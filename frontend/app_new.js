@@ -114,7 +114,8 @@ function filterBySport(sport) {
         p.classList.toggle('active', p.dataset.sport === sport);
     });
 
-    applyFilters();
+    // Re-fetch from backend with sport filter (different sports = different series)
+    loadMarkets();
 }
 
 function applyFilters() {
@@ -228,11 +229,17 @@ lSEc96isSV4HXYuYz2fNUUoH8e5s0+xRraON1cwscci9tC2vKg==
 // Load markets
 async function loadMarkets() {
     const grid = document.getElementById('markets-grid');
-    grid.innerHTML = '<p style="color: #00ff88; grid-column: 1 / -1;">Loading markets...</p>';
+    grid.innerHTML = '<p style="color: #00ff88; grid-column: 1 / -1;">Loading sports markets...</p>';
     
     try {
-        // Try open markets first, fall back to closed if none available
-        let response = await fetch(`${API_BASE}/markets?status=open&limit=500`);
+        // Build URL with sport filter for backend
+        let url = `${API_BASE}/markets?status=open&limit=500`;
+        if (currentSportFilter && currentSportFilter !== 'all') {
+            url += `&sport=${currentSportFilter}`;
+        }
+        
+        // Backend queries Kalshi by sports series (KXNBAGAME, KXNBASPREAD, etc.)
+        let response = await fetch(url);
         let data = await response.json();
         
         if (data.error) {
@@ -240,25 +247,26 @@ async function loadMarkets() {
             return;
         }
         
-        // API returns {markets: [...], cursor: "..."}
         allMarkets = data.markets || data;
-        console.log(`Loaded ${allMarkets.length} open markets from API (after backend filtering)`);
+        console.log(`📊 Sports markets loaded: ${allMarkets.length} open (filter: ${currentSportFilter})`);
         
-        // If no open markets, automatically load closed markets
-        if (allMarkets.length === 0) {
-            console.log('No open markets, loading recently closed games...');
-            response = await fetch(`${API_BASE}/markets?status=closed&limit=500`);
-            data = await response.json();
-            allMarkets = data.markets || data;
-            console.log(`Loaded ${allMarkets.length} closed markets`);
-            
-            if (allMarkets.length === 0) {
-                grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">No markets available</p>';
-                return;
-            }
+        // Log breakdown by series
+        if (allMarkets.length > 0) {
+            const seriesBreakdown = {};
+            allMarkets.forEach(m => {
+                const series = m.series_ticker || m.ticker?.split('-')[0] || 'UNKNOWN';
+                seriesBreakdown[series] = (seriesBreakdown[series] || 0) + 1;
+            });
+            console.log('📈 Series Breakdown:', seriesBreakdown);
         }
         
-        applyFilters(); // respect current sport pill + search when displaying
+        // If no open sports markets, show message
+        if (allMarkets.length === 0) {
+            grid.innerHTML = '<p style="color: #8892a6; grid-column: 1 / -1;">No sports markets available right now. Check back during game time!</p>';
+            return;
+        }
+        
+        applyFilters();
     } catch (error) {
         console.error('Error loading markets:', error);
         grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Network error loading markets. Check console.</p>';
@@ -289,50 +297,164 @@ function displayMarkets(markets) {
     });
 }
 
-// Group markets by event (one card per game)
+// Group markets by GAME - extracts game ID from event_ticker
+// e.g. KXNBAGAME-26FEB28TORWAS, KXNBASPREAD-26FEB28TORWAS, KXNBATOTAL-26FEB28TORWAS
+// all share the game ID "26FEB28TORWAS" = Toronto vs Washington on Feb 28
 function groupByEvent(markets) {
-    const events = {};
+    const games = {};
+    
+    console.log(`🔧 Grouping ${markets.length} markets by game...`);
     
     markets.forEach(market => {
-        const eventTicker = market.event_ticker || 'UNKNOWN';
+        const eventTicker = market.event_ticker || market.ticker || 'UNKNOWN';
         const gameId = extractGameId(eventTicker);
         
-        if (!events[gameId]) {
-            events[gameId] = {
+        if (!games[gameId]) {
+            games[gameId] = {
                 gameId: gameId,
-                eventTitle: formatEventTitle(market),
+                eventTicker: eventTicker,
+                seriesTicker: market.series_ticker || eventTicker.split('-')[0] || '',
+                eventTitle: buildGameTitle(gameId, market),
                 teamNames: parseTeamNames(gameId),
+                sport: detectSport(eventTicker),
                 markets: []
             };
         }
         
-        events[gameId].markets.push(market);
+        games[gameId].markets.push(market);
     });
     
-    return events;
+    console.log(`✅ Grouped into ${Object.keys(games).length} games`);
+    
+    // Log game details
+    Object.values(games).forEach(g => {
+        console.log(`  🏀 ${g.eventTitle}: ${g.markets.length} markets (${g.sport})`);
+    });
+    
+    return games;
 }
 
-// Format clean event title (remove ticker noise)
-function formatEventTitle(market) {
-    // Use title if it's clean
-    if (market.title && !market.title.includes('KXNBA') && !market.title.includes('KXNCAA')) {
-        // Extract game name from title (before colon if exists)
-        if (market.title.includes(':')) {
-            return market.title.split(':')[0].trim();
-        }
-        return market.title;
+// Extract clean game ID from event_ticker
+// KXNBAGAME-26FEB28TORWAS -> 26FEB28TORWAS
+// KXNBASPREAD-26FEB28TORWAS-TOR28 -> 26FEB28TORWAS
+// KXEPLGOAL-26FEB28LEEMCI -> 26FEB28LEEMCI
+function extractGameId(eventTicker) {
+    if (!eventTicker) return 'UNKNOWN';
+    
+    // Remove the series prefix (KXNBAGAME-, KXNBASPREAD-, etc.)
+    const parts = eventTicker.split('-');
+    if (parts.length >= 2) {
+        // The game ID is the second part (date + teams)
+        return parts[1]; // e.g., "26FEB28TORWAS"
+    }
+    return eventTicker;
+}
+
+// Detect sport from event_ticker
+function detectSport(eventTicker) {
+    const upper = (eventTicker || '').toUpperCase();
+    if (upper.includes('KXNBA')) return 'NBA';
+    if (upper.includes('KXNFL')) return 'NFL';
+    if (upper.includes('KXNHL')) return 'NHL';
+    if (upper.includes('KXMLB')) return 'MLB';
+    if (upper.includes('KXNCAAB')) return 'NCAAB';
+    if (upper.includes('KXNCAAF')) return 'NCAAF';
+    if (upper.includes('KXEPL')) return 'EPL';
+    if (upper.includes('KXUCL')) return 'UCL';
+    if (upper.includes('KXLOL') || upper.includes('KXDOTA') || upper.includes('KXCS')) return 'Esports';
+    return 'Sports';
+}
+
+// Get sport emoji
+function getSportEmoji(sport) {
+    const emojis = {
+        'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 
+        'NCAAB': '🎓', 'NCAAF': '🎓', 'EPL': '⚽', 'UCL': '⚽',
+        'Esports': '🎮', 'Sports': '🏆'
+    };
+    return emojis[sport] || '🏆';
+}
+
+// Build game title from gameId and market data
+// 26FEB28TORWAS -> "Toronto vs Washington"
+function buildGameTitle(gameId, market) {
+    // Try to extract from market title first (most reliable)
+    const title = market.title || '';
+    
+    // Titles like "Denver at Utah Winner?" or "Toronto at Washington: Spread"
+    const atMatch = title.match(/^(.+?)\s+at\s+(.+?)[\s:?]/i);
+    if (atMatch) {
+        return `${atMatch[1].trim()} vs ${atMatch[2].trim()}`;
     }
     
-    // Extract from event ticker
-    const event = market.event_ticker || '';
-    const gameId = extractGameId(event);
+    const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)[\s:?]/i);
+    if (vsMatch) {
+        return `${vsMatch[1].trim()} vs ${vsMatch[2].trim()}`;
+    }
+    
+    // Parse from gameId: 26FEB28TORWAS -> TOR vs WAS
     return parseTeamNames(gameId);
+}
+
+// Parse team names from game ID (e.g., 26FEB28TORWAS -> "Toronto vs Washington")
+function parseTeamNames(gameId) {
+    if (!gameId || gameId === 'UNKNOWN') return 'Unknown Game';
+    
+    // NBA team abbreviations to full names
+    const teamMap = {
+        'ATL': 'Atlanta', 'BOS': 'Boston', 'BKN': 'Brooklyn', 'CHA': 'Charlotte',
+        'CHI': 'Chicago', 'CLE': 'Cleveland', 'DAL': 'Dallas', 'DEN': 'Denver',
+        'DET': 'Detroit', 'GSW': 'Golden State', 'HOU': 'Houston', 'IND': 'Indiana',
+        'LAC': 'LA Clippers', 'LAL': 'LA Lakers', 'MEM': 'Memphis', 'MIA': 'Miami',
+        'MIL': 'Milwaukee', 'MIN': 'Minnesota', 'NOP': 'New Orleans', 'NYK': 'New York',
+        'OKC': 'OKC Thunder', 'ORL': 'Orlando', 'PHI': 'Philadelphia', 'PHX': 'Phoenix',
+        'POR': 'Portland', 'SAC': 'Sacramento', 'SAS': 'San Antonio', 'TOR': 'Toronto',
+        'UTA': 'Utah', 'WAS': 'Washington',
+        // NHL
+        'CAR': 'Carolina', 'SEA': 'Seattle', 'COL': 'Colorado', 
+        'VGK': 'Vegas', 'WPG': 'Winnipeg', 'WSH': 'Washington',
+        'VAN': 'Vancouver', 'FLA': 'Florida', 'NYR': 'NY Rangers',
+        'NYI': 'NY Islanders', 'TBL': 'Tampa Bay', 'NJD': 'New Jersey',
+        'PIT': 'Pittsburgh', 'CBJ': 'Columbus', 'NSH': 'Nashville',
+        'STL': 'St. Louis', 'EDM': 'Edmonton', 'CGY': 'Calgary',
+        'OTT': 'Ottawa', 'MTL': 'Montreal', 'BUF': 'Buffalo',
+        'ARI': 'Arizona', 'ANA': 'Anaheim', 'SJS': 'San Jose',
+        // EPL
+        'LEE': 'Leeds', 'MCI': 'Man City', 'LFC': 'Liverpool', 'TOT': 'Tottenham',
+        'NFO': 'Nottingham', 'FUL': 'Fulham', 'BRE': 'Brentford', 'WOL': 'Wolves',
+        'ARS': 'Arsenal', 'EVE': 'Everton', 'NEW': 'Newcastle', 'BUR': 'Burnley',
+        'WHU': 'West Ham', 'MUN': 'Man United', 'AVL': 'Aston Villa', 'CHE': 'Chelsea',
+        'BHA': 'Brighton', 'CRY': 'Crystal Palace', 'SOU': 'Southampton',
+        'IPS': 'Ipswich', 'LEI': 'Leicester', 'BOH': 'Bournemouth',
+        // UCL
+        'ATM': 'Atletico Madrid', 'RMA': 'Real Madrid', 'BAR': 'Barcelona',
+        'PSG': 'PSG', 'CFC': 'Chelsea',
+        'TIE': 'Draw'
+    };
+    
+    // Remove date prefix: 26FEB28TORWAS -> TORWAS
+    const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
+    
+    if (cleaned.length >= 6) {
+        // Try 3+3 split first
+        const team1 = cleaned.substring(0, 3);
+        const team2 = cleaned.substring(3, 6);
+        const name1 = teamMap[team1] || team1;
+        const name2 = teamMap[team2] || team2;
+        if (name1 !== team1 || name2 !== team2) {
+            return `${name1} vs ${name2}`;
+        }
+    }
+    
+    return gameId;
 }
 
 // Display one compact event row (trading floor style)
 function displayEventRow(eventData, container) {
     const liveScore = getLiveScoreForGame(eventData.gameId);
     const isLive = !!liveScore;
+    const sport = eventData.sport || detectSport(eventData.eventTicker);
+    const emoji = getSportEmoji(sport);
 
     const card = document.createElement('div');
     card.style.cssText = `background: #1a1f2e; border: 1px solid ${isLive ? '#00ff88' : '#2a3447'}; border-radius: 8px; padding: 16px; margin-bottom: 12px;`;
@@ -343,7 +465,14 @@ function displayEventRow(eventData, container) {
 
     const titleSpan = document.createElement('span');
     titleSpan.style.cssText = 'font-size: 15px; font-weight: 600; color: #ffffff;';
-    titleSpan.textContent = `🏀 ${eventData.eventTitle}`;
+    titleSpan.textContent = `${emoji} ${eventData.eventTitle}`;
+    header.appendChild(titleSpan);
+
+    // Sport badge
+    const sportBadge = document.createElement('span');
+    sportBadge.style.cssText = 'background: #2a3447; color: #8892a6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600; margin-left: 8px;';
+    sportBadge.textContent = sport;
+    titleSpan.appendChild(sportBadge);
     header.appendChild(titleSpan);
 
     if (isLive) {
@@ -387,29 +516,56 @@ function displayEventRow(eventData, container) {
     container.appendChild(card);
 }
 
-// Categorize markets by type
+// Categorize markets by type using ticker prefix (most reliable with series-based backend)
+// KXNBAGAME → winner, KXNBASPREAD → spread, KXNBATOTAL → total, etc.
 function categorizeMarkets(markets) {
     const result = {
         winner: null,
-        spread: null,
+        spread: null, 
         total: null,
         props: []
     };
     
-    markets.forEach(market => {
-        const event = market.event_ticker || '';
-        const series = market.series_ticker || '';
+    // Type detection by ticker/event_ticker prefix
+    const WINNER_PATTERNS = ['GAME', 'WIN', 'MONEYLINE'];
+    const SPREAD_PATTERNS = ['SPREAD'];
+    const TOTAL_PATTERNS  = ['TOTAL'];
+    
+    function getMarketType(market) {
+        const ticker = (market.ticker || '').toUpperCase();
+        const event = (market.event_ticker || '').toUpperCase();
+        const series = (market.series_ticker || '').toUpperCase();
+        const title = (market.title || '').toUpperCase();
         
-        if (event.includes('GAME') && !result.winner) {
+        // Primary: check ticker/event_ticker prefix (e.g., KXNBAGAME-26FEB28TORWAS)
+        for (const p of WINNER_PATTERNS) {
+            if (ticker.includes(p) || event.includes(p) || series.includes(p) || title.includes('WINNER')) return 'winner';
+        }
+        for (const p of SPREAD_PATTERNS) {
+            if (ticker.includes(p) || event.includes(p) || series.includes(p) || title.includes('SPREAD') || title.includes('WINS BY')) return 'spread';
+        }
+        for (const p of TOTAL_PATTERNS) {
+            if (ticker.includes(p) || event.includes(p) || series.includes(p) || title.includes('TOTAL POINTS') || title.includes('TOTAL GOALS')) return 'total';
+        }
+        
+        return 'prop';
+    }
+    
+    markets.forEach(market => {
+        const type = getMarketType(market);
+        
+        if (type === 'winner' && !result.winner) {
             result.winner = market;
-        } else if (event.includes('SPREAD') || series.includes('SPREAD')) {
-            if (!result.spread) result.spread = market;
-        } else if (event.includes('TOTAL') || series.includes('TOTAL')) {
-            if (!result.total) result.total = market;
+        } else if (type === 'spread' && !result.spread) {
+            result.spread = market;
+        } else if (type === 'total' && !result.total) {
+            result.total = market;
         } else {
             result.props.push(market);
         }
     });
+    
+    console.log(`  Categorized: W=${result.winner?'✓':'✗'} S=${result.spread?'✓':'✗'} T=${result.total?'✓':'✗'} Props=${result.props.length}`);
     
     return result;
 }
@@ -667,416 +823,6 @@ function displayOrderbookLadder(orderbook) {
     document.getElementById('orderbook-ladder').innerHTML = ladderHtml;
 }
 
-// Organize markets by Series (Hierarchical Exchange Model - OLD)
-function organizeBySeries(markets) {
-    const series = {};
-    
-    markets.forEach(market => {
-        const seriesTicker = market.series_ticker || 'OTHER';
-        const eventTicker = market.event_ticker || 'UNKNOWN';
-        
-        // Extract base series (e.g., NBAGAME from KXNBAGAME-26FEB27DENOKC)
-        let seriesKey = 'OTHER';
-        if (eventTicker.includes('NBAGAME')) seriesKey = 'NBA_GAMES';
-        else if (eventTicker.includes('NBAPTS')) seriesKey = 'NBA_POINTS';
-        else if (eventTicker.includes('NBAREB')) seriesKey = 'NBA_REBOUNDS';
-        else if (eventTicker.includes('NBAAST')) seriesKey = 'NBA_ASSISTS';
-        else if (eventTicker.includes('NBA3PT')) seriesKey = 'NBA_3PT';
-        else if (eventTicker.includes('NBASPREAD')) seriesKey = 'NBA_SPREAD';
-        else if (eventTicker.includes('NBATOTAL')) seriesKey = 'NBA_TOTAL';
-        else if (eventTicker.includes('NBA')) seriesKey = 'NBA_OTHER';
-        
-        if (!series[seriesKey]) {
-            series[seriesKey] = {};
-        }
-        
-        // Extract game/event identifier
-        const gameId = extractGameId(eventTicker);
-        
-        if (!series[seriesKey][gameId]) {
-            series[seriesKey][gameId] = {
-                gameId: gameId,
-                teamNames: parseTeamNames(gameId),
-                markets: []
-            };
-        }
-        
-        series[seriesKey][gameId].markets.push(market);
-    });
-    
-    return series;
-}
-
-// Extract game identifier from event ticker
-function extractGameId(eventTicker) {
-    if (eventTicker.includes('-')) {
-        const parts = eventTicker.split('-');
-        return parts[1] || eventTicker;
-    }
-    return eventTicker;
-}
-
-// Display a series section
-function displaySeries(seriesName, events, container) {
-    // Sort series by priority
-    const seriesOrder = ['NBA_GAMES', 'NBA_SPREAD', 'NBA_TOTAL', 'NBA_POINTS', 'NBA_REBOUNDS', 'NBA_ASSISTS', 'NBA_3PT', 'NBA_OTHER'];
-    const priority = seriesOrder.indexOf(seriesName);
-    if (priority === -1 && seriesName !== 'OTHER') return; // Skip unknown series
-    
-    const seriesLabels = {
-        'NBA_GAMES': '🏀 Game Winners',
-        'NBA_SPREAD': '📊 Spreads',
-        'NBA_TOTAL': '🎯 Totals',
-        'NBA_POINTS': '📈 Points Props',
-        'NBA_REBOUNDS': '🏐 Rebounds Props',
-        'NBA_ASSISTS': '🤝 Assists Props',
-        'NBA_3PT': '🎯 3-Pointer Props',
-        'NBA_OTHER': '📋 Other Props'
-    };
-    
-    const label = seriesLabels[seriesName] || seriesName;
-    const eventsList = Object.values(events);
-    
-    if (eventsList.length === 0) return;
-    
-    const seriesSection = document.createElement('div');
-    seriesSection.style.cssText = 'grid-column: 1 / -1; margin-bottom: 30px;';
-    
-    const header = document.createElement('div');
-    header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #0f1419; border-radius: 8px; cursor: pointer; margin-bottom: 12px;';
-    header.innerHTML = `
-        <span style="color: #00ff88; font-weight: 600; font-size: 16px;">${label}</span>
-        <span style="color: #8892a6;">${eventsList.length} events • ▼</span>
-    `;
-    
-    const content = document.createElement('div');
-    content.style.cssText = 'display: block;';
-    
-    // Display each event in this series
-    eventsList.forEach(eventData => {
-        displayEventCard(eventData, content);
-    });
-    
-    header.addEventListener('click', () => {
-        const isHidden = content.style.display === 'none';
-        content.style.display = isHidden ? 'block' : 'none';
-        header.querySelector('span:last-child').innerHTML = `${eventsList.length} events • ${isHidden ? '▲' : '▼'}`;
-    });
-    
-    seriesSection.appendChild(header);
-    seriesSection.appendChild(content);
-    container.appendChild(seriesSection);
-}
-
-// Display an event card (e.g., a specific game with its markets)
-function displayEventCard(eventData, container) {
-    const card = document.createElement('div');
-    card.style.cssText = 'background: #1a1f2e; border: 1px solid #2a3447; border-radius: 12px; padding: 20px; margin-bottom: 16px;';
-    
-    card.innerHTML = `
-        <div style="font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 12px;">
-            🏀 ${eventData.teamNames}
-        </div>
-    `;
-    
-    // Display each market as a contract card
-    const marketsContainer = document.createElement('div');
-    marketsContainer.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 12px;';
-    
-    eventData.markets.forEach(market => {
-        marketsContainer.appendChild(createMarketCard(market));
-    });
-    
-    card.appendChild(marketsContainer);
-    container.appendChild(card);
-}
-
-// Create a Market Card (Binary Financial Contract)
-// Shows YES and NO contracts with bid/ask/last pricing
-function createMarketCard(market) {
-    const card = document.createElement('div');
-    card.style.cssText = 'background: #0f1419; border: 1px solid #2a3447; border-radius: 8px; padding: 16px;';
-    
-    // Contract pricing (normalized to 0-100 probability scale)
-    const yesBid = getPrice(market, 'yes_bid');
-    const yesAsk = getPrice(market, 'yes_ask');
-    const yesLast = getPrice(market, 'last_price') || yesAsk || Math.round((yesBid + yesAsk) / 2);
-
-    const noBid = getPrice(market, 'no_bid');
-    const noAsk = getPrice(market, 'no_ask');
-    const noLast = 100 - yesLast;
-    
-    // Volume and liquidity metrics
-    const volume = market.volume || 0;
-    const openInterest = market.open_interest || 0;
-    const liquidity = market.liquidity || 0;
-    
-    card.innerHTML = `
-        <div style="margin-bottom: 12px;">
-            <div style="font-size: 14px; color: #ffffff; font-weight: 500; margin-bottom: 4px;">${market.title}</div>
-            <div style="font-size: 11px; color: #8892a6;">${market.ticker}</div>
-        </div>
-        
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
-            <!-- YES Contract -->
-            <div class="price-box yes" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="yes" data-price="${yesAsk}" style="background: rgba(0, 255, 136, 0.1); border: 1px solid #00ff88; border-radius: 6px; padding: 12px; cursor: pointer;">
-                <div style="font-size: 11px; color: #00ff88; font-weight: 600; margin-bottom: 6px;">YES</div>
-                <div style="font-size: 24px; color: #00ff88; font-weight: 700; margin-bottom: 4px;">${yesLast}¢</div>
-                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #8892a6;">
-                    <span>Bid: ${yesBid}¢</span>
-                    <span>Ask: ${yesAsk}¢</span>
-                </div>
-            </div>
-            
-            <!-- NO Contract -->
-            <div class="price-box no" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="no" data-price="${noAsk}" style="background: rgba(255, 68, 68, 0.1); border: 1px solid #ff4444; border-radius: 6px; padding: 12px; cursor: pointer;">
-                <div style="font-size: 11px; color: #ff4444; font-weight: 600; margin-bottom: 6px;">NO</div>
-                <div style="font-size: 24px; color: #ff4444; font-weight: 700; margin-bottom: 4px;">${noLast}¢</div>
-                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #8892a6;">
-                    <span>Bid: ${noBid}¢</span>
-                    <span>Ask: ${noAsk}¢</span>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Market Metrics -->
-        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #8892a6; margin-bottom: 10px;">
-            <span>📊 Vol: ${volume}</span>
-            <span>💰 OI: ${openInterest}</span>
-            <span>💧 Liq: ${liquidity}</span>
-        </div>
-        
-        <button onclick="viewOrderbook('${market.ticker}')" style="width: 100%; padding: 8px; background: #2a3447; color: #00ff88; border: 1px solid #3a4457; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">
-            📊 View Order Book
-        </button>
-    `;
-    
-    // Add click handlers for trading
-    setTimeout(() => {
-        const yesBox = card.querySelector('.price-box.yes');
-        const noBox = card.querySelector('.price-box.no');
-        if (yesBox) yesBox.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openBotModal(market, 'yes', yesAsk);
-        });
-        if (noBox) noBox.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openBotModal(market, 'no', noAsk);
-        });
-    }, 0);
-    
-    return card;
-}
-
-// Parse team names from game ID (e.g., "26FEB27DENOKC" -> "DEN vs OKC")
-function parseTeamNames(gameId) {
-    // Game ID format: YYMMMDDTEAM1TEAM2 (e.g., 26FEB27DENOKC)
-    // Extract last part (team codes)
-    const match = gameId.match(/[A-Z]{6,}$/);
-    if (match) {
-        const teams = match[0];
-        // Split into 3-letter team codes
-        const team1 = teams.substring(0, 3);
-        const team2 = teams.substring(3, 6);
-        return `${team1} vs ${team2}`;
-    }
-    return gameId;
-}
-
-// Display a single game card with expandable props
-function displayGameCard(gameData, container) {
-    const card = document.createElement('div');
-    card.className = 'game-card';
-    card.style.cssText = 'background: #1a1f2e; border: 1px solid #2a3447; border-radius: 12px; padding: 20px; margin-bottom: 20px; grid-column: 1 / -1;';
-    
-    // Main game market
-    if (gameData.gameMarket) {
-        const market = gameData.gameMarket;
-        const yesPrice = market.yes_ask || market.yes_bid || 50;
-        const noPrice = market.no_ask || market.no_bid || (100 - yesPrice);
-        
-        card.innerHTML = `
-            <div style="margin-bottom: 15px;">
-                <div style="font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 8px;">
-                    🏀 ${gameData.teamNames}
-                </div>
-                <div style="font-size: 13px; color: #8892a6; margin-bottom: 8px;">${market.title || gameData.id}</div>
-                <div style="display: flex; gap: 12px; margin-bottom: 12px;">
-                    <div class="price-box yes" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="yes" data-price="${yesPrice}" style="flex: 1; cursor: pointer; position: relative;">
-                        <div class="label">YES</div>
-                        <div class="price">${yesPrice}¢</div>
-                        <div style="font-size: 10px; color: #8892a6; margin-top: 4px;">Bid: ${market.yes_bid || 0}¢ | Ask: ${market.yes_ask || 0}¢</div>
-                    </div>
-                    <div class="price-box no" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="no" data-price="${noPrice}" style="flex: 1; cursor: pointer; position: relative;">
-                        <div class="label">NO</div>
-                        <div class="price">${noPrice}¢</div>
-                        <div style="font-size: 10px; color: #8892a6; margin-top: 4px;">Bid: ${market.no_bid || 0}¢ | Ask: ${market.no_ask || 0}¢</div>
-                    </div>
-                </div>
-                <button onclick="viewOrderbook('${market.ticker}')" style="width: 100%; padding: 8px; background: #2a3447; color: #00ff88; border: 1px solid #3a4457; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">📊 View Orderbook</button>
-            </div>
-        `;
-        
-        // Add click handlers for main game
-        setTimeout(() => {
-            const yesBox = card.querySelector('.price-box.yes');
-            const noBox = card.querySelector('.price-box.no');
-            if (yesBox) yesBox.addEventListener('click', () => openBotModal(market, 'yes', yesPrice));
-            if (noBox) noBox.addEventListener('click', () => openBotModal(market, 'no', noPrice));
-        }, 0);
-    } else {
-        // No main game market, just show team names
-        card.innerHTML = `
-            <div style="font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 15px;">
-                🏀 ${gameData.teamNames}
-            </div>
-        `;
-    }
-    
-    // Add spread and total markets if they exist
-    const mainMarketsContainer = document.createElement('div');
-    mainMarketsContainer.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 15px;';
-    
-    if (gameData.spreadMarket) {
-        mainMarketsContainer.appendChild(createMainMarketBox(gameData.spreadMarket, '📊 Spread'));
-    }
-    
-    if (gameData.totalMarket) {
-        mainMarketsContainer.appendChild(createMainMarketBox(gameData.totalMarket, '🎯 Total'));
-    }
-    
-    if (gameData.spreadMarket || gameData.totalMarket) {
-        card.appendChild(mainMarketsContainer);
-    }
-    
-    // Add player props sections
-    const propsContainer = document.createElement('div');
-    propsContainer.style.cssText = 'border-top: 1px solid #2a3447; padding-top: 15px;';
-    
-    const propCategories = [
-        { key: 'points', label: '📈 Points', icon: 'PTS' },
-        { key: 'rebounds', label: '🏐 Rebounds', icon: 'REB' },
-        { key: 'assists', label: '🤝 Assists', icon: 'AST' },
-        { key: 'threes', label: '🎯 3-Pointers', icon: '3PT' },
-        { key: 'other', label: '📊 Other Props', icon: '' }
-    ];
-    
-    propCategories.forEach(category => {
-        const props = gameData.playerProps[category.key];
-        if (props && props.length > 0) {
-            const section = createPropsSection(category.label, props, gameData.id);
-            propsContainer.appendChild(section);
-        }
-    });
-    
-    card.appendChild(propsContainer);
-    container.appendChild(card);
-}
-
-// Create a collapsible props section
-function createPropsSection(title, markets, gameId) {
-    const section = document.createElement('div');
-    section.style.cssText = 'margin-bottom: 12px;';
-    
-    const header = document.createElement('div');
-    header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #0f1419; border-radius: 8px; cursor: pointer; margin-bottom: 8px;';
-    header.innerHTML = `
-        <span style="color: #00ff88; font-weight: 600;">${title} (${markets.length})</span>
-        <span style="color: #8892a6;">▼</span>
-    `;
-    
-    const content = document.createElement('div');
-    content.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; padding: 0 12px;';
-    content.style.display = 'none'; // Start collapsed
-    
-    markets.forEach(market => {
-        const propCard = createPropCard(market);
-        content.appendChild(propCard);
-    });
-    
-    header.addEventListener('click', () => {
-        const isHidden = content.style.display === 'none';
-        content.style.display = isHidden ? 'grid' : 'none';
-        header.querySelector('span:last-child').textContent = isHidden ? '▲' : '▼';
-    });
-    
-    section.appendChild(header);
-    section.appendChild(content);
-    return section;
-}
-
-// Create a small prop card
-function createPropCard(market) {
-    const card = document.createElement('div');
-    card.style.cssText = 'background: #1a1f2e; border: 1px solid #2a3447; border-radius: 8px; padding: 12px;';
-
-    const yesPrice = getPrice(market, 'yes_ask') || getPrice(market, 'yes_bid') || 50;
-    const noPrice  = getPrice(market, 'no_ask')  || getPrice(market, 'no_bid')  || (100 - yesPrice);
-    
-    card.innerHTML = `
-        <div style="font-size: 13px; color: #8892a6; margin-bottom: 8px;">${market.title}</div>
-        <div style="display: flex; gap: 8px; margin-bottom: 6px;">
-            <div class="price-box yes" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="yes" data-price="${yesPrice}" style="flex: 1; cursor: pointer; padding: 8px;">
-                <div class="label" style="font-size: 11px;">YES</div>
-                <div class="price" style="font-size: 16px;">${yesPrice}¢</div>
-                <div style="font-size: 9px; color: #8892a6; margin-top: 2px;">Bid:${market.yes_bid || 0} Ask:${market.yes_ask || 0}</div>
-            </div>
-            <div class="price-box no" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="no" data-price="${noPrice}" style="flex: 1; cursor: pointer; padding: 8px;">
-                <div class="label" style="font-size: 11px;">NO</div>
-                <div class="price" style="font-size: 16px;">${noPrice}¢</div>
-                <div style="font-size: 9px; color: #8892a6; margin-top: 2px;">Bid:${market.no_bid || 0} Ask:${market.no_ask || 0}</div>
-            </div>
-        </div>
-        <button onclick="viewOrderbook('${market.ticker}')" style="width: 100%; padding: 4px; background: #2a3447; color: #00ff88; border: 1px solid #3a4457; border-radius: 4px; cursor: pointer; font-size: 10px;">📊</button>
-    `;
-    
-    // Add click handlers
-    setTimeout(() => {
-        const yesBox = card.querySelector('.price-box.yes');
-        const noBox = card.querySelector('.price-box.no');
-        if (yesBox) yesBox.addEventListener('click', () => openBotModal(market, 'yes', yesPrice));
-        if (noBox) noBox.addEventListener('click', () => openBotModal(market, 'no', noPrice));
-    }, 0);
-    
-    return card;
-}
-
-// Create a main market box (spread/total)
-function createMainMarketBox(market, label) {
-    const box = document.createElement('div');
-    box.style.cssText = 'background: #0f1419; border: 1px solid #2a3447; border-radius: 8px; padding: 12px;';
-
-    const yesPrice = getPrice(market, 'yes_ask') || getPrice(market, 'yes_bid') || 50;
-    const noPrice  = getPrice(market, 'no_ask')  || getPrice(market, 'no_bid')  || (100 - yesPrice);
-    
-    box.innerHTML = `
-        <div style="font-size: 12px; color: #00ff88; font-weight: 600; margin-bottom: 8px;">${label}</div>
-        <div style="font-size: 13px; color: #8892a6; margin-bottom: 8px;">${market.title}</div>
-        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-            <div class="price-box yes" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="yes" data-price="${yesPrice}" style="flex: 1; cursor: pointer; padding: 8px;">
-                <div class="label" style="font-size: 11px;">YES</div>
-                <div class="price" style="font-size: 16px;">${yesPrice}¢</div>
-                <div style="font-size: 9px; color: #8892a6; margin-top: 2px;">B:${market.yes_bid || 0} A:${market.yes_ask || 0}</div>
-            </div>
-            <div class="price-box no" data-market='${JSON.stringify(market).replace(/"/g, '&quot;')}' data-side="no" data-price="${noPrice}" style="flex: 1; cursor: pointer; padding: 8px;">
-                <div class="label" style="font-size: 11px;">NO</div>
-                <div class="price" style="font-size: 16px;">${noPrice}¢</div>
-                <div style="font-size: 9px; color: #8892a6; margin-top: 2px;">B:${market.no_bid || 0} A:${market.no_ask || 0}</div>
-            </div>
-        </div>
-        <button onclick="viewOrderbook('${market.ticker}')" style="width: 100%; padding: 6px; background: #2a3447; color: #00ff88; border: 1px solid #3a4457; border-radius: 4px; cursor: pointer; font-size: 11px;">📊 Orderbook</button>
-    `;
-    
-    // Add click handlers
-    setTimeout(() => {
-        const yesBox = box.querySelector('.price-box.yes');
-        const noBox = box.querySelector('.price-box.no');
-        if (yesBox) yesBox.addEventListener('click', () => openBotModal(market, 'yes', yesPrice));
-        if (noBox) noBox.addEventListener('click', () => openBotModal(market, 'no', noPrice));
-    }, 0);
-    
-    return box;
-}
 
 // Search functionality (delegates to applyFilters to respect sport pill too)
 function setupSearch() {

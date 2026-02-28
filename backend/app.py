@@ -8,6 +8,7 @@ from flask_cors import CORS
 from kalshi_api import KalshiAPI
 import os
 import json
+import requests
 from typing import Dict, List, Optional
 import time
 import threading
@@ -73,33 +74,76 @@ def login():
 
 @app.route('/api/markets', methods=['GET'])
 def get_markets():
-    """Get all markets"""
+    """Get sports markets by querying Kalshi series tickers directly"""
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
             
         status = request.args.get('status', 'open')
-        limit = int(request.args.get('limit', 500))  # Increased default
-        cursor = request.args.get('cursor')
-        event_ticker = request.args.get('event_ticker')
-        series_ticker = request.args.get('series_ticker')  # For filtering by sport/series
+        limit = int(request.args.get('limit', 500))
+        sport_filter = request.args.get('sport')  # Optional: 'nba', 'nhl', 'epl', etc.
         
-        result = kalshi_client.get_markets(status=status, limit=limit, 
-                                           cursor=cursor, event_ticker=event_ticker)
+        # ALL sports series tickers in Kalshi
+        SPORTS_SERIES = {
+            'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL', 'KXNBAPOINTS', 
+                     'KXNBAREBOUNDS', 'KXNBAASSISTS', 'KXNBA3PM', 'KXNBASTEALS', 
+                     'KXNBABLOCKS', 'KXNBAANNOUNCER'],
+            'nfl': ['KXNFLGAME', 'KXNFLSPREAD', 'KXNFLTOTAL'],
+            'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
+            'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL'],
+            'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
+            'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
+            'epl': ['KXEPLGAME', 'KXEPLGOAL', 'KXEPLBTTS'],
+            'ucl': ['KXUCLGAME', 'KXUCLGOAL', 'KXUCLBTTS'],
+        }
         
-        # Extract markets array from response
-        markets = result.get('markets', result) if isinstance(result, dict) else result
+        # Determine which series to fetch
+        if sport_filter and sport_filter.lower() != 'all':
+            series_to_fetch = SPORTS_SERIES.get(sport_filter.lower(), [])
+        else:
+            series_to_fetch = []
+            for sport_series in SPORTS_SERIES.values():
+                series_to_fetch.extend(sport_series)
         
-        # Filter for series if requested
-        if series_ticker:
-            markets = [m for m in markets if series_ticker.upper() in m.get('series_ticker', '').upper()]
+        # Fetch markets from each series
+        all_markets = []
+        series_counts = {}
         
-        # Filter out parlay/multivariate markets
-        markets = [m for m in markets if 'mve_selected_legs' not in m and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+        for series in series_to_fetch:
+            try:
+                result = kalshi_client.get_markets_by_series(series, status=status, limit=200)
+                markets = result.get('markets', [])
+                if markets:
+                    markets = [m for m in markets if 'mve_selected_legs' not in m 
+                             and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+                    if markets:
+                        series_counts[series] = len(markets)
+                        all_markets.extend(markets)
+            except Exception as e:
+                continue
         
-        return jsonify({'markets': markets, 'cursor': result.get('cursor') if isinstance(result, dict) else None})
+        print(f"✅ Sports markets: {len(all_markets)} total from {len(series_counts)} active series")
+        for s, c in sorted(series_counts.items(), key=lambda x: -x[1]):
+            print(f"  {s}: {c} markets")
+        
+        # Deduplicate by ticker
+        seen = set()
+        unique_markets = []
+        for m in all_markets:
+            ticker = m.get('ticker', '')
+            if ticker not in seen:
+                seen.add(ticker)
+                unique_markets.append(m)
+        
+        # Sort by event_ticker for grouping
+        unique_markets.sort(key=lambda m: m.get('event_ticker', ''))
+        unique_markets = unique_markets[:limit]
+        
+        return jsonify({'markets': unique_markets, 'cursor': None})
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

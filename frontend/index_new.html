@@ -315,7 +315,11 @@
     <div class="main-container">
         <!-- Active Bots -->
         <div class="bots-section" id="bots-section" style="display: none;">
-            <h2>Active Trading Bots</h2>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <h2 style="margin:0;">Active Trading Bots</h2>
+            </div>
+            <!-- P&L Dashboard (Upgrade #6) -->
+            <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
             <div id="bots-list">
                 <p style="color: #8892a6;">No active bots</p>
             </div>
@@ -349,6 +353,11 @@
             <button class="btn btn-secondary" onclick="toggleAutoMonitor()">
                 <span id="auto-monitor-text">▶️ Start Auto-Monitor</span>
             </button>
+            <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Find all arb opportunities across all open markets">🔍 Auto-Scan</button>
+            <input type="number" id="scan-min-width" min="1" max="20" value="3" title="Min arb width (¢) to scan for"
+                   style="width:72px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;">
+            <input type="number" id="scan-qty" min="1" value="1" title="Contracts per auto-bot"
+                   style="width:64px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;" placeholder="Qty">
         </div>
 
         <!-- Markets Grid -->
@@ -417,6 +426,20 @@
         </div>
     </div>
     
+    <!-- Auto-Scan Modal (Upgrade #3) -->
+    <div class="modal" id="scan-modal">
+        <div class="modal-content" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
+                    <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
+                </div>
+            </div>
+            <div id="scan-results" style="flex:1;overflow-y:auto;"></div>
+        </div>
+    </div>
+
     <script src="app_new.js"></script>
 </body>
 </html>

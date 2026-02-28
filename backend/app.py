@@ -10,6 +10,7 @@ import os
 import json
 from typing import Dict, List, Optional
 import time
+import threading
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
@@ -410,6 +411,41 @@ def get_fills():
 
 active_bots = {}  # bot_id -> bot_config
 
+# ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
+class RateLimiter:
+    """Token bucket — keeps us under Kalshi's ~10 req/sec API limit."""
+    def __init__(self, rate: float = 8.0, per: float = 1.0):
+        self.rate, self.per = rate, per
+        self._tokens = float(rate)
+        self._last = time.time()
+        self._lock = threading.Lock()
+
+    def wait(self):
+        with self._lock:
+            now = time.time()
+            self._tokens = min(self.rate, self._tokens + (now - self._last) * (self.rate / self.per))
+            self._last = now
+            if self._tokens < 1.0:
+                time.sleep((1.0 - self._tokens) * (self.per / self.rate))
+                self._tokens = 0.0
+            else:
+                self._tokens -= 1.0
+
+api_rate_limiter = RateLimiter(rate=8.0)   # 8 calls/sec
+
+# ─── Session P&L (Upgrade #6: P&L dashboard) ──────────────────────────────────
+session_pnl = {
+    'gross_profit_cents': 0,
+    'gross_loss_cents':   0,
+    'completed_bots':     0,
+    'stopped_bots':       0,
+    'session_start':      time.time(),
+}
+
+# ─── Bot Config (Upgrades #4, #8) ─────────────────────────────────────────────
+REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
+STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
+
 
 @app.route('/api/bot/create', methods=['POST'])
 def create_bot():
@@ -460,6 +496,8 @@ def create_bot():
             'yes_fill_qty':     0,
             'no_fill_qty':      0,
             'created_at':       time.time(),
+            'posted_at':        time.time(),
+            'repost_count':     0,
         }
 
         return jsonify({
@@ -477,11 +515,18 @@ def create_bot():
 
 @app.route('/api/bot/monitor', methods=['POST'])
 def monitor_bots():
-    """Check all active bots and execute trades when conditions are met"""
+    """
+    Check all active bots and execute trades when conditions are met.
+    Upgrades applied:
+      #1 – Faster cycle (called every 2s from frontend)
+      #4 – Partial fill: resize unfilled leg to match filled qty after STALE_CANCEL_MINUTES
+      #7 – Rate-limited API calls via api_rate_limiter
+      #8 – Stale order re-post: cancel & re-post at bid+1 after REPOST_AFTER_MINUTES
+    """
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
-        
+
         actions = []
         active_statuses = ('pending_fills', 'yes_filled', 'no_filled')
 
@@ -489,87 +534,147 @@ def monitor_bots():
             if bot['status'] not in active_statuses:
                 continue
             try:
-                ticker = bot['ticker']
+                ticker  = bot['ticker']
+                qty     = bot['quantity']
+                stop    = bot['stop_loss_cents']
+                now     = time.time()
+                age_min = (now - bot.get('posted_at', now)) / 60.0
 
-                # ── Check fill status of both orders ──────────────────────────
+                # ── (7) Rate-limited fill checks ──────────────────────────────
+                api_rate_limiter.wait()
                 yes_resp = kalshi_client.get_order(bot['yes_order_id'])
+                api_rate_limiter.wait()
                 no_resp  = kalshi_client.get_order(bot['no_order_id'])
-                yes_ord  = yes_resp.get('order', {})
-                no_ord   = no_resp.get('order', {})
 
-                # Kalshi uses 'filled_count' (v2) — fall back to older 'fill_count'
+                yes_ord    = yes_resp.get('order', {})
+                no_ord     = no_resp.get('order', {})
                 yes_filled = yes_ord.get('filled_count', yes_ord.get('fill_count', 0))
                 no_filled  = no_ord.get('filled_count',  no_ord.get('fill_count', 0))
                 bot['yes_fill_qty'] = yes_filled
                 bot['no_fill_qty']  = no_filled
-                qty = bot['quantity']
 
                 # ── Both sides fully filled → profit locked at settlement ──────
                 if yes_filled >= qty and no_filled >= qty:
                     bot['status'] = 'completed'
-                    actions.append({
-                        'bot_id':       bot_id,
-                        'action':       'completed',
-                        'profit_cents': bot['profit_per'] * qty,
-                    })
+                    profit_cents = bot['profit_per'] * qty
+                    session_pnl['gross_profit_cents'] += profit_cents
+                    session_pnl['completed_bots']     += 1
+                    actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
                     continue
 
-                # ── Fetch current bid prices for stop-loss check ───────────────
+                # ── Fetch current market prices (rate-limited) ─────────────────
+                api_rate_limiter.wait()
                 market_resp = kalshi_client.get_market(ticker)
                 market = market_resp.get('market', market_resp)
 
                 def to_cents(field):
                     d = market.get(field + '_dollars')
-                    if d:
-                        return round(float(d) * 100)
+                    if d: return round(float(d) * 100)
                     return market.get(field, 50)
 
                 yes_bid = to_cents('yes_bid')
                 no_bid  = to_cents('no_bid')
-                stop    = bot['stop_loss_cents']
 
-                # ── YES filled, NO still open ─────────────────────────────────
+                # ── (8) Stale order re-post (no fills after REPOST_AFTER_MINUTES) ──
+                if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
+                    new_yes = min(yes_bid + 1, 98)
+                    new_no  = min(no_bid  + 1, 98)
+                    if new_yes + new_no < 100:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                            api_rate_limiter.wait()
+                            ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy', count=qty, yes_price=new_yes)
+                            api_rate_limiter.wait()
+                            nn = kalshi_client.create_order(ticker=ticker, side='no',  action='buy', count=qty, no_price=new_no)
+                            bot.update({
+                                'yes_order_id': ny['order']['order_id'],
+                                'no_order_id':  nn['order']['order_id'],
+                                'yes_price':    new_yes,
+                                'no_price':     new_no,
+                                'profit_per':   100 - new_yes - new_no,
+                                'posted_at':    now,
+                                'repost_count': bot.get('repost_count', 0) + 1,
+                            })
+                            actions.append({'bot_id': bot_id, 'action': 'reposted',
+                                            'new_yes': new_yes, 'new_no': new_no,
+                                            'repost_count': bot['repost_count']})
+                        except Exception as re_err:
+                            print(f"Repost failed for {bot_id}: {re_err}")
+                    continue
+
+                # ── (4) Partial fill: resize unfilled leg after STALE_CANCEL_MINUTES ──
+                if yes_filled > 0 and no_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
+                    new_no_price = min(no_bid + 1, 98)
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(bot['no_order_id'])
+                        api_rate_limiter.wait()
+                        nn = kalshi_client.create_order(ticker=ticker, side='no', action='buy',
+                                                        count=yes_filled, no_price=new_no_price)
+                        bot.update({'no_order_id': nn['order']['order_id'],
+                                    'quantity': yes_filled, 'no_price': new_no_price,
+                                    'posted_at': now})
+                        actions.append({'bot_id': bot_id, 'action': 'partial_resize_no', 'yes_filled': yes_filled})
+                    except Exception as pe:
+                        print(f"Partial resize NO failed for {bot_id}: {pe}")
+                    continue
+
+                if no_filled > 0 and yes_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
+                    new_yes_price = min(yes_bid + 1, 98)
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(bot['yes_order_id'])
+                        api_rate_limiter.wait()
+                        ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy',
+                                                        count=no_filled, yes_price=new_yes_price)
+                        bot.update({'yes_order_id': ny['order']['order_id'],
+                                    'quantity': no_filled, 'yes_price': new_yes_price,
+                                    'posted_at': now})
+                        actions.append({'bot_id': bot_id, 'action': 'partial_resize_yes', 'no_filled': no_filled})
+                    except Exception as pe:
+                        print(f"Partial resize YES failed for {bot_id}: {pe}")
+                    continue
+
+                # ── YES fully filled, NO still open — check stop loss ──────────
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
-                    # Stop loss: market bid for YES dropped ≥ stop_loss_cents below entry
                     if yes_bid <= bot['yes_price'] - stop:
-                        kalshi_client.create_order(      # market sell to exit immediately
-                            ticker=ticker, side='yes', action='sell',
-                            count=yes_filled, order_type='market'
-                        )
+                        api_rate_limiter.wait()
+                        kalshi_client.create_order(ticker=ticker, side='yes', action='sell',
+                                                   count=yes_filled, order_type='market')
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
                         except Exception:
                             pass
                         bot['status'] = 'stopped'
-                        actions.append({
-                            'bot_id':   bot_id,
-                            'action':   'stop_loss_yes',
-                            'entry':    bot['yes_price'],
-                            'exit_bid': yes_bid,
-                            'loss':     yes_bid - bot['yes_price'],
-                        })
+                        loss = (bot['yes_price'] - yes_bid) * yes_filled
+                        session_pnl['gross_loss_cents'] += loss
+                        session_pnl['stopped_bots']     += 1
+                        actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
+                                        'entry': bot['yes_price'], 'exit_bid': yes_bid, 'loss_cents': loss})
 
-                # ── NO filled, YES still open ─────────────────────────────────
+                # ── NO fully filled, YES still open — check stop loss ──────────
                 elif no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if no_bid <= bot['no_price'] - stop:
-                        kalshi_client.create_order(
-                            ticker=ticker, side='no', action='sell',
-                            count=no_filled, order_type='market'
-                        )
+                        api_rate_limiter.wait()
+                        kalshi_client.create_order(ticker=ticker, side='no', action='sell',
+                                                   count=no_filled, order_type='market')
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
                         except Exception:
                             pass
                         bot['status'] = 'stopped'
-                        actions.append({
-                            'bot_id':   bot_id,
-                            'action':   'stop_loss_no',
-                            'entry':    bot['no_price'],
-                            'exit_bid': no_bid,
-                            'loss':     no_bid - bot['no_price'],
-                        })
+                        loss = (bot['no_price'] - no_bid) * no_filled
+                        session_pnl['gross_loss_cents'] += loss
+                        session_pnl['stopped_bots']     += 1
+                        actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
+                                        'entry': bot['no_price'], 'exit_bid': no_bid, 'loss_cents': loss})
 
             except Exception as e:
                 print(f"Error monitoring bot {bot_id}: {e}")
@@ -617,6 +722,83 @@ def cancel_bot(bot_id):
 
     del active_bots[bot_id]
     return jsonify({'success': True, 'cancelled_orders': cancelled})
+
+
+@app.route('/api/bot/scan', methods=['GET'])
+def scan_arb_opportunities():
+    """
+    Upgrade #3: Multi-market arb scanner.
+    Scans all open markets for YES+NO bid sums below 100 by at least min_width cents.
+    Returns ranked list of arb opportunities with suggested queue-priority prices.
+    """
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        min_width = max(1, int(request.args.get('min_width', 3)))
+        limit     = min(500, int(request.args.get('limit', 200)))
+
+        result  = kalshi_client.get_markets(status='open', limit=limit)
+        markets = result.get('markets', result) if isinstance(result, dict) else result
+
+        def tc(m, field):
+            d = m.get(field + '_dollars')
+            if d: return round(float(d) * 100)
+            return m.get(field, 0)
+
+        opportunities = []
+        for m in markets:
+            yes_bid = tc(m, 'yes_bid')
+            no_bid  = tc(m, 'no_bid')
+            if not yes_bid or not no_bid:
+                continue
+            width = 100 - yes_bid - no_bid
+            if width >= min_width:
+                yes_ask = tc(m, 'yes_ask') or yes_bid + 2
+                no_ask  = tc(m, 'no_ask')  or no_bid  + 2
+                # Queue priority: bid+1 if it stays below ask (still maker)
+                sug_yes = (yes_bid + 1) if yes_ask > yes_bid + 1 else yes_bid
+                sug_no  = (no_bid  + 1) if no_ask  > no_bid  + 1 else no_bid
+                opportunities.append({
+                    'ticker':        m.get('ticker', ''),
+                    'title':         m.get('title', ''),
+                    'event_ticker':  m.get('event_ticker', ''),
+                    'yes_bid':       yes_bid,
+                    'no_bid':        no_bid,
+                    'width':         width,
+                    'suggested_yes': sug_yes,
+                    'suggested_no':  sug_no,
+                    'profit_posted': 100 - sug_yes - sug_no,
+                })
+
+        opportunities.sort(key=lambda x: x['width'], reverse=True)
+        return jsonify({'opportunities': opportunities, 'count': len(opportunities), 'min_width': min_width})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pnl', methods=['GET'])
+def get_pnl():
+    """Upgrade #6: P&L dashboard — session profit/loss summary."""
+    pnl = dict(session_pnl)
+    pnl['net_cents']   = pnl['gross_profit_cents'] - pnl['gross_loss_cents']
+    pnl['net_dollars'] = pnl['net_cents'] / 100
+    pnl['active_bots'] = len([b for b in active_bots.values()
+                               if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')])
+    return jsonify(pnl)
+
+
+@app.route('/api/pnl/reset', methods=['POST'])
+def reset_pnl():
+    """Reset session P&L counters."""
+    global session_pnl
+    session_pnl = {
+        'gross_profit_cents': 0, 'gross_loss_cents': 0,
+        'completed_bots': 0,     'stopped_bots': 0,
+        'session_start': time.time(),
+    }
+    return jsonify({'success': True})
 
 
 if __name__ == '__main__':

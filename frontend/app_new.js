@@ -211,6 +211,7 @@ lSEc96isSV4HXYuYz2fNUUoH8e5s0+xRraON1cwscci9tC2vKg==
 
             await loadBalance();
             await loadBots();
+            await loadPnL();
             await loadMarkets();
         } else {
             console.error('❌ Auto-login failed:', data.error);
@@ -1136,8 +1137,11 @@ function calculateArbPrices(market, width) {
 
     const targetTotal = 100 - width;          // e.g. width=5 → 95¢ total
 
-    // Start at best bid (market-maker position, no taker fees)
-    let targetYes = Math.max(yesBid, 1);
+    // Upgrade #2: Queue priority — post at bid+1 to be first in line.
+    // Only go above bid if bid+1 is still below the ask (stays maker, not taker).
+    const queueYes = (yesAsk > yesBid + 1) ? yesBid + 1 : yesBid;
+    const queueNo  = (noAsk  > noBid  + 1) ? noBid  + 1 : noBid;
+    let targetYes = Math.max(queueYes, 1);
     let targetNo  = targetTotal - targetYes;
 
     // Clamp NO into a valid range
@@ -1165,6 +1169,11 @@ function openBotModal(market, _side, _price) {
     const noAsk  = getPrice(market, 'no_ask');
     document.getElementById('bot-market-prices').textContent =
         `YES  Bid ${yesBid}¢ / Ask ${yesAsk}¢     NO  Bid ${noBid}¢ / Ask ${noAsk}¢`;
+
+    // Upgrade #5: Auto-tune width from combined spread (wider spread = less liquid = wider arb needed)
+    const spreadSum  = Math.max(0, (yesAsk - yesBid) + (noAsk - noBid));
+    const autoWidth  = Math.max(3, Math.min(15, Math.round(spreadSum / 2) || 5));
+    document.getElementById('bot-arb-width').value = autoWidth;
 
     recalcArbPrices();
     document.getElementById('bot-modal').classList.add('show');
@@ -1365,6 +1374,8 @@ async function loadBots() {
             const yPct = Math.round((yFill / qty) * 100);
             const nPct = Math.round((nFill / qty) * 100);
 
+            const ageMin      = bot.posted_at ? Math.floor((Date.now() / 1000 - bot.posted_at) / 60) : 0;
+            const repostCount = bot.repost_count || 0;
             const statusLabel = (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const statusClass = {
                 pending_fills: 'monitoring',
@@ -1385,6 +1396,7 @@ async function loadBots() {
                         <span class="bot-status ${statusClass}" style="margin-left:8px;">${statusLabel}</span>
                         <span style="color:#00ff88;font-weight:700;margin-left:10px;">+${profit}¢/contract</span>
                         <span style="color:#8892a6;font-size:11px;margin-left:6px;">($${(profit * qty / 100).toFixed(2)} total)</span>
+                        <span style="color:#555;font-size:10px;margin-left:8px;">${ageMin}m${repostCount > 0 ? ` · ${repostCount} reposts` : ''}</span>
                     </div>
                     <button class="btn btn-secondary" style="padding:.4rem .9rem;font-size:12px;"
                             onclick="cancelBot('${botId}')">Cancel</button>
@@ -1443,7 +1455,7 @@ function toggleAutoMonitor() {
         autoMonitorInterval = null;
         button.textContent = '▶️ Start Auto-Monitor';
     } else {
-        autoMonitorInterval = setInterval(monitorBots, 5000); // Check every 5 seconds
+        autoMonitorInterval = setInterval(monitorBots, 2000); // Upgrade #1: Check every 2 seconds
         button.textContent = '⏸️ Stop Auto-Monitor';
         monitorBots(); // Run immediately
     }
@@ -1459,19 +1471,27 @@ async function monitorBots() {
         
         const data = await response.json();
         
-        if (data.success && data.actions && data.actions.length > 0) {
-            // Show notifications for actions taken
-            data.actions.forEach(action => {
-                console.log('Bot action:', action);
-                
-                if (action.action === 'completed_arb') {
-                    showNotification(`✅ ARB COMPLETED! Profit: ${action.profit}¢ (${action.profit_pct.toFixed(2)}%)`);
-                } else if (action.action.includes('stop_loss')) {
-                    showNotification(`⚠️ Stop loss triggered on ${action.bot_id}`);
-                }
-            });
-            
-            loadBots(); // Refresh bot list
+        if (data.success) {
+            // Upgrade #1: always refresh fill counts and P&L on every monitor cycle
+            loadBots();
+            loadPnL();
+
+            if (data.actions && data.actions.length > 0) {
+                data.actions.forEach(action => {
+                    console.log('Bot action:', action);
+                    if (action.action === 'completed') {
+                        showNotification(`✅ ARB COMPLETE! +${(action.profit_cents/100).toFixed(2)} profit locked`);
+                    } else if (action.action === 'stop_loss_yes') {
+                        showNotification(`⚠️ Stop-loss YES on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}`);
+                    } else if (action.action === 'stop_loss_no') {
+                        showNotification(`⚠️ Stop-loss NO on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}`);
+                    } else if (action.action === 'reposted') {
+                        showNotification(`🔄 Reposted stale order: YES ${action.new_yes}¢ / NO ${action.new_no}¢`);
+                    } else if (action.action.startsWith('partial_resize')) {
+                        showNotification(`📐 Partial fill resize: ${action.bot_id}`);
+                    }
+                });
+            }
         }
     } catch (error) {
         console.error('Error monitoring bots:', error);
@@ -1496,6 +1516,108 @@ async function loadBalance() {
     } catch (error) {
         console.log('Balance fetch error:', error);
     }
+}
+
+// ─── Upgrade #3: Multi-Market Arb Scanner ─────────────────────────────────────
+
+async function autoScanMarkets() {
+    const minWidth = parseInt(document.getElementById('scan-min-width')?.value || '3');
+    showNotification(`🔍 Scanning for arb opportunities ≥ ${minWidth}¢ width...`);
+    try {
+        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}&limit=200`);
+        const data = await resp.json();
+        if (data.error) { showNotification(`❌ Scan failed: ${data.error}`); return; }
+        showScanResults(data.opportunities || [], minWidth);
+    } catch (err) {
+        showNotification(`❌ Scan error: ${err.message}`);
+    }
+}
+
+function showScanResults(opportunities, minWidth) {
+    const modal   = document.getElementById('scan-modal');
+    const results = document.getElementById('scan-results');
+    const countEl = document.getElementById('scan-count');
+    if (!modal || !results) return;
+
+    if (countEl) countEl.textContent = `${opportunities.length} opportunities found (≥ ${minWidth}¢)`;
+
+    if (opportunities.length === 0) {
+        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">No arb opportunities ≥ ${minWidth}¢ right now.<br>Try lowering the min width.</p>`;
+    } else {
+        results.innerHTML = opportunities.slice(0, 30).map(opp => {
+            const profitColor = opp.width >= 10 ? '#ffaa00' : '#00ff88';
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                <div style="flex:1;min-width:0;">
+                    <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${opp.title || opp.ticker}</div>
+                    <div style="color:#8892a6;font-size:11px;margin-top:2px;">YES ${opp.yes_bid}¢ + NO ${opp.no_bid}¢ bid &nbsp;|&nbsp; post at YES ${opp.suggested_yes}¢ / NO ${opp.suggested_no}¢</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                    <span style="color:${profitColor};font-weight:800;font-size:1.3rem;">+${opp.profit_posted}¢</span>
+                    <button onclick="quickBot('${opp.ticker}', ${opp.suggested_yes}, ${opp.suggested_no})"
+                            style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
+                        🤖 Bot
+                    </button>
+                </div>
+            </div>`;
+        }).join('');
+    }
+    modal.classList.add('show');
+}
+
+async function quickBot(ticker, yesPrice, noPrice) {
+    const quantity       = parseInt(document.getElementById('scan-qty')?.value || '1');
+    const stop_loss_cents = 5;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, stop_loss_cents }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`✅ Bot placed! ${ticker} YES ${yesPrice}¢ / NO ${noPrice}¢ → +${data.profit_per}¢/contract`);
+            loadBots();
+            if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            showNotification(`❌ Error: ${data.error}`);
+        }
+    } catch (err) {
+        showNotification(`❌ Network error: ${err.message}`);
+    }
+}
+
+function closeScanModal() {
+    document.getElementById('scan-modal')?.classList.remove('show');
+}
+
+// ─── Upgrade #6: P&L Dashboard ────────────────────────────────────────────────
+
+async function loadPnL() {
+    try {
+        const resp = await fetch(`${API_BASE}/pnl`);
+        const pnl  = await resp.json();
+        const el   = document.getElementById('pnl-display');
+        if (!el) return;
+
+        const net      = pnl.net_dollars ?? 0;
+        const netColor = net >= 0 ? '#00ff88' : '#ff4444';
+        const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
+        const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
+        const sessionH = ((Date.now() / 1000 - (pnl.session_start || Date.now() / 1000)) / 3600).toFixed(1);
+
+        el.innerHTML = `
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">Session P&L</span>
+            <span style="color:${netColor};font-weight:800;font-size:1.1rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
+            <span style="color:#8892a6;font-size:11px;">↑ $${gross} wins &nbsp; ↓ $${loss} stops</span>
+            <span style="color:#8892a6;font-size:11px;">${pnl.completed_bots || 0}W / ${pnl.stopped_bots || 0}L &nbsp; ${sessionH}h</span>
+            <button onclick="resetPnL()" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;">Reset</button>
+        `;
+    } catch (e) { /* P&L display is optional */ }
+}
+
+async function resetPnL() {
+    await fetch(`${API_BASE}/pnl/reset`, { method: 'POST' });
+    loadPnL();
 }
 
 // Show notification as a non-blocking toast

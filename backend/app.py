@@ -983,25 +983,25 @@ def monitor_bots():
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
                     if yes_bid <= bot['yes_price'] - stop:
-                        # STOP LOSS: cancel hedge first, then sell YES
-                        # Cancel the unfilled NO order to prevent orphans
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['no_order_id'])
-                        except Exception:
-                            pass
-                        try:
-                            api_rate_limiter.wait()
-                            no_check = kalshi_client.get_order(bot['no_order_id'])
-                            no_status = no_check.get('order', {}).get('status', '')
-                            if no_status not in ('canceled', 'cancelled'):
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(bot['no_order_id'])
-                        except Exception:
-                            pass
-                        # Now sell YES at 1¢ (gets price improvement to actual bid)
+                        # STOP LOSS: sell YES FIRST, only cancel hedge if sell confirmed
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_SL_yes_{bot_id}')
                         if sold:
+                            # Sell confirmed — NOW safe to cancel the hedge
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(bot['no_order_id'])
+                            except Exception:
+                                pass
+                            # Double-check cancel
+                            try:
+                                api_rate_limiter.wait()
+                                no_check = kalshi_client.get_order(bot['no_order_id'])
+                                no_status = no_check.get('order', {}).get('status', '')
+                                if no_status not in ('canceled', 'cancelled'):
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['no_order_id'])
+                            except Exception:
+                                pass
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
                             loss = (bot['yes_price'] - yes_bid) * yes_filled
@@ -1016,33 +1016,35 @@ def monitor_bots():
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
                                             'entry': bot['yes_price'], 'exit_bid': yes_bid, 'loss_cents': loss})
                         else:
-                            print(f'⚠ Arb SL YES sell FAILED for {bot_id} — will retry next cycle')
-                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes_FAILED'})
+                            # Sell FAILED — do NOT touch hedge, do NOT change status
+                            # Bot stays at yes_filled, retries next monitor cycle
+                            print(f'⚠ Arb SL YES sell FAILED for {bot_id} — hedge kept, retrying next cycle')
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes_RETRY'})
                     continue  # ← prevent fall-through to NO check
 
                 # ── NO fully filled, YES still open — check stop loss ──────
                 if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if no_bid <= bot['no_price'] - stop:
-                        # STOP LOSS: cancel hedge first, then sell NO
-                        # Cancel the unfilled YES order to prevent orphans
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['yes_order_id'])
-                        except Exception:
-                            pass
-                        try:
-                            api_rate_limiter.wait()
-                            yes_check = kalshi_client.get_order(bot['yes_order_id'])
-                            yes_status = yes_check.get('order', {}).get('status', '')
-                            if yes_status not in ('canceled', 'cancelled'):
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(bot['yes_order_id'])
-                        except Exception:
-                            pass
-                        # Now sell NO at 1¢ (gets price improvement to actual bid)
+                        # STOP LOSS: sell NO FIRST, only cancel hedge if sell confirmed
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_SL_no_{bot_id}')
                         if sold:
+                            # Sell confirmed — NOW safe to cancel the hedge
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(bot['yes_order_id'])
+                            except Exception:
+                                pass
+                            # Double-check cancel
+                            try:
+                                api_rate_limiter.wait()
+                                yes_check = kalshi_client.get_order(bot['yes_order_id'])
+                                yes_status = yes_check.get('order', {}).get('status', '')
+                                if yes_status not in ('canceled', 'cancelled'):
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['yes_order_id'])
+                            except Exception:
+                                pass
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
                             loss = (bot['no_price'] - no_bid) * no_filled
@@ -1057,8 +1059,10 @@ def monitor_bots():
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
                                             'entry': bot['no_price'], 'exit_bid': no_bid, 'loss_cents': loss})
                         else:
-                            print(f'⚠ Arb SL NO sell FAILED for {bot_id} — will retry next cycle')
-                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_no_FAILED'})
+                            # Sell FAILED — do NOT touch hedge, do NOT change status
+                            # Bot stays at no_filled, retries next monitor cycle
+                            print(f'⚠ Arb SL NO sell FAILED for {bot_id} — hedge kept, retrying next cycle')
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_no_RETRY'})
 
             except Exception as e:
                 print(f"Error monitoring bot {bot_id}: {e}")

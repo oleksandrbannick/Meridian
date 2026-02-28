@@ -92,6 +92,35 @@ function parseESPNGame(event, sport) {
     const away = competitors.find(c => c.homeAway === 'away') || {};
     const status = event.status || {};
     const statusType = status.type || {};
+    const period = status.period || 0;
+
+    // Format period label correctly per sport
+    let periodLabel = '';
+    const state = statusType.state || 'pre';
+    if (state === 'in' || state === 'post') {
+        if (sport === 'NBA' || sport === 'NCAAB') {
+            // Basketball: quarters (or OT)
+            if (period <= 4) periodLabel = `Q${period}`;
+            else periodLabel = period === 5 ? 'OT' : `${period - 4}OT`;
+        } else if (sport === 'NHL') {
+            // Hockey: periods (or OT)
+            if (period <= 3) periodLabel = `P${period}`;
+            else if (period === 4) periodLabel = 'OT';
+            else periodLabel = `${period - 3}OT`;
+        } else if (sport === 'NFL') {
+            // Football: quarters (or OT)
+            if (period <= 4) periodLabel = `Q${period}`;
+            else periodLabel = 'OT';
+        } else if (sport === 'MLB') {
+            // Baseball: use ESPN's detail (Top/Bot of inning)
+            periodLabel = statusType.shortDetail || `Inn ${period}`;
+        } else {
+            // Soccer / other: use half or ESPN detail
+            if (period <= 2) periodLabel = `${period}H`;
+            else periodLabel = statusType.shortDetail || `P${period}`;
+        }
+    }
+    if (state === 'post') periodLabel = statusType.shortDetail || 'Final';
 
     return {
         sport,
@@ -100,10 +129,10 @@ function parseESPNGame(event, sport) {
         awayAbbr: (away.team || {}).abbreviation || '',
         homeScore: home.score || '0',
         awayScore: away.score || '0',
-        state: statusType.state || 'pre',       // 'pre' | 'in' | 'post'
+        state,
         clock: status.displayClock || '',
-        period: status.period || 0,
-        periodLabel: statusType.shortDetail || '',
+        period,
+        periodLabel,
     };
 }
 

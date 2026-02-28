@@ -648,71 +648,97 @@ def create_bot():
 
 def execute_sell(ticker, side, count, reason='stop_loss'):
     """
-    Reliably sell contracts by placing a limit sell at 1¢.
-    Kalshi's matching engine gives price improvement — you get the best
-    available bid, but using 1¢ guarantees the order crosses the spread
-    and fills immediately instead of sitting on the book.
+    Reliably sell contracts at the current bid price.
+    If the sell doesn't fill within a few seconds, cancel and return False
+    so the bot stays active and retries next cycle at the new bid.
 
     Returns (success: bool, order_info: dict)
     """
-    try:
-        sell_kwargs = {
-            'ticker': ticker,
-            'side': side,
-            'action': 'sell',
-            'count': count,
-        }
-        # Sell at 1¢ — will get price improvement to actual bid
-        if side == 'yes':
-            sell_kwargs['yes_price'] = 1
-        else:
-            sell_kwargs['no_price'] = 1
-
-        api_rate_limiter.wait()
-        resp = kalshi_client.create_order(**sell_kwargs)
-        order_id = resp.get('order', {}).get('order_id')
-
-        if not order_id:
-            print(f'⚠ execute_sell({reason}): no order_id in response: {resp}')
-            return False, resp
-
-        # Verify the sell filled
-        import time as _t
-        _t.sleep(0.5)  # brief pause for Kalshi to process
-        api_rate_limiter.wait()
-        check = kalshi_client.get_order(order_id)
-        order_data = check.get('order', {})
-        filled = order_data.get('filled_count', order_data.get('fill_count', 0))
-        status = order_data.get('status', '')
-
-        if filled >= count:
-            print(f'✅ execute_sell({reason}): {side} {count}x {ticker} FILLED at order {order_id}')
-            return True, {'order_id': order_id, 'filled': filled, 'status': status}
-
-        # Not fully filled yet — wait a bit more and check again
-        _t.sleep(1.0)
-        api_rate_limiter.wait()
-        check2 = kalshi_client.get_order(order_id)
-        order_data2 = check2.get('order', {})
-        filled2 = order_data2.get('filled_count', order_data2.get('fill_count', 0))
-        status2 = order_data2.get('status', '')
-
-        if filled2 >= count:
-            print(f'✅ execute_sell({reason}): {side} {count}x {ticker} FILLED (2nd check) at order {order_id}')
-            return True, {'order_id': order_id, 'filled': filled2, 'status': status2}
-
-        # Still not filled — cancel and report failure so bot stays active
-        print(f'⚠ execute_sell({reason}): {side} {count}x {ticker} NOT FILLED ({filled2}/{count}), cancelling order {order_id}')
+    MAX_ATTEMPTS = 3
+    for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
+            # Fetch the CURRENT bid for this side right before selling
             api_rate_limiter.wait()
-            kalshi_client.cancel_order(order_id)
-        except Exception:
-            pass
-        return False, {'order_id': order_id, 'filled': filled2, 'status': status2}
+            mkt_resp = kalshi_client.get_market(ticker)
+            mkt = mkt_resp.get('market', mkt_resp)
 
-    except Exception as e:
-        print(f'❌ execute_sell({reason}): exception: {e}')
-        return False, {'error': str(e)}
+            def _tc(field):
+                d = mkt.get(field + '_dollars')
+                if d: return round(float(d) * 100)
+                return mkt.get(field, 0)
+
+            cur_bid = _tc(f'{side}_bid')
+            if cur_bid <= 0:
+                print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} bid is {cur_bid}¢ — no buyers')
+                return False, {'error': 'no_bid', 'bid': cur_bid}
+
+            # Place limit sell at the current bid
+            sell_kwargs = {
+                'ticker': ticker,
+                'side': side,
+                'action': 'sell',
+                'count': count,
+            }
+            if side == 'yes':
+                sell_kwargs['yes_price'] = cur_bid
+            else:
+                sell_kwargs['no_price'] = cur_bid
+
+            api_rate_limiter.wait()
+            resp = kalshi_client.create_order(**sell_kwargs)
+            order_id = resp.get('order', {}).get('order_id')
+
+            if not order_id:
+                print(f'⚠ execute_sell({reason}) attempt {attempt}: no order_id in response: {resp}')
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(1)
+                    continue
+                return False, resp
+
+            # Check if it filled immediately
+            time.sleep(0.5)
+            api_rate_limiter.wait()
+            check = kalshi_client.get_order(order_id)
+            order_data = check.get('order', {})
+            filled = order_data.get('filled_count', order_data.get('fill_count', 0))
+
+            if filled >= count:
+                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {cur_bid}¢ (attempt {attempt})')
+                return True, {'order_id': order_id, 'filled': filled, 'sell_price': cur_bid}
+
+            # Wait a bit more and check again
+            time.sleep(1.5)
+            api_rate_limiter.wait()
+            check2 = kalshi_client.get_order(order_id)
+            order_data2 = check2.get('order', {})
+            filled2 = order_data2.get('filled_count', order_data2.get('fill_count', 0))
+
+            if filled2 >= count:
+                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {cur_bid}¢ (attempt {attempt}, 2nd check)')
+                return True, {'order_id': order_id, 'filled': filled2, 'sell_price': cur_bid}
+
+            # Not filled — cancel this order and retry at the NEW bid
+            print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} {count}x {ticker} not filled at {cur_bid}¢ ({filled2}/{count}), cancelling...')
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(order_id)
+            except Exception:
+                pass
+
+            if attempt < MAX_ATTEMPTS:
+                print(f'   Retrying at new bid...')
+                time.sleep(0.5)
+                continue
+
+        except Exception as e:
+            print(f'❌ execute_sell({reason}) attempt {attempt}: exception: {e}')
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(1)
+                continue
+            return False, {'error': str(e)}
+
+    print(f'⚠ execute_sell({reason}): {side} {count}x {ticker} FAILED after {MAX_ATTEMPTS} attempts — will retry next monitor cycle')
+    return False, {'attempts': MAX_ATTEMPTS, 'status': 'all_attempts_failed'}
 
 
 @app.route('/api/bot/monitor', methods=['POST'])

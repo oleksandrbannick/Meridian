@@ -24,9 +24,25 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSearch();
     autoLogin();
     loadLiveScores();
-    // Refresh live scores every 30 seconds
     liveScoresInterval = setInterval(loadLiveScores, 30000);
 });
+
+// ─── TAB NAVIGATION ──────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+    // Update nav tabs
+    document.querySelectorAll('.nav-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    // Show/hide tab pages
+    document.querySelectorAll('.tab-page').forEach(p => {
+        p.classList.toggle('active', p.id === 'tab-' + tab);
+    });
+    // Load tab-specific data
+    if (tab === 'positions') loadPositions();
+    if (tab === 'history') loadTradeHistory();
+    if (tab === 'bots') { loadBots(); loadPnL(); }
+}
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
 
@@ -236,6 +252,9 @@ lSEc96isSV4HXYuYz2fNUUoH8e5s0+xRraON1cwscci9tC2vKg==
             await loadBots();
             await loadPnL();
             await loadMarkets();
+
+            // Auto-resume monitoring if bots exist
+            await autoResumeMonitor();
         } else {
             console.error('❌ Auto-login failed:', data.error);
             const grid = document.getElementById('markets-grid');
@@ -1260,7 +1279,13 @@ async function loadBots() {
         const botIds = Object.keys(bots);
 
         const section = document.getElementById('bots-section');
-        if (botIds.length === 0) { section.style.display = 'none'; updateBotBuddy(0, 0); return; }
+        if (botIds.length === 0) {
+            section.style.display = 'block';
+            document.getElementById('bots-list').innerHTML = `<div class="empty-state"><div class="icon">🤖</div><div class="title">No active bots</div><div class="desc">Deploy a bot from the Markets tab or use the Arb Scanner</div></div>`;
+            updateBotBuddy(0, 0);
+            updateBotsBadge(0);
+            return;
+        }
         section.style.display = 'block';
 
         const botsList = document.getElementById('bots-list');
@@ -1271,6 +1296,50 @@ async function loadBots() {
 
         botIds.forEach(botId => {
             const bot = bots[botId];
+
+            // ── Watch Bots (position watchers) ───────────────────────
+            if (bot.type === 'watch') {
+                const isActive = bot.status === 'watching';
+                if (isActive) activeBotCount++;
+                const side = bot.side || 'yes';
+                const entry = bot.entry_price || 50;
+                const sl = bot.stop_loss_cents || 5;
+                const tp = bot.take_profit_cents || 0;
+                const liveBid = bot.live_bid || '?';
+                const nowSec = Date.now() / 1000;
+                const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
+                const statusClass = bot.status === 'watching' ? 'watching' : bot.status === 'completed' ? 'completed' : 'stopped';
+                const statusLabel = bot.status.toUpperCase();
+
+                const item = document.createElement('div');
+                item.className = 'bot-item';
+                item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #9966ff;';
+                item.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span style="color:#9966ff;font-size:11px;font-weight:700;">👁 WATCH</span>
+                            <strong style="color:#fff;font-size:13px;">${bot.ticker}</strong>
+                            <span class="bot-status ${statusClass}">${statusLabel}</span>
+                            <span class="side-badge ${side}" style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="color:#555;font-size:10px;">${ageMin}m</span>
+                            <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px;color:#8892a6;">
+                        <div>Entry: <strong style="color:#fff;">${entry}¢</strong></div>
+                        <div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
+                        <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>
+                    </div>
+                    ${bot.status === 'stopped' ? `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff4444;">⛔ Stopped — exited via stop-loss</div>` : ''}
+                    ${bot.status === 'completed' ? `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;">✅ Take-profit hit — position sold</div>` : ''}
+                `;
+                botsList.appendChild(item);
+                return; // skip dual-arb rendering
+            }
+
+            // ── Dual-Arb Bots ───────────────────────────────────────
             const profit = bot.profit_per ?? (100 - (bot.yes_price || 0) - (bot.no_price || 0));
             const qty    = bot.quantity || 1;
             const yFill  = bot.yes_fill_qty || 0;
@@ -1413,8 +1482,39 @@ async function loadBots() {
         });
 
         updateBotBuddy(activeBotCount, filledLegs);
+        updateBotsBadge(activeBotCount);
     } catch (error) {
         console.error('Error loading bots:', error);
+    }
+}
+
+// Update nav badge with active bot count
+function updateBotsBadge(count) {
+    const badge = document.getElementById('bots-badge');
+    if (!badge) return;
+    if (count > 0) {
+        badge.style.display = 'inline';
+        badge.textContent = count;
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+// Auto-resume monitoring if bots exist after login/refresh
+async function autoResumeMonitor() {
+    try {
+        const resp = await fetch(`${API_BASE}/bot/list`);
+        const data = await resp.json();
+        const bots = data.bots || {};
+        const activeStatuses = ['pending_fills', 'yes_filled', 'no_filled', 'watching'];
+        const activeCount = Object.values(bots).filter(b => activeStatuses.includes(b.status)).length;
+        if (activeCount > 0 && !autoMonitorInterval) {
+            console.log(`🔄 Auto-resuming monitor for ${activeCount} active bots`);
+            toggleAutoMonitor();
+            showNotification(`🔄 Auto-resumed monitoring ${activeCount} active bot(s)`);
+        }
+    } catch (e) {
+        console.log('Auto-resume check failed:', e);
     }
 }
 
@@ -1846,14 +1946,7 @@ function showNotification(message) {
 
 // ─── Trade History ────────────────────────────────────────────────────────────
 function toggleTradeHistory() {
-    const panel = document.getElementById('trade-history-panel');
-    if (!panel) return;
-    if (panel.style.display === 'none') {
-        panel.style.display = 'block';
-        loadTradeHistory();
-    } else {
-        panel.style.display = 'none';
-    }
+    switchTab('history');
 }
 
 async function loadTradeHistory() {
@@ -1894,4 +1987,197 @@ async function loadTradeHistory() {
     } catch (err) {
         el.innerHTML = `<p style="color:#ff4444;">Failed to load history: ${err.message}</p>`;
     }
+}
+
+// ─── POSITIONS TAB: Show Kalshi positions + Watch feature ─────────────────────
+
+let watchTarget = null; // position being set up for watching
+
+async function loadPositions() {
+    const el = document.getElementById('positions-list');
+    if (!el) return;
+    el.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Loading positions from Kalshi...</p>';
+
+    try {
+        const resp = await fetch(`${API_BASE}/positions/active`);
+        const data = await resp.json();
+        if (data.error) {
+            el.innerHTML = `<p style="color:#ff4444;text-align:center;padding:24px;">Error: ${data.error}</p>`;
+            return;
+        }
+
+        const positions = data.positions || [];
+        if (positions.length === 0) {
+            el.innerHTML = `<div class="empty-state"><div class="icon">💼</div><div class="title">No open positions</div><div class="desc">You don't have any active positions on Kalshi right now.<br>Place trades from the Markets tab or directly on kalshi.com</div></div>`;
+            return;
+        }
+
+        el.innerHTML = positions.map(pos => {
+            const sideColor = pos.side === 'yes' ? '#00ff88' : '#ff4444';
+            const bid = pos.side === 'yes' ? pos.yes_bid : pos.no_bid;
+            const ask = pos.side === 'yes' ? pos.yes_ask : pos.no_ask;
+            const exposure = (pos.market_exposure / 100).toFixed(2);
+            const realizedPnl = (pos.realized_pnl / 100).toFixed(2);
+            const pnlColor = pos.realized_pnl >= 0 ? '#00ff88' : '#ff4444';
+            const isWatched = !!pos.watched_by;
+
+            return `<div class="position-card" style="${isWatched ? 'border-color:#9966ff66;' : ''}">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+                        <span class="side-badge ${pos.side}">${pos.side.toUpperCase()}</span>
+                        <div style="flex:1;min-width:0;">
+                            <div style="color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${pos.title}</div>
+                            <div style="color:#555;font-size:10px;margin-top:2px;">${pos.ticker}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                        ${isWatched
+                            ? `<span style="color:#9966ff;font-size:11px;font-weight:600;">👁 Watched</span>`
+                            : `<button onclick="openWatchModal('${pos.ticker}','${pos.side}',${pos.quantity},${bid})"
+                                     class="btn" style="background:#9966ff22;color:#9966ff;border:1px solid #9966ff44;padding:5px 12px;font-size:11px;font-weight:600;">
+                                👁 Watch
+                              </button>`
+                        }
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;font-size:12px;color:#8892a6;">
+                    <div>Qty: <strong style="color:#fff;">${pos.quantity}</strong></div>
+                    <div>Bid: <strong style="color:${sideColor};">${bid}¢</strong></div>
+                    <div>Exposure: <strong style="color:#fff;">$${exposure}</strong></div>
+                    <div>Realized: <strong style="color:${pnlColor};">$${realizedPnl}</strong></div>
+                </div>
+                ${pos.resting_orders ? `<div style="margin-top:6px;font-size:10px;color:#555;">${pos.resting_orders} resting order(s)</div>` : ''}
+            </div>`;
+        }).join('');
+    } catch (err) {
+        el.innerHTML = `<p style="color:#ff4444;text-align:center;">Failed to load positions: ${err.message}</p>`;
+    }
+}
+
+function openWatchModal(ticker, side, quantity, currentBid) {
+    watchTarget = { ticker, side, quantity, currentBid };
+    document.getElementById('watch-market-info').innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+                <div style="color:#fff;font-weight:600;font-size:14px;">${ticker}</div>
+                <div style="color:#8892a6;font-size:11px;margin-top:2px;">
+                    <span class="side-badge ${side}" style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
+                    × ${quantity} contracts
+                </div>
+            </div>
+            <div style="text-align:right;">
+                <div style="color:#8892a6;font-size:10px;">Current bid</div>
+                <div style="color:${side==='yes'?'#00ff88':'#ff4444'};font-weight:800;font-size:20px;">${currentBid}¢</div>
+            </div>
+        </div>
+    `;
+    document.getElementById('watch-entry-price').value = currentBid;
+    document.getElementById('watch-quantity').value = quantity;
+    document.getElementById('watch-stop-loss').value = 5;
+    document.getElementById('watch-take-profit').value = 0;
+    document.getElementById('watch-modal').classList.add('show');
+}
+
+function closeWatchModal() {
+    document.getElementById('watch-modal').classList.remove('show');
+    watchTarget = null;
+}
+
+async function confirmWatchPosition() {
+    if (!watchTarget) return;
+
+    const entryPrice = parseInt(document.getElementById('watch-entry-price').value);
+    const quantity = parseInt(document.getElementById('watch-quantity').value);
+    const stopLoss = parseInt(document.getElementById('watch-stop-loss').value);
+    const takeProfit = parseInt(document.getElementById('watch-take-profit').value);
+
+    // Risk warnings
+    const warnings = [];
+    if (stopLoss < 3) warnings.push('Stop-loss < 3¢ is very tight — you may get stopped out by normal volatility.');
+    if (stopLoss > 20) warnings.push('Stop-loss > 20¢ means you could lose significant capital before exiting.');
+    if (takeProfit > 0 && takeProfit < 3) warnings.push('Take-profit < 3¢ is very tight — may trigger prematurely.');
+
+    const warnEl = document.getElementById('watch-risk-warning');
+    if (warnings.length > 0) {
+        warnEl.innerHTML = warnings.map(w => `<div class="risk-warning"><span class="icon">⚠️</span>${w}</div>`).join('');
+    } else {
+        warnEl.innerHTML = '';
+    }
+
+    const slPrice = entryPrice - stopLoss;
+    const tpDesc = takeProfit > 0 ? `, take-profit at ${entryPrice + takeProfit}¢` : '';
+    if (!confirm(`👁 Watch ${watchTarget.side.toUpperCase()} position on ${watchTarget.ticker}\n\n` +
+                 `Entry: ${entryPrice}¢ × ${quantity} contracts\n` +
+                 `Stop-loss: sells if bid drops to ${slPrice}¢${tpDesc}\n\n` +
+                 `The bot will market-sell your position if triggered.\nConfirm?`)) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/bot/watch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: watchTarget.ticker,
+                side: watchTarget.side,
+                entry_price: entryPrice,
+                quantity: quantity,
+                stop_loss_cents: stopLoss,
+                take_profit_cents: takeProfit,
+            }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`👁 ${data.message}`);
+            closeWatchModal();
+            loadPositions();
+            loadBots();
+            if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            showNotification(`❌ ${data.error}`);
+        }
+    } catch (err) {
+        showNotification(`❌ Network error: ${err.message}`);
+    }
+}
+
+// ─── RISK WARNINGS ────────────────────────────────────────────────────────────
+
+function generateBotRiskWarnings() {
+    const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
+    const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
+    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const sl = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 5;
+    const total = yes + no;
+
+    const warnings = [];
+    if (total >= 100) {
+        warnings.push({ level: 'error', msg: `YES(${yes}¢) + NO(${no}¢) = ${total}¢ — this is NOT profitable. Total must be below 100¢.` });
+    }
+    if (total >= 97 && total < 100) {
+        warnings.push({ level: 'warn', msg: `Only ${100-total}¢ profit per contract — very thin margin. Consider wider spread.` });
+    }
+    if (yes > 90 || no > 90) {
+        warnings.push({ level: 'warn', msg: `Buying at ${Math.max(yes,no)}¢ is very expensive — limited upside, high risk if it drops.` });
+    }
+    if (yes < 5 || no < 5) {
+        warnings.push({ level: 'warn', msg: `Buying at ${Math.min(yes,no)}¢ is very unlikely to fill — the market may not have liquidity there.` });
+    }
+    if (sl < 3) {
+        warnings.push({ level: 'warn', msg: `Stop-loss of ${sl}¢ is very tight. Normal price fluctuations could trigger it.` });
+    }
+    if (sl > 15) {
+        warnings.push({ level: 'warn', msg: `Stop-loss of ${sl}¢ means you could lose up to $${(sl * qty / 100).toFixed(2)} before exiting.` });
+    }
+
+    const el = document.getElementById('bot-risk-warnings');
+    if (!el) return;
+    if (warnings.length === 0) {
+        el.innerHTML = '';
+        return;
+    }
+    el.innerHTML = warnings.map(w => {
+        const color = w.level === 'error' ? '#ff4444' : '#ffaa00';
+        const bg = w.level === 'error' ? '#ff444415' : '#ffaa0015';
+        const border = w.level === 'error' ? '#ff444444' : '#ffaa0044';
+        return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:${color};display:flex;align-items:center;gap:8px;"><span style="font-size:14px;">⚠️</span>${w.msg}</div>`;
+    }).join('');
 }

@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meridian — Sports Trading Terminal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0e1a; color: #fff; }
+
+        /* ── Header ────────────────────────────────────────────────── */
+        .header {
+            background: #1a1f35; padding: 1rem 2rem; border-bottom: 2px solid #00ff88;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .header h1 { font-size: 1.5rem; color: #00ff88; }
+        .balance-info { display: flex; gap: 2rem; font-size: 0.95rem; }
+        .balance-info span { color: #00ff88; font-weight: 600; }
+
+        /* ── Tab Navigation ────────────────────────────────────────── */
+        .main-nav {
+            display: flex; gap: 0; background: #0d1120; border-bottom: 1px solid #1e2740; padding: 0 2rem;
+        }
+        .nav-tab {
+            padding: 12px 24px; background: none; border: none; color: #8892a6;
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            border-bottom: 2px solid transparent; transition: all .15s; white-space: nowrap;
+        }
+        .nav-tab:hover { color: #fff; background: rgba(255,255,255,0.03); }
+        .nav-tab.active { color: #00ff88; border-bottom-color: #00ff88; }
+        .nav-badge {
+            background: #00ff88; color: #000; font-size: 9px; padding: 1px 6px;
+            border-radius: 8px; margin-left: 6px; font-weight: 700;
+        }
+        .nav-badge.warn { background: #ff4444; color: #fff; }
+
+        /* ── Layout ────────────────────────────────────────────────── */
+        .main-container { max-width: 1600px; margin: 0 auto; padding: 2rem; }
+        .tab-page { display: none; }
+        .tab-page.active { display: block; }
+
+        /* ── Controls & Buttons ────────────────────────────────────── */
+        .controls { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
+        .search-box {
+            flex: 1; min-width: 250px; padding: 0.75rem 1rem; background: #1a1f35;
+            border: 1px solid #2a3550; border-radius: 8px; color: #fff; font-size: 1rem;
+        }
+        .btn {
+            padding: 0.75rem 1.5rem; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; transition: all 0.2s; font-size: 13px;
+        }
+        .btn-primary { background: #00ff88; color: #000; }
+        .btn-primary:hover { background: #00dd77; }
+        .btn-secondary { background: #2a3550; color: #fff; }
+        .btn-secondary:hover { background: #3a4560; }
+        .btn-warn { background: #ff4444; color: #fff; }
+        .btn-warn:hover { background: #dd3333; }
+
+        /* ── Markets Grid ──────────────────────────────────────────── */
+        .markets-grid {
+            display: grid; grid-template-columns: 1fr; gap: 1.5rem;
+        }
+        .market-title { font-size: 1.1rem; margin-bottom: 1rem; color: #fff; line-height: 1.4; }
+        .market-meta { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: 0.85rem; color: #8892a6; }
+
+        /* ── Sport Pills ───────────────────────────────────────────── */
+        .sport-pill {
+            padding: 5px 14px; border-radius: 20px; border: 1px solid #2a3550;
+            background: #1a1f35; color: #8892a6; font-size: 12px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .sport-pill:hover { border-color: #00ff88; color: #00ff88; }
+        .sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
+
+        /* ── Bots Section ──────────────────────────────────────────── */
+        .bots-section {
+            background: #1a1f35; border: 1px solid #2a3550; border-radius: 12px;
+            padding: 1.5rem; margin-bottom: 1.5rem;
+        }
+        .bots-section h2 { margin-bottom: 1rem; color: #00ff88; }
+        .bot-item {
+            background: #0a0e1a; padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .bot-status {
+            display: inline-block; padding: 0.25rem 0.75rem; border-radius: 20px;
+            font-size: 0.8rem; font-weight: 600;
+        }
+        .bot-status.monitoring { background: #ffaa00; color: #000; }
+        .bot-status.leg1_filled { background: #00aaff; color: #fff; }
+        .bot-status.completed { background: #00ff88; color: #000; }
+        .bot-status.stopped { background: #ff4444; color: #fff; }
+        .bot-status.watching { background: #9966ff; color: #fff; }
+
+        /* ── Positions ─────────────────────────────────────────────── */
+        .position-card {
+            background: #1a1f35; border: 1px solid #2a3550; border-radius: 10px;
+            padding: 16px; margin-bottom: 12px; transition: all .15s;
+        }
+        .position-card:hover { border-color: #00ff8866; }
+        .position-card .side-badge {
+            display: inline-block; padding: 2px 10px; border-radius: 4px;
+            font-size: 11px; font-weight: 700; letter-spacing: .04em;
+        }
+        .position-card .side-badge.yes { background: #00ff8822; color: #00ff88; }
+        .position-card .side-badge.no { background: #ff444422; color: #ff4444; }
+
+        /* ── Risk Warning Bar ──────────────────────────────────────── */
+        .risk-warning {
+            background: #ff444415; border: 1px solid #ff444444; border-radius: 8px;
+            padding: 10px 16px; margin-bottom: 12px; font-size: 12px; color: #ff6666;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .risk-warning .icon { font-size: 16px; }
+
+        /* ── Modal ─────────────────────────────────────────────────── */
+        .modal {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.9); z-index: 1000; align-items: center; justify-content: center;
+        }
+        .modal.show { display: flex; }
+        .modal-content {
+            background: #1a1f35; padding: 2rem; border-radius: 12px; max-width: 500px;
+            width: 90%; max-height: 90vh; overflow-y: auto; border: 2px solid #00ff88;
+        }
+        .modal-header { font-size: 1.5rem; margin-bottom: 1.5rem; color: #00ff88; }
+        .form-group { margin-bottom: 1.5rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; color: #8892a6; font-size: 0.9rem; }
+        .form-group input, .form-group select {
+            width: 100%; padding: 0.75rem; background: #0a0e1a; border: 1px solid #2a3550;
+            border-radius: 6px; color: #fff; font-size: 1rem;
+        }
+        .hidden { display: none !important; }
+
+        /* ── Bot Buddy Animated Character ──────────────────────────── */
+        .bot-buddy { display:none; align-items:center; gap:10px; padding:8px 14px; background:#0a0e1a; border:1px solid #1e2740; border-radius:10px; margin-bottom:12px; }
+        .bot-buddy.active { display:flex; }
+        .bot-buddy-avatar { width:48px; height:48px; position:relative; flex-shrink:0; }
+        .bot-buddy-body {
+            width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#00ff88,#00cc6a);
+            position:absolute; bottom:0; left:6px; display:flex; align-items:center; justify-content:center;
+            animation: botBounce 1.2s ease-in-out infinite; box-shadow: 0 0 12px rgba(0,255,136,0.3);
+        }
+        .bot-buddy-eyes { display:flex; gap:5px; margin-top:-2px; }
+        .bot-buddy-eye {
+            width:5px; height:6px; background:#000; border-radius:50%;
+            animation: botBlink 3s ease-in-out infinite;
+        }
+        .bot-buddy-eye:nth-child(2) { animation-delay: 0.1s; }
+        .bot-buddy-antenna {
+            width:2px; height:10px; background:#00ff88; position:absolute; top:0; left:23px;
+            border-radius:1px; animation: botAntenna 2s ease-in-out infinite;
+        }
+        .bot-buddy-antenna::after {
+            content:''; position:absolute; top:-4px; left:-3px; width:8px; height:8px;
+            border-radius:50%; background:#00ff88; box-shadow: 0 0 8px #00ff88;
+            animation: botGlow 1.5s ease-in-out infinite;
+        }
+        .bot-buddy-arm { position:absolute; width:8px; height:3px; background:#00cc6a; border-radius:2px; }
+        .bot-buddy-arm.left { bottom:12px; left:0; animation: botArmL 0.8s ease-in-out infinite; transform-origin: right center; }
+        .bot-buddy-arm.right { bottom:12px; right:0; animation: botArmR 0.8s ease-in-out infinite alternate; transform-origin: left center; }
+        .bot-buddy-msg { color:#8892a6; font-size:12px; line-height:1.4; }
+        .bot-buddy-msg strong { color:#00ff88; }
+        .bot-buddy-status-dot {
+            width:6px; height:6px; border-radius:50%; background:#00ff88;
+            display:inline-block; margin-right:6px; animation: botPulse 1s ease-in-out infinite;
+        }
+        @keyframes botBounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+        @keyframes botBlink { 0%,42%,46%,100%{transform:scaleY(1)} 44%{transform:scaleY(0.1)} }
+        @keyframes botAntenna { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
+        @keyframes botGlow { 0%,100%{opacity:1;box-shadow:0 0 8px #00ff88} 50%{opacity:0.5;box-shadow:0 0 16px #00ff88} }
+        @keyframes botArmL { 0%,100%{transform:rotate(0deg)} 50%{transform:rotate(-25deg)} }
+        @keyframes botArmR { 0%{transform:rotate(0deg)} 100%{transform:rotate(25deg)} }
+        @keyframes botPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .bot-buddy.idle .bot-buddy-body { animation: botIdle 3s ease-in-out infinite; }
+        .bot-buddy.idle .bot-buddy-arm.left, .bot-buddy.idle .bot-buddy-arm.right { animation: none; }
+        .bot-buddy.idle .bot-buddy-antenna::after { animation: none; opacity:0.3; box-shadow:none; }
+        .bot-buddy.idle .bot-buddy-status-dot { background:#555; animation:none; }
+        @keyframes botIdle { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-1px)} }
+
+        /* ── Empty State ───────────────────────────────────────────── */
+        .empty-state {
+            text-align: center; padding: 48px 24px; color: #8892a6;
+        }
+        .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.3; }
+        .empty-state .title { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+        .empty-state .desc { font-size: 13px; line-height: 1.6; }
+    </style>
+</head>
+<body>
+    <!-- ─── Header ─────────────────────────────────────────────── -->
+    <div class="header">
+        <h1 style="display:flex;align-items:center;gap:10px;">
+            <span style="background:linear-gradient(135deg,#00ff88,#00cc6a);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:900;letter-spacing:-.02em;">MERIDIAN</span>
+            <span style="color:#2a3550;font-weight:300;">|</span>
+            <span style="color:#8892a6;font-size:14px;font-weight:500;letter-spacing:.04em;">Sports Trading Terminal</span>
+        </h1>
+        <div class="balance-info" id="balance-display" style="display:none;">
+            <div>Balance: <span id="balance-amount">$0.00</span></div>
+            <div>Portfolio: <span id="portfolio-value">$0.00</span></div>
+        </div>
+        <button id="login-status" class="btn btn-primary" onclick="window.location.reload()">Logged In ✓</button>
+    </div>
+
+    <!-- ─── Tab Navigation ────────────────────────────────────── -->
+    <nav class="main-nav">
+        <button class="nav-tab active" data-tab="markets" onclick="switchTab('markets')">📊 Markets</button>
+        <button class="nav-tab" data-tab="bots" onclick="switchTab('bots')">🤖 Bots &amp; Automation <span class="nav-badge" id="bots-badge" style="display:none">0</span></button>
+        <button class="nav-tab" data-tab="positions" onclick="switchTab('positions')">💼 My Positions</button>
+        <button class="nav-tab" data-tab="history" onclick="switchTab('history')">📜 History</button>
+    </nav>
+
+    <div class="main-container">
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- MARKETS TAB                                            -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="tab-page active" id="tab-markets">
+            <!-- Sport Filter Pills -->
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; align-items:center;">
+                <span style="color:#8892a6; font-size:12px; font-weight:600; white-space:nowrap;">Filter:</span>
+                <button class="sport-pill active" data-sport="all"   onclick="filterBySport('all')">All</button>
+                <button class="sport-pill"        data-sport="live"  onclick="filterBySport('live')">🔴 LIVE</button>
+                <button class="sport-pill"        data-sport="nba"   onclick="filterBySport('nba')">🏀 NBA</button>
+                <button class="sport-pill"        data-sport="nfl"   onclick="filterBySport('nfl')">🏈 NFL</button>
+                <button class="sport-pill"        data-sport="mlb"   onclick="filterBySport('mlb')">⚾ MLB</button>
+                <button class="sport-pill"        data-sport="nhl"   onclick="filterBySport('nhl')">🏒 NHL</button>
+                <button class="sport-pill"        data-sport="ncaab" onclick="filterBySport('ncaab')">🎓 NCAAB</button>
+                <button class="sport-pill"        data-sport="other" onclick="filterBySport('other')">Other</button>
+            </div>
+
+            <!-- Market Controls -->
+            <div class="controls">
+                <input type="text" class="search-box" id="search-box" placeholder="Search markets (e.g., Lakers, Celtics, NBA)...">
+                <button class="btn btn-primary" onclick="loadMarkets()" title="Re-fetch all markets from Kalshi API">🔄 Refresh</button>
+            </div>
+
+            <!-- Markets Grid -->
+            <div class="markets-grid" id="markets-grid">
+                <p style="color: #8892a6; text-align: center; grid-column: 1 / -1;">Loading markets...</p>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- BOTS & AUTOMATION TAB                                  -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="tab-page" id="tab-bots">
+            <!-- Bot Tools Bar -->
+            <div class="controls">
+                <button class="btn btn-primary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks active bots every 2s: fills, reposts, stop-losses">
+                    <span id="auto-monitor-text">▶️ Start Auto-Monitor</span>
+                </button>
+                <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Scan all markets for arb opportunities">🔍 Arb Scanner</button>
+                <button class="btn btn-secondary" onclick="scanMiddles()" title="Find middle spread opportunities">📐 Middles</button>
+                <label style="color:#8892a6;font-size:11px;margin-left:8px;">Min Width (¢):</label>
+                <input type="number" id="scan-min-width" min="1" max="20" value="3"
+                       style="width:60px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;">
+                <label style="color:#8892a6;font-size:11px;margin-left:8px;">Qty:</label>
+                <input type="number" id="scan-qty" min="1" value="1"
+                       style="width:50px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;">
+                <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
+                        style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓ Guide</button>
+            </div>
+
+            <!-- Active Bots Section -->
+            <div class="bots-section" id="bots-section">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <h2 style="margin:0;">Active Trading Bots</h2>
+                </div>
+                <!-- Bot Buddy -->
+                <div class="bot-buddy idle" id="bot-buddy">
+                    <div class="bot-buddy-avatar">
+                        <div class="bot-buddy-antenna"></div>
+                        <div class="bot-buddy-body">
+                            <div class="bot-buddy-eyes">
+                                <div class="bot-buddy-eye"></div>
+                                <div class="bot-buddy-eye"></div>
+                            </div>
+                        </div>
+                        <div class="bot-buddy-arm left"></div>
+                        <div class="bot-buddy-arm right"></div>
+                    </div>
+                    <div class="bot-buddy-msg" id="bot-buddy-msg">
+                        <span class="bot-buddy-status-dot"></span>
+                        <strong>Idle</strong> — Enable Auto-Monitor to put me to work!
+                    </div>
+                </div>
+                <!-- P&L Dashboard -->
+                <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
+                <div id="bots-list"><p style="color: #8892a6;">No active bots</p></div>
+            </div>
+
+            <!-- Feature Guide -->
+            <div id="feature-guide" style="display:none; background:#0d1120; border:1px solid #2a3550; border-radius:10px; padding:16px 20px; margin-top:16px; font-size:12px; line-height:1.7; color:#8892a6;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                    <span style="color:#00ff88; font-weight:700; font-size:13px;">📖 Feature Guide</span>
+                    <button onclick="toggleFeatureGuide()" style="background:none;border:none;color:#8892a6;cursor:pointer;font-size:14px;">✕</button>
+                </div>
+                <div style="display:grid;gap:12px;">
+                    <div><strong style="color:#fff;">▶️ Auto-Monitor</strong> — <strong style="color:#ff6666;">Must be enabled for bots to work.</strong> Runs every 2 seconds:
+                        <ul style="margin:4px 0 0 16px;padding:0;">
+                            <li><strong>Fill detection</strong> — notices when orders get filled</li>
+                            <li><strong>Stale repost</strong> — cancels &amp; re-posts at current bid</li>
+                            <li><strong>Stop loss</strong> — market-sells if bid drops below threshold</li>
+                            <li><strong>Watch bots</strong> — monitors your existing Kalshi positions too</li>
+                        </ul>
+                    </div>
+                    <div><strong style="color:#fff;">🔍 Arb Scanner</strong> — Finds markets where YES bid + NO bid &lt; 100¢. The gap = your profit when both fill.</div>
+                    <div><strong style="color:#fff;">📐 Middles</strong> — Finds games with multiple spread lines where betting between them wins both sides.</div>
+                    <div><strong style="color:#fff;">💼 Positions Tab</strong> — Shows your real Kalshi positions. Attach a watch-bot for automatic stop-loss / take-profit.</div>
+                    <div><strong style="color:#fff;">⚠️ Risk Warnings</strong> — The app warns you before placing risky orders (non-profitable, extreme prices, tight stop-loss).</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- POSITIONS TAB                                          -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="tab-page" id="tab-positions">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h2 style="color:#00ff88;margin:0;">💼 My Kalshi Positions</h2>
+                <button class="btn btn-primary" onclick="loadPositions()">🔄 Refresh</button>
+            </div>
+            <p style="color:#8892a6;font-size:12px;margin-bottom:16px;line-height:1.5;">
+                Your real positions on Kalshi — including ones you placed manually on their website.
+                Attach a <strong style="color:#9966ff;">watch-bot</strong> to auto-sell at stop-loss or take-profit.
+            </p>
+            <div id="positions-list">
+                <div class="empty-state">
+                    <div class="icon">💼</div>
+                    <div class="title">No positions loaded</div>
+                    <div class="desc">Click Refresh to fetch your current Kalshi positions</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- HISTORY TAB                                            -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="tab-page" id="tab-history">
+            <h2 style="color:#ffaa00;margin-bottom:16px;">📜 Trade History</h2>
+            <p style="color:#8892a6;font-size:12px;margin-bottom:16px;">
+                All bot actions — fills, stop-losses, take-profits, completions. Persisted across refreshes.
+            </p>
+            <div id="trade-history-list">
+                <div class="empty-state">
+                    <div class="icon">📜</div>
+                    <div class="title">No trades yet</div>
+                    <div class="desc">Trades will appear here as your bots execute</div>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /main-container -->
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- MODALS                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Dual Arb Bot Modal -->
+    <div class="modal" id="bot-modal">
+        <div class="modal-content" style="max-width: 580px; border: 1px solid #2a3550; border-top: 3px solid #00ff88; padding: 0; overflow-y: auto;">
+            <!-- Top bar -->
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; background:#0d1120; border-bottom:1px solid #1e2740;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);display:flex;align-items:center;justify-content:center;font-size:16px;">⚡</div>
+                    <div>
+                        <div style="color:#fff;font-weight:700;font-size:14px;letter-spacing:.02em;">Dual-Arb Bot</div>
+                        <div style="color:#8892a6;font-size:10px;letter-spacing:.04em;text-transform:uppercase;">Settlement Arbitrage Engine</div>
+                    </div>
+                </div>
+                <button onclick="closeModal()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;" onmouseenter="this.style.borderColor='#ff4444';this.style.color='#ff4444'" onmouseleave="this.style.borderColor='#2a3550';this.style.color='#8892a6'">✕</button>
+            </div>
+            <div style="padding: 20px;">
+                <!-- Strategy description (collapsible) -->
+                <div id="strategy-info" style="margin-bottom:16px;">
+                    <div onclick="toggleStrategyInfo()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:10px 14px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;">
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:12px;">📖</span><span style="color:#8892a6;font-size:12px;font-weight:600;">How does this strategy work?</span></div>
+                        <span id="strategy-chevron" style="color:#8892a6;font-size:10px;">▼</span>
+                    </div>
+                    <div id="strategy-details" style="display:none;padding:14px;background:#080b14;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;font-size:12px;line-height:1.6;color:#8892a6;">
+                        <div style="margin-bottom:10px;"><span style="color:#00ff88;font-weight:700;">Core principle:</span> Every contract settles at <strong style="color:#fff;">100¢</strong>. Buy YES + NO below 100¢ = <strong style="color:#00ff88;">guaranteed profit</strong>.</div>
+                        <div style="padding:8px 12px;background:#0d1120;border-radius:6px;border-left:3px solid #00ff88;">
+                            <strong style="color:#fff;">Example:</strong> YES 45¢ + NO 50¢ = 95¢ → <strong style="color:#00ff88;">+5¢ profit</strong> per contract.
+                        </div>
+                    </div>
+                </div>
+                <!-- Risk warning area -->
+                <div id="bot-risk-warnings"></div>
+                <!-- Market card -->
+                <div id="bot-market-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+                    <div id="bot-market-title" style="color:#fff;font-weight:600;font-size:14px;margin-bottom:10px;"></div>
+                    <div id="bot-market-prices" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
+                </div>
+                <!-- Arb Width Slider -->
+                <div style="margin-bottom:16px;">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+                        <label style="color:#8892a6;font-size:12px;font-weight:600;">Target Profit Width</label>
+                        <span id="width-display" style="color:#00ff88;font-weight:800;font-size:18px;">5¢</span>
+                    </div>
+                    <input type="range" id="bot-arb-width" min="1" max="20" value="5" step="1" oninput="recalcArbPrices()"
+                           style="width:100%;height:6px;border-radius:3px;outline:none;cursor:pointer;accent-color:#00ff88;">
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px;">
+                        <span>1¢ (tight)</span><span>10¢</span><span>20¢ (wide)</span>
+                    </div>
+                </div>
+                <!-- YES / NO Price Inputs -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                    <div style="background:#0a0e1a;border:1px solid #00ff8844;border-radius:8px;padding:12px;text-align:center;">
+                        <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">YES LIMIT BUY</label>
+                        <div style="position:relative;">
+                            <input type="number" id="bot-yes-price" min="1" max="98" oninput="onPriceManualChange()"
+                                   style="width:100%;padding:8px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                   onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
+                            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
+                        </div>
+                        <div id="yes-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
+                    </div>
+                    <div style="background:#0a0e1a;border:1px solid #ff444444;border-radius:8px;padding:12px;text-align:center;">
+                        <label style="color:#ff4444;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">NO LIMIT BUY</label>
+                        <div style="position:relative;">
+                            <input type="number" id="bot-no-price" min="1" max="98" oninput="onPriceManualChange()"
+                                   style="width:100%;padding:8px;background:#060a14;border:2px solid #ff444466;border-radius:6px;color:#ff4444;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                   onfocus="this.style.borderColor='#ff4444'" onblur="this.style.borderColor='#ff444466'">
+                            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ff444466;font-size:12px;pointer-events:none;">¢</span>
+                        </div>
+                        <div id="no-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
+                    </div>
+                </div>
+                <!-- Profit Preview -->
+                <div id="profit-preview" style="margin-bottom:16px;"></div>
+                <!-- Qty, Stop Loss, Phase -->
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+                    <div>
+                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
+                        <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview()"
+                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                    </div>
+                    <div>
+                        <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop Loss <span style="color:#555;font-weight:400;">(¢ drop)</span></label>
+                        <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5"
+                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                    </div>
+                    <div>
+                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Game Phase</label>
+                        <select id="bot-game-phase"
+                                style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;appearance:none;">
+                            <option value="pregame" selected>⏳ Pregame</option>
+                            <option value="live">🔴 Live</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
+                    <strong style="color:#8892a6;">⏳ Pregame:</strong> Orders sit patiently — no repost, no stop-loss timeout.<br>
+                    <strong style="color:#8892a6;">🔴 Live:</strong> Active management — reposts stale orders, triggers stop-losses.
+                </div>
+                <!-- Action buttons -->
+                <div style="display:flex;gap:10px;">
+                    <button onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Deploy Bot</button>
+                    <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scan Modal -->
+    <div class="modal" id="scan-modal">
+        <div class="modal-content" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
+                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
+                    <input type="number" id="scan-modal-qty" min="1" value="1"
+                           style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                    <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
+                </div>
+            </div>
+            <div id="scan-results" style="flex:1;overflow-y:auto;"></div>
+        </div>
+    </div>
+
+    <!-- Middles Modal -->
+    <div class="modal" id="middles-modal">
+        <div class="modal-content" style="max-width:700px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid #ffaa00;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                <div>
+                    <h2 class="modal-header" style="margin:0;">📐 Middle Spread Scanner</h2>
+                    <div style="color:#8892a6;font-size:11px;margin-top:4px;">Find games where you can bet between two spread lines</div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="middles-count" style="color:#8892a6;font-size:12px;"></span>
+                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
+                    <input type="number" id="middles-modal-qty" min="1" value="1"
+                           style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                    <button class="btn btn-secondary" onclick="closeMiddlesModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
+                </div>
+            </div>
+            <div id="middles-results" style="flex:1;overflow-y:auto;"></div>
+        </div>
+    </div>
+
+    <!-- Watch Position Modal -->
+    <div class="modal" id="watch-modal">
+        <div class="modal-content" style="max-width:480px;border-top:3px solid #9966ff;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#9966ff,#7744dd);display:flex;align-items:center;justify-content:center;font-size:16px;">👁</div>
+                    <div>
+                        <div style="color:#fff;font-weight:700;font-size:14px;">Watch Position</div>
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Auto Stop-Loss / Take-Profit</div>
+                    </div>
+                </div>
+                <button onclick="closeWatchModal()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;">✕</button>
+            </div>
+            <div id="watch-market-info" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:12px 16px;margin-bottom:16px;"></div>
+            <div id="watch-risk-warning"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                <div>
+                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop-Loss (¢ drop from entry)</label>
+                    <input type="number" id="watch-stop-loss" min="1" max="50" value="5"
+                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Take-Profit (¢ rise, 0 = off)</label>
+                    <input type="number" id="watch-take-profit" min="0" max="50" value="0"
+                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
+                <div>
+                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Entry Price (¢ you bought at)</label>
+                    <input type="number" id="watch-entry-price" min="1" max="99" value="50"
+                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts to watch</label>
+                    <input type="number" id="watch-quantity" min="1" value="1"
+                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                </div>
+            </div>
+            <div style="padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;margin-bottom:16px;">
+                <strong style="color:#8892a6;">How it works:</strong> The bot monitors the current bid price for your position. If it drops below your entry minus the stop-loss, it <strong style="color:#ff4444;">market-sells</strong> to cut losses. If it rises above entry plus take-profit, it <strong style="color:#00ff88;">market-sells</strong> to lock gains.
+            </div>
+            <button onclick="confirmWatchPosition()" style="width:100%;padding:12px;background:linear-gradient(135deg,#9966ff,#7744dd);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">👁 Start Watching</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

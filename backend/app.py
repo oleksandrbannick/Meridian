@@ -25,7 +25,7 @@ stop_loss_percentage = 0.05  # 5% stop loss default
 @app.route('/')
 def index():
     """Serve the frontend"""
-    return send_from_directory(app.static_folder, 'index_new.html')
+    return send_from_directory(app.static_folder, 'index.html')
 
 
 @app.route('/<path:path>')
@@ -456,6 +456,39 @@ def get_fills():
 active_bots = {}  # bot_id -> bot_config
 trade_history = []  # completed/stopped bots log (newest first)
 
+# ─── State Persistence ────────────────────────────────────────────────────────
+DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
+
+def save_state():
+    """Persist active_bots and trade_history to disk so they survive restarts."""
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump({
+                'active_bots': active_bots,
+                'trade_history': trade_history[:200],
+                'session_pnl': session_pnl,
+            }, f, indent=2, default=str)
+    except Exception as e:
+        print(f'⚠ save_state: {e}')
+
+def load_state():
+    """Load persisted bots and history from disk."""
+    global active_bots, trade_history, session_pnl
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
+                data = json.load(f)
+            active_bots = data.get('active_bots', {})
+            trade_history = data.get('trade_history', [])
+            saved = data.get('session_pnl')
+            if saved:
+                for k in ('gross_profit_cents','gross_loss_cents','completed_bots','stopped_bots'):
+                    if k in saved:
+                        session_pnl[k] = saved[k]
+            print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history')
+    except Exception as e:
+        print(f'⚠ load_state: {e}')
+
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
     """Token bucket — keeps us under Kalshi's ~10 req/sec API limit."""
@@ -597,6 +630,7 @@ def create_bot():
             'posted_at':        time.time(),
             'repost_count':     0,
         }
+        save_state()
 
         return jsonify({
             'success':      True,
@@ -635,7 +669,7 @@ def monitor_bots():
             return jsonify({'error': 'Not authenticated'}), 401
 
         actions = []
-        active_statuses = ('pending_fills', 'yes_filled', 'no_filled')
+        active_statuses = ('pending_fills', 'yes_filled', 'no_filled', 'watching')
 
         for bot_id, bot in list(active_bots.items()):
             if bot['status'] not in active_statuses:
@@ -647,6 +681,68 @@ def monitor_bots():
                 now     = time.time()
                 age_min = (now - bot.get('posted_at', now)) / 60.0
                 phase   = bot.get('game_phase', 'pregame')
+
+                # ── Watch Bots: monitor existing positions ───────────
+                if bot.get('type') == 'watch':
+                    watch_side = bot.get('side', 'yes')
+                    entry = bot.get('entry_price', 50)
+                    sl = bot.get('stop_loss_cents', 5)
+                    tp = bot.get('take_profit_cents', 0)
+
+                    api_rate_limiter.wait()
+                    mkt_resp = kalshi_client.get_market(ticker)
+                    mkt = mkt_resp.get('market', mkt_resp)
+
+                    def tc_watch(field):
+                        d = mkt.get(field + '_dollars')
+                        if d: return round(float(d) * 100)
+                        return mkt.get(field, 50)
+
+                    cur_bid = tc_watch(f'{watch_side}_bid')
+                    bot['live_bid'] = cur_bid
+                    bot['last_price_update'] = now
+
+                    # Stop-loss
+                    if cur_bid <= entry - sl:
+                        api_rate_limiter.wait()
+                        kalshi_client.create_order(
+                            ticker=ticker, side=watch_side, action='sell',
+                            count=qty, order_type='market')
+                        loss = (entry - cur_bid) * qty
+                        bot['status'] = 'stopped'
+                        bot['stopped_at'] = now
+                        session_pnl['gross_loss_cents'] += loss
+                        session_pnl['stopped_bots'] += 1
+                        trade_history.insert(0, {
+                            'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                            'side': watch_side, 'entry_price': entry,
+                            'exit_bid': cur_bid, 'quantity': qty,
+                            'loss_cents': loss, 'result': 'stop_loss_watch',
+                            'timestamp': now,
+                        })
+                        actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
+                                       'loss_cents': loss})
+                    # Take-profit
+                    elif tp > 0 and cur_bid >= entry + tp:
+                        api_rate_limiter.wait()
+                        kalshi_client.create_order(
+                            ticker=ticker, side=watch_side, action='sell',
+                            count=qty, order_type='market')
+                        profit = (cur_bid - entry) * qty
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        session_pnl['gross_profit_cents'] += profit
+                        session_pnl['completed_bots'] += 1
+                        trade_history.insert(0, {
+                            'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                            'side': watch_side, 'entry_price': entry,
+                            'exit_bid': cur_bid, 'quantity': qty,
+                            'profit_cents': profit, 'result': 'take_profit_watch',
+                            'timestamp': now,
+                        })
+                        actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
+                                       'profit_cents': profit})
+                    continue
 
                 # ── Rate-limited fill checks ──────────────────────────────
                 api_rate_limiter.wait()
@@ -868,6 +964,7 @@ def monitor_bots():
                 print(f"Error monitoring bot {bot_id}: {e}")
                 continue
 
+        save_state()
         return jsonify({
             'success':     True,
             'actions':     actions,
@@ -905,6 +1002,7 @@ def set_bot_phase(bot_id):
     active_bots[bot_id]['game_phase'] = new_phase
     # Reset posted_at so timeout counters restart from now
     active_bots[bot_id]['posted_at'] = time.time()
+    save_state()
     return jsonify({'success': True, 'bot_id': bot_id, 'phase': new_phase})
 
 
@@ -933,6 +1031,7 @@ def cancel_bot(bot_id):
                 pass
 
     del active_bots[bot_id]
+    save_state()
     return jsonify({'success': True, 'cancelled_orders': cancelled})
 
 
@@ -1251,5 +1350,115 @@ def scan_middles():
         return jsonify({'error': str(e)}), 500
 
 
+# ─── Active Positions from Kalshi ──────────────────────────────────────────────
+
+@app.route('/api/positions/active', methods=['GET'])
+def get_active_positions():
+    """Get current Kalshi positions enriched with live market data."""
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        positions = kalshi_client.get_positions(limit=200)
+        pos_list = positions.get('market_positions', positions.get('positions', []))
+
+        enriched = []
+        for pos in pos_list:
+            qty = pos.get('position', 0)
+            if qty == 0:
+                continue
+            ticker = pos.get('ticker', '')
+            side = 'yes' if qty > 0 else 'no'
+            abs_qty = abs(qty)
+
+            try:
+                api_rate_limiter.wait()
+                mkt_resp = kalshi_client.get_market(ticker)
+                mkt = mkt_resp.get('market', mkt_resp)
+
+                def tc_pos(field):
+                    d = mkt.get(field + '_dollars')
+                    if d: return round(float(d) * 100)
+                    return mkt.get(field, 0)
+
+                enriched.append({
+                    'ticker':     ticker,
+                    'title':      mkt.get('title', ticker),
+                    'side':       side,
+                    'quantity':   abs_qty,
+                    'yes_bid':    tc_pos('yes_bid'),
+                    'yes_ask':    tc_pos('yes_ask'),
+                    'no_bid':     tc_pos('no_bid'),
+                    'no_ask':     tc_pos('no_ask'),
+                    'market_exposure': pos.get('market_exposure', 0),
+                    'realized_pnl':   pos.get('realized_pnl', 0),
+                    'resting_orders': pos.get('resting_orders_count', 0),
+                    'fees_paid':      pos.get('fees_paid', 0),
+                    'watched_by': next((bid for bid, b in active_bots.items()
+                                        if b.get('ticker') == ticker and b.get('type') == 'watch'
+                                        and b['status'] == 'watching'), None),
+                })
+            except Exception:
+                enriched.append({
+                    'ticker': ticker, 'title': ticker,
+                    'side': side, 'quantity': abs_qty,
+                    'yes_bid': 0, 'no_bid': 0, 'yes_ask': 0, 'no_ask': 0,
+                    'market_exposure': pos.get('market_exposure', 0),
+                    'realized_pnl': pos.get('realized_pnl', 0),
+                    'watched_by': None,
+                })
+
+        return jsonify({'positions': enriched, 'count': len(enriched)})
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/bot/watch', methods=['POST'])
+def watch_position():
+    """Attach a watch-bot to an existing Kalshi position for stop-loss / take-profit."""
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        data = request.json
+        ticker           = data.get('ticker')
+        side             = data.get('side', 'yes')
+        entry_price      = int(data.get('entry_price', 50))
+        quantity         = int(data.get('quantity', 1))
+        stop_loss_cents  = int(data.get('stop_loss_cents', 5))
+        take_profit_cents = int(data.get('take_profit_cents', 0))
+
+        if not ticker:
+            return jsonify({'error': 'ticker required'}), 400
+
+        bot_id = f"watch_{ticker}_{int(time.time())}"
+        active_bots[bot_id] = {
+            'type':              'watch',
+            'ticker':            ticker,
+            'side':              side,
+            'entry_price':       entry_price,
+            'quantity':          quantity,
+            'stop_loss_cents':   stop_loss_cents,
+            'take_profit_cents': take_profit_cents,
+            'status':            'watching',
+            'game_phase':        'live',
+            'created_at':        time.time(),
+            'posted_at':         time.time(),
+        }
+        save_state()
+
+        return jsonify({
+            'success': True,
+            'bot_id':  bot_id,
+            'message': f'Watching {side.upper()} on {ticker} — SL: -{stop_loss_cents}¢'
+                       + (f', TP: +{take_profit_cents}¢' if take_profit_cents else ''),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
+    load_state()
     app.run(debug=True, host='0.0.0.0', port=5001)

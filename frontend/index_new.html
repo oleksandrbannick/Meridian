@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kalshi Basketball Trader</title>
+    <title>Meridian — Sports Trading Terminal</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -188,6 +188,8 @@
             border-radius: 12px;
             max-width: 500px;
             width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
             border: 2px solid #00ff88;
         }
         
@@ -283,28 +285,105 @@
         .sport-pill:hover { border-color: #00ff88; color: #00ff88; }
         .sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
 
-        /* Live score chip */
-        .live-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: #0f1a0f;
-            border: 1px solid #1a3a1a;
-            border-radius: 8px;
-            padding: 5px 10px;
-            font-size: 12px;
-            white-space: nowrap;
+        /* ── Bot Buddy Animated Character ─────────────────── */
+        .bot-buddy { display:none; align-items:center; gap:10px; padding:8px 14px; background:#0a0e1a; border:1px solid #1e2740; border-radius:10px; margin-bottom:12px; }
+        .bot-buddy.active { display:flex; }
+        .bot-buddy-avatar {
+            width:48px; height:48px; position:relative; flex-shrink:0;
         }
-        .live-chip.live { border-color: #00ff88; }
-        .live-chip .teams { color: #fff; font-weight: 600; }
-        .live-chip .score { color: #00ff88; font-weight: 700; }
-        .live-chip .clock { color: #8892a6; font-size: 10px; }
-        .live-chip .final { color: #8892a6; }
+        .bot-buddy-body {
+            width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#00ff88,#00cc6a);
+            position:absolute; bottom:0; left:6px;
+            display:flex; align-items:center; justify-content:center;
+            animation: botBounce 1.2s ease-in-out infinite;
+            box-shadow: 0 0 12px rgba(0,255,136,0.3);
+        }
+        .bot-buddy-eyes {
+            display:flex; gap:5px; margin-top:-2px;
+        }
+        .bot-buddy-eye {
+            width:5px; height:6px; background:#000; border-radius:50%;
+            animation: botBlink 3s ease-in-out infinite;
+        }
+        .bot-buddy-eye:nth-child(2) { animation-delay: 0.1s; }
+        .bot-buddy-antenna {
+            width:2px; height:10px; background:#00ff88;
+            position:absolute; top:0; left:23px;
+            border-radius:1px;
+            animation: botAntenna 2s ease-in-out infinite;
+        }
+        .bot-buddy-antenna::after {
+            content:''; position:absolute; top:-4px; left:-3px;
+            width:8px; height:8px; border-radius:50%;
+            background:#00ff88; box-shadow: 0 0 8px #00ff88;
+            animation: botGlow 1.5s ease-in-out infinite;
+        }
+        .bot-buddy-arm {
+            position:absolute; width:8px; height:3px; background:#00cc6a; border-radius:2px;
+        }
+        .bot-buddy-arm.left {
+            bottom:12px; left:0;
+            animation: botArmL 0.8s ease-in-out infinite;
+            transform-origin: right center;
+        }
+        .bot-buddy-arm.right {
+            bottom:12px; right:0;
+            animation: botArmR 0.8s ease-in-out infinite alternate;
+            transform-origin: left center;
+        }
+        .bot-buddy-msg {
+            color:#8892a6; font-size:12px; line-height:1.4;
+        }
+        .bot-buddy-msg strong { color:#00ff88; }
+        .bot-buddy-status-dot {
+            width:6px; height:6px; border-radius:50%; background:#00ff88;
+            display:inline-block; margin-right:6px;
+            animation: botPulse 1s ease-in-out infinite;
+        }
+        @keyframes botBounce {
+            0%,100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
+        }
+        @keyframes botBlink {
+            0%,42%,46%,100% { transform: scaleY(1); }
+            44% { transform: scaleY(0.1); }
+        }
+        @keyframes botAntenna {
+            0%,100% { transform: rotate(-5deg); }
+            50% { transform: rotate(5deg); }
+        }
+        @keyframes botGlow {
+            0%,100% { opacity:1; box-shadow: 0 0 8px #00ff88; }
+            50% { opacity:0.5; box-shadow: 0 0 16px #00ff88; }
+        }
+        @keyframes botArmL {
+            0%,100% { transform: rotate(0deg); }
+            50% { transform: rotate(-25deg); }
+        }
+        @keyframes botArmR {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(25deg); }
+        }
+        @keyframes botPulse {
+            0%,100% { opacity:1; }
+            50% { opacity:0.3; }
+        }
+        /* idle state — slower, sleepy */
+        .bot-buddy.idle .bot-buddy-body { animation: botIdle 3s ease-in-out infinite; }
+        .bot-buddy.idle .bot-buddy-arm.left,
+        .bot-buddy.idle .bot-buddy-arm.right { animation: none; }
+        .bot-buddy.idle .bot-buddy-antenna::after { animation: none; opacity:0.3; box-shadow:none; }
+        .bot-buddy.idle .bot-buddy-status-dot { background:#555; animation:none; }
+        @keyframes botIdle {
+            0%,100% { transform: translateY(0); }
+            50% { transform: translateY(-1px); }
+        }
+
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🏀 Kalshi Basketball Trader</h1>
+        <h1 style="display:flex;align-items:center;gap:10px;"><span style="background:linear-gradient(135deg,#00ff88,#00cc6a);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:900;letter-spacing:-.02em;">MERIDIAN</span><span style="color:#2a3550;font-weight:300;">|</span><span style="color:#8892a6;font-size:14px;font-weight:500;letter-spacing:.04em;">Sports Trading Terminal</span></h1>
         <div class="balance-info" id="balance-display" style="display: none;">
             <div>Balance: <span id="balance-amount">$0.00</span></div>
             <div>Portfolio: <span id="portfolio-value">$0.00</span></div>
@@ -318,6 +397,24 @@
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                 <h2 style="margin:0;">Active Trading Bots</h2>
             </div>
+            <!-- Bot Buddy Widget -->
+            <div class="bot-buddy idle" id="bot-buddy">
+                <div class="bot-buddy-avatar">
+                    <div class="bot-buddy-antenna"></div>
+                    <div class="bot-buddy-body">
+                        <div class="bot-buddy-eyes">
+                            <div class="bot-buddy-eye"></div>
+                            <div class="bot-buddy-eye"></div>
+                        </div>
+                    </div>
+                    <div class="bot-buddy-arm left"></div>
+                    <div class="bot-buddy-arm right"></div>
+                </div>
+                <div class="bot-buddy-msg" id="bot-buddy-msg">
+                    <span class="bot-buddy-status-dot"></span>
+                    <strong>Idle</strong> — Enable Auto-Monitor to put me to work!
+                </div>
+            </div>
             <!-- P&L Dashboard (Upgrade #6) -->
             <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
             <div id="bots-list">
@@ -325,19 +422,13 @@
             </div>
         </div>
 
-        <!-- Live Scores Bar -->
-        <div id="live-scores-bar" style="display:none; background:#1a1f35; border:1px solid #2a3550; border-radius:10px; padding:12px 16px; margin-bottom:16px;">
-            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-                <span style="color:#00ff88; font-weight:700; font-size:12px; letter-spacing:.05em; white-space:nowrap;">🔴 LIVE SCORES</span>
-                <div id="live-scores-content" style="display:flex; gap:10px; flex-wrap:wrap; flex:1;"></div>
-                <button onclick="loadLiveScores()" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">↺</button>
-            </div>
-        </div>
+
 
         <!-- Sport Filter Pills -->
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; align-items:center;">
             <span style="color:#8892a6; font-size:12px; font-weight:600; white-space:nowrap;">Filter:</span>
             <button class="sport-pill active" data-sport="all"    onclick="filterBySport('all')">All</button>
+            <button class="sport-pill"        data-sport="live"   onclick="filterBySport('live')">🔴 LIVE</button>
             <button class="sport-pill"        data-sport="nba"    onclick="filterBySport('nba')">🏀 NBA</button>
             <button class="sport-pill"        data-sport="nfl"    onclick="filterBySport('nfl')">🏈 NFL</button>
             <button class="sport-pill"        data-sport="mlb"    onclick="filterBySport('mlb')">⚾ MLB</button>
@@ -349,17 +440,59 @@
         <!-- Controls -->
         <div class="controls">
             <input type="text" class="search-box" id="search-box" placeholder="Search markets (e.g., Lakers, Celtics, NBA)...">
-            <button class="btn btn-primary" onclick="loadMarkets()">🔄 Refresh</button>
-            <button class="btn btn-secondary" onclick="toggleAutoMonitor()">
-                <span id="auto-monitor-text">▶️ Start Auto-Monitor</span>
-            </button>
-            <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Find all arb opportunities across all open markets">🔍 Auto-Scan</button>
-            <label style="color: #8892a6; font-size: 11px; margin-left: 8px;">Min Width (¢):</label>
-            <input type="number" id="scan-min-width" min="1" max="20" value="3" title="Min arb width (¢) to scan for"
+            <button class="btn btn-primary" onclick="loadMarkets()" title="Re-fetch all markets from Kalshi API">🔄 Refresh</button>
+            <div style="position:relative;display:inline-block;">
+                <button class="btn btn-secondary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks your active bots every 2 seconds: detects filled orders, reposts stale limit orders at better prices, triggers stop-loss if only one side fills, and resizes partial fills.">
+                    <span id="auto-monitor-text">▶️ Start Auto-Monitor</span>
+                </button>
+            </div>
+            <div style="position:relative;display:inline-block;">
+                <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Scans all sports markets for dual-arb opportunities — finds markets where YES bid + NO bid is well below 100¢, meaning you can place limit orders on both sides and lock guaranteed profit at settlement.">🔍 Arb Scanner</button>
+            </div>
+            <div style="position:relative;display:inline-block;">
+                <button class="btn btn-secondary" onclick="scanMiddles()" title="Finds games with multiple spread lines where you can bet the middle — if the margin lands between two numbers, both bets win." style="border-color:#ffaa0066;">📐 Middles</button>
+            </div>
+            <label style="color: #8892a6; font-size: 11px; margin-left: 8px;" title="Minimum profit spread (in cents) to include in scan results">Min Width (¢):</label>
+            <input type="number" id="scan-min-width" min="1" max="20" value="3" title="Only show markets where the profit gap is ≥ this many cents"
                    style="width:60px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;">
-            <label style="color: #8892a6; font-size: 11px; margin-left: 8px;">Qty:</label>
-            <input type="number" id="scan-qty" min="1" value="1" title="Contracts per auto-bot"
+            <label style="color: #8892a6; font-size: 11px; margin-left: 8px;" title="Number of contracts per auto-placed bot">Qty:</label>
+            <input type="number" id="scan-qty" min="1" value="1" title="How many contracts to buy on each side when placing a bot from scan results"
                    style="width:50px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;" placeholder="Qty">
+            <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;cursor:pointer;border-radius:8px;">❓ Guide</button>
+            <button class="btn" onclick="toggleTradeHistory()" title="View completed and stopped trades" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;cursor:pointer;border-radius:8px;">📜 History</button>
+        </div>
+
+        <!-- Trade History Panel (hidden by default) -->
+        <div id="trade-history-panel" style="display:none; background:#0d1120; border:1px solid #2a3550; border-radius:10px; padding:16px 20px; margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="color:#ffaa00; font-weight:700; font-size:13px;">📜 Trade History</span>
+                <button onclick="toggleTradeHistory()" style="background:none;border:none;color:#8892a6;cursor:pointer;font-size:14px;">✕</button>
+            </div>
+            <div id="trade-history-list" style="font-size:12px;color:#8892a6;"><p>No trades yet</p></div>
+        </div>
+
+        <!-- Feature Guide (hidden by default) -->
+        <div id="feature-guide" style="display:none; background:#0d1120; border:1px solid #2a3550; border-radius:10px; padding:16px 20px; margin-bottom:16px; font-size:12px; line-height:1.7; color:#8892a6;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="color:#00ff88; font-weight:700; font-size:13px;">📖 Feature Guide</span>
+                <button onclick="toggleFeatureGuide()" style="background:none;border:none;color:#8892a6;cursor:pointer;font-size:14px;">✕</button>
+            </div>
+            <div style="display:grid;gap:12px;">
+                <div><strong style="color:#fff;">🔄 Refresh</strong> — Re-fetches all open sports markets from Kalshi's API. Markets are grouped by game and categorized into Winner, Spread, Total, and Player Props.</div>
+                <div><strong style="color:#fff;">▶️ Auto-Monitor</strong> — <strong style="color:#ff6666;">You must enable this for the bot to work.</strong> Without it, your orders sit in the book but the bot doesn't check fills, repost stale orders, or trigger stop-losses. When enabled, it runs every 2 seconds and handles:
+                    <ul style="margin:4px 0 0 16px;padding:0;">
+                        <li><strong>Fill detection</strong> — notices when YES or NO orders get filled</li>
+                        <li><strong>Stale repost</strong> — cancels old orders and re-posts at current bid (never above) to stay competitive in the queue</li>
+                        <li><strong>Partial fill resize</strong> — if one side partially fills, resizes the other side to match</li>
+                        <li><strong>Stop loss</strong> — if only one side fills and the bid drops below your entry minus the stop-loss threshold, it <strong>market-sells</strong> the filled side and <strong>cancels the unfilled order</strong> to prevent orphan positions</li>
+                        <li><strong>Live bid/ask</strong> — refreshes current market prices on each bot card</li>
+                    </ul>
+                </div>
+                <div><strong style="color:#fff;">🔍 Arb Scanner</strong> — Scans all open sports markets for dual-arb opportunities. It finds markets where the combined YES bid + NO bid is below 100¢ — the gap is your potential profit. You set limit orders on both sides and when both fill, the profit is locked at settlement.</div>
+                <div><strong style="color:#fff;">⚡ Dual-Arb Bot</strong> — Click any YES or NO price button on a market to open the bot builder. It places two limit orders (one YES, one NO) that together cost less than 100¢. When both fill, the contract settles at 100¢ regardless of outcome — the difference is your guaranteed profit.</div>
+                <div><strong style="color:#fff;">📊 Player Props NO Side</strong> — Kalshi's web interface hides the NO button on player prop markets, but the API supports it. This app lets you buy NO on any player prop, giving you an edge others can't access through the website.</div>
+                <div><strong style="color:#fff;">🔴 LIVE Filter</strong> — Shows only markets for games currently in progress. Live games have a green border and show the real-time score from ESPN.</div>
+            </div>
         </div>
 
         <!-- Markets Grid -->
@@ -368,77 +501,177 @@
         </div>
     </div>
     
-    <!-- Dual Arb Bot Modal -->
+    <!-- Dual Arb Bot Modal — Premium Redesign -->
     <div class="modal" id="bot-modal">
-        <div class="modal-content" style="max-width: 520px;">
-            <h2 class="modal-header" style="display:flex;align-items:center;gap:8px;">🤖 Dual Arb Bot</h2>
+        <div class="modal-content" style="max-width: 580px; border: 1px solid #2a3550; border-top: 3px solid #00ff88; padding: 0; overflow-y: auto;">
 
-            <!-- Market Info -->
-            <div id="bot-market-info" style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:1.2rem;font-size:0.88rem;">
-                <div id="bot-market-title" style="color:#fff;font-weight:600;margin-bottom:4px;"></div>
-                <div id="bot-market-prices" style="color:#8892a6;font-size:0.8rem;"></div>
+            <!-- ── Top bar ─────────────────────────────────────────────── -->
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; background:#0d1120; border-bottom:1px solid #1e2740;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);display:flex;align-items:center;justify-content:center;font-size:16px;">⚡</div>
+                    <div>
+                        <div style="color:#fff;font-weight:700;font-size:14px;letter-spacing:.02em;">Dual-Arb Bot</div>
+                        <div style="color:#8892a6;font-size:10px;letter-spacing:.04em;text-transform:uppercase;">Settlement Arbitrage Engine</div>
+                    </div>
+                </div>
+                <button onclick="closeModal()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;" onmouseenter="this.style.borderColor='#ff4444';this.style.color='#ff4444'" onmouseleave="this.style.borderColor='#2a3550';this.style.color='#8892a6'">✕</button>
             </div>
 
-            <!-- Arb Width -->
-            <div class="form-group">
-                <label style="display:flex;justify-content:space-between;">
-                    <span>Arb Width (guaranteed profit per contract)</span>
-                    <span id="width-display" style="color:#00ff88;font-weight:700;font-size:1rem;">5¢</span>
-                </label>
-                <input type="number" id="bot-arb-width" min="1" max="30" value="5" step="1"
-                       oninput="recalcArbPrices()" style="font-size:1rem;">
-            </div>
+            <div style="padding: 20px;">
 
-            <!-- YES / NO Price Inputs -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
-                <div>
-                    <label style="color:#00ff88;font-weight:700;font-size:0.85rem;display:block;margin-bottom:4px;">YES Limit Buy (¢)</label>
-                    <input type="number" id="bot-yes-price" min="1" max="98"
-                           oninput="onPriceManualChange()"
-                           style="width:100%;padding:.6rem;background:#0a0e1a;border:2px solid #00ff88;border-radius:6px;color:#00ff88;font-size:1.3rem;font-weight:700;text-align:center;">
+                <!-- ── Strategy description (collapsible) ──────────────── -->
+                <div id="strategy-info" style="margin-bottom:16px;">
+                    <div onclick="toggleStrategyInfo()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:10px 14px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;transition:all .15s;" onmouseenter="this.style.borderColor='#00ff8844'" onmouseleave="this.style.borderColor='#1e2740'">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:12px;">📖</span>
+                            <span style="color:#8892a6;font-size:12px;font-weight:600;">How does this strategy work?</span>
+                        </div>
+                        <span id="strategy-chevron" style="color:#8892a6;font-size:10px;transition:transform .2s;">▼</span>
+                    </div>
+                    <div id="strategy-details" style="display:none;padding:14px;background:#080b14;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;font-size:12px;line-height:1.6;color:#8892a6;">
+                        <div style="margin-bottom:10px;">
+                            <span style="color:#00ff88;font-weight:700;">Core principle:</span> On Kalshi, every contract settles at exactly <strong style="color:#fff;">100¢</strong>. If you buy <strong style="color:#00ff88;">YES</strong> and <strong style="color:#ff4444;">NO</strong> on the same market for a combined cost <strong style="color:#fff;">below 100¢</strong>, the difference is <strong style="color:#00ff88;">guaranteed profit at settlement</strong>.
+                        </div>
+                        <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;margin-bottom:10px;">
+                            <span style="color:#00ff88;">①</span><span>Bot places two <strong style="color:#fff;">limit buy orders</strong> (YES + NO) as resting maker bids</span>
+                            <span style="color:#00ff88;">②</span><span>Natural volatility fills both sides over time</span>
+                            <span style="color:#00ff88;">③</span><span>Once both fill, profit is <strong style="color:#fff;">locked</strong> regardless of outcome</span>
+                        </div>
+                        <div style="padding:8px 12px;background:#0d1120;border-radius:6px;border-left:3px solid #00ff88;">
+                            <strong style="color:#fff;">Example:</strong> Buy YES at 45¢ + NO at 50¢ = 95¢ total → <strong style="color:#00ff88;">+5¢ profit</strong> per contract at settlement no matter what happens.
+                        </div>
+                    </div>
                 </div>
-                <div>
-                    <label style="color:#ff4444;font-weight:700;font-size:0.85rem;display:block;margin-bottom:4px;">NO Limit Buy (¢)</label>
-                    <input type="number" id="bot-no-price" min="1" max="98"
-                           oninput="onPriceManualChange()"
-                           style="width:100%;padding:.6rem;background:#0a0e1a;border:2px solid #ff4444;border-radius:6px;color:#ff4444;font-size:1.3rem;font-weight:700;text-align:center;">
-                </div>
-            </div>
 
-            <!-- Profit Preview -->
-            <div id="profit-preview" style="margin-bottom:1rem;"></div>
-
-            <!-- Quantity & Stop Loss -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-                <div class="form-group" style="margin-bottom:0;">
-                    <label>Contracts (qty)</label>
-                    <input type="number" id="bot-quantity" min="1" value="1"
-                           oninput="updateProfitPreview()">
+                <!-- ── Market card ─────────────────────────────────────── -->
+                <div id="bot-market-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+                    <div id="bot-market-title" style="color:#fff;font-weight:600;font-size:14px;margin-bottom:10px;"></div>
+                    <div id="bot-market-prices" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label>Stop Loss (¢ drop → market exit)</label>
-                    <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5">
-                </div>
-            </div>
 
-            <div class="form-actions" style="margin-top:1.5rem;">
-                <button class="btn btn-primary" onclick="createBot()">🤖 Place Both Orders</button>
-                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <!-- ── Arb Width Slider ────────────────────────────────── -->
+                <div style="margin-bottom:16px;">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+                        <label style="color:#8892a6;font-size:12px;font-weight:600;">Target Profit Width</label>
+                        <span id="width-display" style="color:#00ff88;font-weight:800;font-size:18px;">5¢</span>
+                    </div>
+                    <input type="range" id="bot-arb-width" min="1" max="20" value="5" step="1"
+                           oninput="recalcArbPrices()"
+                           style="width:100%;height:6px;border-radius:3px;outline:none;cursor:pointer;accent-color:#00ff88;background:linear-gradient(to right,#00ff88 0%,#1e2740 100%);">
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px;">
+                        <span>1¢ (tight)</span>
+                        <span>10¢</span>
+                        <span>20¢ (wide)</span>
+                    </div>
+                </div>
+
+                <!-- ── YES / NO Price Inputs ───────────────────────────── -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                    <div style="background:#0a0e1a;border:1px solid #00ff8844;border-radius:8px;padding:12px;text-align:center;">
+                        <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">YES LIMIT BUY</label>
+                        <div style="position:relative;">
+                            <input type="number" id="bot-yes-price" min="1" max="98"
+                                   oninput="onPriceManualChange()"
+                                   style="width:100%;padding:8px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;transition:border-color .15s;"
+                                   onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
+                            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
+                        </div>
+                        <div id="yes-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
+                    </div>
+                    <div style="background:#0a0e1a;border:1px solid #ff444444;border-radius:8px;padding:12px;text-align:center;">
+                        <label style="color:#ff4444;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">NO LIMIT BUY</label>
+                        <div style="position:relative;">
+                            <input type="number" id="bot-no-price" min="1" max="98"
+                                   oninput="onPriceManualChange()"
+                                   style="width:100%;padding:8px;background:#060a14;border:2px solid #ff444466;border-radius:6px;color:#ff4444;font-size:1.5rem;font-weight:800;text-align:center;outline:none;transition:border-color .15s;"
+                                   onfocus="this.style.borderColor='#ff4444'" onblur="this.style.borderColor='#ff444466'">
+                            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ff444466;font-size:12px;pointer-events:none;">¢</span>
+                        </div>
+                        <div id="no-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
+                    </div>
+                </div>
+
+                <!-- ── Profit Preview ──────────────────────────────────── -->
+                <div id="profit-preview" style="margin-bottom:16px;"></div>
+
+                <!-- ── Quantity, Stop Loss, & Game Phase ──────────────── -->
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+                    <div>
+                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
+                        <input type="number" id="bot-quantity" min="1" value="1"
+                               oninput="updateProfitPreview()"
+                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                    </div>
+                    <div>
+                        <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">
+                            Stop Loss <span style="color:#555;font-weight:400;">(¢ drop)</span>
+                        </label>
+                        <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5"
+                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                    </div>
+                    <div>
+                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;" title="Pregame: orders sit patiently, no timeout/repost. Live: aggressive repost & stop-loss after timeouts.">Game Phase</label>
+                        <select id="bot-game-phase"
+                                style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;appearance:none;">
+                            <option value="pregame" selected>⏳ Pregame</option>
+                            <option value="live">🔴 Live</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Phase explanation -->
+                <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
+                    <strong style="color:#8892a6;">⏳ Pregame:</strong> Orders sit patiently in the book — no repost, no stop-loss timeout. Perfect for placing before tip-off.<br>
+                    <strong style="color:#8892a6;">🔴 Live:</strong> Active management — reposts stale orders at current bid after 5min, stop-losses if one side fills and bid drops.
+                </div>
+
+                <!-- ── Action buttons ──────────────────────────────────── -->
+                <div style="display:flex;gap:10px;">
+                    <button onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;transition:all .15s;letter-spacing:.02em;" onmouseenter="this.style.transform='translateY(-1px)';this.style.boxShadow='0 4px 20px rgba(0,255,136,0.3)'" onmouseleave="this.style.transform='none';this.style.boxShadow='none'">
+                        ⚡ Deploy Bot
+                    </button>
+                    <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;" onmouseenter="this.style.borderColor='#ff4444';this.style.color='#ff4444'" onmouseleave="this.style.borderColor='#2a3550';this.style.color='#8892a6'">
+                        Cancel
+                    </button>
+                </div>
             </div>
         </div>
     </div>
     
-    <!-- Auto-Scan Modal (Upgrade #3) -->
+    <!-- Auto-Scan Modal -->
     <div class="modal" id="scan-modal">
         <div class="modal-content" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner — Limit Order Opportunities</h2>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
+                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
+                    <input type="number" id="scan-modal-qty" min="1" value="1" title="Contracts per side"
+                           style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
                     <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
                 </div>
             </div>
             <div id="scan-results" style="flex:1;overflow-y:auto;"></div>
+        </div>
+    </div>
+
+    <!-- Middle Spread Scanner Modal -->
+    <div class="modal" id="middles-modal">
+        <div class="modal-content" style="max-width:700px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid #ffaa00;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                <div>
+                    <h2 class="modal-header" style="margin:0;">📐 Middle Spread Scanner</h2>
+                    <div style="color:#8892a6;font-size:11px;margin-top:4px;">Find games where you can bet between two spread lines and win both sides</div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="middles-count" style="color:#8892a6;font-size:12px;"></span>
+                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
+                    <input type="number" id="middles-modal-qty" min="1" value="1" title="Contracts per leg"
+                           style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                    <button class="btn btn-secondary" onclick="closeMiddlesModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
+                </div>
+            </div>
+            <div id="middles-results" style="flex:1;overflow-y:auto;"></div>
         </div>
     </div>
 

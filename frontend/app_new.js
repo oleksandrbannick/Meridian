@@ -1,4 +1,4 @@
-// Kalshi Basketball Trader - New Frontend
+// Meridian — Sports Trading Terminal
 const API_BASE = 'http://localhost:5001/api';
 let allMarkets = [];
 let autoMonitorInterval = null;
@@ -6,6 +6,7 @@ let liveScoresInterval = null;
 let selectedMarket = null;
 let selectedSide = null;
 let currentSportFilter = 'all';
+let currentLiveFilter = false;  // true = show only live games within sport
 let liveGames = {}; // keyed by team abbreviation pairs for quick lookup
 
 // Price helper: handles both new _dollars string fields and legacy integer cents fields
@@ -31,19 +32,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadLiveScores() {
     try {
-        // Fetch NBA + NFL in parallel (most common sports on Kalshi)
-        const [nbaRes, nflRes] = await Promise.allSettled([
+        // Fetch ALL sports in parallel
+        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes] = await Promise.allSettled([
             fetch(`${API_BASE}/scoreboard/nba`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nfl`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/nhl`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/mlb`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/ncaab`).then(r => r.json()),
         ]);
 
         const games = [];
-        if (nbaRes.status === 'fulfilled' && nbaRes.value.events) {
-            games.push(...nbaRes.value.events.map(e => parseESPNGame(e, 'NBA')));
-        }
-        if (nflRes.status === 'fulfilled' && nflRes.value.events) {
-            games.push(...nflRes.value.events.map(e => parseESPNGame(e, 'NFL')));
-        }
+        const addGames = (res, sport) => {
+            if (res.status === 'fulfilled' && res.value.events) {
+                games.push(...res.value.events.map(e => parseESPNGame(e, sport)));
+            }
+        };
+        addGames(nbaRes, 'NBA');
+        addGames(nflRes, 'NFL');
+        addGames(nhlRes, 'NHL');
+        addGames(mlbRes, 'MLB');
+        addGames(ncaabRes, 'NCAAB');
 
         // Build lookup table for marking Kalshi market cards as live
         liveGames = {};
@@ -54,7 +62,8 @@ async function loadLiveScores() {
             }
         });
 
-        renderLiveScoresBar(games);
+        // Re-render market cards so live badges update
+        if (allMarkets.length > 0) applyFilters();
     } catch (e) {
         console.log('Live scores unavailable:', e);
     }
@@ -82,47 +91,51 @@ function parseESPNGame(event, sport) {
     };
 }
 
-function renderLiveScoresBar(games) {
-    const bar = document.getElementById('live-scores-bar');
-    const content = document.getElementById('live-scores-content');
-    if (!bar || !content) return;
-
-    // Only show live/recent games
-    const visible = games.filter(g => g.state === 'in' || g.state === 'post');
-    if (visible.length === 0) { bar.style.display = 'none'; return; }
-
-    bar.style.display = 'block';
-    content.innerHTML = visible.map(g => {
-        const isLive = g.state === 'in';
-        const liveTag = isLive ? `<span style="color:#ff3333;font-size:10px;font-weight:700;">● LIVE</span>` : '';
-        const clockTag = isLive && g.clock ? `<span class="clock">${g.periodLabel || 'Q'+g.period} ${g.clock}</span>` : `<span class="final">Final</span>`;
-        return `<div class="live-chip ${isLive ? 'live' : ''}">
-            ${liveTag}
-            <span class="teams">${g.awayAbbr} ${g.awayScore} – ${g.homeScore} ${g.homeAbbr}</span>
-            ${clockTag}
-        </div>`;
-    }).join('');
-}
+// Live scores bar removed — live data shown inline on game cards via liveGames lookup
 
 // ─── SPORT FILTER ─────────────────────────────────────────────────────────────
 
-function filterBySport(sport) {
-    currentSportFilter = sport;
+function toggleFeatureGuide() {
+    const guide = document.getElementById('feature-guide');
+    if (guide) guide.style.display = guide.style.display === 'none' ? 'block' : 'none';
+}
 
-    // Update pill active state
+function filterBySport(sport) {
+    // Toggle live sub-filter
+    if (sport === 'live') {
+        currentLiveFilter = !currentLiveFilter;
+    } else {
+        currentSportFilter = sport;
+    }
+
+    // Update pill active states
     document.querySelectorAll('.sport-pill').forEach(p => {
-        p.classList.toggle('active', p.dataset.sport === sport);
+        if (p.dataset.sport === 'live') {
+            p.classList.toggle('active', currentLiveFilter);
+        } else {
+            p.classList.toggle('active', p.dataset.sport === currentSportFilter);
+        }
     });
 
-    // Re-fetch from backend with sport filter (different sports = different series)
-    loadMarkets();
+    // If we picked a sport (not toggling live) and have no markets, fetch
+    if (sport !== 'live') {
+        loadMarkets();
+        return;
+    }
+
+    // Live toggle is client-side only
+    if (allMarkets.length === 0) {
+        loadMarkets().then(() => applyFilters());
+    } else {
+        applyFilters();
+    }
 }
 
 function applyFilters() {
     const query = (document.getElementById('search-box')?.value || '').toLowerCase();
     let filtered = allMarkets;
 
-    // Sport filter
+    // Sport filter first (client-side since we now fetch all)
     if (currentSportFilter !== 'all') {
         filtered = filtered.filter(m => {
             const et = ((m.event_ticker || '') + (m.series_ticker || '') + (m.ticker || '')).toUpperCase();
@@ -135,6 +148,15 @@ function applyFilters() {
                 case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA');
                 default: return true;
             }
+        });
+    }
+
+    // LIVE sub-filter — works WITHIN whatever sport is selected
+    if (currentLiveFilter) {
+        filtered = filtered.filter(m => {
+            const eventTicker = m.event_ticker || m.ticker || '';
+            const gameId = extractGameId(eventTicker);
+            return !!getLiveScoreForGame(gameId);
         });
     }
 
@@ -233,8 +255,12 @@ async function loadMarkets() {
     
     try {
         // Build URL with sport filter for backend
-        let url = `${API_BASE}/markets?status=open&limit=500`;
-        if (currentSportFilter && currentSportFilter !== 'all') {
+        // Use higher limit for 'all' since it aggregates many series
+        // 'live' filter is client-side only, fetch all
+        const isAllOrLive = !currentSportFilter || currentSportFilter === 'all' || currentSportFilter === 'live';
+        const fetchLimit = isAllOrLive ? 2000 : 500;
+        let url = `${API_BASE}/markets?status=open&limit=${fetchLimit}`;
+        if (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live') {
             url += `&sport=${currentSportFilter}`;
         }
         
@@ -883,23 +909,59 @@ function calculateArbPrices(market, width) {
 
     const targetTotal = 100 - width;          // e.g. width=5 → 95¢ total
 
-    // Upgrade #2: Queue priority — post at bid+1 to be first in line.
-    // Only go above bid if bid+1 is still below the ask (stays maker, not taker).
-    const queueYes = (yesAsk > yesBid + 1) ? yesBid + 1 : yesBid;
-    const queueNo  = (noAsk  > noBid  + 1) ? noBid  + 1 : noBid;
-    let targetYes = Math.max(queueYes, 1);
-    let targetNo  = targetTotal - targetYes;
+    // ── Favorite anchoring logic ──
+    // The higher-priced side is the "favorite" (more liquid, fills faster).
+    // Shave LESS from favorite, MORE from underdog.
+    // NEVER post above the current bid — that overpays.
+    //
+    // Split ratio: favorite gets ~40% of the shave, underdog gets ~60%.
+    // E.g. if bids sum to 90¢ and targetTotal = 95¢, we need to shave 5¢ total
+    // from the bids. If yesBid=55 (fav) and noBid=35 (dog):
+    //   favorite shave = 2¢ → targetYes = 55 - 2 = 53
+    //   underdog shave = 3¢ → targetNo  = 35 - 3 = 32
+    //   total = 53 + 32 = 85¢ → profit = 15¢ (bids were already below 100)
+    //
+    // But we also cap at the bid — NEVER go above it.
 
-    // Clamp NO into a valid range
-    if (targetNo < 1)  { targetNo = 1;  targetYes = targetTotal - 1; }
-    if (targetNo > 98) { targetNo = 98; targetYes = targetTotal - 98; }
+    const bidSum = yesBid + noBid;
+    const totalShave = bidSum - targetTotal;  // how much to shave off bids combined
+
+    let targetYes, targetNo;
+
+    if (totalShave <= 0) {
+        // Bids already sum below our target — just use the bids directly
+        // (profit is already > requested width)
+        targetYes = yesBid;
+        targetNo  = noBid;
+    } else {
+        // Determine which side is favorite (higher bid = more likely winner)
+        const yesIsFav = yesBid >= noBid;
+        const favShave = Math.floor(totalShave * 0.4);   // less shave on favorite
+        const dogShave = totalShave - favShave;           // more shave on underdog
+
+        if (yesIsFav) {
+            targetYes = yesBid - favShave;
+            targetNo  = noBid - dogShave;
+        } else {
+            targetYes = yesBid - dogShave;
+            targetNo  = noBid - favShave;
+        }
+    }
+
+    // NEVER exceed the current bid — that's overpaying
+    targetYes = Math.min(targetYes, yesBid);
+    targetNo  = Math.min(targetNo, noBid);
+
+    // Clamp to valid price range
     targetYes = Math.max(1, Math.min(targetYes, 98));
+    targetNo  = Math.max(1, Math.min(targetNo, 98));
 
     return {
         targetYes, targetNo,
         total:   targetYes + targetNo,
         profit:  100 - (targetYes + targetNo),
         yesBid, noBid, yesAsk, noAsk,
+        yesIsFav: yesBid >= noBid,
     };
 }
 
@@ -907,22 +969,68 @@ function calculateArbPrices(market, width) {
 function openBotModal(market, _side, _price) {
     currentArbMarket = market;
 
-    // Market info header
-    document.getElementById('bot-market-title').textContent = market.title;
+    // ── Market title ──
+    const titleEl = document.getElementById('bot-market-title');
+    const title = market.title || market.ticker;
+    const sport = detectSport(market.event_ticker || market.ticker || '');
+    const emoji = getSportEmoji(sport);
+    titleEl.innerHTML = `<div style="display:flex;align-items:center;gap:8px;">
+        <span>${emoji}</span>
+        <span>${title}</span>
+        <span style="background:#1e2740;color:#8892a6;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">${sport}</span>
+    </div>`;
+
+    // ── Market prices (visual cards, not raw text) ──
     const yesBid = getPrice(market, 'yes_bid');
     const yesAsk = getPrice(market, 'yes_ask');
     const noBid  = getPrice(market, 'no_bid');
     const noAsk  = getPrice(market, 'no_ask');
-    document.getElementById('bot-market-prices').textContent =
-        `YES  Bid ${yesBid}¢ / Ask ${yesAsk}¢     NO  Bid ${noBid}¢ / Ask ${noAsk}¢`;
+    const yesSpread = yesAsk - yesBid;
+    const noSpread  = noAsk - noBid;
 
-    // Upgrade #5: Auto-tune width from combined spread (wider spread = less liquid = wider arb needed)
+    document.getElementById('bot-market-prices').innerHTML = `
+        <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:#00ff88;font-weight:700;font-size:11px;">YES</span>
+                <span style="color:#555;font-size:9px;">spread ${yesSpread}¢</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;">
+                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${yesBid}¢</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${yesAsk}¢</strong></span>
+            </div>
+        </div>
+        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:#ff4444;font-weight:700;font-size:11px;">NO</span>
+                <span style="color:#555;font-size:9px;">spread ${noSpread}¢</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;">
+                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${noBid}¢</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${noAsk}¢</strong></span>
+            </div>
+        </div>
+    `;
+
+    // ── Auto-tune width from combined spread ──
     const spreadSum  = Math.max(0, (yesAsk - yesBid) + (noAsk - noBid));
     const autoWidth  = Math.max(3, Math.min(15, Math.round(spreadSum / 2) || 5));
     document.getElementById('bot-arb-width').value = autoWidth;
 
+    // Collapse strategy info by default
+    document.getElementById('strategy-details').style.display = 'none';
+    document.getElementById('strategy-chevron').textContent = '▼';
+
     recalcArbPrices();
     document.getElementById('bot-modal').classList.add('show');
+}
+
+/** Toggle strategy description visibility */
+function toggleStrategyInfo() {
+    const details = document.getElementById('strategy-details');
+    const chevron = document.getElementById('strategy-chevron');
+    const isHidden = details.style.display === 'none';
+    details.style.display = isHidden ? 'block' : 'none';
+    chevron.textContent = isHidden ? '▲' : '▼';
 }
 
 /** Recalculate YES/NO limit prices whenever the arb-width changes */
@@ -931,9 +1039,27 @@ function recalcArbPrices() {
     const width = parseInt(document.getElementById('bot-arb-width').value) || 5;
     document.getElementById('width-display').textContent = `${width}¢`;
 
-    const { targetYes, targetNo } = calculateArbPrices(currentArbMarket, width);
-    document.getElementById('bot-yes-price').value = targetYes;
-    document.getElementById('bot-no-price').value  = targetNo;
+    const arb = calculateArbPrices(currentArbMarket, width);
+    document.getElementById('bot-yes-price').value = arb.targetYes;
+    document.getElementById('bot-no-price').value  = arb.targetNo;
+
+    // Queue position hints
+    const yesHint = document.getElementById('yes-queue-hint');
+    const noHint  = document.getElementById('no-queue-hint');
+    const yesIsFav = arb.yesIsFav;
+    if (yesHint) {
+        const diff = arb.yesBid - arb.targetYes;
+        const role = yesIsFav ? '★ fav' : 'underdog';
+        yesHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
+        yesHint.style.color = yesIsFav ? '#00ff88' : '#8892a6';
+    }
+    if (noHint) {
+        const diff = arb.noBid - arb.targetNo;
+        const role = !yesIsFav ? '★ fav' : 'underdog';
+        noHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
+        noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
+    }
+
     updateProfitPreview();
 }
 
@@ -946,7 +1072,7 @@ function onPriceManualChange() {
     updateProfitPreview();
 }
 
-/** Render the live profit/cost preview box */
+/** Render the premium profit/cost preview */
 function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
@@ -955,19 +1081,45 @@ function updateProfitPreview() {
     const profit = 100 - total;
     const isArb  = profit > 0;
     const dollarProfit = (profit * qty / 100).toFixed(2);
+    const dollarCost   = (total * qty / 100).toFixed(2);
+    const roi = total > 0 ? ((profit / total) * 100).toFixed(1) : '0.0';
+
+    const borderColor = isArb ? '#00ff88' : '#ff4444';
+    const bgColor     = isArb ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,68,0.04)';
+    const accentColor = isArb ? '#00ff88' : '#ff4444';
 
     document.getElementById('profit-preview').innerHTML = `
-        <div style="padding:10px 14px;border-radius:8px;border:2px solid ${isArb ? '#00ff88' : '#ff4444'};background:${isArb ? 'rgba(0,255,136,0.07)' : 'rgba(255,68,68,0.07)'};text-align:center;">
-            <div style="font-size:11px;color:#8892a6;margin-bottom:4px;">Total cost: ${total}¢ per contract &nbsp;|&nbsp; Settlement value: 100¢</div>
-            <div style="font-size:1.6rem;font-weight:800;color:${isArb ? '#00ff88' : '#ff4444'};">
-                ${isArb ? '+' : ''}${profit}¢ / contract
+        <div style="border:1px solid ${borderColor}33;border-radius:10px;background:${bgColor};overflow:hidden;">
+            <!-- Settlement equation -->
+            <div style="padding:12px 16px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:13px;border-bottom:1px solid ${borderColor}22;">
+                <span style="color:#00ff88;font-weight:700;">${yes}¢</span>
+                <span style="color:#555;">+</span>
+                <span style="color:#ff4444;font-weight:700;">${no}¢</span>
+                <span style="color:#555;">=</span>
+                <span style="color:#fff;font-weight:700;">${total}¢</span>
+                <span style="color:#555;margin:0 4px;">→</span>
+                <span style="color:#555;">settles at</span>
+                <span style="color:#fff;font-weight:700;">100¢</span>
+                <span style="color:#555;margin:0 4px;">→</span>
+                <span style="color:${accentColor};font-weight:800;font-size:15px;">${isArb ? '+' : ''}${profit}¢</span>
             </div>
-            <div style="font-size:12px;margin-top:4px;color:${isArb ? '#00ff88' : '#ff4444'};">
-                ${isArb
-                    ? `✅ ${qty} contract${qty > 1 ? 's' : ''} → <strong>+$${dollarProfit}</strong> locked profit at settlement`
-                    : `❌ Not an arb — total ≥ 100¢ (adjust width or prices)`}
+            <!-- Stats row -->
+            <div style="padding:10px 16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
+                <div>
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Cost</div>
+                    <div style="color:#fff;font-weight:700;font-size:14px;">$${dollarCost}</div>
+                </div>
+                <div>
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Profit</div>
+                    <div style="color:${accentColor};font-weight:800;font-size:14px;">${isArb ? '+$' : '-$'}${Math.abs(dollarProfit)}</div>
+                </div>
+                <div>
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">ROI</div>
+                    <div style="color:${accentColor};font-weight:700;font-size:14px;">${isArb ? '+' : ''}${roi}%</div>
+                </div>
             </div>
-            ${isArb ? `<div style="font-size:10px;color:#8892a6;margin-top:6px;">Both limit orders post as market-maker bids — fills from natural volatility</div>` : ''}
+            ${!isArb ? `<div style="padding:6px 16px 10px;text-align:center;font-size:11px;color:#ff4444;">⚠ Not profitable — reduce prices or increase width</div>` : ''}
+            ${isArb && qty > 1 ? `<div style="padding:2px 16px 10px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
         </div>`;
 }
 
@@ -1062,6 +1214,7 @@ async function createBot() {
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
     const stop_loss_cents = parseInt(document.getElementById('bot-stop-loss-cents').value);
+    const game_phase      = document.getElementById('bot-game-phase').value;
 
     if (yes_price + no_price >= 100) {
         alert(`❌ Not an arb — YES(${yes_price}¢) + NO(${no_price}¢) = ${yes_price + no_price}¢ ≥ 100¢\nAdjust prices so total is below 100¢.`);
@@ -1069,13 +1222,17 @@ async function createBot() {
     }
     if (!quantity || quantity < 1) { alert('Quantity must be at least 1'); return; }
 
+    const totalCost = (yes_price + no_price) * quantity;
+    const profitPer = 100 - yes_price - no_price;
+    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: ${game_phase.toUpperCase()}\n\nConfirm order?`)) return;
+
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ticker: currentArbMarket.ticker,
-                yes_price, no_price, quantity, stop_loss_cents,
+                yes_price, no_price, quantity, stop_loss_cents, game_phase,
             }),
         });
         const data = await resp.json();
@@ -1103,11 +1260,14 @@ async function loadBots() {
         const botIds = Object.keys(bots);
 
         const section = document.getElementById('bots-section');
-        if (botIds.length === 0) { section.style.display = 'none'; return; }
+        if (botIds.length === 0) { section.style.display = 'none'; updateBotBuddy(0, 0); return; }
         section.style.display = 'block';
 
         const botsList = document.getElementById('bots-list');
         botsList.innerHTML = '';
+
+        let activeBotCount = 0;
+        let filledLegs = 0;
 
         botIds.forEach(botId => {
             const bot = bots[botId];
@@ -1116,13 +1276,20 @@ async function loadBots() {
             const yFill  = bot.yes_fill_qty || 0;
             const nFill  = bot.no_fill_qty  || 0;
 
-            // Fill progress bars
+            // Fill progress
             const yPct = Math.round((yFill / qty) * 100);
             const nPct = Math.round((nFill / qty) * 100);
+            const bothFilled = yFill >= qty && nFill >= qty;
 
-            const ageMin      = bot.posted_at ? Math.floor((Date.now() / 1000 - bot.posted_at) / 60) : 0;
+            const nowSec      = Date.now() / 1000;
+            const ageMin      = bot.posted_at ? Math.floor((nowSec - bot.posted_at) / 60) : 0;
+            const createdMin  = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : ageMin;
             const repostCount = bot.repost_count || 0;
             const statusLabel = (bot.status || '').replace(/_/g, ' ').toUpperCase();
+            const phase       = bot.game_phase || 'pregame';
+            const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
+            const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
+            const stopLoss    = bot.stop_loss_cents || 5;
             const statusClass = {
                 pending_fills: 'monitoring',
                 yes_filled:    'leg1_filled',
@@ -1131,44 +1298,121 @@ async function loadBots() {
                 stopped:       'stopped',
             }[bot.status] || 'monitoring';
 
+            const isActive = ['pending_fills','yes_filled','no_filled'].includes(bot.status);
+            if (isActive) activeBotCount++;
+            if (yFill >= qty) filledLegs++;
+            if (nFill >= qty) filledLegs++;
+
+            // Parse market name from ticker
+            const tickerParts = (bot.ticker || '').split('-');
+            const displayName = tickerParts.length >= 2 ? tickerParts.slice(1).join('-') : bot.ticker;
+
+            // Timeout / next-action info for LIVE bots
+            let timeoutInfo = '';
+            if (phase === 'live' && isActive) {
+                const repostAt  = 5; // REPOST_AFTER_MINUTES
+                const resizeAt  = 10; // STALE_CANCEL_MINUTES
+                if (yFill === 0 && nFill === 0) {
+                    const minsLeft = Math.max(0, repostAt - ageMin);
+                    timeoutInfo = minsLeft > 0
+                        ? `<span style="color:#ffaa00;font-size:10px;">⏱ Repost in ${minsLeft}m</span>`
+                        : `<span style="color:#ff6666;font-size:10px;">⏱ Repost due</span>`;
+                } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
+                    const minsLeft = Math.max(0, resizeAt - ageMin);
+                    timeoutInfo = minsLeft > 0
+                        ? `<span style="color:#ffaa00;font-size:10px;">⏱ Resize in ${minsLeft}m</span>`
+                        : `<span style="color:#ff6666;font-size:10px;">⏱ Resize due</span>`;
+                }
+            } else if (phase === 'pregame' && isActive) {
+                timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;
+            }
+
+            // Stop-loss info (only visible when one leg is filled)
+            let stopLossInfo = '';
+            if (bot.status === 'yes_filled') {
+                const triggerAt = (bot.yes_price || 0) - stopLoss;
+                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;">
+                    🛑 Stop-loss: sells YES if bid drops to <strong>${triggerAt}¢</strong> (−${stopLoss}¢ from entry)
+                </div>`;
+            } else if (bot.status === 'no_filled') {
+                const triggerAt = (bot.no_price || 0) - stopLoss;
+                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;">
+                    🛑 Stop-loss: sells NO if bid drops to <strong>${triggerAt}¢</strong> (−${stopLoss}¢ from entry)
+                </div>`;
+            }
+
+            // Completed / stopped summary
+            let completedInfo = '';
+            if (bot.status === 'completed') {
+                completedInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
+                    ✅ Both legs filled — <strong>+${profit * qty}¢ ($${(profit * qty / 100).toFixed(2)})</strong> locked at settlement
+                </div>`;
+            } else if (bot.status === 'stopped') {
+                completedInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
+                    ⛔ Stopped — exited via stop-loss
+                </div>`;
+            }
+
             const item = document.createElement('div');
             item.className = 'bot-item';
-            item.style.flexDirection = 'column';
-            item.style.gap = '6px';
+            item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid ' + (bothFilled ? '#00ff88' : statusClass === 'stopped' ? '#ff4444' : '#ffaa00') + ';';
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <div>
-                        <strong style="color:#fff;">${bot.ticker}</strong>
-                        <span class="bot-status ${statusClass}" style="margin-left:8px;">${statusLabel}</span>
-                        <span style="color:#00ff88;font-weight:700;margin-left:10px;">+${profit}¢/contract</span>
-                        <span style="color:#8892a6;font-size:11px;margin-left:6px;">($${(profit * qty / 100).toFixed(2)} total)</span>
-                        <span style="color:#555;font-size:10px;margin-left:8px;">${ageMin}m${repostCount > 0 ? ` · ${repostCount} reposts` : ''}</span>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <strong style="color:#fff;font-size:13px;">${displayName}</strong>
+                        <span class="bot-status ${statusClass}">${statusLabel}</span>
+                        <button onclick="toggleBotPhase('${botId}','${phase === 'live' ? 'pregame' : 'live'}')"
+                                style="background:${phase === 'live' ? '#ff333322' : '#1e2740'};border:1px solid ${phase === 'live' ? '#ff333366' : '#2a3550'};color:${phase === 'live' ? '#ff6666' : '#8892a6'};padding:1px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;"
+                                title="${phase === 'live' ? 'Switch to pregame (patient mode)' : 'Switch to live (active repost & stop-loss)'}">${phaseIcon} ${phaseLabel}</button>
+                        <span style="color:#00ff88;font-weight:800;font-size:13px;">+${profit}¢</span>
+                        <span style="color:#8892a6;font-size:11px;">×${qty} = $${(profit * qty / 100).toFixed(2)}</span>
                     </div>
-                    <button class="btn btn-secondary" style="padding:.4rem .9rem;font-size:12px;"
-                            onclick="cancelBot('${botId}')">Cancel</button>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        ${timeoutInfo}
+                        <span style="color:#555;font-size:10px;" title="Total time alive">${createdMin}m${repostCount > 0 ? ` · ${repostCount}↻` : ''}</span>
+                        <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;"
+                                onclick="cancelBot('${botId}')">✕</button>
+                    </div>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;">
                     <div>
                         <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
-                            <span>YES limit @ ${bot.yes_price || '?'}¢</span>
-                            <span style="color:#00ff88;">${yFill}/${qty} filled</span>
+                            <span>YES @ <strong style="color:#00ff88;">${bot.yes_price || '?'}¢</strong></span>
+                            <span style="color:${yFill >= qty ? '#00ff88' : '#8892a6'};">${yFill}/${qty} ${yFill >= qty ? '✓' : ''}</span>
                         </div>
-                        <div style="height:4px;background:#1a1f2e;border-radius:2px;">
-                            <div style="height:4px;width:${yPct}%;background:#00ff88;border-radius:2px;transition:width .5s;"></div>
+                        <div style="height:3px;background:#1e2740;border-radius:2px;">
+                            <div style="height:3px;width:${yPct}%;background:${yFill >= qty ? '#00ff88' : '#00ff8866'};border-radius:2px;transition:width .5s;"></div>
                         </div>
+                        ${bot.live_yes_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
+                            <span>Bid: <strong style="color:#00ff8899;">${bot.live_yes_bid}¢</strong></span>
+                            <span>Ask: <strong style="color:#00ff8899;">${bot.live_yes_ask || '?'}¢</strong></span>
+                        </div>` : ''}
                     </div>
                     <div>
                         <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
-                            <span>NO limit @ ${bot.no_price || '?'}¢</span>
-                            <span style="color:#ff4444;">${nFill}/${qty} filled</span>
+                            <span>NO @ <strong style="color:#ff4444;">${bot.no_price || '?'}¢</strong></span>
+                            <span style="color:${nFill >= qty ? '#ff4444' : '#8892a6'};">${nFill}/${qty} ${nFill >= qty ? '✓' : ''}</span>
                         </div>
-                        <div style="height:4px;background:#1a1f2e;border-radius:2px;">
-                            <div style="height:4px;width:${nPct}%;background:#ff4444;border-radius:2px;transition:width .5s;"></div>
+                        <div style="height:3px;background:#1e2740;border-radius:2px;">
+                            <div style="height:3px;width:${nPct}%;background:${nFill >= qty ? '#ff4444' : '#ff444466'};border-radius:2px;transition:width .5s;"></div>
                         </div>
+                        ${bot.live_no_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
+                            <span>Bid: <strong style="color:#ff444499;">${bot.live_no_bid}¢</strong></span>
+                            <span>Ask: <strong style="color:#ff444499;">${bot.live_no_ask || '?'}¢</strong></span>
+                        </div>` : ''}
                     </div>
-                </div>`;
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;">
+                    <span>🎟 ${bot.ticker || '?'}</span>
+                    <span>Stop-loss: <strong style="color:#ff6666;">−${stopLoss}¢</strong></span>
+                    <span>${phase === 'live' ? '🔴 Active mgmt' : '⏳ Patient mode'}</span>
+                    <span>${!autoMonitorInterval ? '⚠️ Monitor OFF' : '🤖 Monitoring'}</span>
+                </div>
+                ${stopLossInfo}${completedInfo}`;
             botsList.appendChild(item);
         });
+
+        updateBotBuddy(activeBotCount, filledLegs);
     } catch (error) {
         console.error('Error loading bots:', error);
     }
@@ -1195,15 +1439,75 @@ async function cancelBot(botId) {
 // Toggle auto-monitor
 function toggleAutoMonitor() {
     const button = document.getElementById('auto-monitor-text');
+    const buddy  = document.getElementById('bot-buddy');
     
     if (autoMonitorInterval) {
         clearInterval(autoMonitorInterval);
         autoMonitorInterval = null;
         button.textContent = '▶️ Start Auto-Monitor';
+        if (buddy) { buddy.classList.add('idle'); buddy.classList.remove('active'); }
+        updateBotBuddyMsg('idle');
     } else {
-        autoMonitorInterval = setInterval(monitorBots, 2000); // Upgrade #1: Check every 2 seconds
+        autoMonitorInterval = setInterval(monitorBots, 2000);
         button.textContent = '⏸️ Stop Auto-Monitor';
-        monitorBots(); // Run immediately
+        if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
+        updateBotBuddyMsg('scanning');
+        monitorBots();
+    }
+    // Re-render bots so the "Monitor OFF/ON" label updates
+    loadBots();
+}
+
+// Bot buddy messages — rotates through fun status messages
+const botBuddyMessages = {
+    idle: [
+        `<strong>Idle</strong> — Enable Auto-Monitor to put me to work!`,
+        `<strong>Sleeping...</strong> Hit the monitor button and I'll watch your bots 24/7`,
+        `<strong>Standing by</strong> — Your bots aren't being watched right now`,
+    ],
+    scanning: [
+        `<strong>Working!</strong> Checking fills every 2 seconds...`,
+        `<strong>On it!</strong> Watching order books, detecting fills...`,
+        `<strong>Monitoring</strong> — I'll repost stale orders & trigger stop-losses`,
+        `<strong>Scanning...</strong> Keeping an eye on your positions`,
+        `<strong>Active!</strong> I'll handle reposts, resizes & stop-losses`,
+    ],
+    filled: [
+        `<strong>Nice!</strong> A leg just filled — watching the other side closely`,
+        `<strong>Progress!</strong> One side is in, guarding against adverse moves`,
+    ],
+    completed: [
+        `<strong>Locked in!</strong> Both sides filled — profit secured at settlement 🎉`,
+    ],
+};
+let lastBuddyMsgIdx = -1;
+
+function updateBotBuddyMsg(state) {
+    const el = document.getElementById('bot-buddy-msg');
+    if (!el) return;
+    const pool = botBuddyMessages[state] || botBuddyMessages.idle;
+    let idx = Math.floor(Math.random() * pool.length);
+    if (idx === lastBuddyMsgIdx && pool.length > 1) idx = (idx + 1) % pool.length;
+    lastBuddyMsgIdx = idx;
+    const dotColor = state === 'idle' ? '#555' : (state === 'completed' ? '#00ff88' : '#00ff88');
+    el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${state === 'idle' ? 'animation:none;' : ''}"></span>${pool[idx]}`;
+}
+
+function updateBotBuddy(activeCount, filledLegs) {
+    const buddy = document.getElementById('bot-buddy');
+    if (!buddy) return;
+    // Show buddy whenever there are any bots (active or not)
+    if (activeCount > 0 || document.getElementById('bots-section')?.style.display === 'block') {
+        buddy.style.display = 'flex';
+    }
+    if (!autoMonitorInterval) {
+        updateBotBuddyMsg('idle');
+        return;
+    }
+    if (filledLegs > 0) {
+        updateBotBuddyMsg('filled');
+    } else if (activeCount > 0) {
+        updateBotBuddyMsg('scanning');
     }
 }
 
@@ -1268,37 +1572,57 @@ async function loadBalance() {
 
 async function autoScanMarkets() {
     const minWidth = parseInt(document.getElementById('scan-min-width')?.value || '3');
-    showNotification(`🔍 Scanning for arb opportunities ≥ ${minWidth}¢ width...`);
+    const sportParam = (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live')
+        ? `&sport=${currentSportFilter}` : '';
+    showNotification(`🔍 Scanning all sports markets for ≥ ${minWidth}¢ spread...`);
     try {
-        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}&limit=200`);
+        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}${sportParam}`);
         const data = await resp.json();
         if (data.error) { showNotification(`❌ Scan failed: ${data.error}`); return; }
-        showScanResults(data.opportunities || [], minWidth);
+        showScanResults(data.opportunities || [], minWidth, data.total_scanned || 0);
     } catch (err) {
         showNotification(`❌ Scan error: ${err.message}`);
     }
 }
 
-function showScanResults(opportunities, minWidth) {
+function showScanResults(opportunities, minWidth, totalScanned) {
     const modal   = document.getElementById('scan-modal');
     const results = document.getElementById('scan-results');
     const countEl = document.getElementById('scan-count');
     if (!modal || !results) return;
 
-    if (countEl) countEl.textContent = `${opportunities.length} opportunities found (≥ ${minWidth}¢)`;
+    if (countEl) countEl.textContent = `${opportunities.length} found / ${totalScanned} scanned (≥ ${minWidth}¢)`;
 
     if (opportunities.length === 0) {
-        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">No arb opportunities ≥ ${minWidth}¢ right now.<br>Try lowering the min width.</p>`;
+        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
+            No limit-order arb opportunities ≥ ${minWidth}¢ spread found across ${totalScanned} markets.<br>
+            <span style="font-size:12px;">Try lowering the min width, or check back when more games are active.</span>
+        </p>`;
     } else {
-        results.innerHTML = opportunities.slice(0, 30).map(opp => {
-            const profitColor = opp.width >= 10 ? '#ffaa00' : '#00ff88';
-            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        results.innerHTML = opportunities.slice(0, 50).map(opp => {
+            const profitColor = opp.width >= 10 ? '#ffaa00' : opp.width >= 5 ? '#00ff88' : '#8892a6';
+            const instantTag = opp.instant_arb
+                ? `<span style="background:#ff3333;color:#fff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">⚡ INSTANT</span>`
+                : '';
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
                 <div style="flex:1;min-width:0;">
-                    <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${opp.title || opp.ticker}</div>
-                    <div style="color:#8892a6;font-size:11px;margin-top:2px;">YES ${opp.yes_bid}¢ + NO ${opp.no_bid}¢ bid &nbsp;|&nbsp; post at YES ${opp.suggested_yes}¢ / NO ${opp.suggested_no}¢</div>
+                    <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                        ${opp.title || opp.ticker}${instantTag}
+                    </div>
+                    <div style="color:#8892a6;font-size:11px;margin-top:3px;">
+                        Bids: YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp; 
+                        Asks: YES ${opp.yes_ask}¢ / NO ${opp.no_ask}¢ &nbsp;·&nbsp;
+                        Spread: ${opp.yes_spread}+${opp.no_spread}¢
+                    </div>
+                    <div style="color:#6a7488;font-size:10px;margin-top:2px;">
+                        Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ → lock +${opp.profit_posted}¢/contract
+                    </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-                    <span style="color:${profitColor};font-weight:800;font-size:1.3rem;">+${opp.profit_posted}¢</span>
+                    <div style="text-align:right;">
+                        <div style="color:${profitColor};font-weight:800;font-size:1.3rem;">+${opp.profit_posted}¢</div>
+                        <div style="color:#6a7488;font-size:10px;">gap ${opp.width}¢</div>
+                    </div>
                     <button onclick="quickBot('${opp.ticker}', ${opp.suggested_yes}, ${opp.suggested_no})"
                             style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
                         🤖 Bot
@@ -1311,8 +1635,14 @@ function showScanResults(opportunities, minWidth) {
 }
 
 async function quickBot(ticker, yesPrice, noPrice) {
-    const quantity       = parseInt(document.getElementById('scan-qty')?.value || '1');
+    // Read qty from scan modal first, fall back to controls bar
+    const quantity        = parseInt(document.getElementById('scan-modal-qty')?.value || document.getElementById('scan-qty')?.value || '1');
     const stop_loss_cents = 5;
+    const totalCost       = (yesPrice + noPrice) * quantity;
+    const profitPer       = 100 - yesPrice - noPrice;
+
+    if (!confirm(`⚡ Place Dual-Arb Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n\nConfirm?`)) return;
+
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
             method: 'POST',
@@ -1334,6 +1664,145 @@ async function quickBot(ticker, yesPrice, noPrice) {
 
 function closeScanModal() {
     document.getElementById('scan-modal')?.classList.remove('show');
+}
+
+// ─── Toggle bot phase (pregame ↔ live) ────────────────────────────────────────
+async function toggleBotPhase(botId, newPhase) {
+    try {
+        const resp = await fetch(`${API_BASE}/bot/set_phase/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phase: newPhase }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`${newPhase === 'live' ? '🔴' : '⏳'} Bot switched to ${newPhase.toUpperCase()}`);
+            loadBots();
+        } else {
+            showNotification(`❌ ${data.error}`);
+        }
+    } catch (err) {
+        showNotification(`❌ ${err.message}`);
+    }
+}
+
+// ─── Middle Spread Scanner ────────────────────────────────────────────────────
+async function scanMiddles() {
+    showNotification('📐 Scanning for middle spread opportunities...');
+    try {
+        const resp = await fetch(`${API_BASE}/scan/middles`);
+        const data = await resp.json();
+        if (data.error) { showNotification(`❌ ${data.error}`); return; }
+        showMiddlesResults(data);
+    } catch (err) {
+        showNotification(`❌ Middles scan error: ${err.message}`);
+    }
+}
+
+function showMiddlesResults(data) {
+    const modal   = document.getElementById('middles-modal');
+    const results = document.getElementById('middles-results');
+    const countEl = document.getElementById('middles-count');
+    if (!modal || !results) return;
+
+    const middles = data.middles || [];
+    if (countEl) countEl.textContent = `${middles.length} middles / ${data.total_spreads || 0} spreads`;
+
+    if (middles.length === 0) {
+        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
+            No middle opportunities found across ${data.games_with_spreads || 0} games with spread markets.<br>
+            <span style="font-size:12px;">Middles require multiple spread lines for the same team in a game.</span>
+        </p>`;
+    } else {
+        results.innerHTML = middles.map(m => {
+            const profitColor = m.max_profit >= 50 ? '#ffaa00' : '#00ff88';
+            const gapLabel = m.gap.toFixed(1);
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:10px;border-left:3px solid ${profitColor};">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <div>
+                        <span style="color:#fff;font-weight:700;font-size:14px;">${m.team}</span>
+                        <span style="color:#8892a6;font-size:12px;margin-left:8px;">${m.tight_spread} → ${m.wide_spread}</span>
+                        <span style="background:#ffaa0033;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;margin-left:8px;">GAP ${gapLabel}</span>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="color:${profitColor};font-weight:800;font-size:16px;">+${m.max_profit}¢</div>
+                        <div style="color:#6a7488;font-size:10px;">if middle hits</div>
+                    </div>
+                </div>
+                <div style="font-size:11px;color:#8892a6;margin-bottom:6px;line-height:1.5;">
+                    <div style="margin-bottom:4px;">${m.entry}</div>
+                    <div>Combined cost: <strong style="color:#fff;">${m.cost}¢</strong> · 
+                    Middle win: <strong style="color:#00ff88;">+${m.max_profit}¢</strong> · 
+                    One-side win: <strong style="color:${m.partial_profit >= 0 ? '#ffaa00' : '#ff4444'};">${m.partial_profit >= 0 ? '+' : ''}${m.partial_profit}¢</strong></div>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px;">
+                    <button onclick="placeMiddle('${m.tight_ticker}','${m.wide_ticker}','${m.direction}',${m.tight_yes_bid},${m.tight_no_bid},${m.wide_yes_bid},${m.wide_no_bid})"
+                            style="background:#ffaa00;color:#000;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
+                        📐 Place Middle
+                    </button>
+                    <span style="color:#555;font-size:10px;display:flex;align-items:center;">${m.tight_title} + ${m.wide_title}</span>
+                </div>
+            </div>`;
+        }).join('');
+    }
+    modal.classList.add('show');
+}
+
+async function placeMiddle(tightTicker, wideTicker, direction, tightYesBid, tightNoBid, wideYesBid, wideNoBid) {
+    const qty = parseInt(document.getElementById('middles-modal-qty')?.value || '1');
+
+    // Build readable summary for confirmation
+    let leg1Desc, leg2Desc;
+    if (direction === 'YES_tight_NO_wide') {
+        leg1Desc = `YES ${tightTicker} at ${tightYesBid}¢`;
+        leg2Desc = `NO ${wideTicker} at ${wideNoBid}¢`;
+    } else {
+        leg1Desc = `NO ${tightTicker} at ${tightNoBid}¢`;
+        leg2Desc = `YES ${wideTicker} at ${wideYesBid}¢`;
+    }
+    const totalCost = direction === 'YES_tight_NO_wide'
+        ? (tightYesBid + wideNoBid) * qty
+        : (tightNoBid + wideYesBid) * qty;
+
+    if (!confirm(`📐 Place Middle — ${qty} contract(s)\n\nLeg 1: ${leg1Desc}\nLeg 2: ${leg2Desc}\n\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\n\nConfirm?`)) return;
+
+    try {
+        let order1, order2;
+        if (direction === 'YES_tight_NO_wide') {
+            // Buy YES on tight spread, NO on wide spread — as separate single orders
+            order1 = await fetch(`${API_BASE}/order/single`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker: tightTicker, side: 'yes', price: tightYesBid, quantity: qty }),
+            }).then(r => r.json());
+            order2 = await fetch(`${API_BASE}/order/single`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker: wideTicker, side: 'no', price: wideNoBid, quantity: qty }),
+            }).then(r => r.json());
+        } else {
+            // Buy NO on tight spread, YES on wide spread
+            order1 = await fetch(`${API_BASE}/order/single`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker: tightTicker, side: 'no', price: tightNoBid, quantity: qty }),
+            }).then(r => r.json());
+            order2 = await fetch(`${API_BASE}/order/single`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker: wideTicker, side: 'yes', price: wideYesBid, quantity: qty }),
+            }).then(r => r.json());
+        }
+        if (order1.success && order2.success) {
+            showNotification(`📐 Middle placed! Two separate limit orders deployed.`);
+            loadBots();
+            if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            showNotification(`❌ Middle error: ${order1.error || order2.error}`);
+        }
+    } catch (err) {
+        showNotification(`❌ Network error: ${err.message}`);
+    }
+}
+
+function closeMiddlesModal() {
+    document.getElementById('middles-modal')?.classList.remove('show');
 }
 
 // ─── Upgrade #6: P&L Dashboard ────────────────────────────────────────────────
@@ -1373,4 +1842,56 @@ function showNotification(message) {
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 5000);
+}
+
+// ─── Trade History ────────────────────────────────────────────────────────────
+function toggleTradeHistory() {
+    const panel = document.getElementById('trade-history-panel');
+    if (!panel) return;
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        loadTradeHistory();
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+async function loadTradeHistory() {
+    const el = document.getElementById('trade-history-list');
+    if (!el) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/history?limit=50`);
+        const data = await resp.json();
+        const trades = data.trades || [];
+        if (trades.length === 0) {
+            el.innerHTML = '<p style="color:#555;text-align:center;">No completed or stopped trades this session.</p>';
+            return;
+        }
+        el.innerHTML = `
+            <div style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px 12px;align-items:center;">
+                <div style="color:#555;font-size:10px;font-weight:600;">TIME</div>
+                <div style="color:#555;font-size:10px;font-weight:600;">MARKET</div>
+                <div style="color:#555;font-size:10px;font-weight:600;">PRICES</div>
+                <div style="color:#555;font-size:10px;font-weight:600;">QTY</div>
+                <div style="color:#555;font-size:10px;font-weight:600;">P&L</div>
+                ${trades.map(t => {
+                    const time = new Date(t.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+                    const isWin = t.result === 'completed';
+                    const pnl = isWin ? t.profit_cents : -(t.loss_cents || 0);
+                    const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
+                    const icon = isWin ? '✅' : '⛔';
+                    const ticker = (t.ticker || '').split('-').slice(1).join('-') || t.ticker;
+                    return `
+                        <div style="color:#555;font-size:11px;">${time}</div>
+                        <div style="color:#fff;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${icon} ${ticker}</div>
+                        <div style="font-size:11px;"><span style="color:#00ff88;">Y${t.yes_price || '?'}¢</span> / <span style="color:#ff4444;">N${t.no_price || '?'}¢</span></div>
+                        <div style="color:#8892a6;font-size:11px;text-align:center;">×${t.quantity || 1}</div>
+                        <div style="color:${pnlColor};font-weight:700;font-size:11px;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    } catch (err) {
+        el.innerHTML = `<p style="color:#ff4444;">Failed to load history: ${err.message}</p>`;
+    }
 }

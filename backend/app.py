@@ -80,7 +80,7 @@ def get_markets():
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
             
         status = request.args.get('status', 'open')
-        limit = int(request.args.get('limit', 500))
+        limit = int(request.args.get('limit', 2000))
         sport_filter = request.args.get('sport')  # Optional: 'nba', 'nhl', 'epl', etc.
         
         # ALL sports series tickers in Kalshi
@@ -454,6 +454,7 @@ def get_fills():
 # the filled side to exit (market order guarantees execution despite taker fees).
 
 active_bots = {}  # bot_id -> bot_config
+trade_history = []  # completed/stopped bots log (newest first)
 
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
@@ -491,12 +492,63 @@ REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
 
+# ─── Single Order Endpoint ─────────────────────────────────────────────────────
+@app.route('/api/order/single', methods=['POST'])
+def place_single_order():
+    """
+    Place a single limit order (one side only).
+    Used for middle spreads where you need YES on one market, NO on a different market.
+    Does NOT create a dual-arb bot — just places the order and returns the order ID.
+    """
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        data = request.json
+        ticker = data.get('ticker')
+        side   = data.get('side')        # 'yes' or 'no'
+        price  = int(data.get('price'))   # price in cents
+        qty    = int(data.get('quantity', 1))
+
+        if not ticker or not side or not price:
+            return jsonify({'error': 'Missing required fields: ticker, side, price'}), 400
+
+        if side not in ('yes', 'no'):
+            return jsonify({'error': f"Invalid side '{side}' — must be 'yes' or 'no'"}), 400
+
+        if price < 1 or price > 99:
+            return jsonify({'error': f'Price {price}¢ out of range (1-99)'}), 400
+
+        price_kwargs = {'yes_price': price} if side == 'yes' else {'no_price': price}
+        order = kalshi_client.create_order(
+            ticker=ticker, side=side, action='buy',
+            count=qty, **price_kwargs
+        )
+
+        return jsonify({
+            'success':  True,
+            'order_id': order['order']['order_id'],
+            'ticker':   ticker,
+            'side':     side,
+            'price':    price,
+            'quantity': qty,
+            'message':  f'Placed {side.upper()} limit buy on {ticker} at {price}¢ × {qty}'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/bot/create', methods=['POST'])
 def create_bot():
     """
     Dual Arb Bot: immediately places LIMIT BUY orders on both YES and NO sides.
     Both are market-maker orders (resting in the book) — no taker fees on entry.
     Profit = 100 - yes_price - no_price cents per contract, locked at settlement.
+
+    game_phase: 'pregame' or 'live' — controls timeout behavior.
+      - pregame: patient, orders sit until game starts. No repost, no time-based stop loss.
+      - live: aggressive, repost / stop-loss after timeout windows.
     """
     try:
         if not kalshi_client:
@@ -508,6 +560,7 @@ def create_bot():
         no_price       = int(data.get('no_price'))    # limit buy price for NO, in cents
         quantity       = int(data.get('quantity', 1))
         stop_loss_cents = int(data.get('stop_loss_cents', 5))  # ¢ drop to trigger stop loss
+        game_phase     = data.get('game_phase', 'pregame')     # 'pregame' | 'live'
 
         if not ticker or yes_price is None or no_price is None:
             return jsonify({'error': 'Missing required fields: ticker, yes_price, no_price'}), 400
@@ -534,6 +587,7 @@ def create_bot():
             'quantity':         quantity,
             'stop_loss_cents':  stop_loss_cents,
             'profit_per':       profit_per,
+            'game_phase':       game_phase,
             'status':           'pending_fills',  # pending_fills | yes_filled | no_filled | completed | stopped
             'yes_order_id':     yes_order['order']['order_id'],
             'no_order_id':      no_order['order']['order_id'],
@@ -550,7 +604,8 @@ def create_bot():
             'yes_order_id': yes_order['order']['order_id'],
             'no_order_id':  no_order['order']['order_id'],
             'profit_per':   profit_per,
-            'message':      f'Limit orders placed — YES at {yes_price}¢, NO at {no_price}¢ → {profit_per}¢ profit/contract'
+            'game_phase':   game_phase,
+            'message':      f'[{game_phase.upper()}] Limit orders placed — YES at {yes_price}¢, NO at {no_price}¢ → {profit_per}¢ profit/contract'
         })
 
     except Exception as e:
@@ -560,12 +615,20 @@ def create_bot():
 @app.route('/api/bot/monitor', methods=['POST'])
 def monitor_bots():
     """
-    Check all active bots and execute trades when conditions are met.
-    Upgrades applied:
-      #1 – Faster cycle (called every 2s from frontend)
-      #4 – Partial fill: resize unfilled leg to match filled qty after STALE_CANCEL_MINUTES
-      #7 – Rate-limited API calls via api_rate_limiter
-      #8 – Stale order re-post: cancel & re-post at bid+1 after REPOST_AFTER_MINUTES
+    Check all active bots and handle fills / timeouts.
+
+    PREGAME bots:
+      - Orders sit patiently. No repost, no time-based stop-loss.
+      - Only action: detect fills and mark completed.
+      - If you cancel manually, that's fine.
+
+    LIVE bots:
+      - Repost stale unfilled orders after REPOST_AFTER_MINUTES
+        (but NEVER above the current bid — repost AT the bid).
+      - Partial fill resize after STALE_CANCEL_MINUTES.
+      - Stop-loss if one side fills and the bid drops by stop_loss_cents.
+
+    Both phases: if both sides fill → completed → profit locked at settlement.
     """
     try:
         if not kalshi_client:
@@ -583,8 +646,9 @@ def monitor_bots():
                 stop    = bot['stop_loss_cents']
                 now     = time.time()
                 age_min = (now - bot.get('posted_at', now)) / 60.0
+                phase   = bot.get('game_phase', 'pregame')
 
-                # ── (7) Rate-limited fill checks ──────────────────────────────
+                # ── Rate-limited fill checks ──────────────────────────────
                 api_rate_limiter.wait()
                 yes_resp = kalshi_client.get_order(bot['yes_order_id'])
                 api_rate_limiter.wait()
@@ -597,16 +661,23 @@ def monitor_bots():
                 bot['yes_fill_qty'] = yes_filled
                 bot['no_fill_qty']  = no_filled
 
-                # ── Both sides fully filled → profit locked at settlement ──────
+                # ── Both sides fully filled → profit locked at settlement ──
                 if yes_filled >= qty and no_filled >= qty:
                     bot['status'] = 'completed'
+                    bot['completed_at'] = now
                     profit_cents = bot['profit_per'] * qty
                     session_pnl['gross_profit_cents'] += profit_cents
                     session_pnl['completed_bots']     += 1
+                    trade_history.insert(0, {
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                        'quantity': qty, 'profit_cents': profit_cents,
+                        'result': 'completed', 'timestamp': now,
+                    })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
                     continue
 
-                # ── Fetch current market prices (rate-limited) ─────────────────
+                # ── Fetch current market prices ────────────────────────────
                 api_rate_limiter.wait()
                 market_resp = kalshi_client.get_market(ticker)
                 market = market_resp.get('market', market_resp)
@@ -616,13 +687,42 @@ def monitor_bots():
                     if d: return round(float(d) * 100)
                     return market.get(field, 50)
 
-                yes_bid = to_cents('yes_bid')
-                no_bid  = to_cents('no_bid')
+                yes_bid  = to_cents('yes_bid')
+                no_bid   = to_cents('no_bid')
+                yes_ask  = to_cents('yes_ask')
+                no_ask   = to_cents('no_ask')
 
-                # ── (8) Stale order re-post (no fills after REPOST_AFTER_MINUTES) ──
+                # Store live market data on bot for frontend display
+                bot['live_yes_bid'] = yes_bid
+                bot['live_no_bid']  = no_bid
+                bot['live_yes_ask'] = yes_ask
+                bot['live_no_ask']  = no_ask
+                bot['last_price_update'] = now
+
+                # ═══════════════════════════════════════════════════════════
+                # PREGAME: Patient mode — just detect fills, nothing else.
+                # Orders sit in the book until game starts or user cancels.
+                # ═══════════════════════════════════════════════════════════
+                if phase == 'pregame':
+                    # Update status labels for UI display
+                    if yes_filled >= qty and no_filled < qty:
+                        bot['status'] = 'yes_filled'
+                    elif no_filled >= qty and yes_filled < qty:
+                        bot['status'] = 'no_filled'
+                    # No repost, no stop-loss, no resize — just wait.
+                    continue
+
+                # ═══════════════════════════════════════════════════════════
+                # LIVE: Active management — repost, resize, stop-loss
+                # ═══════════════════════════════════════════════════════════
+
+                # ── Stale order repost (no fills after REPOST_AFTER_MINUTES) ──
+                # NEVER go above the current bid. Repost AT the bid to stay competitive
+                # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
-                    new_yes = min(yes_bid + 1, 98)
-                    new_no  = min(no_bid  + 1, 98)
+                    # Repost at current bids (never above, just refresh position in queue)
+                    new_yes = min(yes_bid, 98)
+                    new_no  = min(no_bid,  98)
                     if new_yes + new_no < 100:
                         try:
                             api_rate_limiter.wait()
@@ -649,9 +749,10 @@ def monitor_bots():
                             print(f"Repost failed for {bot_id}: {re_err}")
                     continue
 
-                # ── (4) Partial fill: resize unfilled leg after STALE_CANCEL_MINUTES ──
+                # ── Partial fill: resize unfilled leg after STALE_CANCEL_MINUTES ──
                 if yes_filled > 0 and no_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
-                    new_no_price = min(no_bid + 1, 98)
+                    # Repost NO at current no_bid (never above)
+                    new_no_price = min(no_bid, 98)
                     try:
                         api_rate_limiter.wait()
                         kalshi_client.cancel_order(bot['no_order_id'])
@@ -667,7 +768,8 @@ def monitor_bots():
                     continue
 
                 if no_filled > 0 and yes_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
-                    new_yes_price = min(yes_bid + 1, 98)
+                    # Repost YES at current yes_bid (never above)
+                    new_yes_price = min(yes_bid, 98)
                     try:
                         api_rate_limiter.wait()
                         kalshi_client.cancel_order(bot['yes_order_id'])
@@ -682,41 +784,83 @@ def monitor_bots():
                         print(f"Partial resize YES failed for {bot_id}: {pe}")
                     continue
 
-                # ── YES fully filled, NO still open — check stop loss ──────────
+                # ── YES fully filled, NO still open — check stop loss ──────
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
                     if yes_bid <= bot['yes_price'] - stop:
+                        # STOP LOSS: market-sell the filled YES side
                         api_rate_limiter.wait()
-                        kalshi_client.create_order(ticker=ticker, side='yes', action='sell',
-                                                   count=yes_filled, order_type='market')
+                        sell_resp = kalshi_client.create_order(
+                            ticker=ticker, side='yes', action='sell',
+                            count=yes_filled, order_type='market')
+                        # Cancel the unfilled NO order to prevent orphans
                         try:
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
                         except Exception:
                             pass
+                        # Verify the cancel actually went through
+                        try:
+                            api_rate_limiter.wait()
+                            no_check = kalshi_client.get_order(bot['no_order_id'])
+                            no_status = no_check.get('order', {}).get('status', '')
+                            if no_status not in ('canceled', 'cancelled'):
+                                # Force cancel again
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(bot['no_order_id'])
+                        except Exception:
+                            pass
                         bot['status'] = 'stopped'
+                        bot['stopped_at'] = now
                         loss = (bot['yes_price'] - yes_bid) * yes_filled
                         session_pnl['gross_loss_cents'] += loss
                         session_pnl['stopped_bots']     += 1
+                        trade_history.insert(0, {
+                            'bot_id': bot_id, 'ticker': ticker,
+                            'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                            'quantity': yes_filled, 'loss_cents': loss,
+                            'result': 'stop_loss_yes', 'exit_bid': yes_bid, 'timestamp': now,
+                        })
                         actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
                                         'entry': bot['yes_price'], 'exit_bid': yes_bid, 'loss_cents': loss})
+                    continue  # ← prevent fall-through to NO check
 
-                # ── NO fully filled, YES still open — check stop loss ──────────
-                elif no_filled >= qty and yes_filled < qty:
+                # ── NO fully filled, YES still open — check stop loss ──────
+                if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if no_bid <= bot['no_price'] - stop:
+                        # STOP LOSS: market-sell the filled NO side
                         api_rate_limiter.wait()
-                        kalshi_client.create_order(ticker=ticker, side='no', action='sell',
-                                                   count=no_filled, order_type='market')
+                        sell_resp = kalshi_client.create_order(
+                            ticker=ticker, side='no', action='sell',
+                            count=no_filled, order_type='market')
+                        # Cancel the unfilled YES order to prevent orphans
                         try:
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
                         except Exception:
                             pass
+                        # Verify the cancel actually went through
+                        try:
+                            api_rate_limiter.wait()
+                            yes_check = kalshi_client.get_order(bot['yes_order_id'])
+                            yes_status = yes_check.get('order', {}).get('status', '')
+                            if yes_status not in ('canceled', 'cancelled'):
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(bot['yes_order_id'])
+                        except Exception:
+                            pass
                         bot['status'] = 'stopped'
+                        bot['stopped_at'] = now
                         loss = (bot['no_price'] - no_bid) * no_filled
                         session_pnl['gross_loss_cents'] += loss
                         session_pnl['stopped_bots']     += 1
+                        trade_history.insert(0, {
+                            'bot_id': bot_id, 'ticker': ticker,
+                            'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                            'quantity': no_filled, 'loss_cents': loss,
+                            'result': 'stop_loss_no', 'exit_bid': no_bid, 'timestamp': now,
+                        })
                         actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
                                         'entry': bot['no_price'], 'exit_bid': no_bid, 'loss_cents': loss})
 
@@ -736,8 +880,32 @@ def monitor_bots():
 
 @app.route('/api/bot/list', methods=['GET'])
 def list_bots():
-    """Get all active bots"""
+    """Get all bots with live market data"""
     return jsonify({'bots': active_bots})
+
+
+@app.route('/api/bot/history', methods=['GET'])
+def bot_history():
+    """Get completed/stopped trade history"""
+    limit = int(request.args.get('limit', 50))
+    return jsonify({'trades': trade_history[:limit], 'total': len(trade_history)})
+
+
+@app.route('/api/bot/set_phase/<bot_id>', methods=['POST'])
+def set_bot_phase(bot_id):
+    """Switch a bot between 'pregame' and 'live' phases.
+    When a game goes live, flip the phase so the monitor starts
+    doing repost / stop-loss management."""
+    if bot_id not in active_bots:
+        return jsonify({'error': 'Bot not found'}), 404
+    data = request.json or {}
+    new_phase = data.get('phase', 'live')
+    if new_phase not in ('pregame', 'live'):
+        return jsonify({'error': 'phase must be pregame or live'}), 400
+    active_bots[bot_id]['game_phase'] = new_phase
+    # Reset posted_at so timeout counters restart from now
+    active_bots[bot_id]['posted_at'] = time.time()
+    return jsonify({'success': True, 'bot_id': bot_id, 'phase': new_phase})
 
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])
@@ -771,19 +939,54 @@ def cancel_bot(bot_id):
 @app.route('/api/bot/scan', methods=['GET'])
 def scan_arb_opportunities():
     """
-    Upgrade #3: Multi-market arb scanner.
-    Scans all open markets for YES+NO bid sums below 100 by at least min_width cents.
-    Returns ranked list of arb opportunities with suggested queue-priority prices.
+    Smart arb scanner — finds markets with wide bid-bid spreads where
+    limit orders can capture profit.  Uses the same series-based fetching
+    as the main /markets endpoint so it actually scans real sports markets.
+
+    Strategy: For dual-arb to work you place YES limit buy at yes_bid+1
+    and NO limit buy at no_bid+1.  Profit = 100 - yes_price - no_price.
+    A market where yes_bid + no_bid is well below 100 means there's room
+    for maker orders to capture spread.  The wider the gap, the more profit
+    per contract (but also longer fill time / lower liquidity).
     """
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
 
         min_width = max(1, int(request.args.get('min_width', 3)))
-        limit     = min(500, int(request.args.get('limit', 200)))
+        sport_filter = request.args.get('sport', '')
 
-        result  = kalshi_client.get_markets(status='open', limit=limit)
-        markets = result.get('markets', result) if isinstance(result, dict) else result
+        # Use the same series map as /api/markets
+        SPORTS_SERIES = {
+            'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL', 'KXNBAPOINTS',
+                     'KXNBAREBOUNDS', 'KXNBAASSISTS', 'KXNBA3PM', 'KXNBASTEALS',
+                     'KXNBABLOCKS'],
+            'nfl': ['KXNFLGAME', 'KXNFLSPREAD', 'KXNFLTOTAL'],
+            'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
+            'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL'],
+            'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
+            'epl': ['KXEPLGAME', 'KXEPLGOAL', 'KXEPLBTTS'],
+            'ucl': ['KXUCLGAME', 'KXUCLGOAL', 'KXUCLBTTS'],
+        }
+
+        if sport_filter and sport_filter.lower() not in ('', 'all'):
+            series_to_fetch = SPORTS_SERIES.get(sport_filter.lower(), [])
+        else:
+            series_to_fetch = []
+            for s in SPORTS_SERIES.values():
+                series_to_fetch.extend(s)
+
+        # Fetch all open markets from each series
+        all_markets = []
+        for series in series_to_fetch:
+            try:
+                result = kalshi_client.get_markets_by_series(series, status='open', limit=200)
+                markets = result.get('markets', [])
+                markets = [m for m in markets if 'mve_selected_legs' not in m
+                           and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+                all_markets.extend(markets)
+            except Exception:
+                continue
 
         def tc(m, field):
             d = m.get(field + '_dollars')
@@ -791,34 +994,73 @@ def scan_arb_opportunities():
             return m.get(field, 0)
 
         opportunities = []
-        for m in markets:
+        for m in all_markets:
             yes_bid = tc(m, 'yes_bid')
             no_bid  = tc(m, 'no_bid')
+            yes_ask = tc(m, 'yes_ask')
+            no_ask  = tc(m, 'no_ask')
             if not yes_bid or not no_bid:
                 continue
+
+            # Width = profit room for dual-arb limit orders
             width = 100 - yes_bid - no_bid
-            if width >= min_width:
-                yes_ask = tc(m, 'yes_ask') or yes_bid + 2
-                no_ask  = tc(m, 'no_ask')  or no_bid  + 2
-                # Queue priority: bid+1 if it stays below ask (still maker)
-                sug_yes = (yes_bid + 1) if yes_ask > yes_bid + 1 else yes_bid
-                sug_no  = (no_bid  + 1) if no_ask  > no_bid  + 1 else no_bid
-                opportunities.append({
-                    'ticker':        m.get('ticker', ''),
-                    'title':         m.get('title', ''),
-                    'event_ticker':  m.get('event_ticker', ''),
-                    'yes_bid':       yes_bid,
-                    'no_bid':        no_bid,
-                    'width':         width,
-                    'suggested_yes': sug_yes,
-                    'suggested_no':  sug_no,
-                    'profit_posted': 100 - sug_yes - sug_no,
-                })
+            if width < min_width:
+                continue
+
+            # If both ask prices exist, calculate instant arb too
+            instant = (100 - (yes_ask or 99) - (no_ask or 99)) if yes_ask and no_ask else 0
+
+            # Suggested prices: AT the bid, never above it.
+            # Use favorite-anchoring: shave less from fav, more from underdog.
+            bid_sum = yes_bid + no_bid
+            target_total = 100 - min_width  # target combined cost
+            total_shave = max(0, bid_sum - target_total)
+            yes_is_fav = yes_bid >= no_bid
+            fav_shave = total_shave * 4 // 10  # 40% to fav
+            dog_shave = total_shave - fav_shave  # 60% to underdog
+            if yes_is_fav:
+                sug_yes = yes_bid - fav_shave
+                sug_no  = no_bid - dog_shave
+            else:
+                sug_yes = yes_bid - dog_shave
+                sug_no  = no_bid - fav_shave
+            sug_yes = max(1, min(sug_yes, yes_bid))  # never above bid
+            sug_no  = max(1, min(sug_no, no_bid))    # never above bid
+            posted_profit = 100 - sug_yes - sug_no
+
+            # Spread info
+            yes_spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 0
+            no_spread  = (no_ask  - no_bid)  if no_ask  and no_bid  else 0
+
+            opportunities.append({
+                'ticker':        m.get('ticker', ''),
+                'title':         m.get('title', ''),
+                'event_ticker':  m.get('event_ticker', ''),
+                'series_ticker': m.get('series_ticker', ''),
+                'yes_bid':       yes_bid,
+                'no_bid':        no_bid,
+                'yes_ask':       yes_ask or 0,
+                'no_ask':        no_ask or 0,
+                'yes_spread':    yes_spread,
+                'no_spread':     no_spread,
+                'width':         width,
+                'instant_arb':   instant > 0,
+                'suggested_yes': sug_yes,
+                'suggested_no':  sug_no,
+                'profit_posted': posted_profit,
+            })
 
         opportunities.sort(key=lambda x: x['width'], reverse=True)
-        return jsonify({'opportunities': opportunities, 'count': len(opportunities), 'min_width': min_width})
+        return jsonify({
+            'opportunities': opportunities,
+            'count': len(opportunities),
+            'total_scanned': len(all_markets),
+            'min_width': min_width
+        })
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -843,6 +1085,170 @@ def reset_pnl():
         'session_start': time.time(),
     }
     return jsonify({'success': True})
+
+
+# ─── Middle Spread Scanner ─────────────────────────────────────────────────────
+# A "middle" is when you buy YES on a tight spread (e.g. Team -3.5) and
+# NO on a wider spread for the same team (e.g. Team -7.5).
+# If the team wins by 4-7 points, BOTH contracts settle YES/NO correctly
+# and you win both sides.  Even if only one hits, the combined cost < 100¢
+# for each individual contract, so downside is limited.
+
+@app.route('/api/scan/middles', methods=['GET'])
+def scan_middles():
+    """
+    Find middle spread opportunities within the same game.
+    Looks for spread pairs where:
+      - Same game (same event group)
+      - One spread is tighter (e.g. -3.5), one is wider (e.g. -7.5)
+      - Buying YES on tight + NO on wide (or vice versa) creates a "middle"
+        where both can win if the margin lands between the two numbers
+
+    Returns list of middle opportunities with expected value calculations.
+    """
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        # Fetch all spread markets
+        SPREAD_SERIES = [
+            'KXNBASPREAD', 'KXNFLSPREAD', 'KXNHLSPREAD',
+            'KXMLBSPREAD', 'KXNCAABSPREAD',
+        ]
+
+        all_spreads = []
+        for series in SPREAD_SERIES:
+            try:
+                result = kalshi_client.get_markets_by_series(series, status='open', limit=200)
+                markets = result.get('markets', [])
+                markets = [m for m in markets if 'mve_selected_legs' not in m]
+                all_spreads.extend(markets)
+            except Exception:
+                continue
+
+        def tc(m, field):
+            d = m.get(field + '_dollars')
+            if d: return round(float(d) * 100)
+            return m.get(field, 0)
+
+        # Group spreads by game
+        # Event ticker format: KXNBASPREAD-26FEB28TORWAS
+        # Game ID = last part after the series prefix hyphen
+        import re
+        games = {}
+        for m in all_spreads:
+            et = m.get('event_ticker', '')
+            # Extract game ID — everything after the last series prefix
+            match = re.match(r'KX\w+SPREAD-(.+)', et, re.IGNORECASE)
+            if not match:
+                continue
+            game_id = match.group(1)
+            if game_id not in games:
+                games[game_id] = []
+            games[game_id].append(m)
+
+        middles = []
+        for game_id, spreads in games.items():
+            if len(spreads) < 2:
+                continue
+
+            # Parse spread numbers from titles
+            # e.g. "TOR vs WAS: TOR -3.5" → team=TOR, spread=-3.5
+            parsed = []
+            for m in spreads:
+                title = m.get('title', '')
+                # Try to extract spread number
+                sp_match = re.search(r'([A-Z]{2,5})\s+([+-]?\d+\.?\d*)', title)
+                if sp_match:
+                    team = sp_match.group(1)
+                    spread_num = float(sp_match.group(2))
+                    parsed.append({
+                        'market': m,
+                        'team': team,
+                        'spread': spread_num,
+                        'yes_bid': tc(m, 'yes_bid'),
+                        'no_bid': tc(m, 'no_bid'),
+                        'yes_ask': tc(m, 'yes_ask'),
+                        'no_ask': tc(m, 'no_ask'),
+                    })
+
+            # Find pairs: same team, different spread numbers
+            for i in range(len(parsed)):
+                for j in range(i + 1, len(parsed)):
+                    a, b = parsed[i], parsed[j]
+                    if a['team'] != b['team']:
+                        continue
+
+                    # Order so that 'tight' has the smaller absolute spread
+                    if abs(a['spread']) <= abs(b['spread']):
+                        tight, wide = a, b
+                    else:
+                        tight, wide = b, a
+
+                    gap = abs(wide['spread']) - abs(tight['spread'])
+                    if gap < 1:
+                        continue  # spreads too close, no real middle
+
+                    # Strategy: buy YES on tight spread, buy NO on wide spread
+                    # Cost: tight_yes_bid + wide_no_bid
+                    # Win condition: margin lands between tight and wide
+                    cost_yes_tight_no_wide = tight['yes_bid'] + wide['no_bid']
+                    # Alt: buy NO on tight, YES on wide
+                    cost_no_tight_yes_wide = tight['no_bid'] + wide['yes_bid']
+
+                    # Pick the cheaper direction
+                    if cost_yes_tight_no_wide <= cost_no_tight_yes_wide:
+                        cost = cost_yes_tight_no_wide
+                        direction = 'YES_tight_NO_wide'
+                        entry_desc = f"YES {tight['market']['title']} @ {tight['yes_bid']}¢ + NO {wide['market']['title']} @ {wide['no_bid']}¢"
+                    else:
+                        cost = cost_no_tight_yes_wide
+                        direction = 'NO_tight_YES_wide'
+                        entry_desc = f"NO {tight['market']['title']} @ {tight['no_bid']}¢ + YES {wide['market']['title']} @ {wide['yes_bid']}¢"
+
+                    # Max win: if margin lands in the middle, both settle favorably = $2 payout
+                    # One-side win: $1 payout
+                    # Both miss: $0 payout
+                    max_payout = 200  # both contracts pay
+                    partial_payout = 100  # one contract pays
+                    max_profit = max_payout - cost
+                    partial_profit = partial_payout - cost
+
+                    middles.append({
+                        'game_id': game_id,
+                        'team': tight['team'],
+                        'tight_spread': tight['spread'],
+                        'wide_spread': wide['spread'],
+                        'gap': gap,
+                        'direction': direction,
+                        'cost': cost,
+                        'max_profit': max_profit,
+                        'partial_profit': partial_profit,
+                        'entry': entry_desc,
+                        'tight_ticker': tight['market']['ticker'],
+                        'wide_ticker': wide['market']['ticker'],
+                        'tight_title': tight['market']['title'],
+                        'wide_title': wide['market']['title'],
+                        'tight_yes_bid': tight['yes_bid'],
+                        'tight_no_bid': tight['no_bid'],
+                        'wide_yes_bid': wide['yes_bid'],
+                        'wide_no_bid': wide['no_bid'],
+                    })
+
+        # Sort by max_profit descending
+        middles.sort(key=lambda x: x['max_profit'], reverse=True)
+
+        return jsonify({
+            'middles': middles,
+            'count': len(middles),
+            'total_spreads': len(all_spreads),
+            'games_with_spreads': len(games),
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

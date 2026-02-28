@@ -569,18 +569,40 @@ function displayEventRow(eventData, container) {
     // Categorize markets
     const categorized = categorizeMarkets(eventData.markets);
     
-    // Display main markets (Winner, Spread, Total) first
-    if (categorized.winner) {
-        marketsGrid.appendChild(createMarketRow(categorized.winner, 'Winner'));
-    }
-    if (categorized.spread) {
-        marketsGrid.appendChild(createMarketRow(categorized.spread, 'Spread'));
-    }
-    if (categorized.total) {
-        marketsGrid.appendChild(createMarketRow(categorized.total, 'Total'));
+    // Display winner markets — each team is its own row with team label from ticker
+    categorized.winners.forEach(m => {
+        const teamLabel = getTeamLabelFromTicker(m.ticker);
+        marketsGrid.appendChild(createMarketRow(m, teamLabel));
+    });
+    
+    // Display spreads — show primary spread (closest to pick-em), rest in collapsible
+    if (categorized.spreads.length > 0) {
+        // Sort by spread number (smallest first = closest to pick-em)
+        const sorted = [...categorized.spreads].sort((a, b) => {
+            const numA = parseInt((a.ticker || '').match(/(\d+)$/)?.[1] || '999');
+            const numB = parseInt((b.ticker || '').match(/(\d+)$/)?.[1] || '999');
+            return numA - numB;
+        });
+        // Show first 2 spreads (one per team at tightest line)
+        sorted.slice(0, 2).forEach(m => {
+            marketsGrid.appendChild(createMarketRow(m, extractSubtitle(m.title) || 'Spread'));
+        });
+        if (sorted.length > 2) {
+            categorized.props.push(...sorted.slice(2));
+        }
     }
     
-    // Player props in collapsible section
+    // Display totals — show the middle total, rest in collapsible
+    if (categorized.totals.length > 0) {
+        const midIdx = Math.floor(categorized.totals.length / 2);
+        marketsGrid.appendChild(createMarketRow(categorized.totals[midIdx], extractSubtitle(categorized.totals[midIdx].title) || 'Total'));
+        const otherTotals = categorized.totals.filter((_, i) => i !== midIdx);
+        if (otherTotals.length > 0) {
+            categorized.props.push(...otherTotals);
+        }
+    }
+    
+    // Player props + extra spreads/totals in collapsible section
     if (categorized.props.length > 0) {
         const propsSection = createPropsCollapsible(categorized.props);
         marketsGrid.appendChild(propsSection);
@@ -594,9 +616,9 @@ function displayEventRow(eventData, container) {
 // KXNBAGAME → winner, KXNBASPREAD → spread, KXNBATOTAL → total, etc.
 function categorizeMarkets(markets) {
     const result = {
-        winner: null,
-        spread: null, 
-        total: null,
+        winners: [],   // ALL winner markets (one per team/outcome)
+        spreads: [],   // ALL spread markets
+        totals: [],    // ALL total markets
         props: []
     };
     
@@ -628,18 +650,18 @@ function categorizeMarkets(markets) {
     markets.forEach(market => {
         const type = getMarketType(market);
         
-        if (type === 'winner' && !result.winner) {
-            result.winner = market;
-        } else if (type === 'spread' && !result.spread) {
-            result.spread = market;
-        } else if (type === 'total' && !result.total) {
-            result.total = market;
+        if (type === 'winner') {
+            result.winners.push(market);
+        } else if (type === 'spread') {
+            result.spreads.push(market);
+        } else if (type === 'total') {
+            result.totals.push(market);
         } else {
             result.props.push(market);
         }
     });
     
-    console.log(`  Categorized: W=${result.winner?'✓':'✗'} S=${result.spread?'✓':'✗'} T=${result.total?'✓':'✗'} Props=${result.props.length}`);
+    console.log(`  Categorized: W=${result.winners.length} S=${result.spreads.length} T=${result.totals.length} Props=${result.props.length}`);
     
     return result;
 }
@@ -668,14 +690,14 @@ function createMarketRow(market, label) {
     
     const yesBtn = document.createElement('button');
     yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${yesStyle}`;
-    // For winner markets, show team names on buttons
-    const teams = (label === 'Winner') ? extractTeamSides(market.title) : null;
-    const yesLabel = teams ? shortenTeam(teams.yes) : 'YES';
-    const noLabel  = teams ? shortenTeam(teams.no)  : 'NO';
+    // For winner markets with team label, show team name + YES/NO context
+    // Each row is now one specific team's market (e.g., MIA ticker = "Will Miami win?")
+    const isTeamRow = label && label !== 'Winner' && label !== 'Spread' && label !== 'Total';
+    const teams = (!isTeamRow && label === 'Winner') ? extractTeamSides(market.title) : null;
+    const yesLabel = isTeamRow ? `✓ Wins` : (teams ? shortenTeam(teams.yes) : 'YES');
+    const noLabel  = isTeamRow ? `✗ Loses` : (teams ? shortenTeam(teams.no)  : 'NO');
 
-    yesBtn.innerHTML = teams
-        ? `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">✓ ${yesLabel}</div>`
-        : `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">YES</div>`;
+    yesBtn.innerHTML = `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${yesLabel}</div>`;
     yesBtn.onclick = () => openBotModal(market, 'yes', yesAsk);
     yesBtn.onmouseenter = () => yesBtn.style.transform = 'scale(1.05)';
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
@@ -688,9 +710,7 @@ function createMarketRow(market, label) {
     
     const noBtn = document.createElement('button');
     noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${noStyle}`;
-    noBtn.innerHTML = teams
-        ? `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">✗ ${noLabel}</div>`
-        : `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">NO</div>`;
+    noBtn.innerHTML = `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${noLabel}</div>`;
     noBtn.onclick = () => openBotModal(market, 'no', noAsk);
     noBtn.onmouseenter = () => noBtn.style.transform = 'scale(1.05)';
     noBtn.onmouseleave = () => noBtn.style.transform = 'scale(1)';
@@ -742,6 +762,47 @@ function getPriceButtonStyle(price, side) {
             return 'background: rgba(255, 68, 68, 0.1); color: #ff4444; border: 1px solid #ff444466;';
         }
     }
+}
+
+// Extract team label from ticker suffix (e.g., KXNBAGAME-26FEB28HOUMIA-MIA -> "Miami")
+function getTeamLabelFromTicker(ticker) {
+    if (!ticker) return 'Winner';
+    // Ticker format: PREFIX-DATEXXXXXX-SUFFIX
+    // e.g., KXNBAGAME-26FEB28HOUMIA-MIA, KXEPLGAME-26MAR01ARSCFC-TIE
+    const parts = ticker.split('-');
+    const suffix = parts[parts.length - 1] || '';
+    if (!suffix) return 'Winner';
+    
+    // Use the same team map as parseTeamNames
+    const teamMap = {
+        'ATL': 'Atlanta', 'BOS': 'Boston', 'BKN': 'Brooklyn', 'CHA': 'Charlotte',
+        'CHI': 'Chicago', 'CLE': 'Cleveland', 'DAL': 'Dallas', 'DEN': 'Denver',
+        'DET': 'Detroit', 'GSW': 'Golden St', 'HOU': 'Houston', 'IND': 'Indiana',
+        'LAC': 'LA Clippers', 'LAL': 'LA Lakers', 'MEM': 'Memphis', 'MIA': 'Miami',
+        'MIL': 'Milwaukee', 'MIN': 'Minnesota', 'NOP': 'New Orleans', 'NYK': 'New York',
+        'OKC': 'OKC', 'ORL': 'Orlando', 'PHI': 'Philadelphia', 'PHX': 'Phoenix',
+        'POR': 'Portland', 'SAC': 'Sacramento', 'SAS': 'San Antonio', 'TOR': 'Toronto',
+        'UTA': 'Utah', 'WAS': 'Washington',
+        // NHL
+        'CAR': 'Carolina', 'SEA': 'Seattle', 'COL': 'Colorado',
+        'VGK': 'Vegas', 'WPG': 'Winnipeg', 'WSH': 'Washington',
+        'VAN': 'Vancouver', 'FLA': 'Florida', 'NYR': 'NY Rangers',
+        'NYI': 'NY Islanders', 'TBL': 'Tampa Bay', 'NJD': 'New Jersey',
+        'PIT': 'Pittsburgh', 'CBJ': 'Columbus', 'NSH': 'Nashville',
+        'STL': 'St. Louis', 'EDM': 'Edmonton', 'CGY': 'Calgary',
+        'OTT': 'Ottawa', 'MTL': 'Montreal', 'BUF': 'Buffalo',
+        'ARI': 'Arizona', 'ANA': 'Anaheim', 'SJS': 'San Jose',
+        // EPL
+        'LEE': 'Leeds', 'MCI': 'Man City', 'LFC': 'Liverpool', 'TOT': 'Tottenham',
+        'NFO': 'Nottingham', 'FUL': 'Fulham', 'BRE': 'Brentford', 'WOL': 'Wolves',
+        'ARS': 'Arsenal', 'EVE': 'Everton', 'NEW': 'Newcastle', 'BUR': 'Burnley',
+        'WHU': 'West Ham', 'MUN': 'Man Utd', 'AVL': 'Aston Villa', 'CHE': 'Chelsea',
+        'BHA': 'Brighton', 'CRY': 'Crystal Palace', 'SOU': 'Southampton',
+        'IPS': 'Ipswich', 'LEI': 'Leicester', 'BOH': 'Bournemouth', 'BOU': 'Bournemouth',
+        'BRI': 'Brighton', 'SUN': 'Sunderland',
+        'TIE': 'Draw',
+    };
+    return teamMap[suffix.toUpperCase()] || suffix;
 }
 
 // Extract team sides from market title for winner markets
@@ -1065,14 +1126,18 @@ function calculateArbPrices(market, width) {
 function openBotModal(market, _side, _price) {
     currentArbMarket = market;
 
-    // ── Market title ──
+    // ── Market title — show team name from ticker ──
     const titleEl = document.getElementById('bot-market-title');
     const title = market.title || market.ticker;
+    const teamFromTicker = getTeamLabelFromTicker(market.ticker);
+    const displayTitle = teamFromTicker && teamFromTicker !== 'Winner' 
+        ? `${teamFromTicker} — ${title}` 
+        : title;
     const sport = detectSport(market.event_ticker || market.ticker || '');
     const emoji = getSportEmoji(sport);
-    titleEl.innerHTML = `<div style="display:flex;align-items:center;gap:8px;">
+    titleEl.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <span>${emoji}</span>
-        <span>${title}</span>
+        <span>${displayTitle}</span>
         <span style="background:#1e2740;color:#8892a6;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">${sport}</span>
     </div>`;
 
@@ -1084,10 +1149,13 @@ function openBotModal(market, _side, _price) {
     const yesSpread = yesAsk - yesBid;
     const noSpread  = noAsk - noBid;
 
-    // Extract team sides for the modal
-    const modalTeams = extractTeamSides(title);
-    const yesTeamLabel = modalTeams ? `YES — ${shortenTeam(modalTeams.yes)} wins` : 'YES';
-    const noTeamLabel  = modalTeams ? `NO — ${shortenTeam(modalTeams.no)} wins`  : 'NO';
+    // Use team name from ticker for clear labeling
+    const yesTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
+        ? `YES — ${teamFromTicker} wins`
+        : 'YES';
+    const noTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
+        ? `NO — ${teamFromTicker} loses`
+        : 'NO';
 
     document.getElementById('bot-market-prices').innerHTML = `
         <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
@@ -2089,37 +2157,90 @@ async function loadTradeHistory() {
         const resp = await fetch(`${API_BASE}/bot/history?limit=50`);
         const data = await resp.json();
         const trades = data.trades || [];
+        
+        // Clear button at top
+        let clearBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+            <button onclick="clearTradeHistory()" style="background:#2a1a1a;border:1px solid #ff4444;color:#ff4444;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">Clear History</button>
+        </div>`;
+        
         if (trades.length === 0) {
-            el.innerHTML = '<p style="color:#555;text-align:center;">No completed or stopped trades this session.</p>';
+            el.innerHTML = clearBtn + '<p style="color:#555;text-align:center;">No completed or stopped trades yet. Start fresh!</p>';
             return;
         }
-        el.innerHTML = `
-            <div style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px 12px;align-items:center;">
-                <div style="color:#555;font-size:10px;font-weight:600;">TIME</div>
-                <div style="color:#555;font-size:10px;font-weight:600;">MARKET</div>
-                <div style="color:#555;font-size:10px;font-weight:600;">PRICES</div>
-                <div style="color:#555;font-size:10px;font-weight:600;">QTY</div>
-                <div style="color:#555;font-size:10px;font-weight:600;">P&L</div>
-                ${trades.map(t => {
-                    const time = new Date(t.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-                    const isWin = t.result === 'completed';
-                    const pnl = isWin ? t.profit_cents : -(t.loss_cents || 0);
-                    const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
-                    const icon = isWin ? '✅' : '⛔';
-                    const verified = t.verified_prices || t.verified_cleared ? ' ✓' : '';
-                    const ticker = (t.ticker || '').split('-').slice(1).join('-') || t.ticker;
-                    return `
-                        <div style="color:#555;font-size:11px;">${time}</div>
-                        <div style="color:#fff;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${icon} ${ticker}</div>
-                        <div style="font-size:11px;"><span style="color:#00ff88;">Y${t.yes_price || '?'}¢</span> / <span style="color:#ff4444;">N${t.no_price || '?'}¢</span></div>
-                        <div style="color:#8892a6;font-size:11px;text-align:center;">×${t.quantity || 1}</div>
-                        <div style="color:${pnlColor};font-weight:700;font-size:11px;">${pnl >= 0 ? '+' : ''}${pnl}¢${verified}</div>
-                    `;
-                }).join('')}
-            </div>
-        `;
+        
+        const rows = trades.map(t => {
+            // Date & time
+            const dt = new Date(t.timestamp * 1000);
+            const date = dt.toLocaleDateString([], {month:'short', day:'numeric'});
+            const time = dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+            
+            // Placed-at time (when bot was created)
+            const placedDt = t.placed_at ? new Date(t.placed_at * 1000) : null;
+            const placedTime = placedDt ? placedDt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+            
+            // Result styling
+            const isWin = t.result === 'completed' || t.result === 'take_profit_watch';
+            const isSL = t.result?.includes('stop_loss');
+            const pnl = isWin ? (t.profit_cents || 0) : -(t.loss_cents || 0);
+            const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
+            const icon = isWin ? '✅' : '⛔';
+            const resultLabel = isWin ? 'FILLED' : (isSL ? 'STOP LOSS' : 'STOPPED');
+            
+            // Team label from ticker suffix
+            const teamLabel = t.team_label || (t.ticker ? t.ticker.split('-').pop() : '');
+            const teamName = getTeamLabelFromTicker(t.ticker || '');
+            
+            // Verified badge
+            const verified = t.verified_prices || t.verified_cleared ? '<span style="color:#00ff88;font-size:9px;margin-left:4px;">✓ verified</span>' : '';
+            
+            // Watch vs Arb type
+            const tradeType = t.type === 'watch' ? 'WATCH' : 'ARB';
+            const typeColor = t.type === 'watch' ? '#ffaa00' : '#00aaff';
+            
+            return `
+                <div style="background:#0f1419;border:1px solid ${isWin ? '#00ff8822' : '#ff444422'};border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
+                    <div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                            <span style="font-size:14px;">${icon}</span>
+                            <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
+                            <span style="background:${typeColor}22;color:${typeColor};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${tradeType}</span>
+                            ${verified}
+                        </div>
+                        <div style="color:#555;font-size:10px;margin-bottom:4px;">${t.ticker || ''}</div>
+                        <div style="display:flex;gap:12px;font-size:11px;">
+                            <span style="color:#8892a6;">Placed: <strong style="color:#aaa;">${placedTime || '—'}</strong></span>
+                            <span style="color:#8892a6;">Closed: <strong style="color:#aaa;">${time}</strong></span>
+                            <span style="color:#8892a6;">${date}</span>
+                        </div>
+                        <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;">
+                            ${t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢</span>` : ''}
+                            ${t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢</span>` : ''}
+                            <span style="color:#8892a6;">×${t.quantity || 1}</span>
+                        </div>
+                    </div>
+                    <div style="text-align:right;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
+                        <div style="color:${pnlColor};font-weight:800;font-size:16px;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
+                        <div style="color:${pnlColor};font-size:10px;font-weight:600;">${resultLabel}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        el.innerHTML = clearBtn + `<div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>`;
     } catch (err) {
         el.innerHTML = `<p style="color:#ff4444;">Failed to load history: ${err.message}</p>`;
+    }
+}
+
+async function clearTradeHistory() {
+    if (!confirm('Clear all trade history and reset P&L? This cannot be undone.')) return;
+    try {
+        await fetch(`${API_BASE}/bot/history/clear`, { method: 'POST' });
+        loadTradeHistory();
+        loadPnL();
+        showNotification('History cleared, P&L reset');
+    } catch (err) {
+        showNotification('Failed to clear history: ' + err.message);
     }
 }
 

@@ -910,12 +910,14 @@ def monitor_bots():
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots'] += 1
                             trade_history.insert(0, {
-                                'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
-                                'side': watch_side, 'entry_price': entry,
-                                'exit_bid': cur_bid, 'quantity': qty,
-                                'loss_cents': loss, 'result': 'stop_loss_watch',
-                                'timestamp': now,
-                            })
+                        'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                        'side': watch_side, 'entry_price': entry,
+                        'exit_bid': cur_bid, 'quantity': qty,
+                        'loss_cents': loss, 'result': 'stop_loss_watch',
+                        'timestamp': now,
+                        'placed_at': bot.get('created_at', now),
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                    })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
                                            'loss_cents': loss})
                         else:
@@ -932,12 +934,14 @@ def monitor_bots():
                             session_pnl['gross_profit_cents'] += profit
                             session_pnl['completed_bots'] += 1
                             trade_history.insert(0, {
-                                'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
-                                'side': watch_side, 'entry_price': entry,
-                                'exit_bid': cur_bid, 'quantity': qty,
-                                'profit_cents': profit, 'result': 'take_profit_watch',
-                                'timestamp': now,
-                            })
+                        'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                        'side': watch_side, 'entry_price': entry,
+                        'exit_bid': cur_bid, 'quantity': qty,
+                        'profit_cents': profit, 'result': 'take_profit_watch',
+                        'timestamp': now,
+                        'placed_at': bot.get('created_at', now),
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                    })
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
                                            'profit_cents': profit})
                         else:
@@ -981,6 +985,8 @@ def monitor_bots():
                         'quantity': qty, 'profit_cents': profit_cents,
                         'result': 'completed', 'timestamp': now,
                         'verified_prices': actual_yes is not None and actual_no is not None,
+                        'placed_at': bot.get('created_at', now),
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                     })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
 
@@ -1217,6 +1223,8 @@ def monitor_bots():
                                 'quantity': yes_filled, 'loss_cents': loss,
                                 'result': 'stop_loss_yes', 'exit_bid': actual_sell,
                                 'verified_cleared': verified, 'timestamp': now,
+                                'placed_at': bot.get('created_at', now),
+                                'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                             })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
                                             'entry': bot['yes_price'], 'exit_bid': actual_sell,
@@ -1325,6 +1333,8 @@ def monitor_bots():
                                 'quantity': no_filled, 'loss_cents': loss,
                                 'result': 'stop_loss_no', 'exit_bid': actual_sell,
                                 'verified_cleared': verified, 'timestamp': now,
+                                'placed_at': bot.get('created_at', now),
+                                'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                             })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
                                             'entry': bot['no_price'], 'exit_bid': actual_sell,
@@ -1421,6 +1431,19 @@ def bot_history():
     """Get completed/stopped trade history"""
     limit = int(request.args.get('limit', 50))
     return jsonify({'trades': trade_history[:limit], 'total': len(trade_history)})
+
+
+@app.route('/api/bot/history/clear', methods=['POST'])
+def clear_history():
+    """Clear all trade history and reset P&L counters"""
+    global trade_history, session_pnl
+    trade_history = []
+    session_pnl['gross_profit_cents'] = 0
+    session_pnl['gross_loss_cents'] = 0
+    session_pnl['completed_bots'] = 0
+    session_pnl['stopped_bots'] = 0
+    save_state()
+    return jsonify({'success': True, 'message': 'History cleared, P&L reset'})
 
 
 @app.route('/api/bot/set_phase/<bot_id>', methods=['POST'])

@@ -2,14 +2,163 @@
 const API_BASE = 'http://localhost:5001/api';
 let allMarkets = [];
 let autoMonitorInterval = null;
+let liveScoresInterval = null;
 let selectedMarket = null;
 let selectedSide = null;
+let currentSportFilter = 'all';
+let liveGames = {}; // keyed by team abbreviation pairs for quick lookup
+
+// Price helper: handles both new _dollars string fields and legacy integer cents fields
+// (Kalshi deprecated integer cent fields in late 2025)
+function getPrice(market, field) {
+    const dollarsKey = field + '_dollars';
+    if (market[dollarsKey] !== undefined && market[dollarsKey] !== null && market[dollarsKey] !== '') {
+        return Math.round(parseFloat(market[dollarsKey]) * 100);
+    }
+    return market[field] || 0;
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Auto-login first, then load everything
+    setupSearch();
     autoLogin();
+    loadLiveScores();
+    // Refresh live scores every 30 seconds
+    liveScoresInterval = setInterval(loadLiveScores, 30000);
 });
+
+// ─── LIVE SCORES ──────────────────────────────────────────────────────────────
+
+async function loadLiveScores() {
+    try {
+        // Fetch NBA + NFL in parallel (most common sports on Kalshi)
+        const [nbaRes, nflRes] = await Promise.allSettled([
+            fetch(`${API_BASE}/scoreboard/nba`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/nfl`).then(r => r.json()),
+        ]);
+
+        const games = [];
+        if (nbaRes.status === 'fulfilled' && nbaRes.value.events) {
+            games.push(...nbaRes.value.events.map(e => parseESPNGame(e, 'NBA')));
+        }
+        if (nflRes.status === 'fulfilled' && nflRes.value.events) {
+            games.push(...nflRes.value.events.map(e => parseESPNGame(e, 'NFL')));
+        }
+
+        // Build lookup table for marking Kalshi market cards as live
+        liveGames = {};
+        games.forEach(g => {
+            if (g.state === 'in') {
+                liveGames[g.awayAbbr] = g;
+                liveGames[g.homeAbbr] = g;
+            }
+        });
+
+        renderLiveScoresBar(games);
+    } catch (e) {
+        console.log('Live scores unavailable:', e);
+    }
+}
+
+function parseESPNGame(event, sport) {
+    const comp = (event.competitions || [])[0] || {};
+    const competitors = comp.competitors || [];
+    const home = competitors.find(c => c.homeAway === 'home') || {};
+    const away = competitors.find(c => c.homeAway === 'away') || {};
+    const status = event.status || {};
+    const statusType = status.type || {};
+
+    return {
+        sport,
+        name: event.shortName || event.name || '',
+        homeAbbr: (home.team || {}).abbreviation || '',
+        awayAbbr: (away.team || {}).abbreviation || '',
+        homeScore: home.score || '0',
+        awayScore: away.score || '0',
+        state: statusType.state || 'pre',       // 'pre' | 'in' | 'post'
+        clock: status.displayClock || '',
+        period: status.period || 0,
+        periodLabel: statusType.shortDetail || '',
+    };
+}
+
+function renderLiveScoresBar(games) {
+    const bar = document.getElementById('live-scores-bar');
+    const content = document.getElementById('live-scores-content');
+    if (!bar || !content) return;
+
+    // Only show live/recent games
+    const visible = games.filter(g => g.state === 'in' || g.state === 'post');
+    if (visible.length === 0) { bar.style.display = 'none'; return; }
+
+    bar.style.display = 'block';
+    content.innerHTML = visible.map(g => {
+        const isLive = g.state === 'in';
+        const liveTag = isLive ? `<span style="color:#ff3333;font-size:10px;font-weight:700;">● LIVE</span>` : '';
+        const clockTag = isLive && g.clock ? `<span class="clock">${g.periodLabel || 'Q'+g.period} ${g.clock}</span>` : `<span class="final">Final</span>`;
+        return `<div class="live-chip ${isLive ? 'live' : ''}">
+            ${liveTag}
+            <span class="teams">${g.awayAbbr} ${g.awayScore} – ${g.homeScore} ${g.homeAbbr}</span>
+            ${clockTag}
+        </div>`;
+    }).join('');
+}
+
+// ─── SPORT FILTER ─────────────────────────────────────────────────────────────
+
+function filterBySport(sport) {
+    currentSportFilter = sport;
+
+    // Update pill active state
+    document.querySelectorAll('.sport-pill').forEach(p => {
+        p.classList.toggle('active', p.dataset.sport === sport);
+    });
+
+    applyFilters();
+}
+
+function applyFilters() {
+    const query = (document.getElementById('search-box')?.value || '').toLowerCase();
+    let filtered = allMarkets;
+
+    // Sport filter
+    if (currentSportFilter !== 'all') {
+        filtered = filtered.filter(m => {
+            const et = ((m.event_ticker || '') + (m.series_ticker || '') + (m.ticker || '')).toUpperCase();
+            switch (currentSportFilter) {
+                case 'nba':   return et.includes('NBA');
+                case 'nfl':   return et.includes('NFL') || et.includes('NFLG');
+                case 'mlb':   return et.includes('MLB') || et.includes('KXMLB');
+                case 'nhl':   return et.includes('NHL') || et.includes('KXNHL');
+                case 'ncaab': return et.includes('NCAAB') || et.includes('KXNCAA');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA');
+                default: return true;
+            }
+        });
+    }
+
+    // Search filter
+    if (query) {
+        filtered = filtered.filter(m => {
+            const title  = (m.title || '').toLowerCase();
+            const ticker = (m.ticker || '').toLowerCase();
+            const series = (m.series_ticker || '').toLowerCase();
+            return title.includes(query) || ticker.includes(query) || series.includes(query);
+        });
+    }
+
+    displayMarkets(filtered);
+}
+
+// ─── LIVE BADGE on game event rows ────────────────────────────────────────────
+
+function getLiveScoreForGame(gameId) {
+    // gameId example: "26FEB27DENOKC" — last 6 chars are team codes
+    const match = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
+    if (!match) return null;
+    const [, t1, t2] = match;
+    return liveGames[t1] || liveGames[t2] || null;
+}
 
 // Auto-login with stored credentials
 async function autoLogin() {
@@ -59,11 +208,7 @@ lSEc96isSV4HXYuYz2fNUUoH8e5s0+xRraON1cwscci9tC2vKg==
         
         if (data.success) {
             console.log('✅ Auto-login successful - Balance: $' + data.balance.toFixed(2));
-            
-            // Setup search first
-            setupSearch();
-            
-            // Then load data
+
             await loadBalance();
             await loadBots();
             await loadMarkets();
@@ -112,7 +257,7 @@ async function loadMarkets() {
             }
         }
         
-        displayMarkets(allMarkets);
+        applyFilters(); // respect current sport pill + search when displaying
     } catch (error) {
         console.error('Error loading markets:', error);
         grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Network error loading markets. Check console.</p>';
@@ -185,13 +330,32 @@ function formatEventTitle(market) {
 
 // Display one compact event row (trading floor style)
 function displayEventRow(eventData, container) {
+    const liveScore = getLiveScoreForGame(eventData.gameId);
+    const isLive = !!liveScore;
+
     const card = document.createElement('div');
-    card.style.cssText = 'background: #1a1f2e; border: 1px solid #2a3447; border-radius: 8px; padding: 16px; margin-bottom: 12px;';
-    
+    card.style.cssText = `background: #1a1f2e; border: 1px solid ${isLive ? '#00ff88' : '#2a3447'}; border-radius: 8px; padding: 16px; margin-bottom: 12px;`;
+
     // Event header
     const header = document.createElement('div');
-    header.style.cssText = 'font-size: 16px; font-weight: 600; color: #ffffff; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #2a3447;';
-    header.textContent = `🏀 ${eventData.eventTitle}`;
+    header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #2a3447;';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.style.cssText = 'font-size: 15px; font-weight: 600; color: #ffffff;';
+    titleSpan.textContent = `🏀 ${eventData.eventTitle}`;
+    header.appendChild(titleSpan);
+
+    if (isLive) {
+        const scoreBadge = document.createElement('span');
+        scoreBadge.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:#0f1a0f;border:1px solid #00ff88;border-radius:6px;padding:3px 10px;font-size:12px;white-space:nowrap;';
+        const score = liveScore;
+        const clock = score.clock ? `${score.periodLabel || 'Q'+score.period} ${score.clock}` : 'Final';
+        scoreBadge.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:700;">● LIVE</span>
+            <span style="color:#fff;font-weight:700;">${score.awayAbbr} ${score.awayScore}–${score.homeScore} ${score.homeAbbr}</span>
+            <span style="color:#8892a6;font-size:10px;">${clock}</span>`;
+        header.appendChild(scoreBadge);
+    }
+
     card.appendChild(header);
     
     // Markets grid (compact button layout)
@@ -266,9 +430,9 @@ function createMarketRow(market, label) {
     }
     
     // YES button (compact price button with value-based styling)
-    const yesBid = market.yes_bid || 0;
-    const yesAsk = market.yes_ask || 0;
-    const yesPrice = yesAsk || Math.round((yesBid + yesAsk) / 2);
+    const yesBid = getPrice(market, 'yes_bid');
+    const yesAsk = getPrice(market, 'yes_ask');
+    const yesPrice = yesAsk || yesBid || Math.round((yesBid + yesAsk) / 2);
     const yesStyle = getPriceButtonStyle(yesPrice, 'yes');
     
     const yesBtn = document.createElement('button');
@@ -279,9 +443,9 @@ function createMarketRow(market, label) {
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
     
     // NO button
-    const noBid = market.no_bid || 0;
-    const noAsk = market.no_ask || 0;
-    const noPrice = noAsk || (100 - yesPrice);
+    const noBid = getPrice(market, 'no_bid');
+    const noAsk = getPrice(market, 'no_ask');
+    const noPrice = noAsk || noBid || (100 - yesPrice);
     const noStyle = getPriceButtonStyle(noPrice, 'no');
     
     const noBtn = document.createElement('button');
@@ -437,54 +601,68 @@ async function fetchOrderbookForSidebar(ticker) {
     try {
         const response = await fetch(`${API_BASE}/orderbook/${ticker}`);
         const data = await response.json();
-        
+
         if (data.error) {
             document.getElementById('orderbook-ladder').innerHTML = `<p style="color: #ff4444;">Error: ${data.error}</p>`;
             return;
         }
-        
-        const orderbook = data.orderbook || data;
-        displayOrderbookLadder(orderbook);
+
+        // Kalshi returns { orderbook: { yes: [[p,q],...], no: [[p,q],...] } }
+        displayOrderbookLadder(data);
     } catch (error) {
         console.error('Error fetching orderbook:', error);
         document.getElementById('orderbook-ladder').innerHTML = `<p style="color: #ff4444;">Network error</p>`;
     }
 }
 
+// Parse a single orderbook level — Kalshi returns [price, qty] arrays
+function parseOrderLevel(level) {
+    if (Array.isArray(level)) return { price: level[0], qty: level[1] };
+    return { price: level.price || level[0], qty: level.quantity || level.qty || level[1] };
+}
+
 function displayOrderbookLadder(orderbook) {
-    const yesOrders = orderbook.yes || [];
-    const noOrders = orderbook.no || [];
-    
+    // Handle nested { orderbook: { yes: [...], no: [...] } } wrapper
+    const ob = orderbook.orderbook || orderbook;
+    const yesOrders = (ob.yes || []).slice().reverse(); // best bid first (highest price)
+    const noOrders = (ob.no || []).slice().reverse();
+
+    // Derive implied ask prices: YES ask = 100 - best NO bid; NO ask = 100 - best YES bid
+    const bestYesBid = yesOrders.length ? parseOrderLevel(yesOrders[0]).price : null;
+    const bestNoBid  = noOrders.length  ? parseOrderLevel(noOrders[0]).price  : null;
+    const impliedYesAsk = bestNoBid  != null ? (100 - bestNoBid)  : null;
+    const impliedNoAsk  = bestYesBid != null ? (100 - bestYesBid) : null;
+
+    const renderRow = (level, color, bg) => {
+        const { price, qty } = parseOrderLevel(level);
+        return `<div style="display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; background: ${bg}; border-left: 3px solid ${color}; border-radius: 4px;">
+            <span style="color: ${color}; font-weight: 700; font-size: 14px;">${price}¢</span>
+            <span style="color: #8892a6; font-size: 12px;">${qty} contracts</span>
+        </div>`;
+    };
+
     const ladderHtml = `
         <div style="background: #1a1f2e; border-radius: 8px; padding: 16px;">
-            <!-- YES Side -->
-            <div style="margin-bottom: 20px;">
-                <div style="font-size: 12px; font-weight: 600; color: #00ff88; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #2a3447;">YES</div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    ${yesOrders.length > 0 ? yesOrders.map(order => `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: rgba(0, 255, 136, 0.05); border-left: 3px solid #00ff88; border-radius: 4px;">
-                            <span style="color: #00ff88; font-weight: 600;">${order.price}¢</span>
-                            <span style="color: #8892a6;">${order.quantity} lots</span>
-                        </div>
-                    `).join('') : '<p style="color: #8892a6; text-align: center; padding: 20px; font-size: 12px;">No orders</p>'}
+            ${impliedYesAsk != null ? `<div style="text-align:center; padding: 6px; background: rgba(0,255,136,0.08); border-radius:6px; margin-bottom:12px; font-size:12px; color:#8892a6;">
+                Best YES ask <span style="color:#00ff88;font-weight:700;">${impliedYesAsk}¢</span> &nbsp;|&nbsp; Best NO ask <span style="color:#ff4444;font-weight:700;">${impliedNoAsk != null ? impliedNoAsk+'¢' : '—'}</span>
+            </div>` : ''}
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                <div>
+                    <div style="font-size: 11px; font-weight: 700; color: #00ff88; margin-bottom: 8px; letter-spacing:.05em;">YES BIDS</div>
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                        ${yesOrders.length > 0 ? yesOrders.map(o => renderRow(o, '#00ff88', 'rgba(0,255,136,0.05)')).join('') : '<p style="color:#8892a6;text-align:center;padding:16px;font-size:12px;">No bids</p>'}
+                    </div>
                 </div>
-            </div>
-            
-            <!-- NO Side -->
-            <div>
-                <div style="font-size: 12px; font-weight: 600; color: #ff4444; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #2a3447;">NO</div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    ${noOrders.length > 0 ? noOrders.map(order => `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: rgba(255, 68, 68, 0.05); border-left: 3px solid #ff4444; border-radius: 4px;">
-                            <span style="color: #ff4444; font-weight: 600;">${order.price}¢</span>
-                            <span style="color: #8892a6;">${order.quantity} lots</span>
-                        </div>
-                    `).join('') : '<p style="color: #8892a6; text-align: center; padding: 20px; font-size: 12px;">No orders</p>'}
+                <div>
+                    <div style="font-size: 11px; font-weight: 700; color: #ff4444; margin-bottom: 8px; letter-spacing:.05em;">NO BIDS</div>
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                        ${noOrders.length > 0 ? noOrders.map(o => renderRow(o, '#ff4444', 'rgba(255,68,68,0.05)')).join('') : '<p style="color:#8892a6;text-align:center;padding:16px;font-size:12px;">No bids</p>'}
+                    </div>
                 </div>
             </div>
         </div>
     `;
-    
+
     document.getElementById('orderbook-ladder').innerHTML = ladderHtml;
 }
 
@@ -619,12 +797,12 @@ function createMarketCard(market) {
     card.style.cssText = 'background: #0f1419; border: 1px solid #2a3447; border-radius: 8px; padding: 16px;';
     
     // Contract pricing (normalized to 0-100 probability scale)
-    const yesBid = market.yes_bid || 0;
-    const yesAsk = market.yes_ask || 0;
-    const yesLast = market.last_price || Math.round((yesBid + yesAsk) / 2);
-    
-    const noBid = market.no_bid || 0;
-    const noAsk = market.no_ask || 0;
+    const yesBid = getPrice(market, 'yes_bid');
+    const yesAsk = getPrice(market, 'yes_ask');
+    const yesLast = getPrice(market, 'last_price') || yesAsk || Math.round((yesBid + yesAsk) / 2);
+
+    const noBid = getPrice(market, 'no_bid');
+    const noAsk = getPrice(market, 'no_ask');
     const noLast = 100 - yesLast;
     
     // Volume and liquidity metrics
@@ -830,9 +1008,9 @@ function createPropsSection(title, markets, gameId) {
 function createPropCard(market) {
     const card = document.createElement('div');
     card.style.cssText = 'background: #1a1f2e; border: 1px solid #2a3447; border-radius: 8px; padding: 12px;';
-    
-    const yesPrice = market.yes_ask || market.yes_bid || 50;
-    const noPrice = market.no_ask || market.no_bid || (100 - yesPrice);
+
+    const yesPrice = getPrice(market, 'yes_ask') || getPrice(market, 'yes_bid') || 50;
+    const noPrice  = getPrice(market, 'no_ask')  || getPrice(market, 'no_bid')  || (100 - yesPrice);
     
     card.innerHTML = `
         <div style="font-size: 13px; color: #8892a6; margin-bottom: 8px;">${market.title}</div>
@@ -866,9 +1044,9 @@ function createPropCard(market) {
 function createMainMarketBox(market, label) {
     const box = document.createElement('div');
     box.style.cssText = 'background: #0f1419; border: 1px solid #2a3447; border-radius: 8px; padding: 12px;';
-    
-    const yesPrice = market.yes_ask || market.yes_bid || 50;
-    const noPrice = market.no_ask || market.no_bid || (100 - yesPrice);
+
+    const yesPrice = getPrice(market, 'yes_ask') || getPrice(market, 'yes_bid') || 50;
+    const noPrice  = getPrice(market, 'no_ask')  || getPrice(market, 'no_bid')  || (100 - yesPrice);
     
     box.innerHTML = `
         <div style="font-size: 12px; color: #00ff88; font-weight: 600; margin-bottom: 8px;">${label}</div>
@@ -899,28 +1077,11 @@ function createMainMarketBox(market, label) {
     return box;
 }
 
-// Search functionality
+// Search functionality (delegates to applyFilters to respect sport pill too)
 function setupSearch() {
     const searchBox = document.getElementById('search-box');
-    searchBox.addEventListener('input', (e) => {
-        const query = e.target.value.toLowerCase();
-        
-        if (query === '') {
-            loadMarkets(); // Reload to get all markets
-            return;
-        }
-        
-        const filtered = allMarkets.filter(m => {
-            const title = (m.title || '').toLowerCase();
-            const ticker = (m.ticker || '').toLowerCase();
-            const series = (m.series_ticker || '').toLowerCase();
-            
-            return title.includes(query) || ticker.includes(query) || series.includes(query);
-        });
-        
-        console.log(`Search for "${query}" found ${filtered.length} markets`);
-        displayMarkets(filtered);
-    });
+    if (!searchBox) return;
+    searchBox.addEventListener('input', () => applyFilters());
 }
 
 // Load recently closed games
@@ -939,13 +1100,13 @@ async function loadRecentGames() {
         
         allMarkets = data.markets || data;
         console.log(`Loaded ${allMarkets.length} closed markets`);
-        
+
         if (allMarkets.length === 0) {
             grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">No closed markets found</p>';
             return;
         }
-        
-        displayMarkets(allMarkets);
+
+        applyFilters();
     } catch (error) {
         console.error('Error loading closed markets:', error);
         grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Network error loading closed markets</p>';
@@ -981,40 +1142,46 @@ async function viewOrderbook(ticker) {
             return;
         }
         
-        // Display orderbook in modal
-        const orderbook = data.orderbook || data;
-        const yesOrders = orderbook.yes || [];
-        const noOrders = orderbook.no || [];
-        
+        // Kalshi returns { orderbook: { yes: [[p,q],...], no: [[p,q],...] } }
+        const ob = data.orderbook || data;
+        const yesOrders = (ob.yes || []).slice().reverse(); // best bid first
+        const noOrders  = (ob.no  || []).slice().reverse();
+
+        const bestYesBid = yesOrders.length ? parseOrderLevel(yesOrders[0]).price : null;
+        const bestNoBid  = noOrders.length  ? parseOrderLevel(noOrders[0]).price  : null;
+        const impliedYesAsk = bestNoBid  != null ? 100 - bestNoBid  : '—';
+        const impliedNoAsk  = bestYesBid != null ? 100 - bestYesBid : '—';
+
+        const renderModalRow = (level, color) => {
+            const { price, qty } = parseOrderLevel(level);
+            return `<div style="display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #2a3447;">
+                <span style="color:${color};font-weight:600;">${price}¢</span>
+                <span style="color:#8892a6;">${qty} contracts</span>
+            </div>`;
+        };
+
         let orderbookHtml = `
-            <div style="background: #1a1f2e; padding: 20px; border-radius: 12px; max-width: 600px; color: #fff;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2 style="margin: 0; color: #00ff88;">📊 Orderbook: ${ticker}</h2>
-                    <button onclick="closeOrderbookModal()" style="background: #ff4444; border: none; color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Close</button>
+            <div style="background: #1a1f2e; padding: 20px; border-radius: 12px; max-width: 640px; width: 95vw; color: #fff;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <h2 style="margin: 0; color: #00ff88; font-size: 16px;">📊 Order Book: ${ticker}</h2>
+                    <button onclick="closeOrderbookModal()" style="background: #ff4444; border: none; color: white; padding: 6px 14px; border-radius: 6px; cursor: pointer;">✕ Close</button>
                 </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div style="text-align:center;padding:8px;background:rgba(0,255,136,0.06);border-radius:6px;margin-bottom:14px;font-size:13px;color:#8892a6;">
+                    Buy YES: <strong style="color:#00ff88;">${typeof impliedYesAsk === 'number' ? impliedYesAsk+'¢' : impliedYesAsk}</strong>
+                    &nbsp;|&nbsp;
+                    Buy NO: <strong style="color:#ff4444;">${typeof impliedNoAsk === 'number' ? impliedNoAsk+'¢' : impliedNoAsk}</strong>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                     <div>
-                        <h3 style="color: #00ff88; margin-bottom: 10px;">YES Orders</h3>
-                        <div style="background: #0f1419; padding: 10px; border-radius: 8px;">
-                            ${yesOrders.length > 0 ? yesOrders.map(order => `
-                                <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2a3447;">
-                                    <span style="color: #00ff88;">${order.price}¢</span>
-                                    <span style="color: #8892a6;">${order.quantity} contracts</span>
-                                </div>
-                            `).join('') : '<p style="color: #8892a6;">No orders</p>'}
+                        <div style="color:#00ff88;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">YES BIDS</div>
+                        <div style="background: #0f1419; padding: 8px; border-radius: 8px; max-height: 320px; overflow-y: auto;">
+                            ${yesOrders.length > 0 ? yesOrders.map(o => renderModalRow(o, '#00ff88')).join('') : '<p style="color:#8892a6;text-align:center;padding:12px;">No bids</p>'}
                         </div>
                     </div>
-                    
                     <div>
-                        <h3 style="color: #ff4444; margin-bottom: 10px;">NO Orders</h3>
-                        <div style="background: #0f1419; padding: 10px; border-radius: 8px;">
-                            ${noOrders.length > 0 ? noOrders.map(order => `
-                                <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2a3447;">
-                                    <span style="color: #ff4444;">${order.price}¢</span>
-                                    <span style="color: #8892a6;">${order.quantity} contracts</span>
-                                </div>
-                            `).join('') : '<p style="color: #8892a6;">No orders</p>'}
+                        <div style="color:#ff4444;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">NO BIDS</div>
+                        <div style="background: #0f1419; padding: 8px; border-radius: 8px; max-height: 320px; overflow-y: auto;">
+                            ${noOrders.length > 0 ? noOrders.map(o => renderModalRow(o, '#ff4444')).join('') : '<p style="color:#8892a6;text-align:center;padding:12px;">No bids</p>'}
                         </div>
                     </div>
                 </div>
@@ -1208,8 +1375,11 @@ async function loadBalance() {
     }
 }
 
-// Show notification
+// Show notification as a non-blocking toast
 function showNotification(message) {
-    // Simple alert for now - could be replaced with toast notifications
-    alert(message);
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a1f35;border:1px solid #00ff88;color:#fff;padding:12px 20px;border-radius:10px;z-index:99999;font-size:14px;font-weight:600;box-shadow:0 4px 20px rgba(0,0,0,0.5);max-width:340px;';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
 }

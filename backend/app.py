@@ -362,6 +362,30 @@ def monitor_arb_positions():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/scoreboard/<sport>', methods=['GET'])
+def get_scoreboard(sport):
+    """Proxy ESPN public scoreboard API to avoid CORS issues"""
+    sport_map = {
+        'nba': 'basketball/nba',
+        'nfl': 'football/nfl',
+        'mlb': 'baseball/mlb',
+        'nhl': 'hockey/nhl',
+        'ncaab': 'basketball/mens-college-basketball',
+        'ncaaf': 'football/college-football',
+    }
+    sport_path = sport_map.get(sport.lower())
+    if not sport_path:
+        return jsonify({'error': f'Unknown sport: {sport}'}), 400
+
+    try:
+        url = f'https://site.api.espn.com/apis/site/v2/sports/{sport_path}/scoreboard'
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        return jsonify(resp.json())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/fills', methods=['GET'])
 def get_fills():
     """Get recent fills/trades"""
@@ -436,20 +460,27 @@ def monitor_bots():
         for bot_id, bot in list(active_bots.items()):
             try:
                 ticker = bot['ticker']
-                
-                # Get current orderbook
-                orderbook = kalshi_client.get_market_orderbook(ticker)
-                yes_offers = orderbook.get('yes', [])
-                no_offers = orderbook.get('no', [])
-                
-                # Get best prices
-                best_yes = yes_offers[0]['price'] if yes_offers else 99
-                best_no = no_offers[0]['price'] if no_offers else 99
-                
+
+                # Use market price fields (simpler & more reliable than orderbook parsing)
+                market_resp = kalshi_client.get_market(ticker)
+                market = market_resp.get('market', market_resp)
+
+                def to_cents(field):
+                    """Handle both _dollars string and integer cents fields."""
+                    dollars_field = field + '_dollars'
+                    if market.get(dollars_field):
+                        return round(float(market[dollars_field]) * 100)
+                    return market.get(field, 99)
+
+                best_yes_ask = to_cents('yes_ask')  # cost to buy YES
+                best_no_ask  = to_cents('no_ask')   # cost to buy NO
+                best_yes_bid = to_cents('yes_bid')  # value if selling YES
+                best_no_bid  = to_cents('no_bid')   # value if selling NO
+
                 # BOT LOGIC: Monitoring state - waiting to buy first leg
                 if bot['status'] == 'monitoring':
-                    if bot['side'] == 'yes' and best_yes <= bot['target_price']:
-                        # Execute YES buy
+                    if bot['side'] == 'yes' and best_yes_ask <= bot['target_price']:
+                        # Current ask is at or below target — execute YES buy
                         order = kalshi_client.create_order(
                             ticker=ticker,
                             side='yes',
@@ -466,9 +497,9 @@ def monitor_bots():
                             'price': bot['target_price'],
                             'quantity': bot['quantity']
                         })
-                    
-                    elif bot['side'] == 'no' and best_no <= bot['target_price']:
-                        # Execute NO buy
+
+                    elif bot['side'] == 'no' and best_no_ask <= bot['target_price']:
+                        # Current ask is at or below target — execute NO buy
                         order = kalshi_client.create_order(
                             ticker=ticker,
                             side='no',
@@ -485,40 +516,39 @@ def monitor_bots():
                             'price': bot['target_price'],
                             'quantity': bot['quantity']
                         })
-                
-                #BOT LOGIC: Leg1 filled - monitor for arb or stop loss
+
+                # BOT LOGIC: Leg1 filled — monitor for arb opportunity or stop loss
                 elif bot['status'] == 'leg1_filled':
                     if bot['side'] == 'yes':
-                        # Check for stop loss (YES price dropped)
-                        if best_yes < bot['leg1_fill_price'] * (1 - bot['stop_loss_pct']/100):
-                            # Sell YES to cut losses
+                        # Stop loss: YES bid dropped too far below fill price
+                        if best_yes_bid < bot['leg1_fill_price'] * (1 - bot['stop_loss_pct'] / 100):
                             order = kalshi_client.create_order(
                                 ticker=ticker,
                                 side='yes',
                                 action='sell',
                                 count=bot['quantity'],
-                                yes_price=max(1, best_yes - 1)
+                                yes_price=max(1, best_yes_bid - 1)
                             )
                             bot['status'] = 'stopped'
                             actions.append({
                                 'bot_id': bot_id,
                                 'action': 'stop_loss_yes',
-                                'sell_price': best_yes
+                                'sell_price': best_yes_bid
                             })
-                        
-                        # Check for arb opportunity (can buy NO and lock profit)
+
+                        # Arb: can we buy NO now and lock in a guaranteed profit?
                         elif bot['auto_arb']:
-                            total_cost = bot['leg1_fill_price'] + best_no
-                            profit_pct = ((100 - total_cost) / total_cost) * 100
-                            
+                            total_cost = bot['leg1_fill_price'] + best_no_ask
+                            profit = 100 - total_cost
+                            profit_pct = (profit / total_cost) * 100 if total_cost > 0 else 0
+
                             if profit_pct >= bot['arb_width']:
-                                # Execute NO leg to complete arb
                                 order = kalshi_client.create_order(
                                     ticker=ticker,
                                     side='no',
                                     action='buy',
                                     count=bot['quantity'],
-                                    no_price=best_no
+                                    no_price=best_no_ask
                                 )
                                 bot['leg2_order_id'] = order['order']['order_id']
                                 bot['status'] = 'completed'
@@ -526,42 +556,41 @@ def monitor_bots():
                                     'bot_id': bot_id,
                                     'action': 'completed_arb',
                                     'yes_price': bot['leg1_fill_price'],
-                                    'no_price': best_no,
-                                    'profit': 100 - total_cost,
+                                    'no_price': best_no_ask,
+                                    'profit': profit,
                                     'profit_pct': profit_pct
                                 })
-                    
+
                     else:  # bot['side'] == 'no'
-                        # Check for stop loss (NO price dropped)
-                        if best_no < bot['leg1_fill_price'] * (1 - bot['stop_loss_pct']/100):
-                            # Sell NO to cut losses
+                        # Stop loss: NO bid dropped too far below fill price
+                        if best_no_bid < bot['leg1_fill_price'] * (1 - bot['stop_loss_pct'] / 100):
                             order = kalshi_client.create_order(
                                 ticker=ticker,
                                 side='no',
                                 action='sell',
                                 count=bot['quantity'],
-                                no_price=max(1, best_no - 1)
+                                no_price=max(1, best_no_bid - 1)
                             )
                             bot['status'] = 'stopped'
                             actions.append({
                                 'bot_id': bot_id,
                                 'action': 'stop_loss_no',
-                                'sell_price': best_no
+                                'sell_price': best_no_bid
                             })
-                        
-                        # Check for arb opportunity (can buy YES and lock profit)
+
+                        # Arb: can we buy YES now and lock in a guaranteed profit?
                         elif bot['auto_arb']:
-                            total_cost = best_yes + bot['leg1_fill_price']
-                            profit_pct = ((100 - total_cost) / total_cost) * 100
-                            
+                            total_cost = best_yes_ask + bot['leg1_fill_price']
+                            profit = 100 - total_cost
+                            profit_pct = (profit / total_cost) * 100 if total_cost > 0 else 0
+
                             if profit_pct >= bot['arb_width']:
-                                # Execute YES leg to complete arb
                                 order = kalshi_client.create_order(
                                     ticker=ticker,
                                     side='yes',
                                     action='buy',
                                     count=bot['quantity'],
-                                    yes_price=best_yes
+                                    yes_price=best_yes_ask
                                 )
                                 bot['leg2_order_id'] = order['order']['order_id']
                                 bot['status'] = 'completed'
@@ -569,8 +598,8 @@ def monitor_bots():
                                     'bot_id': bot_id,
                                     'action': 'completed_arb',
                                     'no_price': bot['leg1_fill_price'],
-                                    'yes_price': best_yes,
-                                    'profit': 100 - total_cost,
+                                    'yes_price': best_yes_ask,
+                                    'profit': profit,
                                     'profit_pct': profit_pct
                                 })
                 

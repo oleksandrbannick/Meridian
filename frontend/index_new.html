@@ -266,6 +266,40 @@
         .bot-status.stopped { background: #ff4444; color: #fff; }
         
         .hidden { display: none !important; }
+
+        /* Sport filter pills */
+        .sport-pill {
+            padding: 5px 14px;
+            border-radius: 20px;
+            border: 1px solid #2a3550;
+            background: #1a1f35;
+            color: #8892a6;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .sport-pill:hover { border-color: #00ff88; color: #00ff88; }
+        .sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
+
+        /* Live score chip */
+        .live-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #0f1a0f;
+            border: 1px solid #1a3a1a;
+            border-radius: 8px;
+            padding: 5px 10px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .live-chip.live { border-color: #00ff88; }
+        .live-chip .teams { color: #fff; font-weight: 600; }
+        .live-chip .score { color: #00ff88; font-weight: 700; }
+        .live-chip .clock { color: #8892a6; font-size: 10px; }
+        .live-chip .final { color: #8892a6; }
     </style>
 </head>
 <body>
@@ -286,7 +320,28 @@
                 <p style="color: #8892a6;">No active bots</p>
             </div>
         </div>
-        
+
+        <!-- Live Scores Bar -->
+        <div id="live-scores-bar" style="display:none; background:#1a1f35; border:1px solid #2a3550; border-radius:10px; padding:12px 16px; margin-bottom:16px;">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                <span style="color:#00ff88; font-weight:700; font-size:12px; letter-spacing:.05em; white-space:nowrap;">🔴 LIVE SCORES</span>
+                <div id="live-scores-content" style="display:flex; gap:10px; flex-wrap:wrap; flex:1;"></div>
+                <button onclick="loadLiveScores()" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">↺</button>
+            </div>
+        </div>
+
+        <!-- Sport Filter Pills -->
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; align-items:center;">
+            <span style="color:#8892a6; font-size:12px; font-weight:600; white-space:nowrap;">Filter:</span>
+            <button class="sport-pill active" data-sport="all"    onclick="filterBySport('all')">All</button>
+            <button class="sport-pill"        data-sport="nba"    onclick="filterBySport('nba')">🏀 NBA</button>
+            <button class="sport-pill"        data-sport="nfl"    onclick="filterBySport('nfl')">🏈 NFL</button>
+            <button class="sport-pill"        data-sport="mlb"    onclick="filterBySport('mlb')">⚾ MLB</button>
+            <button class="sport-pill"        data-sport="nhl"    onclick="filterBySport('nhl')">🏒 NHL</button>
+            <button class="sport-pill"        data-sport="ncaab"  onclick="filterBySport('ncaab')">🎓 NCAAB</button>
+            <button class="sport-pill"        data-sport="other"  onclick="filterBySport('other')">Other</button>
+        </div>
+
         <!-- Controls -->
         <div class="controls">
             <input type="text" class="search-box" id="search-box" placeholder="Search markets (e.g., Lakers, Celtics, NBA)...">
@@ -295,7 +350,7 @@
                 <span id="auto-monitor-text">▶️ Start Auto-Monitor</span>
             </button>
         </div>
-        
+
         <!-- Markets Grid -->
         <div class="markets-grid" id="markets-grid">
             <p style="color: #8892a6; text-align: center; grid-column: 1 / -1;">Loading markets...</p>

@@ -1263,6 +1263,8 @@ async function createBot() {
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
     const stop_loss_cents = parseInt(document.getElementById('bot-stop-loss-cents').value);
     const game_phase      = document.getElementById('bot-game-phase').value;
+    const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
+    const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
     if (yes_price + no_price >= 100) {
         alert(`❌ Not an arb — YES(${yes_price}¢) + NO(${no_price}¢) = ${yes_price + no_price}¢ ≥ 100¢\nAdjust prices so total is below 100¢.`);
@@ -1272,7 +1274,8 @@ async function createBot() {
 
     const totalCost = (yes_price + no_price) * quantity;
     const profitPer = 100 - yes_price - no_price;
-    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: ${game_phase.toUpperCase()}\n\nConfirm order?`)) return;
+    const repeatMsg = repeat_count > 0 ? `\nRepeat: ${repeat_count}× after completion` : '';
+    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: ${game_phase.toUpperCase()}${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
@@ -1281,13 +1284,15 @@ async function createBot() {
             body: JSON.stringify({
                 ticker: currentArbMarket.ticker,
                 yes_price, no_price, quantity, stop_loss_cents, game_phase,
+                repeat_count, arb_width,
             }),
         });
         const data = await resp.json();
 
         if (data.success) {
             const profit = 100 - yes_price - no_price;
-            showNotification(`✅ Orders placed! YES ${yes_price}¢ + NO ${no_price}¢ → ${profit}¢/contract locked at settlement`);
+            const rptNote = repeat_count > 0 ? ` | repeat ${repeat_count}×` : '';
+            showNotification(`✅ Orders placed! YES ${yes_price}¢ + NO ${no_price}¢ → ${profit}¢/contract${rptNote}`);
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
@@ -1451,9 +1456,21 @@ async function loadBots() {
                 </div>`;
             }
 
-            const item = document.createElement('div');
-            item.className = 'bot-item';
-            item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid ' + (bothFilled ? '#00ff88' : statusClass === 'stopped' ? '#ff4444' : '#ffaa00') + ';';
+                // Repeat-arb info
+                let repeatInfo = '';
+                const repeatCount = bot.repeat_count || 0;
+                const repeatsDone = bot.repeats_done || 0;
+                if (repeatCount > 0) {
+                    const remaining = repeatCount - repeatsDone;
+                    repeatInfo = `<div style="background:#6366f111;border:1px solid #6366f133;border-radius:5px;padding:4px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
+                        🔄 Repeat: ${repeatsDone}/${repeatCount} done${remaining > 0 ? ` — ${remaining} remaining` : ' — all done'}
+                        ${bot.parent_bot ? ` <span style="color:#555;">· from ${bot.parent_bot.split('_').slice(-1)}</span>` : ''}
+                    </div>`;
+                }
+
+                const item = document.createElement('div');
+                item.className = 'bot-item';
+                item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid ' + (bothFilled ? '#00ff88' : statusClass === 'stopped' ? '#ff4444' : '#ffaa00') + ';';
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1506,7 +1523,7 @@ async function loadBots() {
                     <span>${phase === 'live' ? '🔴 Active mgmt' : '⏳ Patient mode'}</span>
                     <span>${!autoMonitorInterval ? '⚠️ Monitor OFF' : '🤖 Monitoring'}</span>
                 </div>
-                ${stopLossInfo}${completedInfo}`;
+                ${stopLossInfo}${completedInfo}${repeatInfo}`;
             botsList.appendChild(item);
         });
 
@@ -1660,10 +1677,12 @@ async function monitorBots() {
                     console.log('Bot action:', action);
                     if (action.action === 'completed') {
                         showNotification(`✅ ARB COMPLETE! +${(action.profit_cents/100).toFixed(2)} profit locked`);
+                    } else if (action.action === 'repeat_spawned') {
+                        showNotification(`🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`);
                     } else if (action.action === 'stop_loss_yes') {
-                        showNotification(`⚠️ Stop-loss YES on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}`);
+                        showNotification(`⚠️ Stop-loss YES on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}${action.verified ? ' ✓' : ''}`);
                     } else if (action.action === 'stop_loss_no') {
-                        showNotification(`⚠️ Stop-loss NO on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}`);
+                        showNotification(`⚠️ Stop-loss NO on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}${action.verified ? ' ✓' : ''}`);
                     } else if (action.action === 'reposted') {
                         showNotification(`🔄 Reposted stale order: YES ${action.new_yes}¢ / NO ${action.new_no}¢`);
                     } else if (action.action.startsWith('partial_resize')) {
@@ -1948,9 +1967,10 @@ async function loadPnL() {
         const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
         const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
         const sessionH = ((Date.now() / 1000 - (pnl.session_start || Date.now() / 1000)) / 3600).toFixed(1);
+        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
 
         el.innerHTML = `
-            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">Session P&L</span>
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">Daily P&L <span style="color:#555;font-size:9px;">${dayLabel}</span></span>
             <span style="color:${netColor};font-weight:800;font-size:1.1rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
             <span style="color:#8892a6;font-size:11px;">↑ $${gross} wins &nbsp; ↓ $${loss} stops</span>
             <span style="color:#8892a6;font-size:11px;">${pnl.completed_bots || 0}W / ${pnl.stopped_bots || 0}L &nbsp; ${sessionH}h</span>
@@ -2002,13 +2022,14 @@ async function loadTradeHistory() {
                     const pnl = isWin ? t.profit_cents : -(t.loss_cents || 0);
                     const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
                     const icon = isWin ? '✅' : '⛔';
+                    const verified = t.verified_prices || t.verified_cleared ? ' ✓' : '';
                     const ticker = (t.ticker || '').split('-').slice(1).join('-') || t.ticker;
                     return `
                         <div style="color:#555;font-size:11px;">${time}</div>
                         <div style="color:#fff;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${icon} ${ticker}</div>
                         <div style="font-size:11px;"><span style="color:#00ff88;">Y${t.yes_price || '?'}¢</span> / <span style="color:#ff4444;">N${t.no_price || '?'}¢</span></div>
                         <div style="color:#8892a6;font-size:11px;text-align:center;">×${t.quantity || 1}</div>
-                        <div style="color:${pnlColor};font-weight:700;font-size:11px;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
+                        <div style="color:${pnlColor};font-weight:700;font-size:11px;">${pnl >= 0 ? '+' : ''}${pnl}¢${verified}</div>
                     `;
                 }).join('')}
             </div>

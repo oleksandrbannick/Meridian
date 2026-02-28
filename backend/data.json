@@ -183,51 +183,6 @@
       "live_no_ask": 38,
       "last_price_update": 1772314580.949916,
       "completed_at": 1772314583.179612
-    },
-    "KXNBAGAME-26FEB28HOUMIA-MIA_1772314631": {
-      "ticker": "KXNBAGAME-26FEB28HOUMIA-MIA",
-      "yes_price": 56,
-      "no_price": 39,
-      "quantity": 20,
-      "stop_loss_cents": 5,
-      "profit_per": 5,
-      "game_phase": "live",
-      "status": "stopped",
-      "yes_order_id": "5a75ce3b-d9b6-494a-a02c-7dfeacead28d",
-      "no_order_id": "5953066d-10c6-44b6-8ec7-8e80e9a3203c",
-      "yes_fill_qty": 20,
-      "no_fill_qty": 0,
-      "created_at": 1772314631.562241,
-      "posted_at": 1772314631.562241,
-      "repost_count": 0,
-      "live_yes_bid": 50,
-      "live_no_bid": 46,
-      "live_yes_ask": 54,
-      "live_no_ask": 50,
-      "last_price_update": 1772314670.38388,
-      "stopped_at": 1772314670.38388
-    },
-    "KXNBAGAME-26MAR01PHIBOS-PHI_1772314645": {
-      "ticker": "KXNBAGAME-26MAR01PHIBOS-PHI",
-      "yes_price": 28,
-      "no_price": 68,
-      "quantity": 10,
-      "stop_loss_cents": 5,
-      "profit_per": 4,
-      "game_phase": "live",
-      "status": "pending_fills",
-      "yes_order_id": "812599c0-4479-487a-82c7-67050dddb317",
-      "no_order_id": "8777a76d-e537-4300-8f2e-5da941e0d154",
-      "yes_fill_qty": 0,
-      "no_fill_qty": 0,
-      "created_at": 1772314645.1877382,
-      "posted_at": 1772314645.1877382,
-      "repost_count": 0,
-      "live_yes_bid": 30,
-      "live_no_bid": 69,
-      "live_yes_ask": 31,
-      "live_no_ask": 70,
-      "last_price_update": 1772314746.3912861
     }
   },
   "trade_history": [
@@ -427,6 +382,6 @@
     "gross_loss_cents": 480,
     "completed_bots": 2,
     "stopped_bots": 4,
-    "session_start": 1772314547.53472
+    "session_start": 1772315142.1446452
   }
 }

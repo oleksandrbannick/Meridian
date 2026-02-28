@@ -512,13 +512,32 @@ class RateLimiter:
 api_rate_limiter = RateLimiter(rate=8.0)   # 8 calls/sec
 
 # ─── Session P&L (Upgrade #6: P&L dashboard) ──────────────────────────────────
+import datetime
+
 session_pnl = {
     'gross_profit_cents': 0,
     'gross_loss_cents':   0,
     'completed_bots':     0,
     'stopped_bots':       0,
     'session_start':      time.time(),
+    'day_key':            datetime.date.today().isoformat(),  # for daily auto-reset
 }
+
+def auto_reset_daily_pnl():
+    """Reset P&L counters if the day has changed since last check."""
+    global session_pnl
+    today = datetime.date.today().isoformat()
+    if session_pnl.get('day_key') != today:
+        print(f'📅 New day detected ({session_pnl.get("day_key")} → {today}) — resetting daily P&L')
+        session_pnl = {
+            'gross_profit_cents': 0,
+            'gross_loss_cents':   0,
+            'completed_bots':     0,
+            'stopped_bots':       0,
+            'session_start':      time.time(),
+            'day_key':            today,
+        }
+        save_state()
 
 # ─── Bot Config (Upgrades #4, #8) ─────────────────────────────────────────────
 REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
@@ -594,6 +613,8 @@ def create_bot():
         quantity       = int(data.get('quantity', 1))
         stop_loss_cents = int(data.get('stop_loss_cents', 5))  # ¢ drop to trigger stop loss
         game_phase     = data.get('game_phase', 'pregame')     # 'pregame' | 'live'
+        repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times
+        arb_width      = int(data.get('arb_width', 0))         # remember target width for repeat
 
         if not ticker or yes_price is None or no_price is None:
             return jsonify({'error': 'Missing required fields: ticker, yes_price, no_price'}), 400
@@ -629,6 +650,9 @@ def create_bot():
             'created_at':       time.time(),
             'posted_at':        time.time(),
             'repost_count':     0,
+            'repeat_count':     repeat_count,
+            'repeats_done':     0,
+            'arb_width':        arb_width if arb_width > 0 else profit_per,
         }
         save_state()
 
@@ -639,11 +663,73 @@ def create_bot():
             'no_order_id':  no_order['order']['order_id'],
             'profit_per':   profit_per,
             'game_phase':   game_phase,
+            'repeat_count': repeat_count,
             'message':      f'[{game_phase.upper()}] Limit orders placed — YES at {yes_price}¢, NO at {no_price}¢ → {profit_per}¢ profit/contract'
+                            + (f' (repeat {repeat_count}x)' if repeat_count > 0 else '')
         })
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def verify_position_cleared(ticker, side, expected_gone):
+    """
+    Check the Kalshi positions API to confirm we no longer hold contracts.
+    Returns (is_cleared: bool, remaining: int)
+    """
+    try:
+        api_rate_limiter.wait()
+        pos_resp = kalshi_client.get_positions(ticker=ticker)
+        positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+        for p in positions:
+            if p.get('ticker') == ticker:
+                qty = p.get('position', 0)
+                # positive = YES, negative = NO
+                if side == 'yes' and qty > 0:
+                    print(f'⚠ verify_position: still holding {qty} YES on {ticker}')
+                    return False, qty
+                elif side == 'no' and qty < 0:
+                    print(f'⚠ verify_position: still holding {abs(qty)} NO on {ticker}')
+                    return False, abs(qty)
+        print(f'✅ verify_position: {side} position on {ticker} confirmed CLEARED')
+        return True, 0
+    except Exception as e:
+        print(f'⚠ verify_position error: {e} — treating as unverified')
+        return False, -1
+
+
+def get_actual_fill_price(order_id):
+    """
+    Get the actual average fill price from Kalshi for a completed order.
+    Returns price in cents, or None if not available.
+    """
+    try:
+        api_rate_limiter.wait()
+        # Check fills for this order to get actual execution price
+        fills_resp = kalshi_client.get_fills()
+        fills = fills_resp.get('fills', [])
+        order_fills = [f for f in fills if f.get('order_id') == order_id]
+        if order_fills:
+            total_cents = 0
+            total_count = 0
+            for f in order_fills:
+                price = f.get('yes_price', f.get('no_price', 0))
+                cnt = f.get('count', 1)
+                total_cents += price * cnt
+                total_count += cnt
+            if total_count > 0:
+                return round(total_cents / total_count)
+        # Fallback: check the order status itself
+        api_rate_limiter.wait()
+        order_resp = kalshi_client.get_order(order_id)
+        order_data = order_resp.get('order', {})
+        # Some APIs return average_price or similar
+        avg = order_data.get('average_fill_price', order_data.get('avg_fill_price'))
+        if avg:
+            return round(float(avg) * 100) if float(avg) < 1 else int(avg)
+    except Exception as e:
+        print(f'⚠ get_actual_fill_price error: {e}')
+    return None
 
 
 def execute_sell(ticker, side, count, reason='stop_loss'):
@@ -651,6 +737,8 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
     Reliably sell contracts at the current bid price.
     If the sell doesn't fill within a few seconds, cancel and return False
     so the bot stays active and retries next cycle at the new bid.
+    After a successful fill, VERIFIES via Kalshi positions API that
+    the contracts are actually gone.
 
     Returns (success: bool, order_info: dict)
     """
@@ -703,8 +791,14 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             filled = order_data.get('filled_count', order_data.get('fill_count', 0))
 
             if filled >= count:
-                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {cur_bid}¢ (attempt {attempt})')
-                return True, {'order_id': order_id, 'filled': filled, 'sell_price': cur_bid}
+                # VERIFY: confirm position is actually gone on Kalshi
+                cleared, remaining = verify_position_cleared(ticker, side, count)
+                actual_price = get_actual_fill_price(order_id)
+                sell_price = actual_price if actual_price else cur_bid
+                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}) | verified={cleared}')
+                return True, {'order_id': order_id, 'filled': filled, 'sell_price': sell_price,
+                              'verified_cleared': cleared, 'remaining': remaining,
+                              'actual_fill_price': actual_price}
 
             # Wait a bit more and check again
             time.sleep(1.5)
@@ -714,8 +808,14 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             filled2 = order_data2.get('filled_count', order_data2.get('fill_count', 0))
 
             if filled2 >= count:
-                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {cur_bid}¢ (attempt {attempt}, 2nd check)')
-                return True, {'order_id': order_id, 'filled': filled2, 'sell_price': cur_bid}
+                # VERIFY: confirm position is actually gone on Kalshi
+                cleared, remaining = verify_position_cleared(ticker, side, count)
+                actual_price = get_actual_fill_price(order_id)
+                sell_price = actual_price if actual_price else cur_bid
+                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}, 2nd check) | verified={cleared}')
+                return True, {'order_id': order_id, 'filled': filled2, 'sell_price': sell_price,
+                              'verified_cleared': cleared, 'remaining': remaining,
+                              'actual_fill_price': actual_price}
 
             # Not filled — cancel this order and retry at the NEW bid
             print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} {count}x {ticker} not filled at {cur_bid}¢ ({filled2}/{count}), cancelling...')
@@ -762,6 +862,9 @@ def monitor_bots():
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
+
+        # Auto-reset P&L if the date has changed
+        auto_reset_daily_pnl()
 
         actions = []
         active_statuses = ('pending_fills', 'yes_filled', 'no_filled', 'watching')
@@ -860,16 +963,114 @@ def monitor_bots():
                 if yes_filled >= qty and no_filled >= qty:
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
-                    profit_cents = bot['profit_per'] * qty
+
+                    # Verify actual fill prices from the order data for accurate P&L
+                    actual_yes = get_actual_fill_price(bot['yes_order_id'])
+                    actual_no  = get_actual_fill_price(bot['no_order_id'])
+                    real_yes = actual_yes if actual_yes else bot['yes_price']
+                    real_no  = actual_no  if actual_no  else bot['no_price']
+                    verified_profit = (100 - real_yes - real_no) * qty
+                    profit_cents = verified_profit
+
                     session_pnl['gross_profit_cents'] += profit_cents
                     session_pnl['completed_bots']     += 1
                     trade_history.insert(0, {
                         'bot_id': bot_id, 'ticker': ticker,
-                        'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                        'yes_price': real_yes, 'no_price': real_no,
+                        'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
                         'quantity': qty, 'profit_cents': profit_cents,
                         'result': 'completed', 'timestamp': now,
+                        'verified_prices': actual_yes is not None and actual_no is not None,
                     })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
+
+                    # ── REPEAT ARB: spawn a new bot at fresh prices if repeats remain ──
+                    repeat_remaining = bot.get('repeat_count', 0) - bot.get('repeats_done', 0)
+                    if repeat_remaining > 0:
+                        try:
+                            target_width = bot.get('arb_width', bot['profit_per'])
+                            # Fetch fresh market prices
+                            api_rate_limiter.wait()
+                            fresh_mkt = kalshi_client.get_market(ticker)
+                            fm = fresh_mkt.get('market', fresh_mkt)
+
+                            def tc_repeat(field):
+                                d = fm.get(field + '_dollars')
+                                if d: return round(float(d) * 100)
+                                return fm.get(field, 0)
+
+                            fresh_yes_bid = tc_repeat('yes_bid')
+                            fresh_no_bid  = tc_repeat('no_bid')
+                            current_gap   = 100 - fresh_yes_bid - fresh_no_bid
+
+                            if current_gap >= target_width and fresh_yes_bid > 0 and fresh_no_bid > 0:
+                                # Calculate new prices maintaining the target width
+                                # Use same favorite-anchoring logic as scanner
+                                bid_sum = fresh_yes_bid + fresh_no_bid
+                                target_total = 100 - target_width
+                                total_shave = max(0, bid_sum - target_total)
+                                yes_is_fav = fresh_yes_bid >= fresh_no_bid
+                                fav_shave = total_shave * 4 // 10
+                                dog_shave = total_shave - fav_shave
+                                if yes_is_fav:
+                                    new_yes = fresh_yes_bid - fav_shave
+                                    new_no  = fresh_no_bid - dog_shave
+                                else:
+                                    new_yes = fresh_yes_bid - dog_shave
+                                    new_no  = fresh_no_bid - fav_shave
+                                new_yes = max(1, min(new_yes, fresh_yes_bid))
+                                new_no  = max(1, min(new_no, fresh_no_bid))
+                                new_profit = 100 - new_yes - new_no
+
+                                if new_profit >= 1:
+                                    # Place new orders
+                                    api_rate_limiter.wait()
+                                    ny = kalshi_client.create_order(
+                                        ticker=ticker, side='yes', action='buy',
+                                        count=qty, yes_price=new_yes)
+                                    api_rate_limiter.wait()
+                                    nn = kalshi_client.create_order(
+                                        ticker=ticker, side='no', action='buy',
+                                        count=qty, no_price=new_no)
+
+                                    new_bot_id = f"{ticker}_{int(time.time())}"
+                                    active_bots[new_bot_id] = {
+                                        'ticker':          ticker,
+                                        'yes_price':       new_yes,
+                                        'no_price':        new_no,
+                                        'quantity':        qty,
+                                        'stop_loss_cents': bot['stop_loss_cents'],
+                                        'profit_per':      new_profit,
+                                        'game_phase':      bot['game_phase'],
+                                        'status':          'pending_fills',
+                                        'yes_order_id':    ny['order']['order_id'],
+                                        'no_order_id':     nn['order']['order_id'],
+                                        'yes_fill_qty':    0,
+                                        'no_fill_qty':     0,
+                                        'created_at':      time.time(),
+                                        'posted_at':       time.time(),
+                                        'repost_count':    0,
+                                        'repeat_count':    bot['repeat_count'],
+                                        'repeats_done':    bot.get('repeats_done', 0) + 1,
+                                        'arb_width':       target_width,
+                                        'parent_bot':      bot_id,
+                                    }
+                                    print(f'🔄 REPEAT ARB #{bot.get("repeats_done", 0) + 1}/{bot["repeat_count"]}: '
+                                          f'new bot {new_bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢ profit')
+                                    actions.append({
+                                        'bot_id': new_bot_id, 'action': 'repeat_spawned',
+                                        'yes_price': new_yes, 'no_price': new_no,
+                                        'profit_per': new_profit,
+                                        'repeat_num': bot.get('repeats_done', 0) + 1,
+                                        'repeat_total': bot['repeat_count'],
+                                    })
+                                else:
+                                    print(f'⚠ Repeat skipped: new spread too tight ({new_profit}¢ < 1¢)')
+                            else:
+                                print(f'⚠ Repeat skipped: market gap {current_gap}¢ < target {target_width}¢')
+                        except Exception as rep_err:
+                            print(f'⚠ Repeat arb failed: {rep_err}')
+
                     continue
 
                 # ── Fetch current market prices ────────────────────────────
@@ -1004,17 +1205,22 @@ def monitor_bots():
                                 pass
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
-                            loss = (bot['yes_price'] - yes_bid) * yes_filled
+                            # Use VERIFIED sell price from execute_sell, not the bid snapshot
+                            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', yes_bid)
+                            loss = (bot['yes_price'] - actual_sell) * yes_filled
+                            verified = sell_info.get('verified_cleared', False)
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots']     += 1
                             trade_history.insert(0, {
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                 'quantity': yes_filled, 'loss_cents': loss,
-                                'result': 'stop_loss_yes', 'exit_bid': yes_bid, 'timestamp': now,
+                                'result': 'stop_loss_yes', 'exit_bid': actual_sell,
+                                'verified_cleared': verified, 'timestamp': now,
                             })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
-                                            'entry': bot['yes_price'], 'exit_bid': yes_bid, 'loss_cents': loss})
+                                            'entry': bot['yes_price'], 'exit_bid': actual_sell,
+                                            'loss_cents': loss, 'verified': verified})
                         else:
                             # Sell FAILED — do NOT touch hedge, do NOT change status
                             # Bot stays at yes_filled, retries next monitor cycle
@@ -1047,17 +1253,22 @@ def monitor_bots():
                                 pass
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
-                            loss = (bot['no_price'] - no_bid) * no_filled
+                            # Use VERIFIED sell price from execute_sell, not the bid snapshot
+                            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', no_bid)
+                            loss = (bot['no_price'] - actual_sell) * no_filled
+                            verified = sell_info.get('verified_cleared', False)
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots']     += 1
                             trade_history.insert(0, {
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                 'quantity': no_filled, 'loss_cents': loss,
-                                'result': 'stop_loss_no', 'exit_bid': no_bid, 'timestamp': now,
+                                'result': 'stop_loss_no', 'exit_bid': actual_sell,
+                                'verified_cleared': verified, 'timestamp': now,
                             })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
-                                            'entry': bot['no_price'], 'exit_bid': no_bid, 'loss_cents': loss})
+                                            'entry': bot['no_price'], 'exit_bid': actual_sell,
+                                            'loss_cents': loss, 'verified': verified})
                         else:
                             # Sell FAILED — do NOT touch hedge, do NOT change status
                             # Bot stays at no_filled, retries next monitor cycle
@@ -1270,11 +1481,13 @@ def scan_arb_opportunities():
 @app.route('/api/pnl', methods=['GET'])
 def get_pnl():
     """Upgrade #6: P&L dashboard — session profit/loss summary."""
+    auto_reset_daily_pnl()
     pnl = dict(session_pnl)
     pnl['net_cents']   = pnl['gross_profit_cents'] - pnl['gross_loss_cents']
     pnl['net_dollars'] = pnl['net_cents'] / 100
     pnl['active_bots'] = len([b for b in active_bots.values()
                                if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')])
+    pnl['day_key']     = pnl.get('day_key', datetime.date.today().isoformat())
     return jsonify(pnl)
 
 
@@ -1286,7 +1499,9 @@ def reset_pnl():
         'gross_profit_cents': 0, 'gross_loss_cents': 0,
         'completed_bots': 0,     'stopped_bots': 0,
         'session_start': time.time(),
+        'day_key': datetime.date.today().isoformat(),
     }
+    save_state()
     return jsonify({'success': True})
 
 

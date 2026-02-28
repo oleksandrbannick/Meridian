@@ -702,12 +702,16 @@ def monitor_bots():
                     bot['live_bid'] = cur_bid
                     bot['last_price_update'] = now
 
-                    # Stop-loss
+                    # Stop-loss: limit sell at current bid (hits the bid for guaranteed fill)
                     if cur_bid <= entry - sl:
+                        sell_price = max(cur_bid, 1)  # floor at 1¢
                         api_rate_limiter.wait()
-                        kalshi_client.create_order(
-                            ticker=ticker, side=watch_side, action='sell',
-                            count=qty, order_type='market')
+                        sell_kwargs = {'ticker': ticker, 'side': watch_side, 'action': 'sell', 'count': qty}
+                        if watch_side == 'yes':
+                            sell_kwargs['yes_price'] = sell_price
+                        else:
+                            sell_kwargs['no_price'] = sell_price
+                        kalshi_client.create_order(**sell_kwargs)
                         loss = (entry - cur_bid) * qty
                         bot['status'] = 'stopped'
                         bot['stopped_at'] = now
@@ -724,10 +728,14 @@ def monitor_bots():
                                        'loss_cents': loss})
                     # Take-profit
                     elif tp > 0 and cur_bid >= entry + tp:
+                        sell_price = max(cur_bid, 1)
                         api_rate_limiter.wait()
-                        kalshi_client.create_order(
-                            ticker=ticker, side=watch_side, action='sell',
-                            count=qty, order_type='market')
+                        sell_kwargs = {'ticker': ticker, 'side': watch_side, 'action': 'sell', 'count': qty}
+                        if watch_side == 'yes':
+                            sell_kwargs['yes_price'] = sell_price
+                        else:
+                            sell_kwargs['no_price'] = sell_price
+                        kalshi_client.create_order(**sell_kwargs)
                         profit = (cur_bid - entry) * qty
                         bot['status'] = 'completed'
                         bot['completed_at'] = now
@@ -884,11 +892,12 @@ def monitor_bots():
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
                     if yes_bid <= bot['yes_price'] - stop:
-                        # STOP LOSS: market-sell the filled YES side
+                        # STOP LOSS: cancel hedge, then limit-sell YES at current bid
+                        sell_price = max(yes_bid, 1)  # floor at 1¢
                         api_rate_limiter.wait()
                         sell_resp = kalshi_client.create_order(
                             ticker=ticker, side='yes', action='sell',
-                            count=yes_filled, order_type='market')
+                            count=yes_filled, yes_price=sell_price)
                         # Cancel the unfilled NO order to prevent orphans
                         try:
                             api_rate_limiter.wait()
@@ -925,11 +934,12 @@ def monitor_bots():
                 if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if no_bid <= bot['no_price'] - stop:
-                        # STOP LOSS: market-sell the filled NO side
+                        # STOP LOSS: cancel hedge, then limit-sell NO at current bid
+                        sell_price = max(no_bid, 1)  # floor at 1¢
                         api_rate_limiter.wait()
                         sell_resp = kalshi_client.create_order(
                             ticker=ticker, side='no', action='sell',
-                            count=no_filled, order_type='market')
+                            count=no_filled, no_price=sell_price)
                         # Cancel the unfilled YES order to prevent orphans
                         try:
                             api_rate_limiter.wait()

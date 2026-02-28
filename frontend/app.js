@@ -1125,12 +1125,21 @@ function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
+    const sl     = parseInt(document.getElementById('bot-stop-loss-cents').value) || 5;
     const total  = yes + no;
     const profit = 100 - total;
     const isArb  = profit > 0;
     const dollarProfit = (profit * qty / 100).toFixed(2);
     const dollarCost   = (total * qty / 100).toFixed(2);
     const roi = total > 0 ? ((profit / total) * 100).toFixed(1) : '0.0';
+
+    // Stop-loss breakdown per leg
+    const yesExitPrice = Math.max(0, yes - sl);
+    const noExitPrice  = Math.max(0, no - sl);
+    const yesLossCents = sl * qty;           // loss if YES leg triggers SL
+    const noLossCents  = sl * qty;           // loss if NO leg triggers SL
+    const yesLossDollar = (yesLossCents / 100).toFixed(2);
+    const noLossDollar  = (noLossCents / 100).toFixed(2);
 
     const borderColor = isArb ? '#00ff88' : '#ff4444';
     const bgColor     = isArb ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,68,0.04)';
@@ -1168,6 +1177,28 @@ function updateProfitPreview() {
             </div>
             ${!isArb ? `<div style="padding:6px 16px 10px;text-align:center;font-size:11px;color:#ff4444;">⚠ Not profitable — reduce prices or increase width</div>` : ''}
             ${isArb && qty > 1 ? `<div style="padding:2px 16px 10px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
+            <!-- Stop-loss risk breakdown -->
+            <div style="padding:8px 16px 10px;border-top:1px solid #ff444422;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                    <span style="color:#ff6666;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛑 Stop-Loss Risk (−${sl}¢)</span>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <div style="background:#ff444408;border:1px solid #ff444422;border-radius:6px;padding:6px 10px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#00ff88;font-size:10px;font-weight:600;">YES leg</span>
+                            <span style="color:#ff4444;font-weight:800;font-size:13px;">−$${yesLossDollar}</span>
+                        </div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">sells at ${yesExitPrice}¢ (entry ${yes}¢) × ${qty}</div>
+                    </div>
+                    <div style="background:#ff444408;border:1px solid #ff444422;border-radius:6px;padding:6px 10px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ff4444;font-size:10px;font-weight:600;">NO leg</span>
+                            <span style="color:#ff4444;font-weight:800;font-size:13px;">−$${noLossDollar}</span>
+                        </div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">sells at ${noExitPrice}¢ (entry ${no}¢) × ${qty}</div>
+                    </div>
+                </div>
+            </div>
         </div>`;
 }
 

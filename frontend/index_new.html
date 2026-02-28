@@ -357,45 +357,62 @@
         </div>
     </div>
     
-    <!-- Bot Creation Modal -->
+    <!-- Dual Arb Bot Modal -->
     <div class="modal" id="bot-modal">
-        <div class="modal-content">
-            <h2 class="modal-header">Create Trading Bot</h2>
-            <div id="bot-form">
-                <div class="form-group">
-                    <label>Market:</label>
-                    <div id="bot-market-title" style="color: #fff; font-size: 0.95rem; padding: 0.5rem 0;"></div>
+        <div class="modal-content" style="max-width: 520px;">
+            <h2 class="modal-header" style="display:flex;align-items:center;gap:8px;">🤖 Dual Arb Bot</h2>
+
+            <!-- Market Info -->
+            <div id="bot-market-info" style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:1.2rem;font-size:0.88rem;">
+                <div id="bot-market-title" style="color:#fff;font-weight:600;margin-bottom:4px;"></div>
+                <div id="bot-market-prices" style="color:#8892a6;font-size:0.8rem;"></div>
+            </div>
+
+            <!-- Arb Width -->
+            <div class="form-group">
+                <label style="display:flex;justify-content:space-between;">
+                    <span>Arb Width (guaranteed profit per contract)</span>
+                    <span id="width-display" style="color:#00ff88;font-weight:700;font-size:1rem;">5¢</span>
+                </label>
+                <input type="number" id="bot-arb-width" min="1" max="30" value="5" step="1"
+                       oninput="recalcArbPrices()" style="font-size:1rem;">
+            </div>
+
+            <!-- YES / NO Price Inputs -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+                <div>
+                    <label style="color:#00ff88;font-weight:700;font-size:0.85rem;display:block;margin-bottom:4px;">YES Limit Buy (¢)</label>
+                    <input type="number" id="bot-yes-price" min="1" max="98"
+                           oninput="onPriceManualChange()"
+                           style="width:100%;padding:.6rem;background:#0a0e1a;border:2px solid #00ff88;border-radius:6px;color:#00ff88;font-size:1.3rem;font-weight:700;text-align:center;">
                 </div>
-                
-                <div class="form-group">
-                    <label>Side:</label>
-                    <div id="bot-side" style="color: #00ff88; font-size: 1.2rem; font-weight: 700;"></div>
+                <div>
+                    <label style="color:#ff4444;font-weight:700;font-size:0.85rem;display:block;margin-bottom:4px;">NO Limit Buy (¢)</label>
+                    <input type="number" id="bot-no-price" min="1" max="98"
+                           oninput="onPriceManualChange()"
+                           style="width:100%;padding:.6rem;background:#0a0e1a;border:2px solid #ff4444;border-radius:6px;color:#ff4444;font-size:1.3rem;font-weight:700;text-align:center;">
                 </div>
-                
-                <div class="form-group">
-                    <label>Target Price (cents):</label>
-                    <input type="number" id="bot-target-price" min="1" max="99" value="50">
+            </div>
+
+            <!-- Profit Preview -->
+            <div id="profit-preview" style="margin-bottom:1rem;"></div>
+
+            <!-- Quantity & Stop Loss -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>Contracts (qty)</label>
+                    <input type="number" id="bot-quantity" min="1" value="1"
+                           oninput="updateProfitPreview()">
                 </div>
-                
-                <div class="form-group">
-                    <label>Quantity (contracts):</label>
-                    <input type="number" id="bot-quantity" min="1" value="1">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>Stop Loss (¢ drop → market exit)</label>
+                    <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5">
                 </div>
-                
-                <div class="form-group">
-                    <label>Arb Width (% profit needed to auto-complete):</label>
-                    <input type="number" id="bot-arb-width" min="0" max="50" step="0.5" value="3">
-                </div>
-                
-                <div class="form-group">
-                    <label>Stop Loss (% drop to trigger sell):</label>
-                    <input type="number" id="bot-stop-loss" min="1" max="50" step="1" value="5">
-                </div>
-                
-                <div class="form-actions">
-                    <button class="btn btn-primary" onclick="createBot()">Create Bot</button>
-                    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                </div>
+            </div>
+
+            <div class="form-actions" style="margin-top:1.5rem;">
+                <button class="btn btn-primary" onclick="createBot()">🤖 Place Both Orders</button>
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             </div>
         </div>
     </div>

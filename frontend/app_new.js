@@ -1113,17 +1113,107 @@ async function loadRecentGames() {
     }
 }
 
-// Open bot creation modal
-function openBotModal(market, side, price) {
-    selectedMarket = market;
-    selectedSide = side;
-    
+// ─── Dual Arb Bot Logic ───────────────────────────────────────────────────────
+
+let currentArbMarket = null;
+
+/**
+ * Calculate optimal YES and NO limit-buy prices that guarantee `width` cents profit.
+ *
+ * Strategy: post at the current best bid on each side so we sit first in the
+ * maker queue. YES bid + NO bid must equal (100 - width).
+ *
+ *   YES target = yes_bid  (match best bid, be first in queue)
+ *   NO  target = (100 - width) - YES target
+ *
+ * If the resulting NO price < 1¢, push YES down until NO is valid.
+ */
+function calculateArbPrices(market, width) {
+    const yesBid = getPrice(market, 'yes_bid') || 50;
+    const noBid  = getPrice(market, 'no_bid')  || 50;
+    const yesAsk = getPrice(market, 'yes_ask') || 50;
+    const noAsk  = getPrice(market, 'no_ask')  || 50;
+
+    const targetTotal = 100 - width;          // e.g. width=5 → 95¢ total
+
+    // Start at best bid (market-maker position, no taker fees)
+    let targetYes = Math.max(yesBid, 1);
+    let targetNo  = targetTotal - targetYes;
+
+    // Clamp NO into a valid range
+    if (targetNo < 1)  { targetNo = 1;  targetYes = targetTotal - 1; }
+    if (targetNo > 98) { targetNo = 98; targetYes = targetTotal - 98; }
+    targetYes = Math.max(1, Math.min(targetYes, 98));
+
+    return {
+        targetYes, targetNo,
+        total:   targetYes + targetNo,
+        profit:  100 - (targetYes + targetNo),
+        yesBid, noBid, yesAsk, noAsk,
+    };
+}
+
+/** Open the dual-arb modal for any market (called when clicking YES or NO price button) */
+function openBotModal(market, _side, _price) {
+    currentArbMarket = market;
+
+    // Market info header
     document.getElementById('bot-market-title').textContent = market.title;
-    document.getElementById('bot-side').textContent = side.toUpperCase();
-    document.getElementById('bot-side').style.color = side === 'yes' ? '#00ff88' : '#ff4444';
-    document.getElementById('bot-target-price').value = price;
-    
+    const yesBid = getPrice(market, 'yes_bid');
+    const yesAsk = getPrice(market, 'yes_ask');
+    const noBid  = getPrice(market, 'no_bid');
+    const noAsk  = getPrice(market, 'no_ask');
+    document.getElementById('bot-market-prices').textContent =
+        `YES  Bid ${yesBid}¢ / Ask ${yesAsk}¢     NO  Bid ${noBid}¢ / Ask ${noAsk}¢`;
+
+    recalcArbPrices();
     document.getElementById('bot-modal').classList.add('show');
+}
+
+/** Recalculate YES/NO limit prices whenever the arb-width changes */
+function recalcArbPrices() {
+    if (!currentArbMarket) return;
+    const width = parseInt(document.getElementById('bot-arb-width').value) || 5;
+    document.getElementById('width-display').textContent = `${width}¢`;
+
+    const { targetYes, targetNo } = calculateArbPrices(currentArbMarket, width);
+    document.getElementById('bot-yes-price').value = targetYes;
+    document.getElementById('bot-no-price').value  = targetNo;
+    updateProfitPreview();
+}
+
+/** Called when user manually edits YES or NO price — sync width display */
+function onPriceManualChange() {
+    const yes = parseInt(document.getElementById('bot-yes-price').value) || 0;
+    const no  = parseInt(document.getElementById('bot-no-price').value)  || 0;
+    const profit = 100 - yes - no;
+    document.getElementById('width-display').textContent = `${profit}¢`;
+    updateProfitPreview();
+}
+
+/** Render the live profit/cost preview box */
+function updateProfitPreview() {
+    const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
+    const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
+    const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
+    const total  = yes + no;
+    const profit = 100 - total;
+    const isArb  = profit > 0;
+    const dollarProfit = (profit * qty / 100).toFixed(2);
+
+    document.getElementById('profit-preview').innerHTML = `
+        <div style="padding:10px 14px;border-radius:8px;border:2px solid ${isArb ? '#00ff88' : '#ff4444'};background:${isArb ? 'rgba(0,255,136,0.07)' : 'rgba(255,68,68,0.07)'};text-align:center;">
+            <div style="font-size:11px;color:#8892a6;margin-bottom:4px;">Total cost: ${total}¢ per contract &nbsp;|&nbsp; Settlement value: 100¢</div>
+            <div style="font-size:1.6rem;font-weight:800;color:${isArb ? '#00ff88' : '#ff4444'};">
+                ${isArb ? '+' : ''}${profit}¢ / contract
+            </div>
+            <div style="font-size:12px;margin-top:4px;color:${isArb ? '#00ff88' : '#ff4444'};">
+                ${isArb
+                    ? `✅ ${qty} contract${qty > 1 ? 's' : ''} → <strong>+$${dollarProfit}</strong> locked profit at settlement`
+                    : `❌ Not an arb — total ≥ 100¢ (adjust width or prices)`}
+            </div>
+            ${isArb ? `<div style="font-size:10px;color:#8892a6;margin-top:6px;">Both limit orders post as market-maker bids — fills from natural volatility</div>` : ''}
+        </div>`;
 }
 
 // Close modal
@@ -1209,49 +1299,43 @@ function closeOrderbookModal() {
     if (modal) modal.remove();
 }
 
-// Create bot
+// Place both limit orders and register the bot
 async function createBot() {
-    if (!selectedMarket || !selectedSide) {
-        alert('Invalid bot configuration');
+    if (!currentArbMarket) { alert('No market selected'); return; }
+
+    const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
+    const no_price        = parseInt(document.getElementById('bot-no-price').value);
+    const quantity        = parseInt(document.getElementById('bot-quantity').value);
+    const stop_loss_cents = parseInt(document.getElementById('bot-stop-loss-cents').value);
+
+    if (yes_price + no_price >= 100) {
+        alert(`❌ Not an arb — YES(${yes_price}¢) + NO(${no_price}¢) = ${yes_price + no_price}¢ ≥ 100¢\nAdjust prices so total is below 100¢.`);
         return;
     }
-    
-    const targetPrice = parseInt(document.getElementById('bot-target-price').value);
-    const quantity = parseInt(document.getElementById('bot-quantity').value);
-    const arbWidth = parseFloat(document.getElementById('bot-arb-width').value);
-    const stopLoss = parseFloat(document.getElementById('bot-stop-loss').value);
-    
+    if (!quantity || quantity < 1) { alert('Quantity must be at least 1'); return; }
+
     try {
-        const response = await fetch(`${API_BASE}/bot/create`, {
+        const resp = await fetch(`${API_BASE}/bot/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                ticker: selectedMarket.ticker,
-                side: selectedSide,
-                target_price: targetPrice,
-                quantity: quantity,
-                arb_width: arbWidth,
-                stop_loss_pct: stopLoss,
-                auto_arb: true
-            })
+                ticker: currentArbMarket.ticker,
+                yes_price, no_price, quantity, stop_loss_cents,
+            }),
         });
-        
-        const data = await response.json();
-        
+        const data = await resp.json();
+
         if (data.success) {
-            alert(`✅ Bot created! Monitoring ${selectedSide.toUpperCase()} at ${targetPrice}¢`);
+            const profit = 100 - yes_price - no_price;
+            showNotification(`✅ Orders placed! YES ${yes_price}¢ + NO ${no_price}¢ → ${profit}¢/contract locked at settlement`);
             closeModal();
             loadBots();
-            
-            // Start auto-monitor if not already running
-            if (!autoMonitorInterval) {
-                toggleAutoMonitor();
-            }
+            if (!autoMonitorInterval) toggleAutoMonitor();
         } else {
-            alert('Error creating bot: ' + data.error);
+            alert('Error: ' + data.error);
         }
-    } catch (error) {
-        alert('Error creating bot: ' + error.message);
+    } catch (err) {
+        alert('Network error: ' + err.message);
     }
 }
 
@@ -1260,33 +1344,72 @@ async function loadBots() {
     try {
         const response = await fetch(`${API_BASE}/bot/list`);
         const data = await response.json();
-        
         const bots = data.bots || {};
         const botIds = Object.keys(bots);
-        
-        if (botIds.length === 0) {
-            document.getElementById('bots-section').style.display = 'none';
-            return;
-        }
-        
-        document.getElementById('bots-section').style.display = 'block';
-        
+
+        const section = document.getElementById('bots-section');
+        if (botIds.length === 0) { section.style.display = 'none'; return; }
+        section.style.display = 'block';
+
         const botsList = document.getElementById('bots-list');
         botsList.innerHTML = '';
-        
+
         botIds.forEach(botId => {
             const bot = bots[botId];
-            const botItem = document.createElement('div');
-            botItem.className = 'bot-item';
-            botItem.innerHTML = `
-                <div>
-                    <strong>${bot.ticker}</strong> - ${bot.side.toUpperCase()} @ ${bot.target_price}¢
-                    <span class="bot-status ${bot.status}">${bot.status.replace('_', ' ').toUpperCase()}</span>
-                    ${bot.leg1_fill_price ? `<span style="color: #8892a6; margin-left: 0.5rem;">Filled: ${bot.leg1_fill_price}¢</span>` : ''}
+            const profit = bot.profit_per ?? (100 - (bot.yes_price || 0) - (bot.no_price || 0));
+            const qty    = bot.quantity || 1;
+            const yFill  = bot.yes_fill_qty || 0;
+            const nFill  = bot.no_fill_qty  || 0;
+
+            // Fill progress bars
+            const yPct = Math.round((yFill / qty) * 100);
+            const nPct = Math.round((nFill / qty) * 100);
+
+            const statusLabel = (bot.status || '').replace(/_/g, ' ').toUpperCase();
+            const statusClass = {
+                pending_fills: 'monitoring',
+                yes_filled:    'leg1_filled',
+                no_filled:     'leg1_filled',
+                completed:     'completed',
+                stopped:       'stopped',
+            }[bot.status] || 'monitoring';
+
+            const item = document.createElement('div');
+            item.className = 'bot-item';
+            item.style.flexDirection = 'column';
+            item.style.gap = '6px';
+            item.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <strong style="color:#fff;">${bot.ticker}</strong>
+                        <span class="bot-status ${statusClass}" style="margin-left:8px;">${statusLabel}</span>
+                        <span style="color:#00ff88;font-weight:700;margin-left:10px;">+${profit}¢/contract</span>
+                        <span style="color:#8892a6;font-size:11px;margin-left:6px;">($${(profit * qty / 100).toFixed(2)} total)</span>
+                    </div>
+                    <button class="btn btn-secondary" style="padding:.4rem .9rem;font-size:12px;"
+                            onclick="cancelBot('${botId}')">Cancel</button>
                 </div>
-                <button class="btn btn-secondary" style="padding: 0.5rem 1rem;" onclick="cancelBot('${botId}')">Cancel</button>
-            `;
-            botsList.appendChild(botItem);
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                    <div>
+                        <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
+                            <span>YES limit @ ${bot.yes_price || '?'}¢</span>
+                            <span style="color:#00ff88;">${yFill}/${qty} filled</span>
+                        </div>
+                        <div style="height:4px;background:#1a1f2e;border-radius:2px;">
+                            <div style="height:4px;width:${yPct}%;background:#00ff88;border-radius:2px;transition:width .5s;"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
+                            <span>NO limit @ ${bot.no_price || '?'}¢</span>
+                            <span style="color:#ff4444;">${nFill}/${qty} filled</span>
+                        </div>
+                        <div style="height:4px;background:#1a1f2e;border-radius:2px;">
+                            <div style="height:4px;width:${nPct}%;background:#ff4444;border-radius:2px;transition:width .5s;"></div>
+                        </div>
+                    </div>
+                </div>`;
+            botsList.appendChild(item);
         });
     } catch (error) {
         console.error('Error loading bots:', error);

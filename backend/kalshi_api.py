@@ -190,7 +190,11 @@ class KalshiAPI:
     def cancel_order(self, order_id: str) -> Dict:
         """Cancel an order"""
         return self._make_request('DELETE', f'/portfolio/orders/{order_id}', authenticated=True)
-    
+
+    def get_order(self, order_id: str) -> Dict:
+        """Get a specific order's current status (fill count, remaining, status)"""
+        return self._make_request('GET', f'/portfolio/orders/{order_id}', authenticated=True)
+
     def get_fills(self, ticker: Optional[str] = None, limit: int = 100) -> Dict:
         """Get trade fills"""
         params = {'limit': limit}

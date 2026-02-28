@@ -401,49 +401,76 @@ def get_fills():
         return jsonify({'error': str(e)}), 500
 
 
-# Smart Bot Tracking
+# ─── Dual Arb Bot System ──────────────────────────────────────────────────────
+# Strategy: place LIMIT BUY orders on both YES and NO sides simultaneously.
+# Both orders sit in the order book as bids (market maker = no taker fees).
+# As price volatility causes each side to fill, profit is locked in on settlement.
+# Stop loss: if one side fills and the other side's bid drops X cents, market-sell
+# the filled side to exit (market order guarantees execution despite taker fees).
+
 active_bots = {}  # bot_id -> bot_config
 
 
 @app.route('/api/bot/create', methods=['POST'])
 def create_bot():
-    """Create a smart bot to monitor and execute trades"""
+    """
+    Dual Arb Bot: immediately places LIMIT BUY orders on both YES and NO sides.
+    Both are market-maker orders (resting in the book) — no taker fees on entry.
+    Profit = 100 - yes_price - no_price cents per contract, locked at settlement.
+    """
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
-        
+
         data = request.json
-        ticker = data.get('ticker')
-        side = data.get('side')  # 'yes' or 'no'
-        target_price = int(data.get('target_price'))  # in cents
-        quantity = int(data.get('quantity', 1))
-        arb_width = float(data.get('arb_width', 3))  # minimum % profit for arb
-        stop_loss_pct = float(data.get('stop_loss_pct', 5))  # % drop to trigger stop loss
-        auto_arb = data.get('auto_arb', True)  # automatically execute other side when arb appears
-        
-        bot_id = f"{ticker}_{side}_{int(time.time())}"
-        
+        ticker         = data.get('ticker')
+        yes_price      = int(data.get('yes_price'))   # limit buy price for YES, in cents
+        no_price       = int(data.get('no_price'))    # limit buy price for NO, in cents
+        quantity       = int(data.get('quantity', 1))
+        stop_loss_cents = int(data.get('stop_loss_cents', 5))  # ¢ drop to trigger stop loss
+
+        if not ticker or yes_price is None or no_price is None:
+            return jsonify({'error': 'Missing required fields: ticker, yes_price, no_price'}), 400
+
+        profit_per = 100 - yes_price - no_price
+        if profit_per <= 0:
+            return jsonify({'error': f'Not an arb: yes({yes_price}¢) + no({no_price}¢) = {yes_price+no_price}¢ ≥ 100¢'}), 400
+
+        # Place both limit orders immediately (market-maker = resting bids)
+        yes_order = kalshi_client.create_order(
+            ticker=ticker, side='yes', action='buy',
+            count=quantity, yes_price=yes_price
+        )
+        no_order = kalshi_client.create_order(
+            ticker=ticker, side='no', action='buy',
+            count=quantity, no_price=no_price
+        )
+
+        bot_id = f"{ticker}_{int(time.time())}"
         active_bots[bot_id] = {
-            'ticker': ticker,
-            'side': side,
-            'target_price': target_price,
-            'quantity': quantity,
-            'arb_width': arb_width,
-            'stop_loss_pct': stop_loss_pct,
-            'auto_arb': auto_arb,
-            'status': 'monitoring',  # monitoring, leg1_filled, completed, stopped
-            'leg1_order_id': None,
-            'leg1_fill_price': None,
-            'leg2_order_id': None,
-            'created_at': time.time()
+            'ticker':           ticker,
+            'yes_price':        yes_price,
+            'no_price':         no_price,
+            'quantity':         quantity,
+            'stop_loss_cents':  stop_loss_cents,
+            'profit_per':       profit_per,
+            'status':           'pending_fills',  # pending_fills | yes_filled | no_filled | completed | stopped
+            'yes_order_id':     yes_order['order']['order_id'],
+            'no_order_id':      no_order['order']['order_id'],
+            'yes_fill_qty':     0,
+            'no_fill_qty':      0,
+            'created_at':       time.time(),
         }
-        
+
         return jsonify({
-            'success': True,
-            'bot_id': bot_id,
-            'message': f'Bot created to buy {side.upper()} at {target_price}¢'
+            'success':      True,
+            'bot_id':       bot_id,
+            'yes_order_id': yes_order['order']['order_id'],
+            'no_order_id':  no_order['order']['order_id'],
+            'profit_per':   profit_per,
+            'message':      f'Limit orders placed — YES at {yes_price}¢, NO at {no_price}¢ → {profit_per}¢ profit/contract'
         })
-    
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -456,163 +483,104 @@ def monitor_bots():
             return jsonify({'error': 'Not authenticated'}), 401
         
         actions = []
-        
+        active_statuses = ('pending_fills', 'yes_filled', 'no_filled')
+
         for bot_id, bot in list(active_bots.items()):
+            if bot['status'] not in active_statuses:
+                continue
             try:
                 ticker = bot['ticker']
 
-                # Use market price fields (simpler & more reliable than orderbook parsing)
+                # ── Check fill status of both orders ──────────────────────────
+                yes_resp = kalshi_client.get_order(bot['yes_order_id'])
+                no_resp  = kalshi_client.get_order(bot['no_order_id'])
+                yes_ord  = yes_resp.get('order', {})
+                no_ord   = no_resp.get('order', {})
+
+                # Kalshi uses 'filled_count' (v2) — fall back to older 'fill_count'
+                yes_filled = yes_ord.get('filled_count', yes_ord.get('fill_count', 0))
+                no_filled  = no_ord.get('filled_count',  no_ord.get('fill_count', 0))
+                bot['yes_fill_qty'] = yes_filled
+                bot['no_fill_qty']  = no_filled
+                qty = bot['quantity']
+
+                # ── Both sides fully filled → profit locked at settlement ──────
+                if yes_filled >= qty and no_filled >= qty:
+                    bot['status'] = 'completed'
+                    actions.append({
+                        'bot_id':       bot_id,
+                        'action':       'completed',
+                        'profit_cents': bot['profit_per'] * qty,
+                    })
+                    continue
+
+                # ── Fetch current bid prices for stop-loss check ───────────────
                 market_resp = kalshi_client.get_market(ticker)
                 market = market_resp.get('market', market_resp)
 
                 def to_cents(field):
-                    """Handle both _dollars string and integer cents fields."""
-                    dollars_field = field + '_dollars'
-                    if market.get(dollars_field):
-                        return round(float(market[dollars_field]) * 100)
-                    return market.get(field, 99)
+                    d = market.get(field + '_dollars')
+                    if d:
+                        return round(float(d) * 100)
+                    return market.get(field, 50)
 
-                best_yes_ask = to_cents('yes_ask')  # cost to buy YES
-                best_no_ask  = to_cents('no_ask')   # cost to buy NO
-                best_yes_bid = to_cents('yes_bid')  # value if selling YES
-                best_no_bid  = to_cents('no_bid')   # value if selling NO
+                yes_bid = to_cents('yes_bid')
+                no_bid  = to_cents('no_bid')
+                stop    = bot['stop_loss_cents']
 
-                # BOT LOGIC: Monitoring state - waiting to buy first leg
-                if bot['status'] == 'monitoring':
-                    if bot['side'] == 'yes' and best_yes_ask <= bot['target_price']:
-                        # Current ask is at or below target — execute YES buy
-                        order = kalshi_client.create_order(
-                            ticker=ticker,
-                            side='yes',
-                            action='buy',
-                            count=bot['quantity'],
-                            yes_price=bot['target_price']
+                # ── YES filled, NO still open ─────────────────────────────────
+                if yes_filled >= qty and no_filled < qty:
+                    bot['status'] = 'yes_filled'
+                    # Stop loss: market bid for YES dropped ≥ stop_loss_cents below entry
+                    if yes_bid <= bot['yes_price'] - stop:
+                        kalshi_client.create_order(      # market sell to exit immediately
+                            ticker=ticker, side='yes', action='sell',
+                            count=yes_filled, order_type='market'
                         )
-                        bot['leg1_order_id'] = order['order']['order_id']
-                        bot['leg1_fill_price'] = bot['target_price']
-                        bot['status'] = 'leg1_filled'
+                        try:
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                        except Exception:
+                            pass
+                        bot['status'] = 'stopped'
                         actions.append({
-                            'bot_id': bot_id,
-                            'action': 'bought_yes',
-                            'price': bot['target_price'],
-                            'quantity': bot['quantity']
+                            'bot_id':   bot_id,
+                            'action':   'stop_loss_yes',
+                            'entry':    bot['yes_price'],
+                            'exit_bid': yes_bid,
+                            'loss':     yes_bid - bot['yes_price'],
                         })
 
-                    elif bot['side'] == 'no' and best_no_ask <= bot['target_price']:
-                        # Current ask is at or below target — execute NO buy
-                        order = kalshi_client.create_order(
-                            ticker=ticker,
-                            side='no',
-                            action='buy',
-                            count=bot['quantity'],
-                            no_price=bot['target_price']
+                # ── NO filled, YES still open ─────────────────────────────────
+                elif no_filled >= qty and yes_filled < qty:
+                    bot['status'] = 'no_filled'
+                    if no_bid <= bot['no_price'] - stop:
+                        kalshi_client.create_order(
+                            ticker=ticker, side='no', action='sell',
+                            count=no_filled, order_type='market'
                         )
-                        bot['leg1_order_id'] = order['order']['order_id']
-                        bot['leg1_fill_price'] = bot['target_price']
-                        bot['status'] = 'leg1_filled'
+                        try:
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                        except Exception:
+                            pass
+                        bot['status'] = 'stopped'
                         actions.append({
-                            'bot_id': bot_id,
-                            'action': 'bought_no',
-                            'price': bot['target_price'],
-                            'quantity': bot['quantity']
+                            'bot_id':   bot_id,
+                            'action':   'stop_loss_no',
+                            'entry':    bot['no_price'],
+                            'exit_bid': no_bid,
+                            'loss':     no_bid - bot['no_price'],
                         })
 
-                # BOT LOGIC: Leg1 filled — monitor for arb opportunity or stop loss
-                elif bot['status'] == 'leg1_filled':
-                    if bot['side'] == 'yes':
-                        # Stop loss: YES bid dropped too far below fill price
-                        if best_yes_bid < bot['leg1_fill_price'] * (1 - bot['stop_loss_pct'] / 100):
-                            order = kalshi_client.create_order(
-                                ticker=ticker,
-                                side='yes',
-                                action='sell',
-                                count=bot['quantity'],
-                                yes_price=max(1, best_yes_bid - 1)
-                            )
-                            bot['status'] = 'stopped'
-                            actions.append({
-                                'bot_id': bot_id,
-                                'action': 'stop_loss_yes',
-                                'sell_price': best_yes_bid
-                            })
-
-                        # Arb: can we buy NO now and lock in a guaranteed profit?
-                        elif bot['auto_arb']:
-                            total_cost = bot['leg1_fill_price'] + best_no_ask
-                            profit = 100 - total_cost
-                            profit_pct = (profit / total_cost) * 100 if total_cost > 0 else 0
-
-                            if profit_pct >= bot['arb_width']:
-                                order = kalshi_client.create_order(
-                                    ticker=ticker,
-                                    side='no',
-                                    action='buy',
-                                    count=bot['quantity'],
-                                    no_price=best_no_ask
-                                )
-                                bot['leg2_order_id'] = order['order']['order_id']
-                                bot['status'] = 'completed'
-                                actions.append({
-                                    'bot_id': bot_id,
-                                    'action': 'completed_arb',
-                                    'yes_price': bot['leg1_fill_price'],
-                                    'no_price': best_no_ask,
-                                    'profit': profit,
-                                    'profit_pct': profit_pct
-                                })
-
-                    else:  # bot['side'] == 'no'
-                        # Stop loss: NO bid dropped too far below fill price
-                        if best_no_bid < bot['leg1_fill_price'] * (1 - bot['stop_loss_pct'] / 100):
-                            order = kalshi_client.create_order(
-                                ticker=ticker,
-                                side='no',
-                                action='sell',
-                                count=bot['quantity'],
-                                no_price=max(1, best_no_bid - 1)
-                            )
-                            bot['status'] = 'stopped'
-                            actions.append({
-                                'bot_id': bot_id,
-                                'action': 'stop_loss_no',
-                                'sell_price': best_no_bid
-                            })
-
-                        # Arb: can we buy YES now and lock in a guaranteed profit?
-                        elif bot['auto_arb']:
-                            total_cost = best_yes_ask + bot['leg1_fill_price']
-                            profit = 100 - total_cost
-                            profit_pct = (profit / total_cost) * 100 if total_cost > 0 else 0
-
-                            if profit_pct >= bot['arb_width']:
-                                order = kalshi_client.create_order(
-                                    ticker=ticker,
-                                    side='yes',
-                                    action='buy',
-                                    count=bot['quantity'],
-                                    yes_price=best_yes_ask
-                                )
-                                bot['leg2_order_id'] = order['order']['order_id']
-                                bot['status'] = 'completed'
-                                actions.append({
-                                    'bot_id': bot_id,
-                                    'action': 'completed_arb',
-                                    'no_price': bot['leg1_fill_price'],
-                                    'yes_price': best_yes_ask,
-                                    'profit': profit,
-                                    'profit_pct': profit_pct
-                                })
-                
             except Exception as e:
                 print(f"Error monitoring bot {bot_id}: {e}")
                 continue
-        
+
         return jsonify({
-            'success': True,
-            'actions': actions,
-            'active_bots': len([b for b in active_bots.values() if b['status'] in ['monitoring', 'leg1_filled']])
+            'success':     True,
+            'actions':     actions,
+            'active_bots': len([b for b in active_bots.values() if b['status'] in active_statuses]),
         })
-    
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -625,11 +593,30 @@ def list_bots():
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])
 def cancel_bot(bot_id):
-    """Cancel a bot"""
-    if bot_id in active_bots:
-        del active_bots[bot_id]
-        return jsonify({'success': True, 'message': 'Bot cancelled'})
-    return jsonify({'error': 'Bot not found'}), 404
+    """Cancel a bot and its outstanding limit orders"""
+    if bot_id not in active_bots:
+        return jsonify({'error': 'Bot not found'}), 404
+
+    bot = active_bots[bot_id]
+    cancelled = []
+
+    # Cancel any unfilled limit orders
+    if kalshi_client:
+        if bot.get('yes_order_id') and bot.get('yes_fill_qty', 0) < bot.get('quantity', 1):
+            try:
+                kalshi_client.cancel_order(bot['yes_order_id'])
+                cancelled.append('YES')
+            except Exception:
+                pass
+        if bot.get('no_order_id') and bot.get('no_fill_qty', 0) < bot.get('quantity', 1):
+            try:
+                kalshi_client.cancel_order(bot['no_order_id'])
+                cancelled.append('NO')
+            except Exception:
+                pass
+
+    del active_bots[bot_id]
+    return jsonify({'success': True, 'cancelled_orders': cancelled})
 
 
 if __name__ == '__main__':

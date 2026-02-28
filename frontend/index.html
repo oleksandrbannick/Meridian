@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kalshi Arbitrage Screener</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🎯 Kalshi Arbitrage Screener</h1>
+            <div class="header-actions">
+                <div id="balance-display" class="balance hidden">
+                    <span class="balance-label">Balance:</span>
+                    <span id="balance-amount">$0.00</span>
+                    <span class="balance-label">Portfolio:</span>
+                    <span id="portfolio-value">$0.00</span>
+                </div>
+                <button id="login-btn" class="btn btn-primary">Login</button>
+                <button id="refresh-btn" class="btn btn-secondary hidden">Refresh</button>
+            </div>
+        </header>
+
+        <!-- Login Modal -->
+        <div id="login-modal" class="modal hidden">
+            <div class="modal-content">
+                <h2>Connect to Kalshi</h2>
+                <form id="login-form">
+                    <div class="form-group">
+                        <label for="api-key-id">API Key ID:</label>
+                        <input type="text" id="api-key-id" placeholder="Your API Key ID" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="private-key">Private Key (PEM format):</label>
+                        <textarea id="private-key" placeholder="-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----" rows="10" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="demo-mode" checked>
+                            Use Demo Environment
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Connect</button>
+                        <button type="button" class="btn btn-secondary" onclick="closeLoginModal()">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <h3>Market Filters</h3>
+                    <select id="status-filter" class="filter-select">
+                        <option value="open">Open Markets</option>
+                        <option value="closed">Closed Markets</option>
+                        <option value="settled">Settled Markets</option>
+                    </select>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>Search</h3>
+                    <input type="text" id="search-input" placeholder="Search markets..." class="search-input">
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>Arbitrage Settings</h3>
+                    <div class="form-group">
+                        <label for="min-profit">Min Profit (cents):</label>
+                        <input type="number" id="min-profit" value="5" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="stop-loss">Stop Loss (%):</label>
+                        <input type="number" id="stop-loss" value="5" min="1" max="50">
+                    </div>
+                    <button id="find-arb-btn" class="btn btn-success">Find Arb Opportunities</button>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>Active Positions</h3>
+                    <div id="positions-list" class="positions-list">
+                        <p class="text-muted">No active positions</p>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>Active Arb Trades</h3>
+                    <div id="arb-positions-list" class="positions-list">
+                        <p class="text-muted">No active arb trades</p>
+                    </div>
+                    <button id="monitor-arb-btn" class="btn btn-secondary hidden">Monitor & Stop Loss</button>
+                </div>
+            </aside>
+
+            <!-- Markets Display -->
+            <main class="markets-container">
+                <div class="markets-header">
+                    <h2>Markets</h2>
+                    <div class="view-toggle">
+                        <button class="btn-toggle active" data-view="grid">Grid</button>
+                        <button class="btn-toggle" data-view="list">List</button>
+                    </div>
+                </div>
+
+                <div id="loading" class="loading hidden">
+                    <div class="spinner"></div>
+                    <p>Loading markets...</p>
+                </div>
+
+                <div id="markets-grid" class="markets-grid">
+                    <!-- Markets will be loaded here -->
+                </div>
+            </main>
+        </div>
+
+        <!-- Market Detail Modal -->
+        <div id="market-modal" class="modal hidden">
+            <div class="modal-content modal-large">
+                <button class="modal-close" onclick="closeMarketModal()">×</button>
+                <div id="market-detail">
+                    <!-- Market details will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Arbitrage Trade Modal -->
+        <div id="arb-modal" class="modal hidden">
+            <div class="modal-content">
+                <h2>Create Arbitrage Trade</h2>
+                <div id="arb-form-content">
+                    <div class="arb-preview">
+                        <div class="arb-leg">
+                            <h3>YES Side</h3>
+                            <div class="form-group">
+                                <label>Buy YES Price (cents):</label>
+                                <input type="number" id="arb-yes-price" min="1" max="99" required>
+                            </div>
+                        </div>
+                        <div class="arb-leg">
+                            <h3>NO Side</h3>
+                            <div class="form-group">
+                                <label>Buy NO Price (cents):</label>
+                                <input type="number" id="arb-no-price" min="1" max="99" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Quantity (contracts):</label>
+                        <input type="number" id="arb-quantity" value="1" min="1" required>
+                    </div>
+                    <div id="arb-profit-preview" class="arb-profit">
+                        <!-- Profit calculation will appear here -->
+                    </div>
+                    <div class="form-actions">
+                        <button id="execute-arb-btn" class="btn btn-success">Execute Arbitrage</button>
+                        <button type="button" class="btn btn-secondary" onclick="closeArbModal()">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

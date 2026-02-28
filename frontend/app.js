@@ -668,7 +668,14 @@ function createMarketRow(market, label) {
     
     const yesBtn = document.createElement('button');
     yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${yesStyle}`;
-    yesBtn.innerHTML = `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">YES</div>`;
+    // For winner markets, show team names on buttons
+    const teams = (label === 'Winner') ? extractTeamSides(market.title) : null;
+    const yesLabel = teams ? shortenTeam(teams.yes) : 'YES';
+    const noLabel  = teams ? shortenTeam(teams.no)  : 'NO';
+
+    yesBtn.innerHTML = teams
+        ? `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">✓ ${yesLabel}</div>`
+        : `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">YES</div>`;
     yesBtn.onclick = () => openBotModal(market, 'yes', yesAsk);
     yesBtn.onmouseenter = () => yesBtn.style.transform = 'scale(1.05)';
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
@@ -681,7 +688,9 @@ function createMarketRow(market, label) {
     
     const noBtn = document.createElement('button');
     noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${noStyle}`;
-    noBtn.innerHTML = `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">NO</div>`;
+    noBtn.innerHTML = teams
+        ? `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">✗ ${noLabel}</div>`
+        : `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">NO</div>`;
     noBtn.onclick = () => openBotModal(market, 'no', noAsk);
     noBtn.onmouseenter = () => noBtn.style.transform = 'scale(1.05)';
     noBtn.onmouseleave = () => noBtn.style.transform = 'scale(1)';
@@ -733,6 +742,45 @@ function getPriceButtonStyle(price, side) {
             return 'background: rgba(255, 68, 68, 0.1); color: #ff4444; border: 1px solid #ff444466;';
         }
     }
+}
+
+// Extract team sides from market title for winner markets
+// Returns { yes: 'Miami Heat', no: 'Los Angeles Lakers' } or null
+function extractTeamSides(title) {
+    if (!title) return null;
+    // "Denver at Utah: Winner?" or "Denver Nuggets at Utah Jazz Winner?"
+    const atMatch = title.match(/^(.+?)\s+at\s+(.+?)(?:\s*[:?]|\s+Winner|\s+Moneyline|$)/i);
+    if (atMatch) {
+        return { yes: atMatch[1].trim(), no: atMatch[2].trim() };
+    }
+    // "Denver vs Utah: Winner?" or "Denver vs. Utah Winner?"
+    const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s*[:?]|\s+Winner|\s+Moneyline|$)/i);
+    if (vsMatch) {
+        return { yes: vsMatch[1].trim(), no: vsMatch[2].trim() };
+    }
+    // "Will Denver Nuggets beat Utah Jazz?"
+    const willMatch = title.match(/^Will\s+(.+?)\s+(?:beat|defeat|win against)\s+(.+?)\??$/i);
+    if (willMatch) {
+        return { yes: willMatch[1].trim(), no: willMatch[2].trim() };
+    }
+    return null;
+}
+
+// Shorten a team name for button labels (e.g., "Los Angeles Lakers" -> "Lakers")
+function shortenTeam(name) {
+    if (!name) return '';
+    // If it's already short (abbrev like MIA, LAL), keep it
+    if (name.length <= 5) return name;
+    // Multi-word: use last word ("Los Angeles Lakers" -> "Lakers")
+    const words = name.split(/\s+/);
+    if (words.length > 1) {
+        // Special cases where last word isn't best
+        const last = words[words.length - 1];
+        // "Man City" -> "Man City", "NY Rangers" -> "Rangers"
+        if (words.length === 2 && words[0].length <= 3) return name;
+        return last;
+    }
+    return name;
 }
 
 // Extract subtitle from market title (e.g., "DEN -3.5" from full title)
@@ -1036,10 +1084,15 @@ function openBotModal(market, _side, _price) {
     const yesSpread = yesAsk - yesBid;
     const noSpread  = noAsk - noBid;
 
+    // Extract team sides for the modal
+    const modalTeams = extractTeamSides(title);
+    const yesTeamLabel = modalTeams ? `YES — ${shortenTeam(modalTeams.yes)} wins` : 'YES';
+    const noTeamLabel  = modalTeams ? `NO — ${shortenTeam(modalTeams.no)} wins`  : 'NO';
+
     document.getElementById('bot-market-prices').innerHTML = `
         <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#00ff88;font-weight:700;font-size:11px;">YES</span>
+                <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">spread ${yesSpread}¢</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
@@ -1049,7 +1102,7 @@ function openBotModal(market, _side, _price) {
         </div>
         <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#ff4444;font-weight:700;font-size:11px;">NO</span>
+                <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">spread ${noSpread}¢</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">

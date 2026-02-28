@@ -78,19 +78,25 @@ def get_markets():
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
             
         status = request.args.get('status', 'open')
-        limit = int(request.args.get('limit', 200))
+        limit = int(request.args.get('limit', 500))  # Increased default
         cursor = request.args.get('cursor')
         event_ticker = request.args.get('event_ticker')
         series_ticker = request.args.get('series_ticker')  # For filtering by sport/series
         
-        markets = kalshi_client.get_markets(status=status, limit=limit, 
+        result = kalshi_client.get_markets(status=status, limit=limit, 
                                            cursor=cursor, event_ticker=event_ticker)
         
-        # Filter for basketball if requested
+        # Extract markets array from response
+        markets = result.get('markets', result) if isinstance(result, dict) else result
+        
+        # Filter for series if requested
         if series_ticker:
             markets = [m for m in markets if series_ticker.upper() in m.get('series_ticker', '').upper()]
         
-        return jsonify(markets)
+        # Filter out parlay/multivariate markets
+        markets = [m for m in markets if 'mve_selected_legs' not in m and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+        
+        return jsonify({'markets': markets, 'cursor': result.get('cursor') if isinstance(result, dict) else None})
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500

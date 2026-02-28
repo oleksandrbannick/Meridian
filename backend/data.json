@@ -115,29 +115,6 @@
       "last_price_update": 1772313063.475179,
       "completed_at": 1772313065.525362
     },
-    "KXNBAGAME-26FEB28HOUMIA-MIA_1772313128": {
-      "ticker": "KXNBAGAME-26FEB28HOUMIA-MIA",
-      "yes_price": 36,
-      "no_price": 58,
-      "quantity": 10,
-      "stop_loss_cents": 5,
-      "profit_per": 6,
-      "game_phase": "live",
-      "status": "stopped",
-      "yes_order_id": "1bc04b4e-ff81-4e9a-b4e9-aebae6f2a32a",
-      "no_order_id": "4cf3e2ca-9836-450a-8fb5-0d4684aa16e4",
-      "yes_fill_qty": 0,
-      "no_fill_qty": 10,
-      "created_at": 1772313128.2004778,
-      "posted_at": 1772313128.200479,
-      "repost_count": 0,
-      "live_yes_bid": 52,
-      "live_no_bid": 47,
-      "live_yes_ask": 53,
-      "live_no_ask": 48,
-      "last_price_update": 1772313549.239051,
-      "stopped_at": 1772313549.239051
-    },
     "KXNBAGAME-26FEB28HOUMIA-MIA_1772313138": {
       "ticker": "KXNBAGAME-26FEB28HOUMIA-MIA",
       "yes_price": 37,
@@ -161,28 +138,27 @@
       "last_price_update": 1772313551.240384,
       "stopped_at": 1772313551.240384
     },
-    "KXNBAGAME-26FEB28HOUMIA-MIA_1772313149": {
+    "KXNBAGAME-26FEB28HOUMIA-MIA_1772314114": {
       "ticker": "KXNBAGAME-26FEB28HOUMIA-MIA",
-      "yes_price": 37,
-      "no_price": 59,
-      "quantity": 20,
+      "yes_price": 69,
+      "no_price": 26,
+      "quantity": 5,
       "stop_loss_cents": 5,
-      "profit_per": 4,
+      "profit_per": 5,
       "game_phase": "live",
-      "status": "stopped",
-      "yes_order_id": "01da0cfe-a3d9-4799-94f7-3fc93a83a054",
-      "no_order_id": "19af3ae1-35f5-4400-83cc-352a9c6719ac",
+      "status": "pending_fills",
+      "yes_order_id": "c7d000e7-a4a6-46db-a76e-49f7432e24ec",
+      "no_order_id": "b9dcbe36-3445-40ee-8ddd-e9a5abdfdcb4",
       "yes_fill_qty": 0,
-      "no_fill_qty": 20,
-      "created_at": 1772313149.7425091,
-      "posted_at": 1772313149.74251,
+      "no_fill_qty": 0,
+      "created_at": 1772314114.4972181,
+      "posted_at": 1772314114.497219,
       "repost_count": 0,
-      "live_yes_bid": 52,
-      "live_no_bid": 47,
-      "live_yes_ask": 53,
-      "live_no_ask": 48,
-      "last_price_update": 1772313553.240269,
-      "stopped_at": 1772313553.240269
+      "live_yes_bid": 69,
+      "live_no_bid": 30,
+      "live_yes_ask": 70,
+      "live_no_ask": 31,
+      "last_price_update": 1772314118.508414
     }
   },
   "trade_history": [
@@ -308,6 +284,6 @@
     "gross_loss_cents": 1050,
     "completed_bots": 5,
     "stopped_bots": 6,
-    "session_start": 1772313531.711848
+    "session_start": 1772314089.807584
   }
 }

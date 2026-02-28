@@ -646,6 +646,75 @@ def create_bot():
         return jsonify({'error': str(e)}), 500
 
 
+def execute_sell(ticker, side, count, reason='stop_loss'):
+    """
+    Reliably sell contracts by placing a limit sell at 1¢.
+    Kalshi's matching engine gives price improvement — you get the best
+    available bid, but using 1¢ guarantees the order crosses the spread
+    and fills immediately instead of sitting on the book.
+
+    Returns (success: bool, order_info: dict)
+    """
+    try:
+        sell_kwargs = {
+            'ticker': ticker,
+            'side': side,
+            'action': 'sell',
+            'count': count,
+        }
+        # Sell at 1¢ — will get price improvement to actual bid
+        if side == 'yes':
+            sell_kwargs['yes_price'] = 1
+        else:
+            sell_kwargs['no_price'] = 1
+
+        api_rate_limiter.wait()
+        resp = kalshi_client.create_order(**sell_kwargs)
+        order_id = resp.get('order', {}).get('order_id')
+
+        if not order_id:
+            print(f'⚠ execute_sell({reason}): no order_id in response: {resp}')
+            return False, resp
+
+        # Verify the sell filled
+        import time as _t
+        _t.sleep(0.5)  # brief pause for Kalshi to process
+        api_rate_limiter.wait()
+        check = kalshi_client.get_order(order_id)
+        order_data = check.get('order', {})
+        filled = order_data.get('filled_count', order_data.get('fill_count', 0))
+        status = order_data.get('status', '')
+
+        if filled >= count:
+            print(f'✅ execute_sell({reason}): {side} {count}x {ticker} FILLED at order {order_id}')
+            return True, {'order_id': order_id, 'filled': filled, 'status': status}
+
+        # Not fully filled yet — wait a bit more and check again
+        _t.sleep(1.0)
+        api_rate_limiter.wait()
+        check2 = kalshi_client.get_order(order_id)
+        order_data2 = check2.get('order', {})
+        filled2 = order_data2.get('filled_count', order_data2.get('fill_count', 0))
+        status2 = order_data2.get('status', '')
+
+        if filled2 >= count:
+            print(f'✅ execute_sell({reason}): {side} {count}x {ticker} FILLED (2nd check) at order {order_id}')
+            return True, {'order_id': order_id, 'filled': filled2, 'status': status2}
+
+        # Still not filled — cancel and report failure so bot stays active
+        print(f'⚠ execute_sell({reason}): {side} {count}x {ticker} NOT FILLED ({filled2}/{count}), cancelling order {order_id}')
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(order_id)
+        except Exception:
+            pass
+        return False, {'order_id': order_id, 'filled': filled2, 'status': status2}
+
+    except Exception as e:
+        print(f'❌ execute_sell({reason}): exception: {e}')
+        return False, {'error': str(e)}
+
+
 @app.route('/api/bot/monitor', methods=['POST'])
 def monitor_bots():
     """
@@ -702,54 +771,50 @@ def monitor_bots():
                     bot['live_bid'] = cur_bid
                     bot['last_price_update'] = now
 
-                    # Stop-loss: limit sell at current bid (hits the bid for guaranteed fill)
+                    # Stop-loss: sell at 1¢ (gets price improvement to actual bid)
                     if cur_bid <= entry - sl:
-                        sell_price = max(cur_bid, 1)  # floor at 1¢
-                        api_rate_limiter.wait()
-                        sell_kwargs = {'ticker': ticker, 'side': watch_side, 'action': 'sell', 'count': qty}
-                        if watch_side == 'yes':
-                            sell_kwargs['yes_price'] = sell_price
+                        sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
+                        if sold:
+                            loss = (entry - cur_bid) * qty
+                            bot['status'] = 'stopped'
+                            bot['stopped_at'] = now
+                            session_pnl['gross_loss_cents'] += loss
+                            session_pnl['stopped_bots'] += 1
+                            trade_history.insert(0, {
+                                'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                                'side': watch_side, 'entry_price': entry,
+                                'exit_bid': cur_bid, 'quantity': qty,
+                                'loss_cents': loss, 'result': 'stop_loss_watch',
+                                'timestamp': now,
+                            })
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
+                                           'loss_cents': loss})
                         else:
-                            sell_kwargs['no_price'] = sell_price
-                        kalshi_client.create_order(**sell_kwargs)
-                        loss = (entry - cur_bid) * qty
-                        bot['status'] = 'stopped'
-                        bot['stopped_at'] = now
-                        session_pnl['gross_loss_cents'] += loss
-                        session_pnl['stopped_bots'] += 1
-                        trade_history.insert(0, {
-                            'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
-                            'side': watch_side, 'entry_price': entry,
-                            'exit_bid': cur_bid, 'quantity': qty,
-                            'loss_cents': loss, 'result': 'stop_loss_watch',
-                            'timestamp': now,
-                        })
-                        actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
-                                       'loss_cents': loss})
+                            print(f'⚠ Watch SL sell FAILED for {bot_id} — will retry next cycle')
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch_FAILED',
+                                           'info': str(sell_info)})
                     # Take-profit
                     elif tp > 0 and cur_bid >= entry + tp:
-                        sell_price = max(cur_bid, 1)
-                        api_rate_limiter.wait()
-                        sell_kwargs = {'ticker': ticker, 'side': watch_side, 'action': 'sell', 'count': qty}
-                        if watch_side == 'yes':
-                            sell_kwargs['yes_price'] = sell_price
+                        sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
+                        if sold:
+                            profit = (cur_bid - entry) * qty
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            session_pnl['gross_profit_cents'] += profit
+                            session_pnl['completed_bots'] += 1
+                            trade_history.insert(0, {
+                                'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                                'side': watch_side, 'entry_price': entry,
+                                'exit_bid': cur_bid, 'quantity': qty,
+                                'profit_cents': profit, 'result': 'take_profit_watch',
+                                'timestamp': now,
+                            })
+                            actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
+                                           'profit_cents': profit})
                         else:
-                            sell_kwargs['no_price'] = sell_price
-                        kalshi_client.create_order(**sell_kwargs)
-                        profit = (cur_bid - entry) * qty
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        session_pnl['gross_profit_cents'] += profit
-                        session_pnl['completed_bots'] += 1
-                        trade_history.insert(0, {
-                            'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
-                            'side': watch_side, 'entry_price': entry,
-                            'exit_bid': cur_bid, 'quantity': qty,
-                            'profit_cents': profit, 'result': 'take_profit_watch',
-                            'timestamp': now,
-                        })
-                        actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
-                                       'profit_cents': profit})
+                            print(f'⚠ Watch TP sell FAILED for {bot_id} — will retry next cycle')
+                            actions.append({'bot_id': bot_id, 'action': 'take_profit_watch_FAILED',
+                                           'info': str(sell_info)})
                     continue
 
                 # ── Rate-limited fill checks ──────────────────────────────
@@ -892,61 +957,54 @@ def monitor_bots():
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
                     if yes_bid <= bot['yes_price'] - stop:
-                        # STOP LOSS: cancel hedge, then limit-sell YES at current bid
-                        sell_price = max(yes_bid, 1)  # floor at 1¢
-                        api_rate_limiter.wait()
-                        sell_resp = kalshi_client.create_order(
-                            ticker=ticker, side='yes', action='sell',
-                            count=yes_filled, yes_price=sell_price)
+                        # STOP LOSS: cancel hedge first, then sell YES
                         # Cancel the unfilled NO order to prevent orphans
                         try:
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
                         except Exception:
                             pass
-                        # Verify the cancel actually went through
                         try:
                             api_rate_limiter.wait()
                             no_check = kalshi_client.get_order(bot['no_order_id'])
                             no_status = no_check.get('order', {}).get('status', '')
                             if no_status not in ('canceled', 'cancelled'):
-                                # Force cancel again
                                 api_rate_limiter.wait()
                                 kalshi_client.cancel_order(bot['no_order_id'])
                         except Exception:
                             pass
-                        bot['status'] = 'stopped'
-                        bot['stopped_at'] = now
-                        loss = (bot['yes_price'] - yes_bid) * yes_filled
-                        session_pnl['gross_loss_cents'] += loss
-                        session_pnl['stopped_bots']     += 1
-                        trade_history.insert(0, {
-                            'bot_id': bot_id, 'ticker': ticker,
-                            'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
-                            'quantity': yes_filled, 'loss_cents': loss,
-                            'result': 'stop_loss_yes', 'exit_bid': yes_bid, 'timestamp': now,
-                        })
-                        actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
-                                        'entry': bot['yes_price'], 'exit_bid': yes_bid, 'loss_cents': loss})
+                        # Now sell YES at 1¢ (gets price improvement to actual bid)
+                        sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_SL_yes_{bot_id}')
+                        if sold:
+                            bot['status'] = 'stopped'
+                            bot['stopped_at'] = now
+                            loss = (bot['yes_price'] - yes_bid) * yes_filled
+                            session_pnl['gross_loss_cents'] += loss
+                            session_pnl['stopped_bots']     += 1
+                            trade_history.insert(0, {
+                                'bot_id': bot_id, 'ticker': ticker,
+                                'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                'quantity': yes_filled, 'loss_cents': loss,
+                                'result': 'stop_loss_yes', 'exit_bid': yes_bid, 'timestamp': now,
+                            })
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
+                                            'entry': bot['yes_price'], 'exit_bid': yes_bid, 'loss_cents': loss})
+                        else:
+                            print(f'⚠ Arb SL YES sell FAILED for {bot_id} — will retry next cycle')
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes_FAILED'})
                     continue  # ← prevent fall-through to NO check
 
                 # ── NO fully filled, YES still open — check stop loss ──────
                 if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if no_bid <= bot['no_price'] - stop:
-                        # STOP LOSS: cancel hedge, then limit-sell NO at current bid
-                        sell_price = max(no_bid, 1)  # floor at 1¢
-                        api_rate_limiter.wait()
-                        sell_resp = kalshi_client.create_order(
-                            ticker=ticker, side='no', action='sell',
-                            count=no_filled, no_price=sell_price)
+                        # STOP LOSS: cancel hedge first, then sell NO
                         # Cancel the unfilled YES order to prevent orphans
                         try:
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
                         except Exception:
                             pass
-                        # Verify the cancel actually went through
                         try:
                             api_rate_limiter.wait()
                             yes_check = kalshi_client.get_order(bot['yes_order_id'])
@@ -956,19 +1014,25 @@ def monitor_bots():
                                 kalshi_client.cancel_order(bot['yes_order_id'])
                         except Exception:
                             pass
-                        bot['status'] = 'stopped'
-                        bot['stopped_at'] = now
-                        loss = (bot['no_price'] - no_bid) * no_filled
-                        session_pnl['gross_loss_cents'] += loss
-                        session_pnl['stopped_bots']     += 1
-                        trade_history.insert(0, {
-                            'bot_id': bot_id, 'ticker': ticker,
-                            'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
-                            'quantity': no_filled, 'loss_cents': loss,
-                            'result': 'stop_loss_no', 'exit_bid': no_bid, 'timestamp': now,
-                        })
-                        actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
-                                        'entry': bot['no_price'], 'exit_bid': no_bid, 'loss_cents': loss})
+                        # Now sell NO at 1¢ (gets price improvement to actual bid)
+                        sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_SL_no_{bot_id}')
+                        if sold:
+                            bot['status'] = 'stopped'
+                            bot['stopped_at'] = now
+                            loss = (bot['no_price'] - no_bid) * no_filled
+                            session_pnl['gross_loss_cents'] += loss
+                            session_pnl['stopped_bots']     += 1
+                            trade_history.insert(0, {
+                                'bot_id': bot_id, 'ticker': ticker,
+                                'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                'quantity': no_filled, 'loss_cents': loss,
+                                'result': 'stop_loss_no', 'exit_bid': no_bid, 'timestamp': now,
+                            })
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
+                                            'entry': bot['no_price'], 'exit_bid': no_bid, 'loss_cents': loss})
+                        else:
+                            print(f'⚠ Arb SL NO sell FAILED for {bot_id} — will retry next cycle')
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_no_FAILED'})
 
             except Exception as e:
                 print(f"Error monitoring bot {bot_id}: {e}")

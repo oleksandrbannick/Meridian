@@ -1981,27 +1981,27 @@ function showScanResults(opportunities, minWidth, totalScanned) {
     } else {
         results.innerHTML = opportunities.slice(0, 50).map(opp => {
             const profitColor = opp.width >= 10 ? '#ffaa00' : opp.width >= 5 ? '#00ff88' : '#8892a6';
-            const instantTag = opp.instant_arb
-                ? `<span style="background:#ff3333;color:#fff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">⚡ INSTANT</span>`
+            const liveTag = opp.is_live
+                ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">🔴 LIVE</span>`
                 : '';
-            // Difficulty / fill quality badge
-            const diffColors = { easy: '#00ff88', medium: '#ffaa00', hard: '#ff6666', unlikely: '#555' };
-            const diffColor = diffColors[opp.difficulty] || '#555';
-            const diffLabel = (opp.difficulty || 'unknown').toUpperCase();
+            // Catch speed badge
+            const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
+            const speedColor = speedColors[opp.catch_speed] || '#555';
+            const speedLabel = (opp.catch_speed || 'slow').toUpperCase();
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                        ${opp.title || opp.ticker}${instantTag}
-                        <span style="background:${diffColor}22;color:${diffColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${diffLabel}</span>
+                        ${opp.title || opp.ticker}${liveTag}
+                        <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${speedLabel}</span>
                     </div>
                     <div style="color:#8892a6;font-size:11px;margin-top:3px;">
                         Bids: YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp; 
-                        Asks: YES ${opp.yes_ask}¢ / NO ${opp.no_ask}¢ &nbsp;·&nbsp;
-                        Balance: ${Math.round((opp.balance || 0) * 100)}%
+                        Spreads: YES ${opp.yes_spread}¢ / NO ${opp.no_spread}¢ &nbsp;·&nbsp;
+                        Liq: ${Math.round((opp.liquidity || 0) * 100)}%
                     </div>
                     <div style="color:#6a7488;font-size:10px;margin-top:2px;">
                         Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ → lock +${opp.profit_posted}¢/contract
-                        &nbsp;·&nbsp; Score: ${opp.fill_score || 0}
+                        &nbsp;·&nbsp; Catch: ${opp.catch_score || 0}
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
@@ -2106,12 +2106,19 @@ function showMiddlesResults(data) {
             const guarLabel = isGuaranteed
                 ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ GUARANTEED ARB</span>`
                 : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">MIDDLE BET</span>`;
+            const liveTag = m.is_live
+                ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">🔴 LIVE</span>`
+                : '';
+            const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
+            const speedColor = speedColors[m.catch_speed] || '#555';
+            const speedLabel = (m.catch_speed || 'slow').toUpperCase();
             const midWidth = m.middle_width % 1 === 0 ? m.middle_width : m.middle_width.toFixed(1);
             return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:10px;border-left:3px solid ${borderColor};">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                     <div>
                         <span style="color:#fff;font-weight:700;font-size:14px;">${m.team_a} vs ${m.team_b}</span>
-                        ${guarLabel}
+                        ${guarLabel}${liveTag}
+                        <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px;">${speedLabel}</span>
                     </div>
                     <div style="text-align:right;">
                         <div style="color:${isGuaranteed ? '#00ff88' : '#ffaa00'};font-weight:800;font-size:16px;">${isGuaranteed ? '+' : ''}${m.guaranteed_profit}¢</div>
@@ -2121,16 +2128,17 @@ function showMiddlesResults(data) {
                 <div style="font-size:11px;color:#8892a6;margin-bottom:8px;line-height:1.6;">
                     <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
                         <span style="color:#ff4444;font-weight:700;font-size:10px;min-width:20px;">NO</span>
-                        <span>${m.title_a} @ <strong style="color:#fff;">${m.no_a_bid}¢</strong></span>
+                        <span>${m.title_a} @ <strong style="color:#fff;">${m.no_a_bid}¢</strong> <span style="color:#6a7488;font-size:10px;">(spread ${m.no_spread_a || 0}¢)</span></span>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
                         <span style="color:#ff4444;font-weight:700;font-size:10px;min-width:20px;">NO</span>
-                        <span>${m.title_b} @ <strong style="color:#fff;">${m.no_b_bid}¢</strong></span>
+                        <span>${m.title_b} @ <strong style="color:#fff;">${m.no_b_bid}¢</strong> <span style="color:#6a7488;font-size:10px;">(spread ${m.no_spread_b || 0}¢)</span></span>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px;padding:6px 8px;background:#0f1419;border-radius:6px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:6px;padding:6px 8px;background:#0f1419;border-radius:6px;">
                         <div>Cost: <strong style="color:#fff;">${m.cost}¢</strong></div>
-                        <div>Middle zone: <strong style="color:#fff;">${midWidth} pts</strong></div>
+                        <div>Middle: <strong style="color:#fff;">${midWidth} pts</strong></div>
                         <div>Both win: <strong style="color:#00ff88;">+${m.middle_profit}¢</strong></div>
+                        <div>Catch: <strong style="color:${speedColor};">${m.catch_score}</strong> · Liq ${Math.round((m.liquidity || 0) * 100)}%</div>
                     </div>
                     <div style="margin-top:6px;color:#6a7488;font-size:10px;">
                         ↳ One NO always wins (100¢). If game within ${midWidth} pts of either spread, both NOs win (200¢).

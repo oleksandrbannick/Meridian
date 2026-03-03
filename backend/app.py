@@ -1664,9 +1664,6 @@ def scan_arb_opportunities():
             if width < min_width:
                 continue
 
-            # If both ask prices exist, calculate instant arb too
-            instant = (100 - (yes_ask or 99) - (no_ask or 99)) if yes_ask and no_ask else 0
-
             # Suggested prices: AT the bid, never above it.
             # Use favorite-anchoring: shave less from fav, more from underdog.
             bid_sum = yes_bid + no_bid
@@ -1685,37 +1682,61 @@ def scan_arb_opportunities():
             sug_no  = max(1, min(sug_no, no_bid))    # never above bid
             posted_profit = 100 - sug_yes - sug_no
 
-            # Spread info
-            yes_spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 0
-            no_spread  = (no_ask  - no_bid)  if no_ask  and no_bid  else 0
+            # ── Spread & Liquidity ─────────────────────────────────
+            yes_spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 99
+            no_spread  = (no_ask  - no_bid)  if no_ask  and no_bid  else 99
+            total_spread = yes_spread + no_spread
 
-                # ── Fill quality score ──────────────────────────────────
-            # Extreme-outcome markets (min bid < 10) have huge "gaps" but
-            # will never fill both sides.  Penalise them so realistic
-            # opportunities sort higher.
+            # ── Balance: how close both sides are to 50/50 ─────────
             min_bid_val = min(yes_bid, no_bid)
             max_bid_val = max(yes_bid, no_bid, 1)
             balance = round(min_bid_val / max_bid_val, 2)
 
+            # Skip garbage: extreme-outcome markets that will never
+            # fill both sides (e.g. YES 5¢ / NO 92¢)
             if min_bid_val < 5:
-                fill_score = 0.0          # skip garbage
-            elif min_bid_val < 15:
-                fill_score = round(width * balance * (min_bid_val / 25) ** 2, 1)
-            else:
-                fill_score = round(width * balance, 1)
+                continue
 
-            # Difficulty label
-            if min_bid_val >= 30:
-                difficulty = 'easy'
-            elif min_bid_val >= 15:
-                difficulty = 'medium'
-            elif min_bid_val >= 5:
-                difficulty = 'hard'
+            # ── Liquidity score (0-1): tight spread = high ─────────
+            # Perfect spread = 1¢ each side (total 2) → liquidity 1.0
+            # 5¢ each side (total 10) → liquidity 0.2
+            # No ask data (total 198) → essentially 0
+            liquidity = round(min(1.0, 2.0 / max(1, total_spread)), 3)
+
+            # ── Live game detection ────────────────────────────────
+            ticker_str = m.get('ticker', '')
+            is_live = _is_game_live(ticker_str)
+
+            # ── CATCH SCORE ────────────────────────────────────────
+            # The core metric: how quickly and reliably you'll catch
+            # the width as price oscillates during live play.
+            #
+            # Formula: width × liquidity × balance × live_multiplier
+            #
+            # Sweet spot: 3-8¢ width, 1-2¢ spreads, balanced bids,
+            # live game = high catch score.
+            # Wide width + wide spread + extreme odds = low score.
+            #
+            # Research basis:
+            # - Tight spread = active market, orders fill fast
+            # - Balance near 50/50 = price likely to cross both bids
+            # - Live game = volatility happening NOW (3x multiplier)
+            # - Width is the profit if both fill
+            live_mult = 3.0 if is_live else 1.0
+            catch_score = round(width * liquidity * balance * live_mult, 1)
+
+            # ── Catch speed label ──────────────────────────────────
+            if catch_score >= 8:
+                catch_speed = 'prime'    # best opportunities
+            elif catch_score >= 4:
+                catch_speed = 'fast'     # good fill speed
+            elif catch_score >= 1.5:
+                catch_speed = 'moderate' # decent, may take time
             else:
-                difficulty = 'unlikely'
+                catch_speed = 'slow'     # wide spread or unbalanced
 
             opportunities.append({
-                'ticker':        m.get('ticker', ''),
+                'ticker':        ticker_str,
                 'title':         m.get('title', ''),
                 'event_ticker':  m.get('event_ticker', ''),
                 'series_ticker': m.get('series_ticker', ''),
@@ -1723,22 +1744,21 @@ def scan_arb_opportunities():
                 'no_bid':        no_bid,
                 'yes_ask':       yes_ask or 0,
                 'no_ask':        no_ask or 0,
-                'yes_spread':    yes_spread,
-                'no_spread':     no_spread,
+                'yes_spread':    yes_spread if yes_spread < 99 else 0,
+                'no_spread':     no_spread if no_spread < 99 else 0,
                 'width':         width,
-                'instant_arb':   instant > 0,
                 'suggested_yes': sug_yes,
                 'suggested_no':  sug_no,
                 'profit_posted': posted_profit,
-                'fill_score':    fill_score,
+                'catch_score':   catch_score,
+                'catch_speed':   catch_speed,
+                'liquidity':     liquidity,
                 'balance':       balance,
-                'difficulty':    difficulty,
                 'min_bid':       min_bid_val,
+                'is_live':       is_live,
             })
 
-        # Filter out extremely unlikely fills
-        opportunities = [o for o in opportunities if o['fill_score'] > 0]
-        opportunities.sort(key=lambda x: x['fill_score'], reverse=True)
+        opportunities.sort(key=lambda x: x['catch_score'], reverse=True)
         return jsonify({
             'opportunities': opportunities,
             'count': len(opportunities),
@@ -1968,8 +1988,38 @@ def scan_middles():
                                 sug_a = no_a
                                 sug_b = no_b
 
-                            # Quality score: favor wider middles, better prices
-                            score = middle_width * 2 + max(0, guaranteed_profit)
+                            # ── Spread & liquidity for each NO leg ────────
+                            no_spread_a = (mkt_a['no_ask'] - mkt_a['no_bid']) if mkt_a['no_ask'] and mkt_a['no_bid'] else 99
+                            no_spread_b = (mkt_b['no_ask'] - mkt_b['no_bid']) if mkt_b['no_ask'] and mkt_b['no_bid'] else 99
+                            total_spread = no_spread_a + no_spread_b
+                            liquidity = round(min(1.0, 2.0 / max(1, total_spread)), 3)
+
+                            # ── Balance: how close the two NO bids are ────
+                            min_no = min(no_a, no_b)
+                            max_no = max(no_a, no_b, 1)
+                            balance = round(min_no / max_no, 2)
+
+                            # ── Live game detection ───────────────────────
+                            ticker_a_str = mkt_a['market'].get('ticker', '')
+                            is_live = _is_game_live(ticker_a_str)
+                            live_mult = 3.0 if is_live else 1.0
+
+                            # ── CATCH SCORE for middles ───────────────────
+                            # Same philosophy: width × liquidity × balance × live
+                            # But width here is middle_width (spread points) and
+                            # guaranteed_profit matters too.
+                            base = middle_width * 2 + max(0, guaranteed_profit)
+                            catch_score = round(base * liquidity * balance * live_mult, 1)
+
+                            # ── Catch speed label ─────────────────────────
+                            if catch_score >= 15:
+                                catch_speed = 'prime'
+                            elif catch_score >= 6:
+                                catch_speed = 'fast'
+                            elif catch_score >= 2:
+                                catch_speed = 'moderate'
+                            else:
+                                catch_speed = 'slow'
 
                             middles.append({
                                 'game_id': game_id,
@@ -1982,6 +2032,8 @@ def scan_middles():
                                 'middle_width': middle_width,
                                 'no_a_bid': no_a,
                                 'no_b_bid': no_b,
+                                'no_spread_a': no_spread_a if no_spread_a < 99 else 0,
+                                'no_spread_b': no_spread_b if no_spread_b < 99 else 0,
                                 'cost': cost,
                                 'guaranteed_profit': guaranteed_profit,
                                 'middle_profit': middle_profit,
@@ -1991,11 +2043,15 @@ def scan_middles():
                                 'ticker_b': mkt_b['market']['ticker'],
                                 'title_a': mkt_a['market']['title'],
                                 'title_b': mkt_b['market']['title'],
-                                'score': score,
+                                'catch_score': catch_score,
+                                'catch_speed': catch_speed,
+                                'liquidity': liquidity,
+                                'balance': balance,
+                                'is_live': is_live,
                             })
 
-        # Sort: guaranteed arbs first, then by score
-        middles.sort(key=lambda x: (x['guaranteed_profit'] > 0, x['score']), reverse=True)
+        # Sort: guaranteed arbs first, then by catch_score
+        middles.sort(key=lambda x: (x['guaranteed_profit'] > 0, x['catch_score']), reverse=True)
 
         return jsonify({
             'middles': middles,

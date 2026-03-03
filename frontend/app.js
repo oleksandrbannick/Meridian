@@ -569,10 +569,11 @@ function displayEventRow(eventData, container) {
     // Categorize markets
     const categorized = categorizeMarkets(eventData.markets);
     
-    // Display winner markets — each team is its own row with team label from ticker
+    // Display winner markets — each team is its own row with clear team label
     categorized.winners.forEach(m => {
         const teamLabel = getTeamLabelFromTicker(m.ticker);
-        marketsGrid.appendChild(createMarketRow(m, teamLabel));
+        const winLabel = teamLabel && teamLabel !== 'Winner' ? `${teamLabel} Win` : 'Winner';
+        marketsGrid.appendChild(createMarketRow(m, winLabel));
     });
     
     // Display spreads — show primary spread (closest to pick-em), rest in collapsible
@@ -676,10 +677,13 @@ function createMarketRow(market, label) {
     labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6;';
     labelDiv.textContent = label;
     
-    // Extract clean subtitle from market title
-    const subtitle = extractSubtitle(market.title);
-    if (subtitle && label !== 'Winner') {
-        labelDiv.textContent = subtitle;
+    // Extract clean subtitle from market title (only for spread/total rows, NEVER overwrite team labels)
+    const isWinnerLabel = label === 'Winner' || label.endsWith(' Win');
+    if (!isWinnerLabel) {
+        const subtitle = extractSubtitle(market.title);
+        if (subtitle) {
+            labelDiv.textContent = subtitle;
+        }
     }
     
     // YES button (compact price button with value-based styling)
@@ -860,6 +864,66 @@ function extractSubtitle(title) {
     }
     
     return title.length > 40 ? title.substring(0, 37) + '...' : title;
+}
+
+// ── Sportsbook-style display name from a Kalshi ticker ──────────────────────
+// KXNBAGAME-26MAR02BOSMIL-BOS   → "BOS vs MIL · Moneyline · Boston"
+// KXNBASPREAD-26MAR02BOSMIL-BOS35 → "BOS vs MIL · Spread · BOS -3.5"
+// KXNBATOTAL-26MAR02BOSMIL-O2255  → "BOS vs MIL · Total · O 225.5"
+function formatBotDisplayName(ticker) {
+    if (!ticker) return 'Unknown';
+    const parts = ticker.split('-');
+    if (parts.length < 2) return ticker;
+
+    const prefix  = (parts[0] || '').toUpperCase();   // KXNBAGAME
+    const gameId  = parts[1] || '';                    // 26MAR02BOSMIL
+    const suffix  = parts.length >= 3 ? parts[parts.length - 1] : '';
+
+    // Detect market type from prefix
+    let marketType = 'Moneyline';
+    if (prefix.includes('SPREAD')) marketType = 'Spread';
+    else if (prefix.includes('TOTAL')) marketType = 'Total';
+    else if (prefix.includes('GAME') || prefix.includes('WIN') || prefix.includes('MONEYLINE')) marketType = 'Moneyline';
+
+    // Parse teams from gameId: 26MAR02BOSMIL → BOS vs MIL
+    const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');  // strip date prefix
+    let matchup = '';
+    if (cleaned.length >= 6) {
+        const t1 = cleaned.substring(0, 3);
+        const t2 = cleaned.substring(3, 6);
+        const teamMap = {
+            'ATL': 'ATL', 'BOS': 'BOS', 'BKN': 'BKN', 'CHA': 'CHA',
+            'CHI': 'CHI', 'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN',
+            'DET': 'DET', 'GSW': 'GSW', 'HOU': 'HOU', 'IND': 'IND',
+            'LAC': 'LAC', 'LAL': 'LAL', 'MEM': 'MEM', 'MIA': 'MIA',
+            'MIL': 'MIL', 'MIN': 'MIN', 'NOP': 'NOP', 'NYK': 'NYK',
+            'OKC': 'OKC', 'ORL': 'ORL', 'PHI': 'PHI', 'PHX': 'PHX',
+            'POR': 'POR', 'SAC': 'SAC', 'SAS': 'SAS', 'TOR': 'TOR',
+            'UTA': 'UTA', 'WAS': 'WAS',
+            'CAR': 'CAR', 'SEA': 'SEA', 'COL': 'COL', 'VGK': 'VGK',
+            'WPG': 'WPG', 'WSH': 'WSH', 'VAN': 'VAN', 'FLA': 'FLA',
+            'NYR': 'NYR', 'NYI': 'NYI', 'TBL': 'TBL', 'NJD': 'NJD',
+            'PIT': 'PIT', 'CBJ': 'CBJ', 'NSH': 'NSH', 'STL': 'STL',
+            'EDM': 'EDM', 'CGY': 'CGY', 'OTT': 'OTT', 'MTL': 'MTL',
+            'BUF': 'BUF', 'ARI': 'ARI', 'ANA': 'ANA', 'SJS': 'SJS',
+        };
+        const n1 = teamMap[t1] || t1;
+        const n2 = teamMap[t2] || t2;
+        matchup = `${n1} vs ${n2}`;
+    }
+
+    // Side label from suffix (team or spread/total detail)
+    const sideTeam = getTeamLabelFromTicker(ticker);
+    let sideLabel = '';
+    if (marketType === 'Moneyline' && sideTeam && sideTeam !== 'Winner') {
+        sideLabel = sideTeam + ' Win';
+    } else if (suffix) {
+        sideLabel = suffix;
+    }
+
+    // Compose: "BOS vs MIL · Moneyline · Boston Win"
+    const segments = [matchup, marketType, sideLabel].filter(Boolean);
+    return segments.join(' · ') || ticker;
 }
 
 // Create collapsible player props section
@@ -1477,19 +1541,10 @@ async function loadBots() {
         const botsList = document.getElementById('bots-list');
         botsList.innerHTML = '';
 
-        // Separate bots into active vs finished
-        const activeBots = [];
-        const finishedBots = [];
-        botIds.forEach(botId => {
-            const bot = bots[botId];
-            const isFinished = bot.status === 'completed' || bot.status === 'stopped';
-            // Watch bots that are done
-            const isWatchDone = bot.type === 'watch' && (bot.status === 'completed' || bot.status === 'stopped');
-            if (isFinished || isWatchDone) {
-                finishedBots.push(botId);
-            } else {
-                activeBots.push(botId);
-            }
+        // Filter to only active bots (finished ones only appear in History tab)
+        const activeBots = botIds.filter(id => {
+            const s = bots[id].status;
+            return s !== 'completed' && s !== 'stopped';
         });
 
         let activeBotCount = 0;
@@ -1567,8 +1622,7 @@ async function loadBots() {
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
 
-            const tickerParts = (bot.ticker || '').split('-');
-            const displayName = tickerParts.length >= 2 ? tickerParts.slice(1).join('-') : bot.ticker;
+            const displayName = formatBotDisplayName(bot.ticker);
 
             // Cycle info for repeat bots
             const repeatCount = bot.repeat_count || 0;
@@ -1682,100 +1736,6 @@ async function loadBots() {
                 ${stopLossInfo}`;
             botsList.appendChild(item);
         });
-
-        // ══════════════════════════════════════════════════════════════
-        // FINISHED BOTS (completed + stopped) — collapsed section
-        // ══════════════════════════════════════════════════════════════
-        if (finishedBots.length > 0) {
-            const completedCount = finishedBots.filter(id => bots[id].status === 'completed').length;
-            const stoppedCount = finishedBots.filter(id => bots[id].status === 'stopped').length;
-
-            const finishedHeader = document.createElement('div');
-            finishedHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 12px;margin-top:12px;background:#0d1117;border:1px solid #1e2740;border-radius:8px;cursor:pointer;user-select:none;';
-            finishedHeader.innerHTML = `
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <span id="finished-toggle-icon" style="color:#555;font-size:12px;">▶</span>
-                    <span style="color:#8892a6;font-size:12px;font-weight:600;">Finished</span>
-                    ${completedCount > 0 ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;">✅ ${completedCount}</span>` : ''}
-                    ${stoppedCount > 0 ? `<span style="background:#ff444422;color:#ff4444;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;">⛔ ${stoppedCount}</span>` : ''}
-                </div>
-                <button class="btn btn-secondary" style="padding:2px 8px;font-size:10px;" onclick="event.stopPropagation(); clearFinishedBots()">Clear all</button>
-            `;
-            const finishedContainer = document.createElement('div');
-            finishedContainer.id = 'finished-bots-container';
-            finishedContainer.style.cssText = 'display:none;margin-top:6px;';
-
-            finishedHeader.addEventListener('click', () => {
-                const isHidden = finishedContainer.style.display === 'none';
-                finishedContainer.style.display = isHidden ? 'block' : 'none';
-                document.getElementById('finished-toggle-icon').textContent = isHidden ? '▼' : '▶';
-            });
-
-            finishedBots.forEach(botId => {
-                const bot = bots[botId];
-                const tickerParts = (bot.ticker || '').split('-');
-                const displayName = tickerParts.length >= 2 ? tickerParts.slice(1).join('-') : bot.ticker;
-                const isCompleted = bot.status === 'completed';
-                const isStopped = bot.status === 'stopped';
-
-                // Watch bot finished
-                if (bot.type === 'watch') {
-                    const item = document.createElement('div');
-                    item.className = 'bot-item';
-                    item.style.cssText = `flex-direction:column;gap:6px;border-left:3px solid ${isCompleted ? '#00ff88' : '#ff4444'};opacity:0.8;padding:8px 12px;`;
-                    item.innerHTML = `
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <span style="font-size:11px;">${isCompleted ? '✅' : '⛔'}</span>
-                                <span style="color:#9966ff;font-size:10px;font-weight:700;">WATCH</span>
-                                <strong style="color:#fff;font-size:12px;">${bot.ticker}</strong>
-                                <span style="color:${isCompleted ? '#00ff88' : '#ff4444'};font-size:10px;">${isCompleted ? 'TP Hit' : 'Stopped'}</span>
-                            </div>
-                            <button class="btn btn-secondary" style="padding:2px 8px;font-size:10px;" onclick="cancelBot('${botId}')">✕</button>
-                        </div>
-                    `;
-                    finishedContainer.appendChild(item);
-                    return;
-                }
-
-                // Dual-arb bot finished
-                const repeatCount = bot.repeat_count || 0;
-                const repeatsDone = bot.repeats_done || 0;
-                const netPnl = bot.net_pnl_cents || 0;
-                const netSign = netPnl >= 0 ? '+' : '';
-                const netColor = netPnl >= 0 ? '#00ff88' : '#ff4444';
-
-                let cycleText = '';
-                if (repeatCount > 0) {
-                    cycleText = `${repeatsDone}/${repeatCount} cycles`;
-                } else {
-                    cycleText = isCompleted ? '1/1 cycle' : '0/1 cycle';
-                }
-
-                const endReason = isCompleted ? '✅ All cycles completed' : '⛔ Stopped — stop-loss hit';
-
-                const item = document.createElement('div');
-                item.className = 'bot-item';
-                item.style.cssText = `flex-direction:column;gap:6px;border-left:3px solid ${isCompleted ? '#00ff88' : '#ff4444'};opacity:0.85;padding:8px 12px;`;
-                item.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                            <span style="font-size:11px;">${isCompleted ? '✅' : '⛔'}</span>
-                            <strong style="color:#fff;font-size:12px;">${displayName}</strong>
-                            <span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${cycleText}</span>
-                            <span style="color:${netColor};font-weight:800;font-size:12px;">${netSign}${netPnl}¢</span>
-                            <span style="color:#8892a6;font-size:10px;">($${(Math.abs(netPnl) / 100).toFixed(2)})</span>
-                        </div>
-                        <button class="btn btn-secondary" style="padding:2px 8px;font-size:10px;" onclick="cancelBot('${botId}')">✕</button>
-                    </div>
-                    <div style="font-size:10px;color:#555;">${endReason} · 🎟 ${bot.ticker}</div>
-                `;
-                finishedContainer.appendChild(item);
-            });
-
-            botsList.appendChild(finishedHeader);
-            botsList.appendChild(finishedContainer);
-        }
 
         updateBotBuddy(activeBotCount, filledLegs);
         updateBotsBadge(activeBotCount);
@@ -2303,9 +2263,8 @@ async function loadTradeHistory() {
             const icon = isWin ? '✅' : '⛔';
             const resultLabel = isWin ? 'FILLED' : (isSL ? 'STOP LOSS' : 'STOPPED');
             
-            // Team label from ticker suffix
-            const teamLabel = t.team_label || (t.ticker ? t.ticker.split('-').pop() : '');
-            const teamName = getTeamLabelFromTicker(t.ticker || '');
+            // Sportsbook-style display name
+            const teamName = formatBotDisplayName(t.ticker || '');
             
             // Verified badge
             const verified = t.verified_prices || t.verified_cleared ? '<span style="color:#00ff88;font-size:9px;margin-left:4px;">✓ verified</span>' : '';

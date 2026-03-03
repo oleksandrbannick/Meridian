@@ -698,9 +698,10 @@ def verify_position_cleared(ticker, side, expected_gone):
         return False, -1
 
 
-def get_actual_fill_price(order_id):
+def get_actual_fill_price(order_id, side='yes'):
     """
     Get the actual average fill price from Kalshi for a completed order.
+    side='yes' → use yes_price field, side='no' → use no_price field.
     Returns price in cents, or None if not available.
     """
     try:
@@ -713,7 +714,10 @@ def get_actual_fill_price(order_id):
             total_cents = 0
             total_count = 0
             for f in order_fills:
-                price = f.get('yes_price', f.get('no_price', 0))
+                # Kalshi fills contain BOTH yes_price and no_price (complements).
+                # Use the correct one based on which side this order was for.
+                price_field = 'no_price' if side == 'no' else 'yes_price'
+                price = f.get(price_field, f.get('yes_price', f.get('no_price', 0)))
                 cnt = f.get('count', 1)
                 total_cents += price * cnt
                 total_count += cnt
@@ -793,7 +797,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             if filled >= count:
                 # VERIFY: confirm position is actually gone on Kalshi
                 cleared, remaining = verify_position_cleared(ticker, side, count)
-                actual_price = get_actual_fill_price(order_id)
+                actual_price = get_actual_fill_price(order_id, side)
                 sell_price = actual_price if actual_price else cur_bid
                 print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}) | verified={cleared}')
                 return True, {'order_id': order_id, 'filled': filled, 'sell_price': sell_price,
@@ -810,7 +814,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             if filled2 >= count:
                 # VERIFY: confirm position is actually gone on Kalshi
                 cleared, remaining = verify_position_cleared(ticker, side, count)
-                actual_price = get_actual_fill_price(order_id)
+                actual_price = get_actual_fill_price(order_id, side)
                 sell_price = actual_price if actual_price else cur_bid
                 print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}, 2nd check) | verified={cleared}')
                 return True, {'order_id': order_id, 'filled': filled2, 'sell_price': sell_price,
@@ -969,8 +973,8 @@ def monitor_bots():
                     bot['completed_at'] = now
 
                     # Verify actual fill prices from the order data for accurate P&L
-                    actual_yes = get_actual_fill_price(bot['yes_order_id'])
-                    actual_no  = get_actual_fill_price(bot['no_order_id'])
+                    actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
+                    actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
                     real_yes = actual_yes if actual_yes else bot['yes_price']
                     real_no  = actual_no  if actual_no  else bot['no_price']
                     verified_profit = (100 - real_yes - real_no) * qty

@@ -1,11 +1,64 @@
 {
-  "active_bots": {},
+  "active_bots": {
+    "KXNBAGAME-26MAR02HOUWAS-WAS_1772497114": {
+      "ticker": "KXNBAGAME-26MAR02HOUWAS-WAS",
+      "yes_price": 11,
+      "no_price": 84,
+      "quantity": 1,
+      "stop_loss_cents": 7,
+      "profit_per": 5,
+      "game_phase": "live",
+      "status": "completed",
+      "yes_order_id": "ab5bf10b-c60b-40f6-b335-111412067233",
+      "no_order_id": "e1f4ff80-cd0c-4a53-bc7f-8f230ffc2339",
+      "yes_fill_qty": 1,
+      "no_fill_qty": 1,
+      "created_at": 1772497114.198329,
+      "posted_at": 1772497114.198329,
+      "repost_count": 0,
+      "repeat_count": 2,
+      "repeats_done": 0,
+      "arb_width": 5,
+      "live_yes_bid": 12,
+      "live_no_bid": 86,
+      "live_yes_ask": 14,
+      "live_no_ask": 88,
+      "last_price_update": 1772497592.2265909,
+      "completed_at": 1772497594.2208
+    },
+    "KXNBAGAME-26MAR02BOSMIL-MIL_1772497460": {
+      "ticker": "KXNBAGAME-26MAR02BOSMIL-MIL",
+      "yes_price": 43,
+      "no_price": 56,
+      "quantity": 3,
+      "stop_loss_cents": 6,
+      "profit_per": 1,
+      "game_phase": "live",
+      "status": "pending_fills",
+      "yes_order_id": "4d7bc256-f817-4d1f-b9e3-c97d9c6fb4df",
+      "no_order_id": "edd3838f-6b92-468f-afe2-db2c4f4335f7",
+      "yes_fill_qty": 0,
+      "no_fill_qty": 0,
+      "created_at": 1772497460.2857752,
+      "posted_at": 1772497762.2272441,
+      "repost_count": 1,
+      "repeat_count": 2,
+      "repeats_done": 0,
+      "arb_width": 5,
+      "live_yes_bid": 43,
+      "live_no_bid": 56,
+      "live_yes_ask": 44,
+      "live_no_ask": 57,
+      "last_price_update": 1772497992.147855
+    }
+  },
   "trade_history": [],
   "session_pnl": {
     "gross_profit_cents": 0,
     "gross_loss_cents": 0,
     "completed_bots": 0,
     "stopped_bots": 0,
-    "day_key": "2026-02-28"
+    "session_start": 1772498013.854801,
+    "day_key": "2026-03-02"
   }
 }

@@ -994,12 +994,17 @@ def monitor_bots():
                     })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
 
-                    # ── REPEAT ARB: spawn a new bot at fresh prices if repeats remain ──
-                    repeat_remaining = bot.get('repeat_count', 0) - bot.get('repeats_done', 0)
-                    if repeat_remaining > 0:
+                    # Track cumulative P&L on the bot itself
+                    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
+
+                    # ── REPEAT ARB: update bot in-place if repeats remain ──
+                    repeats_done_now = bot.get('repeats_done', 0) + 1
+                    bot['repeats_done'] = repeats_done_now
+                    repeat_total = bot.get('repeat_count', 0)
+
+                    if repeats_done_now < repeat_total:
                         try:
                             target_width = bot.get('arb_width', bot['profit_per'])
-                            # Fetch fresh market prices
                             api_rate_limiter.wait()
                             fresh_mkt = kalshi_client.get_market(ticker)
                             fm = fresh_mkt.get('market', fresh_mkt)
@@ -1014,8 +1019,6 @@ def monitor_bots():
                             current_gap   = 100 - fresh_yes_bid - fresh_no_bid
 
                             if current_gap >= target_width and fresh_yes_bid > 0 and fresh_no_bid > 0:
-                                # Calculate new prices maintaining the target width
-                                # Use same favorite-anchoring logic as scanner
                                 bid_sum = fresh_yes_bid + fresh_no_bid
                                 target_total = 100 - target_width
                                 total_shave = max(0, bid_sum - target_total)
@@ -1033,7 +1036,6 @@ def monitor_bots():
                                 new_profit = 100 - new_yes - new_no
 
                                 if new_profit >= 1:
-                                    # Place new orders
                                     api_rate_limiter.wait()
                                     ny = kalshi_client.create_order(
                                         ticker=ticker, side='yes', action='buy',
@@ -1043,43 +1045,33 @@ def monitor_bots():
                                         ticker=ticker, side='no', action='buy',
                                         count=qty, no_price=new_no)
 
-                                    new_bot_id = f"{ticker}_{int(time.time())}"
-                                    active_bots[new_bot_id] = {
-                                        'ticker':          ticker,
-                                        'yes_price':       new_yes,
-                                        'no_price':        new_no,
-                                        'quantity':        qty,
-                                        'stop_loss_cents': bot['stop_loss_cents'],
-                                        'profit_per':      new_profit,
-                                        'game_phase':      bot['game_phase'],
-                                        'status':          'pending_fills',
-                                        'yes_order_id':    ny['order']['order_id'],
-                                        'no_order_id':     nn['order']['order_id'],
-                                        'yes_fill_qty':    0,
-                                        'no_fill_qty':     0,
-                                        'created_at':      time.time(),
-                                        'posted_at':       time.time(),
-                                        'repost_count':    0,
-                                        'repeat_count':    bot['repeat_count'],
-                                        'repeats_done':    bot.get('repeats_done', 0) + 1,
-                                        'arb_width':       target_width,
-                                        'parent_bot':      bot_id,
-                                    }
-                                    print(f'🔄 REPEAT ARB #{bot.get("repeats_done", 0) + 1}/{bot["repeat_count"]}: '
-                                          f'new bot {new_bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢ profit')
+                                    # ── Update bot IN-PLACE — same bot_id, fresh legs ──
+                                    bot['yes_price']    = new_yes
+                                    bot['no_price']     = new_no
+                                    bot['profit_per']   = new_profit
+                                    bot['yes_order_id'] = ny['order']['order_id']
+                                    bot['no_order_id']  = nn['order']['order_id']
+                                    bot['yes_fill_qty'] = 0
+                                    bot['no_fill_qty']  = 0
+                                    bot['status']       = 'pending_fills'
+                                    bot['posted_at']    = time.time()
+                                    bot['repost_count'] = 0
+                                    del bot['completed_at']
+
+                                    print(f'🔄 REPEAT ARB cycle {repeats_done_now + 1}/{repeat_total}: '
+                                          f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢ profit')
                                     actions.append({
-                                        'bot_id': new_bot_id, 'action': 'repeat_spawned',
+                                        'bot_id': bot_id, 'action': 'repeat_cycle',
+                                        'cycle': repeats_done_now + 1, 'total': repeat_total,
                                         'yes_price': new_yes, 'no_price': new_no,
                                         'profit_per': new_profit,
-                                        'repeat_num': bot.get('repeats_done', 0) + 1,
-                                        'repeat_total': bot['repeat_count'],
                                     })
                                 else:
-                                    print(f'⚠ Repeat skipped: new spread too tight ({new_profit}¢ < 1¢)')
+                                    print(f'⚠ Repeat skipped: new spread too tight ({new_profit}¢ < 1¢) — bot stays completed')
                             else:
-                                print(f'⚠ Repeat skipped: market gap {current_gap}¢ < target {target_width}¢')
+                                print(f'⚠ Repeat skipped: market gap {current_gap}¢ < target {target_width}¢ — bot stays completed')
                         except Exception as rep_err:
-                            print(f'⚠ Repeat arb failed: {rep_err}')
+                            print(f'⚠ Repeat arb failed: {rep_err} — bot stays completed')
 
                     continue
 
@@ -1234,64 +1226,8 @@ def monitor_bots():
                                             'entry': bot['yes_price'], 'exit_bid': actual_sell,
                                             'loss_cents': loss, 'verified': verified})
 
-                            # ── REPEAT ARB after stop-loss ──
-                            repeat_remaining = bot.get('repeat_count', 0) - bot.get('repeats_done', 0)
-                            if repeat_remaining > 0:
-                                try:
-                                    target_width = bot.get('arb_width', bot['profit_per'])
-                                    api_rate_limiter.wait()
-                                    fresh_mkt = kalshi_client.get_market(ticker)
-                                    fm = fresh_mkt.get('market', fresh_mkt)
-                                    def tc_rsl_y(field):
-                                        d = fm.get(field + '_dollars')
-                                        if d: return round(float(d) * 100)
-                                        return fm.get(field, 0)
-                                    fresh_yes_bid = tc_rsl_y('yes_bid')
-                                    fresh_no_bid  = tc_rsl_y('no_bid')
-                                    current_gap   = 100 - fresh_yes_bid - fresh_no_bid
-                                    if current_gap >= target_width and fresh_yes_bid > 0 and fresh_no_bid > 0:
-                                        bid_sum = fresh_yes_bid + fresh_no_bid
-                                        target_total = 100 - target_width
-                                        total_shave = max(0, bid_sum - target_total)
-                                        yes_is_fav = fresh_yes_bid >= fresh_no_bid
-                                        fav_shave = total_shave * 4 // 10
-                                        dog_shave = total_shave - fav_shave
-                                        if yes_is_fav:
-                                            new_yes = fresh_yes_bid - fav_shave
-                                            new_no  = fresh_no_bid - dog_shave
-                                        else:
-                                            new_yes = fresh_yes_bid - dog_shave
-                                            new_no  = fresh_no_bid - fav_shave
-                                        new_yes = max(1, min(new_yes, fresh_yes_bid))
-                                        new_no  = max(1, min(new_no, fresh_no_bid))
-                                        new_profit = 100 - new_yes - new_no
-                                        if new_profit >= 1:
-                                            api_rate_limiter.wait()
-                                            ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy', count=qty, yes_price=new_yes)
-                                            api_rate_limiter.wait()
-                                            nn = kalshi_client.create_order(ticker=ticker, side='no', action='buy', count=qty, no_price=new_no)
-                                            new_bot_id = f"{ticker}_{int(time.time())}"
-                                            active_bots[new_bot_id] = {
-                                                'ticker': ticker, 'yes_price': new_yes, 'no_price': new_no,
-                                                'quantity': qty, 'stop_loss_cents': bot['stop_loss_cents'],
-                                                'profit_per': new_profit, 'game_phase': bot['game_phase'],
-                                                'status': 'pending_fills',
-                                                'yes_order_id': ny['order']['order_id'],
-                                                'no_order_id': nn['order']['order_id'],
-                                                'yes_fill_qty': 0, 'no_fill_qty': 0,
-                                                'created_at': time.time(), 'posted_at': time.time(),
-                                                'repost_count': 0, 'repeat_count': bot['repeat_count'],
-                                                'repeats_done': bot.get('repeats_done', 0) + 1,
-                                                'arb_width': target_width, 'parent_bot': bot_id,
-                                            }
-                                            print(f'🔄 REPEAT (after SL) #{bot.get("repeats_done", 0) + 1}/{bot["repeat_count"]}: '
-                                                  f'new bot {new_bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢')
-                                            actions.append({'bot_id': new_bot_id, 'action': 'repeat_spawned',
-                                                'yes_price': new_yes, 'no_price': new_no, 'profit_per': new_profit,
-                                                'repeat_num': bot.get('repeats_done', 0) + 1,
-                                                'repeat_total': bot['repeat_count'], 'after_stop_loss': True})
-                                except Exception as rep_err:
-                                    print(f'⚠ Repeat after SL failed: {rep_err}')
+                            # Track cumulative P&L on the bot (stop-loss = no repeat)
+                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
 
                         else:
                             # Sell FAILED — do NOT touch hedge, do NOT change status
@@ -1344,64 +1280,8 @@ def monitor_bots():
                                             'entry': bot['no_price'], 'exit_bid': actual_sell,
                                             'loss_cents': loss, 'verified': verified})
 
-                            # ── REPEAT ARB after stop-loss ──
-                            repeat_remaining = bot.get('repeat_count', 0) - bot.get('repeats_done', 0)
-                            if repeat_remaining > 0:
-                                try:
-                                    target_width = bot.get('arb_width', bot['profit_per'])
-                                    api_rate_limiter.wait()
-                                    fresh_mkt = kalshi_client.get_market(ticker)
-                                    fm = fresh_mkt.get('market', fresh_mkt)
-                                    def tc_rsl_n(field):
-                                        d = fm.get(field + '_dollars')
-                                        if d: return round(float(d) * 100)
-                                        return fm.get(field, 0)
-                                    fresh_yes_bid = tc_rsl_n('yes_bid')
-                                    fresh_no_bid  = tc_rsl_n('no_bid')
-                                    current_gap   = 100 - fresh_yes_bid - fresh_no_bid
-                                    if current_gap >= target_width and fresh_yes_bid > 0 and fresh_no_bid > 0:
-                                        bid_sum = fresh_yes_bid + fresh_no_bid
-                                        target_total = 100 - target_width
-                                        total_shave = max(0, bid_sum - target_total)
-                                        yes_is_fav = fresh_yes_bid >= fresh_no_bid
-                                        fav_shave = total_shave * 4 // 10
-                                        dog_shave = total_shave - fav_shave
-                                        if yes_is_fav:
-                                            new_yes = fresh_yes_bid - fav_shave
-                                            new_no  = fresh_no_bid - dog_shave
-                                        else:
-                                            new_yes = fresh_yes_bid - dog_shave
-                                            new_no  = fresh_no_bid - fav_shave
-                                        new_yes = max(1, min(new_yes, fresh_yes_bid))
-                                        new_no  = max(1, min(new_no, fresh_no_bid))
-                                        new_profit = 100 - new_yes - new_no
-                                        if new_profit >= 1:
-                                            api_rate_limiter.wait()
-                                            ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy', count=qty, yes_price=new_yes)
-                                            api_rate_limiter.wait()
-                                            nn = kalshi_client.create_order(ticker=ticker, side='no', action='buy', count=qty, no_price=new_no)
-                                            new_bot_id = f"{ticker}_{int(time.time())}"
-                                            active_bots[new_bot_id] = {
-                                                'ticker': ticker, 'yes_price': new_yes, 'no_price': new_no,
-                                                'quantity': qty, 'stop_loss_cents': bot['stop_loss_cents'],
-                                                'profit_per': new_profit, 'game_phase': bot['game_phase'],
-                                                'status': 'pending_fills',
-                                                'yes_order_id': ny['order']['order_id'],
-                                                'no_order_id': nn['order']['order_id'],
-                                                'yes_fill_qty': 0, 'no_fill_qty': 0,
-                                                'created_at': time.time(), 'posted_at': time.time(),
-                                                'repost_count': 0, 'repeat_count': bot['repeat_count'],
-                                                'repeats_done': bot.get('repeats_done', 0) + 1,
-                                                'arb_width': target_width, 'parent_bot': bot_id,
-                                            }
-                                            print(f'🔄 REPEAT (after SL) #{bot.get("repeats_done", 0) + 1}/{bot["repeat_count"]}: '
-                                                  f'new bot {new_bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢')
-                                            actions.append({'bot_id': new_bot_id, 'action': 'repeat_spawned',
-                                                'yes_price': new_yes, 'no_price': new_no, 'profit_per': new_profit,
-                                                'repeat_num': bot.get('repeats_done', 0) + 1,
-                                                'repeat_total': bot['repeat_count'], 'after_stop_loss': True})
-                                except Exception as rep_err:
-                                    print(f'⚠ Repeat after SL failed: {rep_err}')
+                            # Track cumulative P&L on the bot (stop-loss = no repeat)
+                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
 
                         else:
                             # Sell FAILED — do NOT touch hedge, do NOT change status

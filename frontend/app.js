@@ -1477,16 +1477,33 @@ async function loadBots() {
         const botsList = document.getElementById('bots-list');
         botsList.innerHTML = '';
 
+        // Separate bots into active vs finished
+        const activeBots = [];
+        const finishedBots = [];
+        botIds.forEach(botId => {
+            const bot = bots[botId];
+            const isFinished = bot.status === 'completed' || bot.status === 'stopped';
+            // Watch bots that are done
+            const isWatchDone = bot.type === 'watch' && (bot.status === 'completed' || bot.status === 'stopped');
+            if (isFinished || isWatchDone) {
+                finishedBots.push(botId);
+            } else {
+                activeBots.push(botId);
+            }
+        });
+
         let activeBotCount = 0;
         let filledLegs = 0;
 
-        botIds.forEach(botId => {
+        // ══════════════════════════════════════════════════════════════
+        // ACTIVE BOTS
+        // ══════════════════════════════════════════════════════════════
+        activeBots.forEach(botId => {
             const bot = bots[botId];
 
             // ── Watch Bots (position watchers) ───────────────────────
             if (bot.type === 'watch') {
-                const isActive = bot.status === 'watching';
-                if (isActive) activeBotCount++;
+                activeBotCount++;
                 const side = bot.side || 'yes';
                 const entry = bot.entry_price || 50;
                 const sl = bot.stop_loss_cents || 5;
@@ -1494,8 +1511,6 @@ async function loadBots() {
                 const liveBid = bot.live_bid || '?';
                 const nowSec = Date.now() / 1000;
                 const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
-                const statusClass = bot.status === 'watching' ? 'watching' : bot.status === 'completed' ? 'completed' : 'stopped';
-                const statusLabel = bot.status.toUpperCase();
 
                 const item = document.createElement('div');
                 item.className = 'bot-item';
@@ -1505,8 +1520,8 @@ async function loadBots() {
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <span style="color:#9966ff;font-size:11px;font-weight:700;">👁 WATCH</span>
                             <strong style="color:#fff;font-size:13px;">${bot.ticker}</strong>
-                            <span class="bot-status ${statusClass}">${statusLabel}</span>
-                            <span class="side-badge ${side}" style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
+                            <span class="bot-status watching">WATCHING</span>
+                            <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span style="color:#555;font-size:10px;">${ageMin}m</span>
@@ -1518,20 +1533,17 @@ async function loadBots() {
                         <div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
                         <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>
                     </div>
-                    ${bot.status === 'stopped' ? `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff4444;">⛔ Stopped — exited via stop-loss</div>` : ''}
-                    ${bot.status === 'completed' ? `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;">✅ Take-profit hit — position sold</div>` : ''}
                 `;
                 botsList.appendChild(item);
-                return; // skip dual-arb rendering
+                return;
             }
 
-            // ── Dual-Arb Bots ───────────────────────────────────────
+            // ── Dual-Arb Bots (active) ──────────────────────────────
             const profit = bot.profit_per ?? (100 - (bot.yes_price || 0) - (bot.no_price || 0));
             const qty    = bot.quantity || 1;
             const yFill  = bot.yes_fill_qty || 0;
             const nFill  = bot.no_fill_qty  || 0;
 
-            // Fill progress
             const yPct = Math.round((yFill / qty) * 100);
             const nPct = Math.round((nFill / qty) * 100);
             const bothFilled = yFill >= qty && nFill >= qty;
@@ -1549,24 +1561,29 @@ async function loadBots() {
                 pending_fills: 'monitoring',
                 yes_filled:    'leg1_filled',
                 no_filled:     'leg1_filled',
-                completed:     'completed',
-                stopped:       'stopped',
             }[bot.status] || 'monitoring';
 
-            const isActive = ['pending_fills','yes_filled','no_filled'].includes(bot.status);
-            if (isActive) activeBotCount++;
+            activeBotCount++;
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
 
-            // Parse market name from ticker
             const tickerParts = (bot.ticker || '').split('-');
             const displayName = tickerParts.length >= 2 ? tickerParts.slice(1).join('-') : bot.ticker;
 
+            // Cycle info for repeat bots
+            const repeatCount = bot.repeat_count || 0;
+            const repeatsDone = bot.repeats_done || 0;
+            let cycleInfo = '';
+            if (repeatCount > 0) {
+                const currentCycle = repeatsDone + 1; // currently working on this cycle
+                cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Cycle ${currentCycle}/${repeatCount}</span>`;
+            }
+
             // Timeout / next-action info for LIVE bots
             let timeoutInfo = '';
-            if (phase === 'live' && isActive) {
-                const repostAt  = 5; // REPOST_AFTER_MINUTES
-                const resizeAt  = 10; // STALE_CANCEL_MINUTES
+            if (phase === 'live') {
+                const repostAt  = 5;
+                const resizeAt  = 10;
                 if (yFill === 0 && nFill === 0) {
                     const minsLeft = Math.max(0, repostAt - ageMin);
                     timeoutInfo = minsLeft > 0
@@ -1578,11 +1595,11 @@ async function loadBots() {
                         ? `<span style="color:#ffaa00;font-size:10px;">⏱ Resize in ${minsLeft}m</span>`
                         : `<span style="color:#ff6666;font-size:10px;">⏱ Resize due</span>`;
                 }
-            } else if (phase === 'pregame' && isActive) {
+            } else if (phase === 'pregame') {
                 timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;
             }
 
-            // Stop-loss info (only visible when one leg is filled)
+            // Stop-loss info
             let stopLossInfo = '';
             if (bot.status === 'yes_filled') {
                 const triggerAt = (bot.yes_price || 0) - stopLoss;
@@ -1596,38 +1613,24 @@ async function loadBots() {
                 </div>`;
             }
 
-            // Completed / stopped summary
-            let completedInfo = '';
-            if (bot.status === 'completed') {
-                completedInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
-                    ✅ Both legs filled — <strong>+${profit * qty}¢ ($${(profit * qty / 100).toFixed(2)})</strong> locked at settlement
-                </div>`;
-            } else if (bot.status === 'stopped') {
-                completedInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
-                    ⛔ Stopped — exited via stop-loss
-                </div>`;
+            // Net P&L so far (from previous completed cycles)
+            let netPnlInfo = '';
+            const netPnl = bot.net_pnl_cents || 0;
+            if (netPnl !== 0 && repeatCount > 0) {
+                const sign = netPnl > 0 ? '+' : '';
+                const color = netPnl > 0 ? '#00ff88' : '#ff4444';
+                netPnlInfo = `<span style="color:${color};font-size:10px;font-weight:700;">${sign}${netPnl}¢ earned</span>`;
             }
 
-                // Repeat-arb info
-                let repeatInfo = '';
-                const repeatCount = bot.repeat_count || 0;
-                const repeatsDone = bot.repeats_done || 0;
-                if (repeatCount > 0) {
-                    const remaining = repeatCount - repeatsDone;
-                    repeatInfo = `<div style="background:#6366f111;border:1px solid #6366f133;border-radius:5px;padding:4px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
-                        🔄 Repeat: ${repeatsDone}/${repeatCount} done${remaining > 0 ? ` — ${remaining} remaining` : ' — all done'}
-                        ${bot.parent_bot ? ` <span style="color:#555;">· from ${bot.parent_bot.split('_').slice(-1)}</span>` : ''}
-                    </div>`;
-                }
-
-                const item = document.createElement('div');
-                item.className = 'bot-item';
-                item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid ' + (bothFilled ? '#00ff88' : statusClass === 'stopped' ? '#ff4444' : '#ffaa00') + ';';
+            const item = document.createElement('div');
+            item.className = 'bot-item';
+            item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #ffaa00;';
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <strong style="color:#fff;font-size:13px;">${displayName}</strong>
                         <span class="bot-status ${statusClass}">${statusLabel}</span>
+                        ${cycleInfo}
                         <button onclick="toggleBotPhase('${botId}','${phase === 'live' ? 'pregame' : 'live'}')"
                                 style="background:${phase === 'live' ? '#ff333322' : '#1e2740'};border:1px solid ${phase === 'live' ? '#ff333366' : '#2a3550'};color:${phase === 'live' ? '#ff6666' : '#8892a6'};padding:1px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;"
                                 title="${phase === 'live' ? 'Switch to pregame (patient mode)' : 'Switch to live (active repost & stop-loss)'}">${phaseIcon} ${phaseLabel}</button>
@@ -1635,6 +1638,7 @@ async function loadBots() {
                         <span style="color:#8892a6;font-size:11px;">×${qty} = $${(profit * qty / 100).toFixed(2)}</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;">
+                        ${netPnlInfo}
                         ${timeoutInfo}
                         <span style="color:#555;font-size:10px;" title="Total time alive">${createdMin}m${repostCount > 0 ? ` · ${repostCount}↻` : ''}</span>
                         <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;"
@@ -1675,9 +1679,103 @@ async function loadBots() {
                     <span>${phase === 'live' ? '🔴 Active mgmt' : '⏳ Patient mode'}</span>
                     <span>${!autoMonitorInterval ? '⚠️ Monitor OFF' : '🤖 Monitoring'}</span>
                 </div>
-                ${stopLossInfo}${completedInfo}${repeatInfo}`;
+                ${stopLossInfo}`;
             botsList.appendChild(item);
         });
+
+        // ══════════════════════════════════════════════════════════════
+        // FINISHED BOTS (completed + stopped) — collapsed section
+        // ══════════════════════════════════════════════════════════════
+        if (finishedBots.length > 0) {
+            const completedCount = finishedBots.filter(id => bots[id].status === 'completed').length;
+            const stoppedCount = finishedBots.filter(id => bots[id].status === 'stopped').length;
+
+            const finishedHeader = document.createElement('div');
+            finishedHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 12px;margin-top:12px;background:#0d1117;border:1px solid #1e2740;border-radius:8px;cursor:pointer;user-select:none;';
+            finishedHeader.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span id="finished-toggle-icon" style="color:#555;font-size:12px;">▶</span>
+                    <span style="color:#8892a6;font-size:12px;font-weight:600;">Finished</span>
+                    ${completedCount > 0 ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;">✅ ${completedCount}</span>` : ''}
+                    ${stoppedCount > 0 ? `<span style="background:#ff444422;color:#ff4444;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;">⛔ ${stoppedCount}</span>` : ''}
+                </div>
+                <button class="btn btn-secondary" style="padding:2px 8px;font-size:10px;" onclick="event.stopPropagation(); clearFinishedBots()">Clear all</button>
+            `;
+            const finishedContainer = document.createElement('div');
+            finishedContainer.id = 'finished-bots-container';
+            finishedContainer.style.cssText = 'display:none;margin-top:6px;';
+
+            finishedHeader.addEventListener('click', () => {
+                const isHidden = finishedContainer.style.display === 'none';
+                finishedContainer.style.display = isHidden ? 'block' : 'none';
+                document.getElementById('finished-toggle-icon').textContent = isHidden ? '▼' : '▶';
+            });
+
+            finishedBots.forEach(botId => {
+                const bot = bots[botId];
+                const tickerParts = (bot.ticker || '').split('-');
+                const displayName = tickerParts.length >= 2 ? tickerParts.slice(1).join('-') : bot.ticker;
+                const isCompleted = bot.status === 'completed';
+                const isStopped = bot.status === 'stopped';
+
+                // Watch bot finished
+                if (bot.type === 'watch') {
+                    const item = document.createElement('div');
+                    item.className = 'bot-item';
+                    item.style.cssText = `flex-direction:column;gap:6px;border-left:3px solid ${isCompleted ? '#00ff88' : '#ff4444'};opacity:0.8;padding:8px 12px;`;
+                    item.innerHTML = `
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:11px;">${isCompleted ? '✅' : '⛔'}</span>
+                                <span style="color:#9966ff;font-size:10px;font-weight:700;">WATCH</span>
+                                <strong style="color:#fff;font-size:12px;">${bot.ticker}</strong>
+                                <span style="color:${isCompleted ? '#00ff88' : '#ff4444'};font-size:10px;">${isCompleted ? 'TP Hit' : 'Stopped'}</span>
+                            </div>
+                            <button class="btn btn-secondary" style="padding:2px 8px;font-size:10px;" onclick="cancelBot('${botId}')">✕</button>
+                        </div>
+                    `;
+                    finishedContainer.appendChild(item);
+                    return;
+                }
+
+                // Dual-arb bot finished
+                const repeatCount = bot.repeat_count || 0;
+                const repeatsDone = bot.repeats_done || 0;
+                const netPnl = bot.net_pnl_cents || 0;
+                const netSign = netPnl >= 0 ? '+' : '';
+                const netColor = netPnl >= 0 ? '#00ff88' : '#ff4444';
+
+                let cycleText = '';
+                if (repeatCount > 0) {
+                    cycleText = `${repeatsDone}/${repeatCount} cycles`;
+                } else {
+                    cycleText = isCompleted ? '1/1 cycle' : '0/1 cycle';
+                }
+
+                const endReason = isCompleted ? '✅ All cycles completed' : '⛔ Stopped — stop-loss hit';
+
+                const item = document.createElement('div');
+                item.className = 'bot-item';
+                item.style.cssText = `flex-direction:column;gap:6px;border-left:3px solid ${isCompleted ? '#00ff88' : '#ff4444'};opacity:0.85;padding:8px 12px;`;
+                item.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span style="font-size:11px;">${isCompleted ? '✅' : '⛔'}</span>
+                            <strong style="color:#fff;font-size:12px;">${displayName}</strong>
+                            <span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${cycleText}</span>
+                            <span style="color:${netColor};font-weight:800;font-size:12px;">${netSign}${netPnl}¢</span>
+                            <span style="color:#8892a6;font-size:10px;">($${(Math.abs(netPnl) / 100).toFixed(2)})</span>
+                        </div>
+                        <button class="btn btn-secondary" style="padding:2px 8px;font-size:10px;" onclick="cancelBot('${botId}')">✕</button>
+                    </div>
+                    <div style="font-size:10px;color:#555;">${endReason} · 🎟 ${bot.ticker}</div>
+                `;
+                finishedContainer.appendChild(item);
+            });
+
+            botsList.appendChild(finishedHeader);
+            botsList.appendChild(finishedContainer);
+        }
 
         updateBotBuddy(activeBotCount, filledLegs);
         updateBotsBadge(activeBotCount);
@@ -1731,6 +1829,25 @@ async function cancelBot(botId) {
         }
     } catch (error) {
         alert('Error cancelling bot: ' + error.message);
+    }
+}
+
+// Clear all finished (completed + stopped) bots from the list
+async function clearFinishedBots() {
+    if (!confirm('Remove all finished bots from the list?')) return;
+    try {
+        const response = await fetch(`${API_BASE}/bot/list`);
+        const data = await response.json();
+        const bots = data.bots || {};
+        const finishedIds = Object.keys(bots).filter(id =>
+            bots[id].status === 'completed' || bots[id].status === 'stopped'
+        );
+        for (const id of finishedIds) {
+            await fetch(`${API_BASE}/bot/cancel/${id}`, { method: 'DELETE' });
+        }
+        loadBots();
+    } catch (error) {
+        console.error('Error clearing finished bots:', error);
     }
 }
 

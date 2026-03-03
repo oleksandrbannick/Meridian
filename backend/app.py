@@ -546,6 +546,74 @@ def auto_reset_daily_pnl():
 REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
+# ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
+_espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: True} for teams in live games
+_ESPN_CACHE_TTL = 60  # seconds
+
+# Kalshi 3-letter codes that differ from ESPN abbreviations
+_KALSHI_TO_ESPN = {
+    'WAS': 'WSH', 'NYK': 'NY', 'NOP': 'NO', 'SAS': 'SA',
+    'GSW': 'GS', 'UTA': 'UTAH', 'PHX': 'PHO',
+}
+
+def _refresh_espn_cache():
+    """Fetch all ESPN scoreboards and cache live team abbreviations."""
+    global _espn_cache
+    if time.time() - _espn_cache['ts'] < _ESPN_CACHE_TTL:
+        return
+    live_teams = {}
+    sport_paths = {
+        'nba': 'basketball/nba',
+        'nhl': 'hockey/nhl',
+        'nfl': 'football/nfl',
+        'mlb': 'baseball/mlb',
+        'ncaab': 'basketball/mens-college-basketball',
+    }
+    for sport, path in sport_paths.items():
+        try:
+            url = f'https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard'
+            resp = requests.get(url, timeout=4)
+            resp.raise_for_status()
+            events = resp.json().get('events', [])
+            for ev in events:
+                comp = (ev.get('competitions') or [{}])[0]
+                status = (ev.get('status') or {}).get('type', {}).get('state', 'pre')
+                if status == 'in':  # game is live
+                    for team in comp.get('competitors', []):
+                        abbr = (team.get('team') or {}).get('abbreviation', '')
+                        if abbr:
+                            live_teams[abbr.upper()] = True
+        except Exception:
+            continue
+    _espn_cache = {'data': live_teams, 'ts': time.time()}
+    if live_teams:
+        print(f'🏟 ESPN cache refreshed: {len(live_teams)} live teams: {", ".join(sorted(live_teams.keys()))}')
+
+
+def _is_game_live(ticker: str) -> bool:
+    """Check if the game referenced by a Kalshi ticker is currently live."""
+    _refresh_espn_cache()
+    live = _espn_cache['data']
+    if not live:
+        return False
+    # Parse teams from ticker: KXSERIES-YYMMMDDTEAM1TEAM2-VARIANT
+    parts = ticker.split('-')
+    if len(parts) < 2:
+        return False
+    date_teams = parts[1]
+    import re as _re
+    stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', date_teams)
+    if len(stripped) < 6:
+        return False
+    t1 = stripped[:3].upper()
+    t2 = stripped[3:6].upper()
+    # Check both Kalshi codes and ESPN-mapped codes
+    for code in [t1, t2]:
+        espn_code = _KALSHI_TO_ESPN.get(code, code)
+        if code in live or espn_code in live:
+            return True
+    return False
+
 
 # ─── Single Order Endpoint ─────────────────────────────────────────────────────
 @app.route('/api/order/single', methods=['POST'])
@@ -616,7 +684,7 @@ def create_bot():
         quantity       = int(data.get('quantity', 1))
         stop_loss_cents = int(data.get('stop_loss_cents', 5))  # ¢ drop to trigger stop loss
         game_phase     = data.get('game_phase', 'pregame')     # 'pregame' | 'live'
-        repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times
+        repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times (N+1 total runs)
         arb_width      = int(data.get('arb_width', 0))         # remember target width for repeat
 
         if not ticker or yes_price is None or no_price is None:
@@ -625,6 +693,36 @@ def create_bot():
         profit_per = 100 - yes_price - no_price
         if profit_per <= 0:
             return jsonify({'error': f'Not an arb: yes({yes_price}¢) + no({no_price}¢) = {yes_price+no_price}¢ ≥ 100¢'}), 400
+
+        # ── PRICE VALIDATION: fetch current market and verify prices ──────────
+        # Don't place orders based on stale scanner data
+        try:
+            api_rate_limiter.wait()
+            live_mkt = kalshi_client.get_market(ticker)
+            lm = live_mkt.get('market', live_mkt)
+            def _lc(f):
+                d = lm.get(f + '_dollars')
+                if d: return round(float(d) * 100)
+                return lm.get(f, 0)
+            live_yes_bid = _lc('yes_bid')
+            live_no_bid  = _lc('no_bid')
+
+            # Rule: NEVER place a limit buy ABOVE the current bid.
+            # If our price > bid, that means the market has moved and our order
+            # would fill at a worse price than intended (or the scanner was stale).
+            if yes_price > live_yes_bid and live_yes_bid > 0:
+                return jsonify({'error': f'YES price {yes_price}¢ is ABOVE current bid {live_yes_bid}¢ — market has moved. Refresh and retry.'}), 400
+            if no_price > live_no_bid and live_no_bid > 0:
+                return jsonify({'error': f'NO price {no_price}¢ is ABOVE current bid {live_no_bid}¢ — market has moved. Refresh and retry.'}), 400
+
+            # Also check the spread still makes sense
+            live_total = live_yes_bid + live_no_bid
+            if live_total >= 100:
+                return jsonify({'error': f'Market bids now total {live_total}¢ ≥ 100 — no arb exists. Refresh and retry.'}), 400
+
+            print(f'✅ Price validation passed: YES {yes_price}¢ ≤ bid {live_yes_bid}¢, NO {no_price}¢ ≤ bid {live_no_bid}¢')
+        except Exception as pv_err:
+            print(f'⚠ Price validation skipped: {pv_err}')
 
         # Place both limit orders immediately (market-maker = resting bids)
         yes_order = kalshi_client.create_order(
@@ -893,6 +991,20 @@ def _run_monitor():
         actions = []
         active_statuses = ('pending_fills', 'yes_filled', 'no_filled', 'watching')
 
+        # ── Auto-phase: switch pregame → live when ESPN shows game in progress ──
+        for bot_id, bot in list(active_bots.items()):
+            if bot.get('game_phase') == 'pregame' and bot['status'] in active_statuses:
+                if bot.get('type') == 'watch':
+                    continue
+                try:
+                    if _is_game_live(bot['ticker']):
+                        bot['game_phase'] = 'live'
+                        bot['posted_at'] = time.time()  # restart timeout counters
+                        actions.append({'bot_id': bot_id, 'action': 'auto_phase_live'})
+                        print(f'🏟 AUTO-PHASE: {bot_id} switched to LIVE (ESPN detected game in progress)')
+                except Exception:
+                    pass
+
         for bot_id, bot in list(active_bots.items()):
             if bot['status'] not in active_statuses:
                 continue
@@ -1030,7 +1142,7 @@ def _run_monitor():
                     bot['repeats_done'] = repeats_done_now
                     repeat_total = bot.get('repeat_count', 0)
 
-                    if repeats_done_now < repeat_total:
+                    if repeats_done_now <= repeat_total:
                         try:
                             target_width = bot.get('arb_width', bot['profit_per'])
                             api_rate_limiter.wait()
@@ -1126,16 +1238,82 @@ def _run_monitor():
                 bot['last_price_update'] = now
 
                 # ═══════════════════════════════════════════════════════════
-                # PREGAME: Patient mode — just detect fills, nothing else.
-                # Orders sit in the book until game starts or user cancels.
+                # PREGAME: Patient mode — but with SAFETY stop-loss.
+                # Orders sit in the book, no repost/resize. However, if one
+                # side fills and the bid drops past stop_loss, we MUST exit
+                # to prevent catastrophic losses.
                 # ═══════════════════════════════════════════════════════════
                 if phase == 'pregame':
                     # Update status labels for UI display
                     if yes_filled >= qty and no_filled < qty:
                         bot['status'] = 'yes_filled'
+                        # SAFETY STOP-LOSS even in pregame
+                        if yes_bid <= bot['yes_price'] - stop:
+                            print(f'🛑 PREGAME SAFETY SL: {bot_id} YES bid {yes_bid}¢ dropped below {bot["yes_price"] - stop}¢')
+                            sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'pregame_SL_yes_{bot_id}')
+                            if sold:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['no_order_id'])
+                                except Exception:
+                                    pass
+                                bot['status'] = 'stopped'
+                                bot['repeat_count'] = 0  # Kill repeats on stop-loss
+                                bot['stopped_at'] = now
+                                actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', yes_bid)
+                                loss = (bot['yes_price'] - actual_sell) * yes_filled
+                                verified = sell_info.get('verified_cleared', False)
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots']     += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                    'quantity': yes_filled, 'loss_cents': loss,
+                                    'result': 'stop_loss_yes', 'exit_bid': actual_sell,
+                                    'verified_cleared': verified, 'timestamp': now,
+                                    'placed_at': bot.get('created_at', now),
+                                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                })
+                                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+                                actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
+                                                'entry': bot['yes_price'], 'exit_bid': actual_sell,
+                                                'loss_cents': loss, 'verified': verified,
+                                                'note': 'pregame safety SL'})
                     elif no_filled >= qty and yes_filled < qty:
                         bot['status'] = 'no_filled'
-                    # No repost, no stop-loss, no resize — just wait.
+                        # SAFETY STOP-LOSS even in pregame
+                        if no_bid <= bot['no_price'] - stop:
+                            print(f'🛑 PREGAME SAFETY SL: {bot_id} NO bid {no_bid}¢ dropped below {bot["no_price"] - stop}¢')
+                            sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'pregame_SL_no_{bot_id}')
+                            if sold:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['yes_order_id'])
+                                except Exception:
+                                    pass
+                                bot['status'] = 'stopped'
+                                bot['repeat_count'] = 0  # Kill repeats on stop-loss
+                                bot['stopped_at'] = now
+                                actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', no_bid)
+                                loss = (bot['no_price'] - actual_sell) * no_filled
+                                verified = sell_info.get('verified_cleared', False)
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots']     += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                    'quantity': no_filled, 'loss_cents': loss,
+                                    'result': 'stop_loss_no', 'exit_bid': actual_sell,
+                                    'verified_cleared': verified, 'timestamp': now,
+                                    'placed_at': bot.get('created_at', now),
+                                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                })
+                                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+                                actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
+                                                'entry': bot['no_price'], 'exit_bid': actual_sell,
+                                                'loss_cents': loss, 'verified': verified,
+                                                'note': 'pregame safety SL'})
+                    # No repost, no resize — just wait (unless SL triggered above).
                     continue
 
                 # ═══════════════════════════════════════════════════════════
@@ -1238,6 +1416,7 @@ def _run_monitor():
                             except Exception:
                                 pass
                             bot['status'] = 'stopped'
+                            bot['repeat_count'] = 0  # Kill repeats on stop-loss
                             bot['stopped_at'] = now
                             # Use VERIFIED sell price from execute_sell, not the bid snapshot
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', yes_bid)
@@ -1296,6 +1475,7 @@ def _run_monitor():
                             except Exception:
                                 pass
                             bot['status'] = 'stopped'
+                            bot['repeat_count'] = 0  # Kill repeats on stop-loss
                             bot['stopped_at'] = now
                             # Use VERIFIED sell price from execute_sell, not the bid snapshot
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', no_bid)
@@ -1509,6 +1689,31 @@ def scan_arb_opportunities():
             yes_spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 0
             no_spread  = (no_ask  - no_bid)  if no_ask  and no_bid  else 0
 
+                # ── Fill quality score ──────────────────────────────────
+            # Extreme-outcome markets (min bid < 10) have huge "gaps" but
+            # will never fill both sides.  Penalise them so realistic
+            # opportunities sort higher.
+            min_bid_val = min(yes_bid, no_bid)
+            max_bid_val = max(yes_bid, no_bid, 1)
+            balance = round(min_bid_val / max_bid_val, 2)
+
+            if min_bid_val < 5:
+                fill_score = 0.0          # skip garbage
+            elif min_bid_val < 15:
+                fill_score = round(width * balance * (min_bid_val / 25) ** 2, 1)
+            else:
+                fill_score = round(width * balance, 1)
+
+            # Difficulty label
+            if min_bid_val >= 30:
+                difficulty = 'easy'
+            elif min_bid_val >= 15:
+                difficulty = 'medium'
+            elif min_bid_val >= 5:
+                difficulty = 'hard'
+            else:
+                difficulty = 'unlikely'
+
             opportunities.append({
                 'ticker':        m.get('ticker', ''),
                 'title':         m.get('title', ''),
@@ -1525,9 +1730,15 @@ def scan_arb_opportunities():
                 'suggested_yes': sug_yes,
                 'suggested_no':  sug_no,
                 'profit_posted': posted_profit,
+                'fill_score':    fill_score,
+                'balance':       balance,
+                'difficulty':    difficulty,
+                'min_bid':       min_bid_val,
             })
 
-        opportunities.sort(key=lambda x: x['width'], reverse=True)
+        # Filter out extremely unlikely fills
+        opportunities = [o for o in opportunities if o['fill_score'] > 0]
+        opportunities.sort(key=lambda x: x['fill_score'], reverse=True)
         return jsonify({
             'opportunities': opportunities,
             'count': len(opportunities),
@@ -1578,27 +1789,42 @@ def reset_pnl():
 @app.route('/api/scan/middles', methods=['GET'])
 def scan_middles():
     """
-    Find middle spread opportunities within the same game.
-    Looks for spread pairs where:
-      - Same game (same event group)
-      - One spread is tighter (e.g. -3.5), one is wider (e.g. -7.5)
-      - Buying YES on tight + NO on wide (or vice versa) creates a "middle"
-        where both can win if the margin lands between the two numbers
+    Middle spread scanner — opposing-team NO+NO strategy.
 
-    Returns list of middle opportunities with expected value calculations.
+    For a game between Team A and Team B, a "middle" buys:
+      - NO on "Team A wins by over X" (wins unless A wins by X+)
+      - NO on "Team B wins by over Y" (wins unless B wins by Y+)
+
+    Since only one team can win, AT LEAST ONE NO always wins (100¢ payout).
+    If the game margin falls in the "middle" (within X of A or within Y of B),
+    BOTH NOs win → 200¢ payout.
+
+    Guaranteed profit if combined NO cost < 100¢.
+    Middle bonus if both hit.
     """
     try:
         if not kalshi_client:
-            return jsonify({'error': 'Not authenticated'}), 401
+            return jsonify({'error': 'Not authenticated. Please login first.'}), 401
+
+        sport_filter = request.args.get('sport', '')
 
         # Fetch all spread markets
-        SPREAD_SERIES = [
-            'KXNBASPREAD', 'KXNFLSPREAD', 'KXNHLSPREAD',
-            'KXMLBSPREAD', 'KXNCAABSPREAD',
-        ]
+        SPREAD_SERIES = {
+            'nba': ['KXNBASPREAD'],
+            'nfl': ['KXNFLSPREAD'],
+            'nhl': ['KXNHLSPREAD'],
+            'mlb': ['KXMLBSPREAD'],
+            'ncaab': ['KXNCAABSPREAD'],
+        }
+        if sport_filter and sport_filter.lower() not in ('', 'all'):
+            series_to_fetch = SPREAD_SERIES.get(sport_filter.lower(), [])
+        else:
+            series_to_fetch = []
+            for ss in SPREAD_SERIES.values():
+                series_to_fetch.extend(ss)
 
         all_spreads = []
-        for series in SPREAD_SERIES:
+        for series in series_to_fetch:
             try:
                 result = kalshi_client.get_markets_by_series(series, status='open', limit=200)
                 markets = result.get('markets', [])
@@ -1612,112 +1838,164 @@ def scan_middles():
             if d: return round(float(d) * 100)
             return m.get(field, 0)
 
-        # Group spreads by game
-        # Event ticker format: KXNBASPREAD-26FEB28TORWAS
-        # Game ID = last part after the series prefix hyphen
         import re
-        games = {}
+
+        # ── Parse each market to extract team + spread number ─────────
+        # Title format: "Orlando wins by over 7.5 Points?"
+        # or: "TOR -3.5" etc.
+        parsed_markets = []
         for m in all_spreads:
+            title = m.get('title', '')
+            ticker = m.get('ticker', '')
             et = m.get('event_ticker', '')
-            # Extract game ID — everything after the last series prefix
-            match = re.match(r'KX\w+SPREAD-(.+)', et, re.IGNORECASE)
-            if not match:
+
+            # Extract spread number and team from title
+            sp_match = re.search(r'(\w[\w\s\.]+?)\s+wins?\s+by\s+over\s+([\d.]+)', title, re.IGNORECASE)
+            if not sp_match:
+                sp_match = re.search(r'([A-Z]{2,5})\s+([+-]?[\d.]+)', title)
+            if not sp_match:
                 continue
-            game_id = match.group(1)
-            if game_id not in games:
-                games[game_id] = []
-            games[game_id].append(m)
+
+            team_name = sp_match.group(1).strip()
+            spread_num = float(sp_match.group(2))
+
+            # Extract game ID from event ticker
+            ev_match = re.match(r'KX\w+SPREAD-(.+)', et, re.IGNORECASE)
+            game_id = ev_match.group(1) if ev_match else et
+
+            # Extract 3-letter team codes from the game_id portion
+            # e.g. '26MAR02ORLMIA' → teams ORL, MIA
+            date_stripped = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', game_id)
+            team_a_code = date_stripped[:3] if len(date_stripped) >= 6 else ''
+            team_b_code = date_stripped[3:6] if len(date_stripped) >= 6 else ''
+
+            # Figure out which team this market references
+            # Match team_name to one of the two team codes
+            team_code = ''
+            opponent_code = ''
+            tn_upper = team_name.upper()
+            for code in [team_a_code, team_b_code]:
+                if code and (code in tn_upper or tn_upper.startswith(code)
+                             or code in ticker.upper()):
+                    team_code = code
+                    opponent_code = team_b_code if code == team_a_code else team_a_code
+                    break
+            # Fallback: use the last part of the ticker
+            if not team_code:
+                ticker_parts = ticker.split('-')
+                if len(ticker_parts) >= 3:
+                    last = ticker_parts[-1].split('_')[0]
+                    if last == team_a_code:
+                        team_code, opponent_code = team_a_code, team_b_code
+                    elif last == team_b_code:
+                        team_code, opponent_code = team_b_code, team_a_code
+                    else:
+                        team_code = last
+            if not team_code:
+                team_code = team_name[:3].upper()
+
+            parsed_markets.append({
+                'market': m,
+                'game_id': game_id,
+                'team_code': team_code,
+                'opponent_code': opponent_code,
+                'team_name': team_name,
+                'spread': spread_num,
+                'yes_bid': tc(m, 'yes_bid'),
+                'no_bid': tc(m, 'no_bid'),
+                'yes_ask': tc(m, 'yes_ask'),
+                'no_ask': tc(m, 'no_ask'),
+            })
+
+        # ── Group by game ─────────────────────────────────────────────
+        games = {}
+        for pm in parsed_markets:
+            gid = pm['game_id']
+            if gid not in games:
+                games[gid] = []
+            games[gid].append(pm)
 
         middles = []
-        for game_id, spreads in games.items():
-            if len(spreads) < 2:
+        for game_id, markets in games.items():
+            if len(markets) < 2:
                 continue
 
-            # Parse spread numbers from titles
-            # e.g. "TOR vs WAS: TOR -3.5" → team=TOR, spread=-3.5
-            parsed = []
-            for m in spreads:
-                title = m.get('title', '')
-                # Try to extract spread number
-                sp_match = re.search(r'([A-Z]{2,5})\s+([+-]?\d+\.?\d*)', title)
-                if sp_match:
-                    team = sp_match.group(1)
-                    spread_num = float(sp_match.group(2))
-                    parsed.append({
-                        'market': m,
-                        'team': team,
-                        'spread': spread_num,
-                        'yes_bid': tc(m, 'yes_bid'),
-                        'no_bid': tc(m, 'no_bid'),
-                        'yes_ask': tc(m, 'yes_ask'),
-                        'no_ask': tc(m, 'no_ask'),
-                    })
+            # Separate into teams
+            teams = {}
+            for pm in markets:
+                tc_key = pm['team_code']
+                if tc_key not in teams:
+                    teams[tc_key] = []
+                teams[tc_key].append(pm)
 
-            # Find pairs: same team, different spread numbers
-            for i in range(len(parsed)):
-                for j in range(i + 1, len(parsed)):
-                    a, b = parsed[i], parsed[j]
-                    if a['team'] != b['team']:
-                        continue
+            team_codes = list(teams.keys())
+            if len(team_codes) < 2:
+                continue
 
-                    # Order so that 'tight' has the smaller absolute spread
-                    if abs(a['spread']) <= abs(b['spread']):
-                        tight, wide = a, b
-                    else:
-                        tight, wide = b, a
+            # ── Build cross-team pairs (opposing NO + NO) ─────────────
+            for i in range(len(team_codes)):
+                for j in range(i + 1, len(team_codes)):
+                    tc_a = team_codes[i]
+                    tc_b = team_codes[j]
 
-                    gap = abs(wide['spread']) - abs(tight['spread'])
-                    if gap < 1:
-                        continue  # spreads too close, no real middle
+                    for mkt_a in teams[tc_a]:
+                        for mkt_b in teams[tc_b]:
+                            no_a = mkt_a['no_bid']
+                            no_b = mkt_b['no_bid']
+                            if no_a <= 0 or no_b <= 0:
+                                continue
 
-                    # Strategy: buy YES on tight spread, buy NO on wide spread
-                    # Cost: tight_yes_bid + wide_no_bid
-                    # Win condition: margin lands between tight and wide
-                    cost_yes_tight_no_wide = tight['yes_bid'] + wide['no_bid']
-                    # Alt: buy NO on tight, YES on wide
-                    cost_no_tight_yes_wide = tight['no_bid'] + wide['yes_bid']
+                            cost = no_a + no_b
+                            # Middle zone: game margin between
+                            #   "Team A wins by ≤ spread_a" and
+                            #   "Team B wins by ≤ spread_b"
+                            # Width in points = spread_a + spread_b
+                            middle_width = mkt_a['spread'] + mkt_b['spread']
 
-                    # Pick the cheaper direction
-                    if cost_yes_tight_no_wide <= cost_no_tight_yes_wide:
-                        cost = cost_yes_tight_no_wide
-                        direction = 'YES_tight_NO_wide'
-                        entry_desc = f"YES {tight['market']['title']} @ {tight['yes_bid']}¢ + NO {wide['market']['title']} @ {wide['no_bid']}¢"
-                    else:
-                        cost = cost_no_tight_yes_wide
-                        direction = 'NO_tight_YES_wide'
-                        entry_desc = f"NO {tight['market']['title']} @ {tight['no_bid']}¢ + YES {wide['market']['title']} @ {wide['yes_bid']}¢"
+                            # Payoffs
+                            guaranteed_profit = 100 - cost   # one NO always wins
+                            middle_profit = 200 - cost       # both NOs win
 
-                    # Max win: if margin lands in the middle, both settle favorably = $2 payout
-                    # One-side win: $1 payout
-                    # Both miss: $0 payout
-                    max_payout = 200  # both contracts pay
-                    partial_payout = 100  # one contract pays
-                    max_profit = max_payout - cost
-                    partial_profit = partial_payout - cost
+                            # Suggested prices for guaranteed arb (total < 100)
+                            if cost >= 100:
+                                # Need to bid lower for guaranteed profit
+                                target = 95  # 5¢ guaranteed profit
+                                # Split proportionally
+                                ratio_a = no_a / (no_a + no_b) if (no_a + no_b) > 0 else 0.5
+                                sug_a = max(1, int(target * ratio_a))
+                                sug_b = max(1, target - sug_a)
+                            else:
+                                sug_a = no_a
+                                sug_b = no_b
 
-                    middles.append({
-                        'game_id': game_id,
-                        'team': tight['team'],
-                        'tight_spread': tight['spread'],
-                        'wide_spread': wide['spread'],
-                        'gap': gap,
-                        'direction': direction,
-                        'cost': cost,
-                        'max_profit': max_profit,
-                        'partial_profit': partial_profit,
-                        'entry': entry_desc,
-                        'tight_ticker': tight['market']['ticker'],
-                        'wide_ticker': wide['market']['ticker'],
-                        'tight_title': tight['market']['title'],
-                        'wide_title': wide['market']['title'],
-                        'tight_yes_bid': tight['yes_bid'],
-                        'tight_no_bid': tight['no_bid'],
-                        'wide_yes_bid': wide['yes_bid'],
-                        'wide_no_bid': wide['no_bid'],
-                    })
+                            # Quality score: favor wider middles, better prices
+                            score = middle_width * 2 + max(0, guaranteed_profit)
 
-        # Sort by max_profit descending
-        middles.sort(key=lambda x: x['max_profit'], reverse=True)
+                            middles.append({
+                                'game_id': game_id,
+                                'team_a': tc_a,
+                                'team_b': tc_b,
+                                'team_a_name': mkt_a['team_name'],
+                                'team_b_name': mkt_b['team_name'],
+                                'spread_a': mkt_a['spread'],
+                                'spread_b': mkt_b['spread'],
+                                'middle_width': middle_width,
+                                'no_a_bid': no_a,
+                                'no_b_bid': no_b,
+                                'cost': cost,
+                                'guaranteed_profit': guaranteed_profit,
+                                'middle_profit': middle_profit,
+                                'suggested_a': sug_a,
+                                'suggested_b': sug_b,
+                                'ticker_a': mkt_a['market']['ticker'],
+                                'ticker_b': mkt_b['market']['ticker'],
+                                'title_a': mkt_a['market']['title'],
+                                'title_b': mkt_b['market']['title'],
+                                'score': score,
+                            })
+
+        # Sort: guaranteed arbs first, then by score
+        middles.sort(key=lambda x: (x['guaranteed_profit'] > 0, x['score']), reverse=True)
 
         return jsonify({
             'middles': middles,

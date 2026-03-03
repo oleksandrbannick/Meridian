@@ -1490,7 +1490,7 @@ async function createBot() {
 
     const totalCost = (yes_price + no_price) * quantity;
     const profitPer = 100 - yes_price - no_price;
-    const repeatMsg = repeat_count > 0 ? `\nRepeat: ${repeat_count}× after completion` : '';
+    const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
     if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: ${game_phase.toUpperCase()}${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
@@ -1507,7 +1507,7 @@ async function createBot() {
 
         if (data.success) {
             const profit = 100 - yes_price - no_price;
-            const rptNote = repeat_count > 0 ? ` | repeat ${repeat_count}×` : '';
+            const rptNote = repeat_count > 0 ? ` | ${repeat_count + 1} runs total` : '';
             showNotification(`✅ Orders placed! YES ${yes_price}¢ + NO ${no_price}¢ → ${profit}¢/contract${rptNote}`);
             closeModal();
             loadBots();
@@ -1629,8 +1629,9 @@ async function loadBots() {
             const repeatsDone = bot.repeats_done || 0;
             let cycleInfo = '';
             if (repeatCount > 0) {
-                const currentCycle = repeatsDone + 1; // currently working on this cycle
-                cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Cycle ${currentCycle}/${repeatCount}</span>`;
+                const totalRuns = repeatCount + 1;
+                const currentCycle = repeatsDone + 1;
+                cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
             }
 
             // Timeout / next-action info for LIVE bots
@@ -1908,6 +1909,8 @@ async function monitorBots() {
                         showNotification(`✅ ARB COMPLETE! +${(action.profit_cents/100).toFixed(2)} profit locked`);
                     } else if (action.action === 'repeat_spawned') {
                         showNotification(`🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`);
+                    } else if (action.action === 'auto_phase_live') {
+                        showNotification(`🏟 Game went LIVE — bot ${action.bot_id} auto-switched to LIVE mode`);
                     } else if (action.action === 'stop_loss_yes') {
                         showNotification(`⚠️ Stop-loss YES on ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}${action.verified ? ' ✓' : ''}`);
                     } else if (action.action === 'stop_loss_no') {
@@ -1981,18 +1984,24 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             const instantTag = opp.instant_arb
                 ? `<span style="background:#ff3333;color:#fff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">⚡ INSTANT</span>`
                 : '';
+            // Difficulty / fill quality badge
+            const diffColors = { easy: '#00ff88', medium: '#ffaa00', hard: '#ff6666', unlikely: '#555' };
+            const diffColor = diffColors[opp.difficulty] || '#555';
+            const diffLabel = (opp.difficulty || 'unknown').toUpperCase();
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                         ${opp.title || opp.ticker}${instantTag}
+                        <span style="background:${diffColor}22;color:${diffColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${diffLabel}</span>
                     </div>
                     <div style="color:#8892a6;font-size:11px;margin-top:3px;">
                         Bids: YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp; 
                         Asks: YES ${opp.yes_ask}¢ / NO ${opp.no_ask}¢ &nbsp;·&nbsp;
-                        Spread: ${opp.yes_spread}+${opp.no_spread}¢
+                        Balance: ${Math.round((opp.balance || 0) * 100)}%
                     </div>
                     <div style="color:#6a7488;font-size:10px;margin-top:2px;">
                         Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ → lock +${opp.profit_posted}¢/contract
+                        &nbsp;·&nbsp; Score: ${opp.fill_score || 0}
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
@@ -2088,36 +2097,51 @@ function showMiddlesResults(data) {
     if (middles.length === 0) {
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
             No middle opportunities found across ${data.games_with_spreads || 0} games with spread markets.<br>
-            <span style="font-size:12px;">Middles require multiple spread lines for the same team in a game.</span>
+            <span style="font-size:12px;">Middles require spread lines for opposing teams in the same game.</span>
         </p>`;
     } else {
-        results.innerHTML = middles.map(m => {
-            const profitColor = m.max_profit >= 50 ? '#ffaa00' : '#00ff88';
-            const gapLabel = m.gap.toFixed(1);
-            return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:10px;border-left:3px solid ${profitColor};">
+        results.innerHTML = middles.slice(0, 60).map(m => {
+            const isGuaranteed = m.guaranteed_profit > 0;
+            const borderColor = isGuaranteed ? '#00ff88' : '#ffaa00';
+            const guarLabel = isGuaranteed
+                ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ GUARANTEED ARB</span>`
+                : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">MIDDLE BET</span>`;
+            const midWidth = m.middle_width % 1 === 0 ? m.middle_width : m.middle_width.toFixed(1);
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:10px;border-left:3px solid ${borderColor};">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                     <div>
-                        <span style="color:#fff;font-weight:700;font-size:14px;">${m.team}</span>
-                        <span style="color:#8892a6;font-size:12px;margin-left:8px;">${m.tight_spread} → ${m.wide_spread}</span>
-                        <span style="background:#ffaa0033;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;margin-left:8px;">GAP ${gapLabel}</span>
+                        <span style="color:#fff;font-weight:700;font-size:14px;">${m.team_a} vs ${m.team_b}</span>
+                        ${guarLabel}
                     </div>
                     <div style="text-align:right;">
-                        <div style="color:${profitColor};font-weight:800;font-size:16px;">+${m.max_profit}¢</div>
-                        <div style="color:#6a7488;font-size:10px;">if middle hits</div>
+                        <div style="color:${isGuaranteed ? '#00ff88' : '#ffaa00'};font-weight:800;font-size:16px;">${isGuaranteed ? '+' : ''}${m.guaranteed_profit}¢</div>
+                        <div style="color:#6a7488;font-size:10px;">guaranteed</div>
                     </div>
                 </div>
-                <div style="font-size:11px;color:#8892a6;margin-bottom:6px;line-height:1.5;">
-                    <div style="margin-bottom:4px;">${m.entry}</div>
-                    <div>Combined cost: <strong style="color:#fff;">${m.cost}¢</strong> · 
-                    Middle win: <strong style="color:#00ff88;">+${m.max_profit}¢</strong> · 
-                    One-side win: <strong style="color:${m.partial_profit >= 0 ? '#ffaa00' : '#ff4444'};">${m.partial_profit >= 0 ? '+' : ''}${m.partial_profit}¢</strong></div>
+                <div style="font-size:11px;color:#8892a6;margin-bottom:8px;line-height:1.6;">
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+                        <span style="color:#ff4444;font-weight:700;font-size:10px;min-width:20px;">NO</span>
+                        <span>${m.title_a} @ <strong style="color:#fff;">${m.no_a_bid}¢</strong></span>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+                        <span style="color:#ff4444;font-weight:700;font-size:10px;min-width:20px;">NO</span>
+                        <span>${m.title_b} @ <strong style="color:#fff;">${m.no_b_bid}¢</strong></span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px;padding:6px 8px;background:#0f1419;border-radius:6px;">
+                        <div>Cost: <strong style="color:#fff;">${m.cost}¢</strong></div>
+                        <div>Middle zone: <strong style="color:#fff;">${midWidth} pts</strong></div>
+                        <div>Both win: <strong style="color:#00ff88;">+${m.middle_profit}¢</strong></div>
+                    </div>
+                    <div style="margin-top:6px;color:#6a7488;font-size:10px;">
+                        ↳ One NO always wins (100¢). If game within ${midWidth} pts of either spread, both NOs win (200¢).
+                        ${m.cost >= 100 ? `<br>⚠ Cost ${m.cost}¢ > 100¢ — suggest lower bids: NO ${m.suggested_a}¢ + NO ${m.suggested_b}¢ = ${m.suggested_a + m.suggested_b}¢ for guaranteed profit` : ''}
+                    </div>
                 </div>
-                <div style="display:flex;gap:8px;margin-top:8px;">
-                    <button onclick="placeMiddle('${m.tight_ticker}','${m.wide_ticker}','${m.direction}',${m.tight_yes_bid},${m.tight_no_bid},${m.wide_yes_bid},${m.wide_no_bid})"
-                            style="background:#ffaa00;color:#000;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
+                <div style="display:flex;gap:8px;">
+                    <button onclick="placeMiddle('${m.ticker_a}','${m.ticker_b}',${m.suggested_a},${m.suggested_b})"
+                            style="background:${isGuaranteed ? '#00ff88' : '#ffaa00'};color:#000;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
                         📐 Place Middle
                     </button>
-                    <span style="color:#555;font-size:10px;display:flex;align-items:center;">${m.tight_title} + ${m.wide_title}</span>
                 </div>
             </div>`;
         }).join('');
@@ -2125,49 +2149,26 @@ function showMiddlesResults(data) {
     modal.classList.add('show');
 }
 
-async function placeMiddle(tightTicker, wideTicker, direction, tightYesBid, tightNoBid, wideYesBid, wideNoBid) {
+async function placeMiddle(tickerA, tickerB, priceA, priceB) {
     const qty = parseInt(document.getElementById('middles-modal-qty')?.value || '1');
+    const cost = (priceA + priceB) * qty;
+    const guaranteed = (100 - priceA - priceB) * qty;
+    const middle = (200 - priceA - priceB) * qty;
 
-    // Build readable summary for confirmation
-    let leg1Desc, leg2Desc;
-    if (direction === 'YES_tight_NO_wide') {
-        leg1Desc = `YES ${tightTicker} at ${tightYesBid}¢`;
-        leg2Desc = `NO ${wideTicker} at ${wideNoBid}¢`;
-    } else {
-        leg1Desc = `NO ${tightTicker} at ${tightNoBid}¢`;
-        leg2Desc = `YES ${wideTicker} at ${wideYesBid}¢`;
-    }
-    const totalCost = direction === 'YES_tight_NO_wide'
-        ? (tightYesBid + wideNoBid) * qty
-        : (tightNoBid + wideYesBid) * qty;
-
-    if (!confirm(`📐 Place Middle — ${qty} contract(s)\n\nLeg 1: ${leg1Desc}\nLeg 2: ${leg2Desc}\n\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\n\nConfirm?`)) return;
+    if (!confirm(`📐 Place Middle — ${qty} contract(s)\n\nLeg 1: NO ${tickerA} at ${priceA}¢\nLeg 2: NO ${tickerB} at ${priceB}¢\n\nTotal cost: ${cost}¢ ($${(cost / 100).toFixed(2)})\nGuaranteed: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nIf middle hits: +${middle}¢\n\nConfirm?`)) return;
 
     try {
-        let order1, order2;
-        if (direction === 'YES_tight_NO_wide') {
-            // Buy YES on tight spread, NO on wide spread — as separate single orders
-            order1 = await fetch(`${API_BASE}/order/single`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker: tightTicker, side: 'yes', price: tightYesBid, quantity: qty }),
-            }).then(r => r.json());
-            order2 = await fetch(`${API_BASE}/order/single`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker: wideTicker, side: 'no', price: wideNoBid, quantity: qty }),
-            }).then(r => r.json());
-        } else {
-            // Buy NO on tight spread, YES on wide spread
-            order1 = await fetch(`${API_BASE}/order/single`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker: tightTicker, side: 'no', price: tightNoBid, quantity: qty }),
-            }).then(r => r.json());
-            order2 = await fetch(`${API_BASE}/order/single`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker: wideTicker, side: 'yes', price: wideYesBid, quantity: qty }),
-            }).then(r => r.json());
-        }
+        const order1 = await fetch(`${API_BASE}/order/single`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: tickerA, side: 'no', price: priceA, quantity: qty }),
+        }).then(r => r.json());
+        const order2 = await fetch(`${API_BASE}/order/single`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: tickerB, side: 'no', price: priceB, quantity: qty }),
+        }).then(r => r.json());
+
         if (order1.success && order2.success) {
-            showNotification(`📐 Middle placed! Two separate limit orders deployed.`);
+            showNotification(`📐 Middle placed! NO on both spreads deployed.`);
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
         } else {

@@ -511,6 +511,9 @@ class RateLimiter:
 
 api_rate_limiter = RateLimiter(rate=8.0)   # 8 calls/sec
 
+# ─── Monitor lock: prevent concurrent monitor calls from double-executing ─────
+monitor_lock = threading.Lock()
+
 # ─── Session P&L (Upgrade #6: P&L dashboard) ──────────────────────────────────
 import datetime
 
@@ -867,6 +870,23 @@ def monitor_bots():
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
 
+        # ── CRITICAL: prevent concurrent monitor calls from double-executing ──
+        acquired = monitor_lock.acquire(blocking=False)
+        if not acquired:
+            return jsonify({'success': True, 'actions': [], 'active_bots': 0, 'skipped': 'monitor already running'})
+
+        try:
+            return _run_monitor()
+        finally:
+            monitor_lock.release()
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _run_monitor():
+    """Internal monitor logic — must only be called while holding monitor_lock."""
+    try:
         # Auto-reset P&L if the date has changed
         auto_reset_daily_pnl()
 
@@ -906,6 +926,10 @@ def monitor_bots():
 
                     # Stop-loss: sell at 1¢ (gets price improvement to actual bid)
                     if cur_bid <= entry - sl:
+                        # SAFETY: re-check bot hasn't already been stopped
+                        if bot['status'] in ('stopped', 'completed'):
+                            print(f'⛔ SKIPPING duplicate watch SL for {bot_id} — already {bot["status"]}')
+                            continue
                         sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
                         if sold:
                             loss = (entry - cur_bid) * qty
@@ -930,6 +954,10 @@ def monitor_bots():
                                            'info': str(sell_info)})
                     # Take-profit
                     elif tp > 0 and cur_bid >= entry + tp:
+                        # SAFETY: re-check bot hasn't already been stopped
+                        if bot['status'] in ('stopped', 'completed'):
+                            print(f'⛔ SKIPPING duplicate watch TP for {bot_id} — already {bot["status"]}')
+                            continue
                         sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
                         if sold:
                             profit = (cur_bid - entry) * qty
@@ -1186,6 +1214,10 @@ def monitor_bots():
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
                     if yes_bid <= bot['yes_price'] - stop:
+                        # SAFETY: re-check bot hasn't already been stopped
+                        if bot['status'] in ('stopped', 'completed'):
+                            print(f'⛔ SKIPPING duplicate SL YES for {bot_id} — already {bot["status"]}')
+                            continue
                         # STOP LOSS: sell YES FIRST, only cancel hedge if sell confirmed
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_SL_yes_{bot_id}')
                         if sold:
@@ -1240,6 +1272,10 @@ def monitor_bots():
                 if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if no_bid <= bot['no_price'] - stop:
+                        # SAFETY: re-check bot hasn't already been stopped
+                        if bot['status'] in ('stopped', 'completed'):
+                            print(f'⛔ SKIPPING duplicate SL NO for {bot_id} — already {bot["status"]}')
+                            continue
                         # STOP LOSS: sell NO FIRST, only cancel hedge if sell confirmed
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_SL_no_{bot_id}')
                         if sold:

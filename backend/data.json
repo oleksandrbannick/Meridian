@@ -51,6 +51,31 @@
       "live_no_ask": 49,
       "last_price_update": 1772498618.891077,
       "stopped_at": 1772498618.891077
+    },
+    "KXNBAGAME-26MAR02BOSMIL-MIL_1772501274": {
+      "ticker": "KXNBAGAME-26MAR02BOSMIL-MIL",
+      "yes_price": 5,
+      "no_price": 90,
+      "quantity": 1,
+      "stop_loss_cents": 5,
+      "profit_per": 5,
+      "game_phase": "live",
+      "status": "no_filled",
+      "yes_order_id": "6f66eb70-83bb-4f99-946a-127ba7a0d3d3",
+      "no_order_id": "fc66daa5-39ec-4ae0-ad37-0c32463605d8",
+      "yes_fill_qty": 0,
+      "no_fill_qty": 1,
+      "created_at": 1772501274.653298,
+      "posted_at": 1772501274.653298,
+      "repost_count": 0,
+      "repeat_count": 0,
+      "repeats_done": 0,
+      "arb_width": 5,
+      "live_yes_bid": 10,
+      "live_no_bid": 89,
+      "live_yes_ask": 11,
+      "live_no_ask": 90,
+      "last_price_update": 1772501382.774297
     }
   },
   "trade_history": [
@@ -172,7 +197,7 @@
     "gross_loss_cents": 186,
     "completed_bots": 0,
     "stopped_bots": 8,
-    "session_start": 1772498410.075697,
+    "session_start": 1772501052.16129,
     "day_key": "2026-03-02"
   }
 }

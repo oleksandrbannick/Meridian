@@ -1478,7 +1478,6 @@ async function createBot() {
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
     const stop_loss_cents = parseInt(document.getElementById('bot-stop-loss-cents').value);
-    const game_phase      = document.getElementById('bot-game-phase').value;
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
@@ -1491,7 +1490,7 @@ async function createBot() {
     const totalCost = (yes_price + no_price) * quantity;
     const profitPer = 100 - yes_price - no_price;
     const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: ${game_phase.toUpperCase()}${repeatMsg}\n\nConfirm order?`)) return;
+    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: auto-detect${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
@@ -1499,7 +1498,7 @@ async function createBot() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ticker: currentArbMarket.ticker,
-                yes_price, no_price, quantity, stop_loss_cents, game_phase,
+                yes_price, no_price, quantity, stop_loss_cents,
                 repeat_count, arb_width,
             }),
         });
@@ -1688,7 +1687,7 @@ async function loadBots() {
                         ${cycleInfo}
                         <button onclick="toggleBotPhase('${botId}','${phase === 'live' ? 'pregame' : 'live'}')"
                                 style="background:${phase === 'live' ? '#ff333322' : '#1e2740'};border:1px solid ${phase === 'live' ? '#ff333366' : '#2a3550'};color:${phase === 'live' ? '#ff6666' : '#8892a6'};padding:1px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;"
-                                title="${phase === 'live' ? 'Switch to pregame (patient mode)' : 'Switch to live (active repost & stop-loss)'}">${phaseIcon} ${phaseLabel}</button>
+                                title="Auto-detected from ESPN. Click to override.">${phaseIcon} ${phaseLabel}</button>
                         <span style="color:#00ff88;font-weight:800;font-size:13px;">+${profit}¢</span>
                         <span style="color:#8892a6;font-size:11px;">×${qty} = $${(profit * qty / 100).toFixed(2)}</span>
                     </div>
@@ -1757,21 +1756,16 @@ function updateBotsBadge(count) {
     }
 }
 
-// Auto-resume monitoring if bots exist after login/refresh
+// Always start monitoring after login — bots should never go unmonitored
 async function autoResumeMonitor() {
-    try {
-        const resp = await fetch(`${API_BASE}/bot/list`);
-        const data = await resp.json();
-        const bots = data.bots || {};
-        const activeStatuses = ['pending_fills', 'yes_filled', 'no_filled', 'watching'];
-        const activeCount = Object.values(bots).filter(b => activeStatuses.includes(b.status)).length;
-        if (activeCount > 0 && !autoMonitorInterval) {
-            console.log(`🔄 Auto-resuming monitor for ${activeCount} active bots`);
-            toggleAutoMonitor();
-            showNotification(`🔄 Auto-resumed monitoring ${activeCount} active bot(s)`);
-        }
-    } catch (e) {
-        console.log('Auto-resume check failed:', e);
+    if (!autoMonitorInterval) {
+        console.log('🔄 Starting auto-monitor (always-on)');
+        autoMonitorInterval = setInterval(monitorBots, 2000);
+        const button = document.getElementById('auto-monitor-text');
+        const buddy  = document.getElementById('bot-buddy');
+        if (button) button.textContent = '⏸️ Pause Monitor';
+        if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
+        monitorBots();
     }
 }
 
@@ -1812,7 +1806,7 @@ async function clearFinishedBots() {
     }
 }
 
-// Toggle auto-monitor
+// Toggle auto-monitor (pause/resume — but monitor auto-restarts on bot creation)
 function toggleAutoMonitor() {
     const button = document.getElementById('auto-monitor-text');
     const buddy  = document.getElementById('bot-buddy');
@@ -1820,12 +1814,12 @@ function toggleAutoMonitor() {
     if (autoMonitorInterval) {
         clearInterval(autoMonitorInterval);
         autoMonitorInterval = null;
-        button.textContent = '▶️ Start Auto-Monitor';
+        if (button) button.textContent = '▶️ Resume Monitor';
         if (buddy) { buddy.classList.add('idle'); buddy.classList.remove('active'); }
         updateBotBuddyMsg('idle');
     } else {
         autoMonitorInterval = setInterval(monitorBots, 2000);
-        button.textContent = '⏸️ Stop Auto-Monitor';
+        if (button) button.textContent = '⏸️ Pause Monitor';
         if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
         updateBotBuddyMsg('scanning');
         monitorBots();

@@ -331,8 +331,10 @@ def monitor_arb_positions():
                 no_status = kalshi_client._make_request('GET', 
                     f'/portfolio/orders/{no_order["order"]["order_id"]}', authenticated=True)
                 
-                yes_filled = yes_status['order']['fill_count'] if yes_status else 0
-                no_filled = no_status['order']['fill_count'] if no_status else 0
+                yes_data = (yes_status.get('order', yes_status) if isinstance(yes_status, dict) else {}) if yes_status else {}
+                no_data  = (no_status.get('order', no_status) if isinstance(no_status, dict) else {}) if no_status else {}
+                yes_filled = yes_data.get('fill_count', 0)
+                no_filled = no_data.get('fill_count', 0)
                 
                 # Get current market price
                 market = kalshi_client.get_market(ticker)
@@ -683,7 +685,8 @@ def create_bot():
         no_price       = int(data.get('no_price'))    # limit buy price for NO, in cents
         quantity       = int(data.get('quantity', 1))
         stop_loss_cents = int(data.get('stop_loss_cents', 5))  # ¢ drop to trigger stop loss
-        game_phase     = data.get('game_phase', 'pregame')     # 'pregame' | 'live'
+        # Auto-detect game phase from ESPN — no manual setting needed
+        game_phase = 'live' if _is_game_live(ticker) else 'pregame'
         repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times (N+1 total runs)
         arb_width      = int(data.get('arb_width', 0))         # remember target width for repeat
 
@@ -827,7 +830,7 @@ def get_actual_fill_price(order_id, side='yes'):
         # Fallback: check the order status itself
         api_rate_limiter.wait()
         order_resp = kalshi_client.get_order(order_id)
-        order_data = order_resp.get('order', {})
+        order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
         # Some APIs return average_price or similar
         avg = order_data.get('average_fill_price', order_data.get('avg_fill_price'))
         if avg:
@@ -879,7 +882,8 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
 
             api_rate_limiter.wait()
             resp = kalshi_client.create_order(**sell_kwargs)
-            order_id = resp.get('order', {}).get('order_id')
+            resp_ord = resp.get('order', resp) if isinstance(resp, dict) else {}
+            order_id = resp_ord.get('order_id')
 
             if not order_id:
                 print(f'⚠ execute_sell({reason}) attempt {attempt}: no order_id in response: {resp}')
@@ -892,7 +896,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             time.sleep(0.5)
             api_rate_limiter.wait()
             check = kalshi_client.get_order(order_id)
-            order_data = check.get('order', {})
+            order_data = check.get('order', check) if isinstance(check, dict) else {}
             filled = order_data.get('filled_count', order_data.get('fill_count', 0))
 
             if filled >= count:
@@ -909,7 +913,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             time.sleep(1.5)
             api_rate_limiter.wait()
             check2 = kalshi_client.get_order(order_id)
-            order_data2 = check2.get('order', {})
+            order_data2 = check2.get('order', check2) if isinstance(check2, dict) else {}
             filled2 = order_data2.get('filled_count', order_data2.get('fill_count', 0))
 
             if filled2 >= count:
@@ -1100,10 +1104,16 @@ def _run_monitor():
                 api_rate_limiter.wait()
                 no_resp  = kalshi_client.get_order(bot['no_order_id'])
 
-                yes_ord    = yes_resp.get('order', {})
-                no_ord     = no_resp.get('order', {})
+                # Kalshi API may return {order: {...}} or the order directly
+                yes_ord = yes_resp.get('order', yes_resp) if isinstance(yes_resp, dict) else {}
+                no_ord  = no_resp.get('order', no_resp)   if isinstance(no_resp, dict) else {}
                 yes_filled = yes_ord.get('filled_count', yes_ord.get('fill_count', 0))
                 no_filled  = no_ord.get('filled_count',  no_ord.get('fill_count', 0))
+
+                # Debug: log fill detection
+                if yes_filled > 0 or no_filled > 0:
+                    print(f'📊 FILL CHECK {bot_id}: YES={yes_filled}/{qty} NO={no_filled}/{qty} | resp_keys={list(yes_resp.keys()) if isinstance(yes_resp, dict) else "?"}')
+
                 bot['yes_fill_qty'] = yes_filled
                 bot['no_fill_qty']  = no_filled
 
@@ -1409,7 +1419,8 @@ def _run_monitor():
                             try:
                                 api_rate_limiter.wait()
                                 no_check = kalshi_client.get_order(bot['no_order_id'])
-                                no_status = no_check.get('order', {}).get('status', '')
+                                no_ord_data = no_check.get('order', no_check) if isinstance(no_check, dict) else {}
+                                no_status = no_ord_data.get('status', '')
                                 if no_status not in ('canceled', 'cancelled'):
                                     api_rate_limiter.wait()
                                     kalshi_client.cancel_order(bot['no_order_id'])
@@ -1468,7 +1479,8 @@ def _run_monitor():
                             try:
                                 api_rate_limiter.wait()
                                 yes_check = kalshi_client.get_order(bot['yes_order_id'])
-                                yes_status = yes_check.get('order', {}).get('status', '')
+                                yes_ord_data = yes_check.get('order', yes_check) if isinstance(yes_check, dict) else {}
+                                yes_status = yes_ord_data.get('status', '')
                                 if yes_status not in ('canceled', 'cancelled'):
                                     api_rate_limiter.wait()
                                     kalshi_client.cancel_order(bot['yes_order_id'])

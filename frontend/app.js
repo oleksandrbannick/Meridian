@@ -8,6 +8,60 @@ let selectedSide = null;
 let currentSportFilter = 'all';
 let currentLiveFilter = false;  // true = show only live games within sport
 let liveGames = {}; // keyed by team abbreviation pairs for quick lookup
+let allGameData = {}; // ALL games (pre/in/post) for score display on every card
+let boxScoreCache = {}; // {espnGameId: {players: {...}, ts: Date.now()}}
+let expandedSections = new Set(); // Track which collapsibles are open across re-renders
+let priceRefreshInterval = null; // Interval for live price updates on main screen
+
+// ─── Box Score: live player stats from ESPN ──────────────────────────────────
+async function fetchBoxScore(sport, espnGameId) {
+    if (!espnGameId) return null;
+    const cached = boxScoreCache[espnGameId];
+    if (cached && Date.now() - cached.ts < 30000) return cached;  // 30s TTL
+    try {
+        const resp = await fetch(`${API_BASE}/boxscore/${sport.toLowerCase()}/${espnGameId}`);
+        const data = await resp.json();
+        if (data.players) {
+            boxScoreCache[espnGameId] = { ...data, ts: Date.now() };
+            return boxScoreCache[espnGameId];
+        }
+    } catch (e) {
+        console.warn('Box score fetch failed:', e);
+    }
+    return null;
+}
+
+// Get the current stat value for a player from cached box score
+// statType: 'pts', 'reb', 'ast', 'stl', 'blk', '3pt', etc.
+function getPlayerLiveStat(playerName, statType) {
+    if (!playerName) return null;
+    const key = playerName.toLowerCase();
+    for (const gameId of Object.keys(boxScoreCache)) {
+        const box = boxScoreCache[gameId];
+        if (!box || !box.players) continue;
+        // Exact match
+        const p = box.players[key];
+        if (p) {
+            // Map stat type to ESPN label
+            const espnKey = { 'pts': 'pts', 'reb': 'reb', 'ast': 'ast',
+                              'stl': 'stl', 'blk': 'blk', '3pt': '3pt',
+                              'to': 'to', 'min': 'min' }[statType] || statType;
+            return p[espnKey] !== undefined ? p[espnKey] : null;
+        }
+        // Fuzzy: try last name match (e.g., "Gilgeous-Alexander" in "Shai Gilgeous-Alexander")
+        for (const [pkey, pdata] of Object.entries(box.players)) {
+            const pLast = pkey.split(' ').slice(-1)[0];
+            const searchLast = key.split(' ').slice(-1)[0];
+            if (pLast === searchLast && pLast.length > 3) {
+                const espnKey = { 'pts': 'pts', 'reb': 'reb', 'ast': 'ast',
+                                  'stl': 'stl', 'blk': 'blk', '3pt': '3pt',
+                                  'to': 'to', 'min': 'min' }[statType] || statType;
+                return pdata[espnKey] !== undefined ? pdata[espnKey] : null;
+            }
+        }
+    }
+    return null;
+}
 
 // Price helper: handles both new _dollars string fields and legacy integer cents fields
 // (Kalshi deprecated integer cent fields in late 2025)
@@ -69,13 +123,23 @@ async function loadLiveScores() {
         addGames(mlbRes, 'MLB');
         addGames(ncaabRes, 'NCAAB');
 
-        // Build lookup table for marking Kalshi market cards as live
+        // Build lookup tables
         liveGames = {};
+        allGameData = {};
         games.forEach(g => {
+            // ALL games for score display (pre, in, post)
+            if (g.homeAbbr) allGameData[g.homeAbbr] = g;
+            if (g.awayAbbr) allGameData[g.awayAbbr] = g;
+            // Live filter only uses in-progress games
             if (g.state === 'in') {
                 liveGames[g.awayAbbr] = g;
                 liveGames[g.homeAbbr] = g;
             }
+        });
+
+        // Pre-fetch box scores for live games (fire-and-forget for cache warming)
+        games.filter(g => g.state === 'in' && g.espnGameId).forEach(g => {
+            fetchBoxScore(g.sport, g.espnGameId);
         });
 
         // Re-render market cards so live badges update
@@ -122,17 +186,37 @@ function parseESPNGame(event, sport) {
     }
     if (state === 'post') periodLabel = statusType.shortDetail || 'Final';
 
+    // Start time for pregame display
+    let startTime = '';
+    if (state === 'pre') {
+        const gameDate = event.date || comp.date || '';
+        if (gameDate) {
+            const d = new Date(gameDate);
+            startTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
+        }
+    }
+
+    // ESPN status detail ("Halftime", "End of 3rd", "Final", "7:30 PM ET", etc.)
+    const statusDetail = statusType.shortDetail || statusType.detail || '';
+
     return {
         sport,
+        espnGameId: event.id || '',  // ESPN game ID for boxscore lookups
         name: event.shortName || event.name || '',
+        homeName: (home.team || {}).shortDisplayName || (home.team || {}).displayName || '',
+        awayName: (away.team || {}).shortDisplayName || (away.team || {}).displayName || '',
         homeAbbr: (home.team || {}).abbreviation || '',
         awayAbbr: (away.team || {}).abbreviation || '',
         homeScore: home.score || '0',
         awayScore: away.score || '0',
+        homeLogo: (home.team || {}).logo || '',
+        awayLogo: (away.team || {}).logo || '',
         state,
         clock: status.displayClock || '',
         period,
         periodLabel,
+        startTime,
+        statusDetail,
     };
 }
 
@@ -230,6 +314,14 @@ function getLiveScoreForGame(gameId) {
     return liveGames[t1] || liveGames[t2] || null;
 }
 
+// Get game data for ANY state (pre/in/post) for scoreboard display
+function getGameScore(gameId) {
+    const match = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
+    if (!match) return null;
+    const [, t1, t2] = match;
+    return allGameData[t1] || allGameData[t2] || null;
+}
+
 // Auto-login with stored credentials
 async function autoLogin() {
     console.log('🔐 Starting auto-login...');
@@ -311,9 +403,117 @@ async function loadMarkets() {
         }
         
         applyFilters();
+
+        // Start live price refresh (5s interval)
+        startPriceRefresh();
     } catch (error) {
         console.error('Error loading markets:', error);
         grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Network error loading markets. Check console.</p>';
+    }
+}
+
+// ─── Live Price Refresh: update visible market prices from orderbook ─────────
+
+let priceRefreshRunning = false;
+
+function startPriceRefresh() {
+    if (priceRefreshInterval) clearInterval(priceRefreshInterval);
+    priceRefreshInterval = setInterval(refreshVisiblePrices, 10000);
+    // Fire first refresh immediately after DOM renders
+    setTimeout(refreshVisiblePrices, 0);
+}
+
+async function refreshVisiblePrices() {
+    // Guard: skip if previous refresh is still running
+    if (priceRefreshRunning) return;
+    priceRefreshRunning = true;
+
+    try {
+    // Collect all visible price buttons and their tickers
+    const allBtns = document.querySelectorAll('button[data-ticker][data-side]');
+    const tickerSet = new Set();
+    allBtns.forEach(btn => {
+        const t = btn.getAttribute('data-ticker');
+        if (t) tickerSet.add(t);
+    });
+
+    if (tickerSet.size === 0) { priceRefreshRunning = false; return; }
+
+    console.log(`🔄 Price refresh: ${tickerSet.size} tickers found in DOM`);
+
+    // Sort: moneylines / spreads / totals first, then props
+    const allTickers = [...tickerSet];
+    allTickers.sort((a, b) => {
+        const aIsProp = /KXNBA(PTS|REB|AST|3PT|STL|BLK)/.test(a);
+        const bIsProp = /KXNBA(PTS|REB|AST|3PT|STL|BLK)/.test(b);
+        return aIsProp - bIsProp;
+    });
+    const batch = allTickers;  // Send ALL visible tickers — backend rate-limits itself
+
+    // Split into chunks of 20 to avoid single huge request timing out
+    const CHUNK_SIZE = 20;
+    for (let i = 0; i < batch.length; i += CHUNK_SIZE) {
+        const chunk = batch.slice(i, i + CHUNK_SIZE);
+    try {
+        const resp = await fetch(`${API_BASE}/prices/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tickers: chunk }),
+        });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (!data.prices) continue;
+        const updatedCount = Object.keys(data.prices).length;
+        console.log(`  ✅ Chunk ${Math.floor(i/CHUNK_SIZE)+1}: ${updatedCount}/${chunk.length} prices updated`);
+
+        // Update each button in-place
+        for (const [ticker, p] of Object.entries(data.prices)) {
+            // Update allMarkets array too (so modal opens with fresh data)
+            const mkt = allMarkets.find(m => m.ticker === ticker);
+            if (mkt) {
+                mkt.yes_bid = p.yes_bid;
+                mkt.no_bid  = p.no_bid;
+                mkt.yes_ask = p.yes_ask;
+                mkt.no_ask  = p.no_ask;
+                delete mkt.yes_bid_dollars;
+                delete mkt.no_bid_dollars;
+                delete mkt.yes_ask_dollars;
+                delete mkt.no_ask_dollars;
+            }
+
+            // Find YES button for this ticker
+            const yesBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="yes"]`);
+            if (yesBtn) {
+                const yesPrice = p.yes_ask > 0 ? p.yes_ask : 0;  // ask only
+                const yesDisplay = yesPrice > 0 ? `${yesPrice}¢` : '—';
+                const oldText = yesBtn.querySelector('div:first-child')?.textContent || '';
+                if (oldText !== yesDisplay && yesPrice > 0) {
+                    console.log(`  🟢 ${ticker} YES: ${oldText} → ${yesDisplay}`);
+                }
+                const newStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes') : 'background: #1a1f2e; color: #555;';
+                yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
+                yesBtn.querySelector('div:first-child').textContent = yesDisplay;
+                if (mkt) yesBtn.onclick = () => openBotModal(mkt, 'yes', p.yes_ask);
+            }
+
+            // Find NO button for this ticker
+            const noBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="no"]`);
+            if (noBtn) {
+                const noPrice = p.no_ask > 0 ? p.no_ask : 0;  // ask only
+                const noDisplay = noPrice > 0 ? `${noPrice}¢` : '—';
+                const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
+                noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
+                noBtn.querySelector('div:first-child').textContent = noDisplay;
+                if (mkt) noBtn.onclick = () => openBotModal(mkt, 'no', p.no_ask);
+            }
+        }
+    } catch (e) {
+        // Silent — prices stay at last known value
+        console.warn('Price refresh chunk failed:', e);
+    }
+    } // end chunk loop
+    } finally {
+        priceRefreshRunning = false;
     }
 }
 
@@ -506,53 +706,106 @@ function parseGameDate(gameId) {
     return `${month} ${day}`;
 }
 
+// Build the scoreboard widget for a game card
+function buildScoreboard(gameScore) {
+    if (!gameScore) return null;
+    const { state, awayAbbr, homeAbbr, awayName, homeName, awayScore, homeScore,
+            awayLogo, homeLogo, clock, period, periodLabel, startTime, statusDetail } = gameScore;
+
+    const wrap = document.createElement('div');
+
+    if (state === 'pre') {
+        // ── Pregame: show scheduled start time ──
+        const timeStr = startTime || statusDetail || '';
+        wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+        wrap.innerHTML = `
+            <span style="color:#8892a6;font-size:13px;font-weight:600;">${awayAbbr}</span>
+            <span style="color:#4a5568;font-size:12px;">vs</span>
+            <span style="color:#8892a6;font-size:13px;font-weight:600;">${homeAbbr}</span>
+            <span style="color:#2a3447;margin:0 6px;">│</span>
+            <span style="color:#6a7488;font-size:12px;">🕐 ${timeStr || 'Scheduled'}</span>`;
+        return wrap;
+    }
+
+    if (state === 'post') {
+        // ── Final: show final score ──
+        const awayWon = parseInt(awayScore) > parseInt(homeScore);
+        const homeWon = parseInt(homeScore) > parseInt(awayScore);
+        wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:6px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+        wrap.innerHTML = `
+            <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
+            <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${awayScore}</span>
+            <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
+            <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${homeScore}</span>
+            <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
+            <span style="color:#2a3447;margin:0 6px;">│</span>
+            <span style="color:#8892a6;font-size:11px;font-weight:600;">${periodLabel || 'Final'}</span>`;
+        return wrap;
+    }
+
+    // ── LIVE: prominent scoreboard ──
+    const awayLeading = parseInt(awayScore) > parseInt(homeScore);
+    const homeLeading = parseInt(homeScore) > parseInt(awayScore);
+    const isHalftime = (statusDetail || '').toLowerCase().includes('half');
+    const clockDisplay = isHalftime ? 'Halftime' : (clock ? `${periodLabel} ${clock}` : periodLabel || 'Live');
+
+    wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:12px 20px;margin-bottom:12px;position:relative;';
+    wrap.innerHTML = `
+        <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
+        <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
+        <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${awayScore}</span>
+        <span style="color:#4a5568;font-size:18px;margin:0 2px;">–</span>
+        <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${homeScore}</span>
+        <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
+        <span style="color:#2a3447;margin:0 6px;">│</span>
+        <span style="color:#00ff88;font-size:12px;font-weight:600;">${clockDisplay}</span>`;
+    return wrap;
+}
+
 // Display one compact event row (trading floor style)
 function displayEventRow(eventData, container) {
     const liveScore = getLiveScoreForGame(eventData.gameId);
     const isLive = !!liveScore;
+    const gameScore = getGameScore(eventData.gameId);
     const sport = eventData.sport || detectSport(eventData.eventTicker);
     const emoji = getSportEmoji(sport);
 
     const card = document.createElement('div');
     card.style.cssText = `background: #1a1f2e; border: 1px solid ${isLive ? '#00ff88' : '#2a3447'}; border-radius: 8px; padding: 16px; margin-bottom: 12px;`;
 
-    // Event header
+    // Event header (title + sport + date)
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #2a3447;';
+    header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom: 8px;';
 
     const titleSpan = document.createElement('span');
     titleSpan.style.cssText = 'font-size: 15px; font-weight: 600; color: #ffffff;';
     titleSpan.textContent = `${emoji} ${eventData.eventTitle}`;
     header.appendChild(titleSpan);
 
-    // Sport badge
-    const sportBadge = document.createElement('span');
-    sportBadge.style.cssText = 'background: #2a3447; color: #8892a6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600; margin-left: 8px;';
-    sportBadge.textContent = sport;
-    titleSpan.appendChild(sportBadge);
+    // Sport + date badges
+    const badgeWrap = document.createElement('span');
+    badgeWrap.style.cssText = 'display:flex;align-items:center;gap:8px;';
 
-    // Date badge
+    const sportBadge = document.createElement('span');
+    sportBadge.style.cssText = 'background: #2a3447; color: #8892a6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600;';
+    sportBadge.textContent = sport;
+    badgeWrap.appendChild(sportBadge);
+
     const gameDate = parseGameDate(eventData.gameId);
     if (gameDate) {
         const dateBadge = document.createElement('span');
-        dateBadge.style.cssText = 'color: #6a7488; font-size: 11px; margin-left: 8px;';
+        dateBadge.style.cssText = 'color: #6a7488; font-size: 11px;';
         dateBadge.textContent = `📅 ${gameDate}`;
-        titleSpan.appendChild(dateBadge);
+        badgeWrap.appendChild(dateBadge);
     }
-    header.appendChild(titleSpan);
-
-    if (isLive) {
-        const scoreBadge = document.createElement('span');
-        scoreBadge.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:#0f1a0f;border:1px solid #00ff88;border-radius:6px;padding:3px 10px;font-size:12px;white-space:nowrap;';
-        const score = liveScore;
-        const clock = score.clock ? `${score.periodLabel || 'Q'+score.period} ${score.clock}` : 'Final';
-        scoreBadge.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:700;">● LIVE</span>
-            <span style="color:#fff;font-weight:700;">${score.awayAbbr} ${score.awayScore}–${score.homeScore} ${score.homeAbbr}</span>
-            <span style="color:#8892a6;font-size:10px;">${clock}</span>`;
-        header.appendChild(scoreBadge);
-    }
-
+    header.appendChild(badgeWrap);
     card.appendChild(header);
+
+    // ── Scoreboard widget (live score / pregame time / final score) ──
+    if (gameScore) {
+        const scoreboard = buildScoreboard(gameScore);
+        if (scoreboard) card.appendChild(scoreboard);
+    }
     
     // Markets grid (compact button layout)
     const marketsGrid = document.createElement('div');
@@ -581,7 +834,7 @@ function displayEventRow(eventData, container) {
             marketsGrid.appendChild(createMarketRow(m, extractSubtitle(m.title) || 'Spread'));
         });
         if (sorted.length > 2) {
-            const spreadSection = createCollapsible('📊 More Spreads', sorted.slice(2), m => extractSubtitle(m.title) || 'Spread');
+            const spreadSection = createCollapsible('📊 More Spreads', sorted.slice(2), m => extractSubtitle(m.title) || 'Spread', `${eventData.gameId}_spreads`);
             marketsGrid.appendChild(spreadSection);
         }
     }
@@ -598,14 +851,14 @@ function displayEventRow(eventData, container) {
         marketsGrid.appendChild(createMarketRow(sortedTotals[midIdx], extractTotalLine(sortedTotals[midIdx])));
         const otherTotals = sortedTotals.filter((_, i) => i !== midIdx);
         if (otherTotals.length > 0) {
-            const totalSection = createCollapsible('📊 More Totals', otherTotals, m => extractTotalLine(m));
+            const totalSection = createCollapsible('📊 More Totals', otherTotals, m => extractTotalLine(m), `${eventData.gameId}_totals`);
             marketsGrid.appendChild(totalSection);
         }
     }
     
     // Player props — group by stat type with readable labels
     if (categorized.props.length > 0) {
-        const propsSection = createPropsSection(categorized.props);
+        const propsSection = createPropsSection(categorized.props, { gameScore, sport, isLive, gameId: eventData.gameId });
         marketsGrid.appendChild(propsSection);
     }
     
@@ -660,13 +913,28 @@ function createMarketRow(market, label) {
     // Market label — trust the caller's label (they compute the right one)
     const labelDiv = document.createElement('div');
     labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6;';
-    labelDiv.textContent = label || extractSubtitle(market.title) || market.title;
+
+    // If this prop has a live stat, show it as a badge next to the label
+    if (market._liveStat) {
+        const stat = market._liveStat;
+        const statLabel = { pts: 'PTS', reb: 'REB', ast: 'AST', stl: 'STL', blk: 'BLK', '3pt': '3PT' }[stat.type] || stat.type.toUpperCase();
+        // Extract the threshold from the title (e.g., "Player: 15+ points" → 15)
+        const threshMatch = (market.title || '').match(/(\d+\.?\d*)\+/);
+        const threshold = threshMatch ? parseFloat(threshMatch[1]) : null;
+        const isOver = threshold !== null && parseFloat(stat.value) >= threshold;
+        const isClose = threshold !== null && parseFloat(stat.value) >= threshold - 3 && !isOver;
+        const badgeColor = isOver ? '#00ff88' : (isClose ? '#ffaa00' : '#8892a6');
+        const badgeBg = isOver ? 'rgba(0,255,136,0.15)' : (isClose ? 'rgba(255,170,0,0.15)' : 'rgba(136,146,166,0.1)');
+        labelDiv.innerHTML = `<span>${label || extractSubtitle(market.title) || market.title}</span> <span style="background:${badgeBg};color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">${stat.value} ${statLabel}</span>`;
+    } else {
+        labelDiv.textContent = label || extractSubtitle(market.title) || market.title;
+    }
     
-    // YES button (compact price button with value-based styling)
+    // YES button — show ASK price only (what it costs to buy YES)
     const yesBid = getPrice(market, 'yes_bid');
     const yesAsk = getPrice(market, 'yes_ask');
-    const yesPrice = yesAsk || yesBid || Math.round((yesBid + yesAsk) / 2);
-    const yesStyle = getPriceButtonStyle(yesPrice, 'yes');
+    const yesPrice = yesAsk > 0 ? yesAsk : 0; // ask only, no bid fallback
+    const yesStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes') : 'background: #1a1f2e; color: #555;';
     
     const yesBtn = document.createElement('button');
     yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${yesStyle}`;
@@ -689,24 +957,35 @@ function createMarketRow(market, label) {
         yesLabel = `✓ Covers`;
         noLabel = `✗ Misses`;
     } else {
-        yesLabel = 'YES';
-        noLabel = 'NO';
+        // Player props — extract threshold like "30+" from title "Player: 30+ points"
+        const threshMatch = (market.title || '').match(/(\d+)\+/);
+        if (threshMatch) {
+            yesLabel = `${threshMatch[1]}+ ✓`;
+            noLabel = `Under ${threshMatch[1]}`;
+        } else {
+            yesLabel = 'YES';
+            noLabel = 'NO';
+        }
     }
 
-    yesBtn.innerHTML = `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${yesLabel}</div>`;
+    yesBtn.setAttribute('data-ticker', market.ticker);
+    yesBtn.setAttribute('data-side', 'yes');
+    yesBtn.innerHTML = `<div>${yesPrice > 0 ? yesPrice + '¢' : '—'}</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${yesLabel}</div>`;
     yesBtn.onclick = () => openBotModal(market, 'yes', yesAsk);
     yesBtn.onmouseenter = () => yesBtn.style.transform = 'scale(1.05)';
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
     
-    // NO button
+    // NO button — show ASK price only (what it costs to buy NO)
     const noBid = getPrice(market, 'no_bid');
     const noAsk = getPrice(market, 'no_ask');
-    const noPrice = noAsk || noBid || (100 - yesPrice);
-    const noStyle = getPriceButtonStyle(noPrice, 'no');
+    const noPrice = noAsk > 0 ? noAsk : 0; // ask only, no bid fallback
+    const noStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
     
     const noBtn = document.createElement('button');
     noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${noStyle}`;
-    noBtn.innerHTML = `<div>${noPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${noLabel}</div>`;
+    noBtn.setAttribute('data-ticker', market.ticker);
+    noBtn.setAttribute('data-side', 'no');
+    noBtn.innerHTML = `<div>${noPrice > 0 ? noPrice + '¢' : '—'}</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${noLabel}</div>`;
     noBtn.onclick = () => openBotModal(market, 'no', noAsk);
     noBtn.onmouseenter = () => noBtn.style.transform = 'scale(1.05)';
     noBtn.onmouseleave = () => noBtn.style.transform = 'scale(1)';
@@ -953,19 +1232,22 @@ function formatBotDisplayName(ticker) {
 
 // Create collapsible player props section
 // Generic collapsible section (used for spreads, totals, and props)
-function createCollapsible(label, items, labelFn) {
+function createCollapsible(label, items, labelFn, stableKey) {
     const section = document.createElement('div');
     section.style.cssText = 'margin-top: 8px;';
+    
+    // Check if this section was previously expanded
+    const wasExpanded = stableKey && expandedSections.has(stableKey);
     
     const header = document.createElement('div');
     header.style.cssText = 'padding: 8px; background: #0f1419; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;';
     header.innerHTML = `
         <span style="color: #8892a6; font-size: 12px; font-weight: 600;">${label} (${items.length})</span>
-        <span style="color: #8892a6; font-size: 12px;">▼</span>
+        <span style="color: #8892a6; font-size: 12px;">${wasExpanded ? '▲' : '▼'}</span>
     `;
     
     const content = document.createElement('div');
-    content.style.cssText = 'display: none; padding-top: 8px; gap: 6px; flex-direction: column;';
+    content.style.cssText = `display: ${wasExpanded ? 'flex' : 'none'}; padding-top: 8px; gap: 6px; flex-direction: column;`;
     
     items.slice(0, 30).forEach(item => {
         const itemLabel = labelFn ? labelFn(item) : extractSubtitle(item.title);
@@ -976,6 +1258,11 @@ function createCollapsible(label, items, labelFn) {
         const isHidden = content.style.display === 'none';
         content.style.display = isHidden ? 'flex' : 'none';
         header.querySelector('span:last-child').textContent = isHidden ? '▲' : '▼';
+        // Track expanded state for persistence across re-renders
+        if (stableKey) {
+            if (isHidden) expandedSections.add(stableKey);
+            else expandedSections.delete(stableKey);
+        }
     };
     
     section.appendChild(header);
@@ -989,13 +1276,37 @@ function createPropsCollapsible(props) {
 }
 
 // Create grouped player props section — groups by stat type (points, rebounds, etc.)
-function createPropsSection(props) {
+function createPropsSection(props, gameCtx) {
     const STAT_LABELS = {
         'KXNBAPTS': '🏀 Points',  'KXNBAREB': '🏀 Rebounds', 'KXNBAAST': '🏀 Assists',
         'KXNBA3PT': '🏀 3-Pointers', 'KXNBASTL': '🏀 Steals', 'KXNBABLK': '🏀 Blocks',
         'KXNBAMVP': '🏆 MVP',     'KXNHLGOAL': '🏒 Goals',   'KXEPLBTTS': '⚽ BTTS',
         'KXUCLBTTS': '⚽ BTTS',   'KXMLSBTTS': '⚽ BTTS',
     };
+
+    // Map series_ticker to ESPN stat key
+    const SERIES_TO_STAT = {
+        'KXNBAPTS': 'pts', 'KXNBAREB': 'reb', 'KXNBAAST': 'ast',
+        'KXNBASTL': 'stl', 'KXNBABLK': 'blk', 'KXNBA3PT': '3pt',
+    };
+
+    const isLive = gameCtx && gameCtx.isLive;
+    const gid = (gameCtx && gameCtx.gameId) || '';
+
+    // Enrich props with live stat data for the renderer
+    if (isLive) {
+        props.forEach(m => {
+            const colonIdx = (m.title || '').indexOf(':');
+            if (colonIdx < 0) return;
+            const playerName = m.title.substring(0, colonIdx).trim();
+            const statType = SERIES_TO_STAT[m.series_ticker];
+            if (!statType) return;
+            const val = getPlayerLiveStat(playerName, statType);
+            if (val !== null && val !== undefined) {
+                m._liveStat = { value: val, type: statType };
+            }
+        });
+    }
 
     // Group by series_ticker (stat type)
     const groups = {};
@@ -1008,22 +1319,25 @@ function createPropsSection(props) {
     // If only one group or few total props, use simple collapsible
     const groupKeys = Object.keys(groups);
     if (groupKeys.length <= 1 || props.length <= 6) {
-        return createCollapsible('📊 Player Props', props, m => extractPropLabel(m));
+        return createCollapsible('📊 Player Props', props, m => extractPropLabel(m), `${gid}_props`);
     }
 
     // Multiple groups — create outer collapsible with inner sub-groups
     const section = document.createElement('div');
     section.style.cssText = 'margin-top: 8px;';
+    
+    const propsKey = `${gid}_props`;
+    const wasPropsExpanded = expandedSections.has(propsKey);
 
     const header = document.createElement('div');
     header.style.cssText = 'padding: 8px; background: #0f1419; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;';
     header.innerHTML = `
         <span style="color: #8892a6; font-size: 12px; font-weight: 600;">📊 Player Props (${props.length})</span>
-        <span style="color: #8892a6; font-size: 12px;">▼</span>
+        <span style="color: #8892a6; font-size: 12px;">${wasPropsExpanded ? '▲' : '▼'}</span>
     `;
 
     const content = document.createElement('div');
-    content.style.cssText = 'display: none; padding-top: 8px; gap: 4px; flex-direction: column;';
+    content.style.cssText = `display: ${wasPropsExpanded ? 'flex' : 'none'}; padding-top: 8px; gap: 4px; flex-direction: column;`;
 
     // Sort groups: points first, then alphabetical
     const groupOrder = ['KXNBAPTS', 'KXNBAREB', 'KXNBAAST', 'KXNBA3PT', 'KXNBASTL', 'KXNBABLK'];
@@ -1039,7 +1353,7 @@ function createPropsSection(props) {
     sortedKeys.forEach(key => {
         const items = groups[key];
         const groupLabel = STAT_LABELS[key] || key.replace('KXNBA', '').replace('KX', '');
-        const subCollapsible = createCollapsible(`${groupLabel} (${items.length})`, items, m => extractPropLabel(m));
+        const subCollapsible = createCollapsible(`${groupLabel} (${items.length})`, items, m => extractPropLabel(m), `${gid}_props_${key}`);
         content.appendChild(subCollapsible);
     });
 
@@ -1047,6 +1361,8 @@ function createPropsSection(props) {
         const isHidden = content.style.display === 'none';
         content.style.display = isHidden ? 'flex' : 'none';
         header.querySelector('span:last-child').textContent = isHidden ? '▲' : '▼';
+        if (isHidden) expandedSections.add(propsKey);
+        else expandedSections.delete(propsKey);
     };
 
     section.appendChild(header);
@@ -1219,6 +1535,7 @@ async function loadRecentGames() {
 // ─── Dual Arb Bot Logic ───────────────────────────────────────────────────────
 
 let currentArbMarket = null;
+let modalRefreshInterval = null;
 
 /**
  * Calculate optimal YES and NO limit-buy prices that guarantee `width` cents profit.
@@ -1295,7 +1612,222 @@ function calculateArbPrices(market, width) {
     };
 }
 
-/** Open the dual-arb modal for any market (called when clicking YES or NO price button) */
+// ═══════════════════════════════════════════════════════════════════
+// TRADE MODE: Straight Bet vs Dual Arb Bot
+// ═══════════════════════════════════════════════════════════════════
+
+let currentTradeMode = 'straight'; // 'straight' or 'arb'
+let currentStraightSide = 'yes';   // 'yes' or 'no'
+
+/** Set trade mode and toggle visibility */
+function setTradeMode(mode) {
+    currentTradeMode = mode;
+    const straightSection = document.getElementById('straight-section');
+    const arbSection = document.getElementById('arb-section');
+    const straightBtn = document.getElementById('mode-straight');
+    const arbBtn = document.getElementById('mode-arb');
+    const iconEl = document.getElementById('modal-icon');
+    const titleEl = document.getElementById('modal-mode-title');
+    const subtitleEl = document.getElementById('modal-mode-subtitle');
+
+    if (mode === 'straight') {
+        straightSection.style.display = 'block';
+        arbSection.style.display = 'none';
+        straightBtn.style.background = '#00ff8822';
+        straightBtn.style.color = '#00ff88';
+        straightBtn.style.borderBottom = '2px solid #00ff88';
+        arbBtn.style.background = 'transparent';
+        arbBtn.style.color = '#8892a6';
+        arbBtn.style.borderBottom = '2px solid transparent';
+        iconEl.textContent = '💰';
+        titleEl.textContent = 'Straight Bet';
+        subtitleEl.textContent = 'Limit Order';
+    } else {
+        straightSection.style.display = 'none';
+        arbSection.style.display = 'block';
+        arbBtn.style.background = '#00ff8822';
+        arbBtn.style.color = '#00ff88';
+        arbBtn.style.borderBottom = '2px solid #00ff88';
+        straightBtn.style.background = 'transparent';
+        straightBtn.style.color = '#8892a6';
+        straightBtn.style.borderBottom = '2px solid transparent';
+        iconEl.textContent = '⚡';
+        titleEl.textContent = 'Dual-Arb Bot';
+        subtitleEl.textContent = 'Settlement Arbitrage Engine';
+        // Recalculate arb prices when switching to arb mode
+        recalcArbPrices();
+    }
+}
+
+/** Set the selected side for straight bet */
+function setStraightSide(side) {
+    currentStraightSide = side;
+    const yesBtn = document.getElementById('straight-yes-btn');
+    const noBtn = document.getElementById('straight-no-btn');
+    const priceInput = document.getElementById('straight-price');
+    const priceLabel = document.getElementById('straight-price-label');
+
+    if (side === 'yes') {
+        yesBtn.style.border = '2px solid #00ff88';
+        yesBtn.style.background = '#00ff8822';
+        yesBtn.style.color = '#00ff88';
+        noBtn.style.border = '2px solid #ff444444';
+        noBtn.style.background = 'transparent';
+        noBtn.style.color = '#ff444466';
+        priceInput.style.color = '#00ff88';
+        priceInput.style.borderColor = '#00ff8866';
+        priceLabel.style.color = '#00ff88';
+        priceLabel.textContent = 'YES LIMIT PRICE';
+    } else {
+        noBtn.style.border = '2px solid #ff4444';
+        noBtn.style.background = '#ff444422';
+        noBtn.style.color = '#ff4444';
+        yesBtn.style.border = '2px solid #00ff8844';
+        yesBtn.style.background = 'transparent';
+        yesBtn.style.color = '#00ff8866';
+        priceInput.style.color = '#ff4444';
+        priceInput.style.borderColor = '#ff444466';
+        priceLabel.style.color = '#ff4444';
+        priceLabel.textContent = 'NO LIMIT PRICE';
+    }
+
+    // Update price to current ask for the selected side
+    if (currentArbMarket) {
+        const price = side === 'yes'
+            ? (getPrice(currentArbMarket, 'yes_ask') || getPrice(currentArbMarket, 'yes_bid'))
+            : (getPrice(currentArbMarket, 'no_ask') || getPrice(currentArbMarket, 'no_bid'));
+        if (price) priceInput.value = price;
+    }
+
+    updateStraightPreview();
+}
+
+/** Update straight bet preview (payout calculator) */
+function updateStraightPreview() {
+    const price = parseInt(document.getElementById('straight-price').value) || 0;
+    const qty = parseInt(document.getElementById('straight-qty').value) || 1;
+    const side = currentStraightSide;
+
+    if (price < 1 || price > 99) {
+        document.getElementById('straight-preview').innerHTML = '';
+        return;
+    }
+
+    const cost = (price * qty / 100).toFixed(2);
+    const payout = (qty).toFixed(2);          // $1 per contract if wins
+    const profit = ((100 - price) * qty / 100).toFixed(2);
+    const roi = ((100 - price) / price * 100).toFixed(1);
+    const impliedProb = price;  // price in cents = implied probability %
+    const sideColor = side === 'yes' ? '#00ff88' : '#ff4444';
+    const sideLabel = side === 'yes' ? 'YES' : 'NO';
+
+    // Get current market bid for the hint
+    let hintText = '';
+    if (currentArbMarket) {
+        const bid = side === 'yes' ? getPrice(currentArbMarket, 'yes_bid') : getPrice(currentArbMarket, 'no_bid');
+        const ask = side === 'yes' ? getPrice(currentArbMarket, 'yes_ask') : getPrice(currentArbMarket, 'no_ask');
+        if (ask > 0 && price >= ask) {
+            hintText = `<span style="color:#00ff88;">⚡ At or above ask (${ask}¢) — fills immediately</span>`;
+        } else if (price > bid && bid > 0) {
+            if (ask > 0) {
+                hintText = `<span style="color:#8892a6;">Between bid (${bid}¢) and ask (${ask}¢)</span>`;
+            } else {
+                hintText = `<span style="color:#00ff88;">⚡ Above best bid (${bid}¢) — likely fills</span>`;
+            }
+        } else if (price === bid && bid > 0) {
+            hintText = `<span style="color:#ffaa00;">⏳ At bid (${bid}¢) — joins queue behind ${bid}¢ orders</span>`;
+        } else if (price < bid && bid > 0) {
+            hintText = `<span style="color:#ff4444;">⏳ Below bid (${bid}¢) — unlikely to fill</span>`;
+        } else {
+            hintText = `<span style="color:#8892a6;">Bid: ${bid}¢ · Ask: ${ask > 0 ? ask + '¢' : '—'}</span>`;
+        }
+    }
+
+    document.getElementById('straight-preview').innerHTML = `
+        <div style="border:1px solid ${sideColor}33;border-radius:10px;background:${side === 'yes' ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,68,0.04)'};overflow:hidden;">
+            <div style="padding:12px 16px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;border-bottom:1px solid ${sideColor}22;">
+                <span style="color:${sideColor};font-weight:700;">${sideLabel} ${price}¢</span>
+                <span style="color:#555;">×</span>
+                <span style="color:#fff;font-weight:700;">${qty}</span>
+                <span style="color:#555;">→</span>
+                <span style="color:#fff;">cost <strong>$${cost}</strong></span>
+                <span style="color:#555;">→</span>
+                <span style="color:${sideColor};font-weight:800;">wins +$${profit}</span>
+            </div>
+            <div style="padding:10px 16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
+                <div>
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Cost</div>
+                    <div style="color:#fff;font-weight:700;font-size:14px;">$${cost}</div>
+                </div>
+                <div>
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">If Wins</div>
+                    <div style="color:${sideColor};font-weight:800;font-size:14px;">+$${profit}</div>
+                </div>
+                <div>
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">ROI / Prob</div>
+                    <div style="color:${sideColor};font-weight:700;font-size:14px;">+${roi}% / ${impliedProb}%</div>
+                </div>
+            </div>
+            ${hintText ? `<div style="padding:6px 16px 10px;text-align:center;font-size:11px;">${hintText}</div>` : ''}
+        </div>`;
+
+    // Update hint below price input
+    const hintEl = document.getElementById('straight-price-hint');
+    if (hintEl && currentArbMarket) {
+        const bid = side === 'yes' ? getPrice(currentArbMarket, 'yes_bid') : getPrice(currentArbMarket, 'no_bid');
+        hintEl.textContent = `current bid: ${bid}¢`;
+    }
+}
+
+/** Place a straight limit order */
+async function placeStraightBet() {
+    if (!currentArbMarket) { alert('No market selected'); return; }
+
+    const side = currentStraightSide;
+    const price = parseInt(document.getElementById('straight-price').value);
+    const qty = parseInt(document.getElementById('straight-qty').value) || 1;
+    const addWatch = document.getElementById('straight-add-watch').checked;
+    const sl = parseInt(document.getElementById('straight-sl').value) || 5;
+    const tp = parseInt(document.getElementById('straight-tp').value) || 0;
+
+    if (!price || price < 1 || price > 99) { alert('Price must be 1-99¢'); return; }
+
+    const cost = (price * qty / 100).toFixed(2);
+    const profit = ((100 - price) * qty / 100).toFixed(2);
+    const watchNote = addWatch ? `\n🛑 Auto stop-loss: -${sl}¢${tp > 0 ? ` · Take-profit: +${tp}¢` : ''}` : '';
+
+    if (!confirm(`💰 Place Limit Order\n\n${side.toUpperCase()} on: ${currentArbMarket.ticker}\nPrice: ${price}¢ × ${qty} contracts\nCost: $${cost}\nPays: $${(qty).toFixed(2)} if ${side} wins (+$${profit})${watchNote}\n\nConfirm?`)) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/order/place`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: currentArbMarket.ticker,
+                side,
+                price,
+                quantity: qty,
+                add_watch: addWatch,
+                stop_loss_cents: sl,
+                take_profit_cents: tp,
+            }),
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            showNotification(`✅ ${side.toUpperCase()} limit order placed: ${qty}× at ${price}¢ — cost $${cost}`);
+            closeModal();
+            loadBots();
+            if (addWatch && !autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    } catch (err) {
+        alert('Network error: ' + err.message);
+    }
+}
+
+/** Open the trade modal — defaults to straight bet mode with clicked side pre-selected */
 function openBotModal(market, _side, _price) {
     currentArbMarket = market;
 
@@ -1319,8 +1851,11 @@ function openBotModal(market, _side, _price) {
     const yesAsk = getPrice(market, 'yes_ask');
     const noBid  = getPrice(market, 'no_bid');
     const noAsk  = getPrice(market, 'no_ask');
-    const yesSpread = yesAsk - yesBid;
-    const noSpread  = noAsk - noBid;
+    const yesSpread = (yesAsk > 0 && yesBid > 0) ? (yesAsk - yesBid) : 0;
+    const noSpread  = (noAsk > 0 && noBid > 0) ? (noAsk - noBid) : 0;
+
+    // Format price display — show "—" for no bids/asks
+    const fmtPrice = (v) => v > 0 ? `${v}¢` : '—';
 
     // Use team name from ticker for clear labeling
     const yesTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
@@ -1334,36 +1869,137 @@ function openBotModal(market, _side, _price) {
         <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                 <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
-                <span style="color:#555;font-size:9px;">spread ${yesSpread}¢</span>
+                <span style="color:#555;font-size:9px;">${yesSpread > 0 ? `spread ${yesSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${yesBid}¢</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${yesAsk}¢</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${fmtPrice(yesBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${fmtPrice(yesAsk)}</strong></span>
             </div>
         </div>
         <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                 <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
-                <span style="color:#555;font-size:9px;">spread ${noSpread}¢</span>
+                <span style="color:#555;font-size:9px;">${noSpread > 0 ? `spread ${noSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${noBid}¢</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${noAsk}¢</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${fmtPrice(noBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${fmtPrice(noAsk)}</strong></span>
             </div>
         </div>
     `;
 
-    // ── Auto-tune width from combined spread ──
+    // ── Set default mode to straight bet ──
+    setTradeMode('straight');
+    setStraightSide(_side || 'yes');
+
+    // Pre-fill straight price with ask (what it costs to buy now)
+    const defaultPrice = (_side === 'no')
+        ? (noAsk || noBid || (100 - yesAsk))
+        : (yesAsk || yesBid || 50);
+    document.getElementById('straight-price').value = defaultPrice;
+    document.getElementById('straight-qty').value = 1;
+    updateStraightPreview();
+
+    // Also prepare arb side for if they switch
     const spreadSum  = Math.max(0, (yesAsk - yesBid) + (noAsk - noBid));
     const autoWidth  = Math.max(3, Math.min(15, Math.round(spreadSum / 2) || 5));
     document.getElementById('bot-arb-width').value = autoWidth;
-
-    // Collapse strategy info by default
     document.getElementById('strategy-details').style.display = 'none';
     document.getElementById('strategy-chevron').textContent = '▼';
 
-    recalcArbPrices();
+    // Show watch options toggle logic
+    const watchCheck = document.getElementById('straight-add-watch');
+    const watchOpts = document.getElementById('straight-watch-opts');
+    watchCheck.checked = false;
+    watchOpts.style.display = 'none';
+    watchCheck.onchange = () => {
+        watchOpts.style.display = watchCheck.checked ? 'grid' : 'none';
+    };
+
     document.getElementById('bot-modal').classList.add('show');
+
+    // ── Auto-refresh market prices every 3s using ORDERBOOK (real-time) ──
+    if (modalRefreshInterval) clearInterval(modalRefreshInterval);
+    modalRefreshInterval = setInterval(async () => {
+        if (!currentArbMarket || !document.getElementById('bot-modal').classList.contains('show')) {
+            clearInterval(modalRefreshInterval);
+            modalRefreshInterval = null;
+            return;
+        }
+        try {
+            const resp = await fetch(`${API_BASE}/orderbook/${currentArbMarket.ticker}`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data.error) return;
+            const ob = data.orderbook || data;
+            const yesLevels = (ob.yes || []).slice().reverse();
+            const noLevels  = (ob.no  || []).slice().reverse();
+            const bestYesBid = yesLevels.length ? parseOrderLevel(yesLevels[0]).price : 0;
+            const bestNoBid  = noLevels.length  ? parseOrderLevel(noLevels[0]).price  : 0;
+            // Derive ask from opposite side: YES ask = 100 - best NO bid
+            const bestYesAsk = bestNoBid  > 0 ? (100 - bestNoBid)  : 0;
+            const bestNoAsk  = bestYesBid > 0 ? (100 - bestYesBid) : 0;
+            // Update currentArbMarket with real-time orderbook prices
+            currentArbMarket.yes_bid = bestYesBid;
+            currentArbMarket.no_bid  = bestNoBid;
+            currentArbMarket.yes_ask = bestYesAsk;
+            currentArbMarket.no_ask  = bestNoAsk;
+            // Clear dollar fields so getPrice() uses the integer fields
+            delete currentArbMarket.yes_bid_dollars;
+            delete currentArbMarket.no_bid_dollars;
+            delete currentArbMarket.yes_ask_dollars;
+            delete currentArbMarket.no_ask_dollars;
+            // Update price cards
+            refreshModalPriceCards();
+            // Recalc arb prices if in arb mode
+            if (document.getElementById('arb-mode-btn')?.classList.contains('active')) {
+                recalcArbPrices();
+            }
+        } catch (e) { /* silent — modal still usable with stale data */ }
+    }, 3000);
+}
+
+/** Refresh the price display cards in the open modal with currentArbMarket data */
+function refreshModalPriceCards() {
+    if (!currentArbMarket) return;
+    const market = currentArbMarket;
+    const yesBid = getPrice(market, 'yes_bid');
+    const yesAsk = getPrice(market, 'yes_ask');
+    const noBid  = getPrice(market, 'no_bid');
+    const noAsk  = getPrice(market, 'no_ask');
+    const yesSpread = (yesAsk > 0 && yesBid > 0) ? (yesAsk - yesBid) : 0;
+    const noSpread  = (noAsk > 0 && noBid > 0) ? (noAsk - noBid) : 0;
+
+    const fmtPrice = (v) => v > 0 ? `${v}¢` : '—';
+
+    const teamFromTicker = getTeamLabelFromTicker(market.ticker);
+    const yesTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
+        ? `YES — ${teamFromTicker} wins` : 'YES';
+    const noTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
+        ? `NO — ${teamFromTicker} loses` : 'NO';
+
+    document.getElementById('bot-market-prices').innerHTML = `
+        <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
+                <span style="color:#555;font-size:9px;">${yesSpread > 0 ? `spread ${yesSpread}¢` : ''}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;">
+                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${fmtPrice(yesBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${fmtPrice(yesAsk)}</strong></span>
+            </div>
+        </div>
+        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
+                <span style="color:#555;font-size:9px;">${noSpread > 0 ? `spread ${noSpread}¢` : ''}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;">
+                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${fmtPrice(noBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${fmtPrice(noAsk)}</strong></span>
+            </div>
+        </div>
+    `;
 }
 
 /** Toggle strategy description visibility */
@@ -1498,6 +2134,10 @@ function updateProfitPreview() {
 
 // Close modal
 function closeModal() {
+    if (modalRefreshInterval) {
+        clearInterval(modalRefreshInterval);
+        modalRefreshInterval = null;
+    }
     document.getElementById('bot-modal').classList.remove('show');
 }
 
@@ -1582,6 +2222,31 @@ function closeOrderbookModal() {
 // Place both limit orders and register the bot
 async function createBot() {
     if (!currentArbMarket) { alert('No market selected'); return; }
+
+    // ── Fetch fresh prices from ORDERBOOK right before submitting ──
+    try {
+        const obResp = await fetch(`${API_BASE}/orderbook/${currentArbMarket.ticker}`);
+        if (obResp.ok) {
+            const obData = await obResp.json();
+            if (!obData.error) {
+                const ob = obData.orderbook || obData;
+                const yesLevels = (ob.yes || []).slice().reverse();
+                const noLevels  = (ob.no  || []).slice().reverse();
+                const bestYesBid = yesLevels.length ? parseOrderLevel(yesLevels[0]).price : 0;
+                const bestNoBid  = noLevels.length  ? parseOrderLevel(noLevels[0]).price  : 0;
+                currentArbMarket.yes_bid = bestYesBid;
+                currentArbMarket.no_bid  = bestNoBid;
+                currentArbMarket.yes_ask = bestNoBid > 0 ? (100 - bestNoBid) : 0;
+                currentArbMarket.no_ask  = bestYesBid > 0 ? (100 - bestYesBid) : 0;
+                delete currentArbMarket.yes_bid_dollars;
+                delete currentArbMarket.no_bid_dollars;
+                delete currentArbMarket.yes_ask_dollars;
+                delete currentArbMarket.no_ask_dollars;
+                refreshModalPriceCards();
+                recalcArbPrices();
+            }
+        }
+    } catch (_) { /* proceed with what we have */ }
 
     const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
@@ -1721,9 +2386,10 @@ async function loadBots() {
             const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
             const stopLoss    = bot.stop_loss_cents || 5;
             const statusClass = {
-                pending_fills: 'monitoring',
-                yes_filled:    'leg1_filled',
-                no_filled:     'leg1_filled',
+                pending_fills:  'monitoring',
+                yes_filled:     'leg1_filled',
+                no_filled:      'leg1_filled',
+                waiting_repeat: 'monitoring',
             }[bot.status] || 'monitoring';
 
             activeBotCount++;
@@ -1760,6 +2426,18 @@ async function loadBots() {
                 }
             } else if (phase === 'pregame') {
                 timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;
+            }
+
+            // Waiting for repeat spread
+            let waitRepeatInfo = '';
+            if (bot.status === 'waiting_repeat') {
+                const waitSince = bot.waiting_repeat_since || 0;
+                const waitMin = waitSince > 0 ? Math.round((Date.now() / 1000 - waitSince) / 60) : 0;
+                const targetW = bot.arb_width || bot.profit_per || '?';
+                waitRepeatInfo = `<div style="background:#6366f111;border:1px solid #6366f133;border-radius:5px;padding:4px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
+                    🔄 Waiting for ${targetW}¢ spread to reopen (${waitMin}m) — auto-places when available
+                </div>`;
+                timeoutInfo = `<span style="color:#818cf8;font-size:10px;">🔄 Waiting repeat</span>`;
             }
 
             // Stop-loss info
@@ -1842,7 +2520,8 @@ async function loadBots() {
                     <span>${phase === 'live' ? '🔴 Active mgmt' : '⏳ Patient mode'}</span>
                     <span>${!autoMonitorInterval ? '⚠️ Monitor OFF' : '🤖 Monitoring'}</span>
                 </div>
-                ${stopLossInfo}`;
+                ${stopLossInfo}
+                ${waitRepeatInfo}`;
             botsList.appendChild(item);
         });
 
@@ -2022,6 +2701,14 @@ async function monitorBots() {
                         showNotification(`🔄 Reposted stale order: YES ${action.new_yes}¢ / NO ${action.new_no}¢`);
                     } else if (action.action.startsWith('partial_resize')) {
                         showNotification(`📐 Partial fill resize: ${action.bot_id}`);
+                    } else if (action.action === 'straight_bet_filled') {
+                        showNotification(`💰 LIMIT ORDER FILLED! ${action.side.toUpperCase()} ${action.quantity}× at ${action.price}¢ on ${action.ticker}`);
+                    } else if (action.action === 'straight_bet_cancelled') {
+                        showNotification(`❌ Limit order cancelled: ${action.side.toUpperCase()} on ${action.ticker}`);
+                    } else if (action.action === 'stop_loss_watch') {
+                        showNotification(`⚠️ Watch SL triggered: ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}`);
+                    } else if (action.action === 'take_profit_watch') {
+                        showNotification(`🎯 Watch TP hit: ${action.bot_id} | profit: +${(action.profit_cents/100).toFixed(2)}`);
                     }
                 });
             }
@@ -2341,14 +3028,137 @@ function showNotification(message) {
     setTimeout(() => toast.remove(), 5000);
 }
 
-// ─── Trade History ────────────────────────────────────────────────────────────
+// ─── Trade History & Analytics ─────────────────────────────────────────────────
 function toggleTradeHistory() {
     switchTab('history');
+}
+
+async function loadHistoryStats() {
+    const panel = document.getElementById('history-stats-panel');
+    const widthPanel = document.getElementById('width-breakdown-panel');
+    if (!panel) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/history/stats`);
+        const s = await resp.json();
+
+        if (s.arb_total === 0 && s.watch_total === 0) {
+            panel.innerHTML = '<p style="color:#555;text-align:center;font-size:12px;">No trades yet — analytics will appear after your first trade.</p>';
+            if (widthPanel) widthPanel.innerHTML = '';
+            return;
+        }
+
+        const fillRate = s.arb_fill_rate || 0;
+        const fillColor = fillRate >= 50 ? '#00ff88' : fillRate >= 25 ? '#ffaa00' : '#ff4444';
+        const netColor = s.arb_net_cents >= 0 ? '#00ff88' : '#ff4444';
+        const netDollars = (s.arb_net_cents / 100).toFixed(2);
+
+        // Format duration
+        const fmtDur = (secs) => {
+            if (secs === null || secs === undefined) return '—';
+            if (secs < 60) return `${secs}s`;
+            if (secs < 3600) return `${Math.floor(secs/60)}m ${secs%60}s`;
+            return `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`;
+        };
+
+        // Main stats grid
+        panel.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Fill Rate</div>
+                    <div style="color:${fillColor};font-size:24px;font-weight:800;">${fillRate}%</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${s.arb_wins}W / ${s.arb_losses}L of ${s.arb_total}</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&L</div>
+                    <div style="color:${netColor};font-size:24px;font-weight:800;">${s.arb_net_cents >= 0 ? '+' : ''}$${netDollars}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">Avg: +${s.arb_avg_profit}¢ win / -${s.arb_avg_loss}¢ loss</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Fill Time</div>
+                    <div style="color:#fff;font-size:24px;font-weight:800;">${fmtDur(s.avg_fill_duration_s)}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">Win: ${fmtDur(s.avg_win_duration_s)} / Loss: ${fmtDur(s.avg_loss_duration_s)}</div>
+                </div>
+                ${s.watch_total > 0 ? `
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Watch Trades</div>
+                    <div style="color:#ffaa00;font-size:24px;font-weight:800;">${s.watch_wins}W / ${s.watch_losses}L</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">of ${s.watch_total} total</div>
+                </div>` : ''}
+            </div>
+
+            <!-- Phase / Quarter / Margin breakdown row -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;">
+                ${_renderMiniBreakdown('By Phase', s.phase_stats, {'pregame': 'Pregame', 'live': 'Live'})}
+                ${_renderMiniBreakdown('By Quarter', s.quarter_stats, null)}
+                ${_renderMiniBreakdown('By Score Margin', s.margin_stats, {'close_0_5': '0-5 pts', 'mid_6_15': '6-15 pts', 'blowout_16plus': '16+ pts'})}
+                ${_renderMiniBreakdown('First Leg', s.first_leg_stats, {'yes': 'YES first', 'no': 'NO first'})}
+            </div>
+        `;
+
+        // Width breakdown table
+        if (widthPanel && s.width_breakdown && s.width_breakdown.length > 0) {
+            const rows = s.width_breakdown.map(w => {
+                const frColor = w.fill_rate >= 50 ? '#00ff88' : w.fill_rate >= 25 ? '#ffaa00' : '#ff4444';
+                const nColor = w.net_cents >= 0 ? '#00ff88' : '#ff4444';
+                return `<tr>
+                    <td style="padding:6px 10px;color:#fff;font-weight:700;">${w.width}¢</td>
+                    <td style="padding:6px 10px;color:${frColor};font-weight:700;">${w.fill_rate}%</td>
+                    <td style="padding:6px 10px;color:#8892a6;">${w.wins}W / ${w.losses}L</td>
+                    <td style="padding:6px 10px;color:${nColor};font-weight:700;">${w.net_cents >= 0 ? '+' : ''}${w.net_cents}¢</td>
+                    <td style="padding:6px 10px;color:#8892a6;">${w.avg_fill_duration_s !== null ? fmtDur(w.avg_fill_duration_s) : '—'}</td>
+                </tr>`;
+            }).join('');
+            widthPanel.innerHTML = `
+                <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;font-weight:600;">📊 Fill Rate by Width Setting</div>
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                        <tr style="border-bottom:1px solid #1e2740;">
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Record</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Net</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Avg Fill</th>
+                        </tr>
+                        ${rows}
+                    </table>
+                </div>
+            `;
+        } else if (widthPanel) {
+            widthPanel.innerHTML = '';
+        }
+    } catch (err) {
+        panel.innerHTML = `<p style="color:#ff4444;font-size:11px;">Stats unavailable: ${err.message}</p>`;
+    }
+}
+
+function _renderMiniBreakdown(title, stats, labelMap) {
+    if (!stats || Object.keys(stats).length === 0) return '';
+    const items = Object.entries(stats)
+        .filter(([_, v]) => v.wins + v.losses > 0)
+        .map(([k, v]) => {
+            const total = v.wins + v.losses;
+            const rate = total > 0 ? Math.round(v.wins / total * 100) : 0;
+            const label = labelMap ? (labelMap[k] || k) : k;
+            const color = rate >= 50 ? '#00ff88' : rate >= 25 ? '#ffaa00' : '#ff4444';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;">
+                <span style="color:#8892a6;font-size:11px;">${label}</span>
+                <span style="color:${color};font-size:11px;font-weight:700;">${rate}% <span style="color:#555;font-weight:400;">(${v.wins}W/${v.losses}L)</span></span>
+            </div>`;
+        }).join('');
+    if (!items) return '';
+    return `<div style="background:#0f1419;border-radius:8px;padding:12px;border:1px solid #1e2740;">
+        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;font-weight:600;">${title}</div>
+        ${items}
+    </div>`;
 }
 
 async function loadTradeHistory() {
     const el = document.getElementById('trade-history-list');
     if (!el) return;
+
+    // Load stats panel in parallel
+    loadHistoryStats();
+
     try {
         const resp = await fetch(`${API_BASE}/bot/history?limit=50`);
         const data = await resp.json();
@@ -2360,7 +3170,7 @@ async function loadTradeHistory() {
         </div>`;
         
         if (trades.length === 0) {
-            el.innerHTML = clearBtn + '<p style="color:#555;text-align:center;">No completed or stopped trades yet. Start fresh!</p>';
+            el.innerHTML = clearBtn + '<p style="color:#555;text-align:center;">No completed or stopped trades yet.</p>';
             return;
         }
         
@@ -2370,7 +3180,7 @@ async function loadTradeHistory() {
             const date = dt.toLocaleDateString([], {month:'short', day:'numeric'});
             const time = dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
             
-            // Placed-at time (when bot was created)
+            // Placed-at time
             const placedDt = t.placed_at ? new Date(t.placed_at * 1000) : null;
             const placedTime = placedDt ? placedDt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
             
@@ -2382,23 +3192,63 @@ async function loadTradeHistory() {
             const icon = isWin ? '✅' : '⛔';
             const resultLabel = isWin ? 'FILLED' : (isSL ? 'STOP LOSS' : 'STOPPED');
             
-            // Sportsbook-style display name
+            // Display name
             const teamName = formatBotDisplayName(t.ticker || '');
             
             // Verified badge
             const verified = t.verified_prices || t.verified_cleared ? '<span style="color:#00ff88;font-size:9px;margin-left:4px;">✓ verified</span>' : '';
             
-            // Watch vs Arb type
+            // Trade type
             const tradeType = t.type === 'watch' ? 'WATCH' : 'ARB';
             const typeColor = t.type === 'watch' ? '#ffaa00' : '#00aaff';
+
+            // ─── New analytics fields ───
+            const width = t.arb_width || 0;
+            const firstLeg = t.first_leg || '';
+            const fillDur = t.fill_duration_s;
+            const phase = t.game_phase || '';
+            const slSetting = t.stop_loss_cents || 0;
+            const gc = t.game_context || {};
+
+            // Format fill duration
+            let durStr = '';
+            if (fillDur !== null && fillDur !== undefined) {
+                if (fillDur < 60) durStr = `${fillDur}s`;
+                else if (fillDur < 3600) durStr = `${Math.floor(fillDur/60)}m${fillDur%60}s`;
+                else durStr = `${Math.floor(fillDur/3600)}h${Math.floor((fillDur%3600)/60)}m`;
+            }
+
+            // Game context badge
+            let gameCtxHtml = '';
+            if (gc.period) {
+                const qLabel = gc.period <= 4 ? `Q${gc.period}` : 'OT';
+                gameCtxHtml += `<span style="background:#1e274022;color:#8892a6;padding:1px 5px;border-radius:3px;font-size:9px;">${qLabel}${gc.clock ? ' ' + gc.clock : ''}</span>`;
+            }
+            if (gc.score_diff !== undefined && gc.score_diff >= 0) {
+                const diffColor = gc.score_diff <= 5 ? '#00ff88' : gc.score_diff <= 15 ? '#ffaa00' : '#ff4444';
+                gameCtxHtml += `<span style="background:#1e274022;color:${diffColor};padding:1px 5px;border-radius:3px;font-size:9px;">±${gc.score_diff}</span>`;
+            }
+
+            // Analytics detail row (only for arb trades)
+            let analyticsRow = '';
+            if (t.type !== 'watch' && (width || firstLeg || durStr || phase)) {
+                const parts = [];
+                if (width) parts.push(`<span style="color:#8892a6;">Width: <strong style="color:#00aaff;">${width}¢</strong></span>`);
+                if (firstLeg) parts.push(`<span style="color:#8892a6;">1st: <strong style="color:#fff;">${firstLeg.toUpperCase()}</strong></span>`);
+                if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
+                if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
+                if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
+            }
             
             return `
                 <div style="background:#0f1419;border:1px solid ${isWin ? '#00ff8822' : '#ff444422'};border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
                     <div>
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
                             <span style="font-size:14px;">${icon}</span>
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
                             <span style="background:${typeColor}22;color:${typeColor};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${tradeType}</span>
+                            ${gameCtxHtml}
                             ${verified}
                         </div>
                         <div style="color:#555;font-size:10px;margin-bottom:4px;">${t.ticker || ''}</div>
@@ -2410,8 +3260,10 @@ async function loadTradeHistory() {
                         <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;">
                             ${t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢</span>` : ''}
                             ${t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢</span>` : ''}
+                            ${t.exit_bid ? `<span style="color:#ffaa00;">Exit ${t.exit_bid}¢</span>` : ''}
                             <span style="color:#8892a6;">×${t.quantity || 1}</span>
                         </div>
+                        ${analyticsRow}
                     </div>
                     <div style="text-align:right;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
                         <div style="color:${pnlColor};font-weight:800;font-size:16px;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>

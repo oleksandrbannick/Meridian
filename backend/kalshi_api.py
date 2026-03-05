@@ -83,15 +83,16 @@ class KalshiAPI:
             headers = {'Content-Type': 'application/json'}
         
         # Make request
+        timeout = 15  # seconds
         try:
             if method.upper() == 'GET':
-                response = requests.get(url, headers=headers, params=params)
+                response = requests.get(url, headers=headers, params=params, timeout=timeout)
             elif method.upper() == 'POST':
-                response = requests.post(url, headers=headers, json=data)
+                response = requests.post(url, headers=headers, json=data, timeout=timeout)
             elif method.upper() == 'DELETE':
-                response = requests.delete(url, headers=headers)
+                response = requests.delete(url, headers=headers, timeout=timeout)
             elif method.upper() == 'PUT':
-                response = requests.put(url, headers=headers, json=data)
+                response = requests.put(url, headers=headers, json=data, timeout=timeout)
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
@@ -217,3 +218,24 @@ class KalshiAPI:
         if ticker:
             params['ticker'] = ticker
         return self._make_request('GET', '/portfolio/fills', params=params, authenticated=True)
+
+    # ─── WebSocket helpers ────────────────────────────────────────────────
+    @property
+    def ws_url(self) -> str:
+        """Return the WebSocket URL for this environment."""
+        if 'demo' in self.base_url:
+            return 'wss://demo-api.kalshi.co/trade-api/ws/v2'
+        return 'wss://api.elections.kalshi.com/trade-api/ws/v2'
+
+    def ws_auth_headers(self) -> Dict[str, str]:
+        """Generate authentication headers for the WebSocket handshake."""
+        timestamp = int(time.time() * 1000)
+        timestamp_str = str(timestamp)
+        # Sign a GET to the WS path
+        path = '/trade-api/ws/v2'
+        signature = self._sign_request(timestamp_str, 'GET', path)
+        return {
+            'KALSHI-ACCESS-KEY': self.api_key_id,
+            'KALSHI-ACCESS-SIGNATURE': signature,
+            'KALSHI-ACCESS-TIMESTAMP': timestamp_str,
+        }

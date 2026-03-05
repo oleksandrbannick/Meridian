@@ -101,6 +101,17 @@ def auto_login():
         kalshi_client = KalshiAPI(api_key_id, key_path, demo=demo)
         balance = kalshi_client.get_balance()
 
+        # Start WebSocket connection for real-time data
+        try:
+            ws_manager.connect(kalshi_client)
+            # Subscribe to tickers of any existing active bots
+            active_tickers = list({b['ticker'] for b in active_bots.values()
+                                   if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching')})
+            if active_tickers:
+                threading.Timer(2.0, lambda: ws_manager.subscribe(active_tickers)).start()
+        except Exception as ws_err:
+            print(f'⚠ WS connect after login failed (non-fatal): {ws_err}')
+
         return jsonify({
             'success': True,
             'balance': balance.get('balance', 0) / 100,
@@ -109,6 +120,18 @@ def auto_login():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ws/status', methods=['GET'])
+def ws_status():
+    """Get WebSocket connection status and subscribed tickers."""
+    return jsonify({
+        'connected': ws_manager.connected,
+        'subscribed_tickers': list(ws_manager._subscribed_tickers),
+        'cached_tickers': list(ws_manager.ticker_cache.keys()),
+        'recent_fills': len(ws_manager.fill_events),
+        'recent_orders': len(ws_manager.order_events),
+    })
 
 
 @app.route('/api/markets', methods=['GET'])
@@ -210,7 +233,24 @@ def get_markets():
         # Sort by event_ticker for grouping
         unique_markets.sort(key=lambda m: m.get('event_ticker', ''))
         unique_markets = unique_markets[:limit]
-        
+
+        # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
+        ws_overlaid = 0
+        for m in unique_markets:
+            t = m.get('ticker', '')
+            ws_p = ws_manager.get_price(t) if ws_manager else None
+            if ws_p and (ws_p.get('yes_bid', 0) > 0 or ws_p.get('no_bid', 0) > 0):
+                m['yes_bid'] = ws_p['yes_bid']
+                m['no_bid']  = ws_p['no_bid']
+                m['yes_ask'] = ws_p['yes_ask']
+                m['no_ask']  = ws_p['no_ask']
+                # Clear dollar fields so frontend uses integer cents
+                for df in ['yes_bid_dollars', 'no_bid_dollars', 'yes_ask_dollars', 'no_ask_dollars']:
+                    m.pop(df, None)
+                ws_overlaid += 1
+        if ws_overlaid:
+            print(f'📡 Overlaid WS prices on {ws_overlaid}/{len(unique_markets)} markets')
+
         return jsonify({'markets': unique_markets, 'cursor': None})
     
     except Exception as e:
@@ -245,6 +285,68 @@ def get_orderbook(ticker):
         orderbook = kalshi_client.get_market_orderbook(ticker)
         return jsonify(orderbook)
     
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/prices/batch', methods=['POST'])
+def get_batch_prices():
+    """Batch-fetch best bid/ask prices for multiple tickers using orderbook + WS cache.
+    Request body: { "tickers": ["TICKER1", "TICKER2", ...] }
+    Returns: { "prices": { "TICKER1": { yes_bid, no_bid, yes_ask, no_ask, source }, ... } }
+    Caps at 20 tickers per call to respect rate limits.
+    """
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        data = request.get_json() or {}
+        tickers = data.get('tickers', [])
+        if not tickers:
+            return jsonify({'prices': {}})
+
+        # Cap at 60 tickers per batch — rate limiter handles throttling
+        tickers = tickers[:60]
+
+        prices = {}
+        for ticker in tickers:
+            # 1. Try WS cache first (fastest, real-time for subscribed tickers)
+            ws_price = ws_manager.get_price(ticker) if ws_manager else None
+            if ws_price and (ws_price.get('yes_bid', 0) > 0 or ws_price.get('no_bid', 0) > 0):
+                prices[ticker] = {
+                    'yes_bid': ws_price.get('yes_bid', 0),
+                    'no_bid':  ws_price.get('no_bid', 0),
+                    'yes_ask': ws_price.get('yes_ask', 0),
+                    'no_ask':  ws_price.get('no_ask', 0),
+                    'source': 'ws',
+                }
+                continue
+
+            # 2. Fallback: fetch orderbook (depth=1 for just best level)
+            try:
+                api_rate_limiter.wait()
+                ob_data = kalshi_client.get_market_orderbook(ticker, depth=1)
+                ob = ob_data.get('orderbook', ob_data)
+                y_levels = ob.get('yes', [])
+                n_levels = ob.get('no', [])
+                # Sort descending by price (best bid first)
+                y_sorted = sorted(y_levels, key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                n_sorted = sorted(n_levels, key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                best_yes_bid = (y_sorted[0][0] if isinstance(y_sorted[0], list) else y_sorted[0].get('price', 0)) if y_sorted else 0
+                best_no_bid  = (n_sorted[0][0] if isinstance(n_sorted[0], list) else n_sorted[0].get('price', 0)) if n_sorted else 0
+                prices[ticker] = {
+                    'yes_bid': best_yes_bid,
+                    'no_bid':  best_no_bid,
+                    'yes_ask': 100 - best_no_bid if best_no_bid > 0 else 0,
+                    'no_ask':  100 - best_yes_bid if best_yes_bid > 0 else 0,
+                    'source': 'orderbook',
+                }
+            except Exception as ob_err:
+                # Skip this ticker silently
+                continue
+
+        return jsonify({'prices': prices})
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -505,6 +607,79 @@ def get_scoreboard(sport):
         return jsonify({'error': str(e)}), 500
 
 
+# ─── ESPN Box Score proxy for live player stats ───────────────────────────────
+_boxscore_cache = {}  # {game_id: {'data': {...}, 'ts': float}}
+_BOXSCORE_TTL = 30    # seconds
+
+@app.route('/api/boxscore/<sport>/<game_id>', methods=['GET'])
+def get_boxscore(sport, game_id):
+    """
+    Proxy ESPN boxscore API to get live per-player stats.
+    Returns a simplified dict: {player_name: {pts, reb, ast, stl, blk, ...}}.
+    Cached for 30 seconds to avoid hammering ESPN.
+    """
+    sport_map = {
+        'nba': 'basketball/nba',
+        'ncaab': 'basketball/mens-college-basketball',
+        'nfl': 'football/nfl',
+        'mlb': 'baseball/mlb',
+        'nhl': 'hockey/nhl',
+    }
+    sport_path = sport_map.get(sport.lower())
+    if not sport_path:
+        return jsonify({'error': f'Unknown sport: {sport}'}), 400
+
+    cache_key = f'{sport}_{game_id}'
+    now = time.time()
+    cached = _boxscore_cache.get(cache_key)
+    if cached and now - cached['ts'] < _BOXSCORE_TTL:
+        return jsonify(cached['data'])
+
+    try:
+        url = f'https://site.api.espn.com/apis/site/v2/sports/{sport_path}/summary?event={game_id}'
+        resp = requests.get(url, timeout=8)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        players = {}
+        # Parse boxscore from summary
+        for team_box in raw.get('boxscore', {}).get('players', []):
+            team_name = team_box.get('team', {}).get('abbreviation', '?')
+            for stat_group in team_box.get('statistics', []):
+                labels = stat_group.get('labels', [])   # e.g. ['MIN','FG','3PT','FT','OREB','DREB','REB','AST','STL','BLK','TO','PF','PTS']
+                for athlete in stat_group.get('athletes', []):
+                    name = athlete.get('athlete', {}).get('displayName', '?')
+                    short_name = athlete.get('athlete', {}).get('shortName', name)
+                    stats = athlete.get('stats', [])
+                    stat_dict = {}
+                    for i, label in enumerate(labels):
+                        if i < len(stats):
+                            stat_dict[label.lower()] = stats[i]
+                    stat_dict['team'] = team_name
+                    stat_dict['name'] = name
+                    stat_dict['short_name'] = short_name
+                    # Use lowercase full name as key for easy lookup
+                    players[name.lower()] = stat_dict
+
+        # Also include game status
+        game_status = ''
+        header = raw.get('header', {})
+        competitions = header.get('competitions', [{}])
+        if competitions:
+            game_status = competitions[0].get('status', {}).get('type', {}).get('shortDetail', '')
+
+        result = {
+            'players': players,
+            'game_status': game_status,
+            'game_id': game_id,
+        }
+        _boxscore_cache[cache_key] = {'data': result, 'ts': now}
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e), 'players': {}}), 200
+
+
 @app.route('/api/fills', methods=['GET'])
 def get_fills():
     """Get recent fills/trades"""
@@ -584,6 +759,249 @@ class RateLimiter:
                 self._tokens -= 1.0
 
 api_rate_limiter = RateLimiter(rate=8.0)   # 8 calls/sec
+
+# ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
+import websocket as _ws_lib
+
+class KalshiWSManager:
+    """
+    Manages a single authenticated WebSocket connection to Kalshi.
+    Subscribes to orderbook_delta, ticker, fill, and user_orders channels
+    for the tickers that active bots care about.
+
+    Keeps a local price cache so the monitor loop can read prices instantly
+    instead of making REST calls.
+    """
+
+    def __init__(self):
+        self._ws = None
+        self._thread = None
+        self._connected = False
+        self._cmd_id = 0
+        self._lock = threading.Lock()
+
+        # Local caches updated by WS messages
+        self.ticker_cache = {}    # {market_ticker: {yes_bid, yes_ask, no_bid, no_ask, ...}}
+        self.fill_events = []     # Recent fill events (capped at 200)
+        self.order_events = []    # Recent user_order events (capped at 200)
+        self._subscribed_tickers = set()
+        self._sids = {}           # {channel: sid}
+
+    @property
+    def connected(self):
+        return self._connected and self._ws is not None
+
+    def _next_id(self):
+        self._cmd_id += 1
+        return self._cmd_id
+
+    # ── Connect ──────────────────────────────────────────────────
+    def connect(self, kalshi_api):
+        """Open WS connection using credentials from the KalshiAPI instance."""
+        if self._connected:
+            return
+        self._api = kalshi_api
+        url = kalshi_api.ws_url
+        headers = kalshi_api.ws_auth_headers()
+        # websocket-client expects header list ["Key: Value", ...]
+        header_list = [f'{k}: {v}' for k, v in headers.items()]
+
+        def on_open(ws):
+            self._connected = True
+            print('🔌 Kalshi WS connected')
+
+        def on_message(ws, message):
+            try:
+                data = json.loads(message)
+                self._handle_message(data)
+            except Exception as e:
+                print(f'⚠ WS message parse error: {e}')
+
+        def on_error(ws, error):
+            print(f'⚠ Kalshi WS error: {error}')
+
+        def on_close(ws, close_status_code, close_msg):
+            self._connected = False
+            print(f'🔌 Kalshi WS closed: {close_status_code} {close_msg}')
+            # Auto-reconnect after 5 seconds
+            threading.Timer(5.0, lambda: self._auto_reconnect(kalshi_api)).start()
+
+        try:
+            self._ws = _ws_lib.WebSocketApp(
+                url,
+                header=header_list,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+            self._thread = threading.Thread(
+                target=self._ws.run_forever,
+                kwargs={'ping_interval': 10, 'ping_timeout': 5,
+                        'ping_payload': 'heartbeat'},
+                daemon=True,
+            )
+            self._thread.start()
+        except Exception as e:
+            print(f'❌ WS connect failed: {e}')
+
+    def _auto_reconnect(self, kalshi_api):
+        """Try to reconnect after a disconnect."""
+        if self._connected:
+            return
+        print('🔄 WS auto-reconnect...')
+        try:
+            self.connect(kalshi_api)
+            # Re-subscribe after reconnect
+            time.sleep(1)
+            if self._subscribed_tickers:
+                self.subscribe(list(self._subscribed_tickers))
+        except Exception as e:
+            print(f'❌ WS reconnect failed: {e}')
+
+    def disconnect(self):
+        """Close the WS connection."""
+        if self._ws:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+        self._connected = False
+        self._ws = None
+
+    # ── Subscribe / Unsubscribe ────────────────────────────────
+    def subscribe(self, tickers):
+        """Subscribe to ticker, fill, and user_orders channels for given market tickers."""
+        if not self._connected or not self._ws:
+            return
+        tickers = [t for t in tickers if t]
+        if not tickers:
+            return
+        new_tickers = [t for t in tickers if t not in self._subscribed_tickers]
+        if not new_tickers and self._sids:
+            return  # Already subscribed
+
+        with self._lock:
+            # Market-data channels (need market_tickers)
+            for channel in ['ticker']:
+                cmd = {
+                    'id': self._next_id(),
+                    'cmd': 'subscribe',
+                    'params': {
+                        'channels': [channel],
+                        'market_tickers': new_tickers,
+                    }
+                }
+                self._ws.send(json.dumps(cmd))
+
+            # Private channels — fill and user_orders for these tickers
+            for channel in ['fill', 'user_orders']:
+                cmd = {
+                    'id': self._next_id(),
+                    'cmd': 'subscribe',
+                    'params': {
+                        'channels': [channel],
+                        'market_tickers': new_tickers,
+                    }
+                }
+                self._ws.send(json.dumps(cmd))
+
+            self._subscribed_tickers.update(new_tickers)
+            print(f'📡 WS subscribed to {len(new_tickers)} tickers: {new_tickers[:5]}...')
+
+    def add_ticker(self, ticker):
+        """Add a single ticker to existing subscriptions (or start fresh)."""
+        if ticker in self._subscribed_tickers:
+            return
+        if not self._sids:
+            # No existing subs — do a fresh subscribe
+            self.subscribe([ticker])
+            return
+        # Use update_subscription to add to existing sids
+        with self._lock:
+            for channel, sid in self._sids.items():
+                if channel in ('ticker', 'fill', 'user_orders'):
+                    cmd = {
+                        'id': self._next_id(),
+                        'cmd': 'update_subscription',
+                        'params': {
+                            'sids': [sid],
+                            'market_tickers': [ticker],
+                            'action': 'add_markets',
+                        }
+                    }
+                    self._ws.send(json.dumps(cmd))
+            self._subscribed_tickers.add(ticker)
+
+    # ── Message handler ──────────────────────────────────────
+    def _handle_message(self, data):
+        msg_type = data.get('type', '')
+        msg = data.get('msg', {})
+
+        if msg_type == 'subscribed':
+            channel = msg.get('channel', '')
+            sid = data.get('msg', {}).get('sid') or data.get('sid')
+            if sid and channel:
+                self._sids[channel] = sid
+            return
+
+        if msg_type == 'ticker':
+            ticker = msg.get('market_ticker', '')
+            if ticker:
+                self.ticker_cache[ticker] = {
+                    'yes_bid': msg.get('yes_bid', 0),
+                    'yes_ask': msg.get('yes_ask', 0),
+                    'no_bid': 100 - msg.get('yes_ask', 0) if not msg.get('no_bid') else 0,
+                    'no_ask': 100 - msg.get('yes_bid', 0) if not msg.get('no_ask') else 0,
+                    'price': msg.get('price', 0),
+                    'volume': msg.get('volume', 0),
+                    'ts': msg.get('ts', 0),
+                }
+                # Compute no_bid/no_ask properly (Kalshi reports yes side)
+                # no_bid = 100 - yes_ask, no_ask = 100 - yes_bid
+                self.ticker_cache[ticker]['no_bid'] = 100 - msg.get('yes_ask', 100)
+                self.ticker_cache[ticker]['no_ask'] = 100 - msg.get('yes_bid', 0)
+            return
+
+        if msg_type == 'fill':
+            self.fill_events.insert(0, msg)
+            if len(self.fill_events) > 200:
+                self.fill_events = self.fill_events[:200]
+            ticker = msg.get('market_ticker', '')
+            order_id = msg.get('order_id', '')
+            side = msg.get('side', '')
+            count = msg.get('count', 0)
+            print(f'💰 WS FILL: {side} {count}x {ticker} (order {order_id[:8]}...)')
+            return
+
+        if msg_type == 'user_order':
+            self.order_events.insert(0, msg)
+            if len(self.order_events) > 200:
+                self.order_events = self.order_events[:200]
+            return
+
+        if msg_type == 'error':
+            code = msg.get('code', '?')
+            emsg = msg.get('msg', '')
+            print(f'⚠ WS error [{code}]: {emsg}')
+            return
+
+    # ── Price lookups ───────────────────────────────────────────
+    def get_price(self, ticker):
+        """Get cached price data for a ticker. Returns None if not cached."""
+        return self.ticker_cache.get(ticker)
+
+    def get_fills_for_order(self, order_id):
+        """Get all WS fill events for a given order_id."""
+        return [f for f in self.fill_events if f.get('order_id') == order_id]
+
+    def get_total_fills(self, order_id):
+        """Sum up fill counts for an order_id from WS events."""
+        return sum(f.get('count', 0) for f in self.fill_events if f.get('order_id') == order_id)
+
+
+# Global WS manager instance
+ws_manager = KalshiWSManager()
 
 # ─── Monitor lock: prevent concurrent monitor calls from double-executing ─────
 monitor_lock = threading.Lock()
@@ -693,10 +1111,35 @@ def _refresh_espn_cache():
                     abbr = (team.get('team') or {}).get('abbreviation', '')
                     if abbr:
                         abbr_upper = abbr.upper()
+                        # Get scores for game context
+                        competitors = comp.get('competitors', [])
+                        home_score = 0
+                        away_score = 0
+                        for c in competitors:
+                            try:
+                                sc = int(c.get('score', 0))
+                            except (ValueError, TypeError):
+                                sc = 0
+                            if c.get('homeAway') == 'home':
+                                home_score = sc
+                            else:
+                                away_score = sc
+                        # Period/quarter info
+                        ev_status = ev.get('status', {})
+                        period = ev_status.get('period', 0)
+                        clock = ev_status.get('displayClock', '')
+                        status_detail = (ev_status.get('type', {}).get('shortDetail', ''))
+
                         team_info[abbr_upper] = {
                             'live': is_live,
                             'game_time': game_time,
                             'status': status,
+                            'period': period,
+                            'clock': clock,
+                            'status_detail': status_detail,
+                            'home_score': home_score,
+                            'away_score': away_score,
+                            'score_diff': abs(home_score - away_score),
                         }
                         # Also store under Kalshi code if different
                         kalshi_code = _ESPN_TO_KALSHI.get(abbr_upper)
@@ -737,6 +1180,28 @@ def _is_game_live(ticker: str) -> bool:
         if entry and entry.get('live'):
             return True
     return False
+
+
+def _get_game_context(ticker: str) -> dict:
+    """Get live game context (quarter, score diff, clock) for trade logging."""
+    _refresh_espn_cache()
+    info = _espn_cache['data']
+    if not info:
+        return {}
+    t1, t2 = _parse_ticker_teams(ticker)
+    if not t1:
+        return {}
+    for code in [t1, t2]:
+        espn_code = _KALSHI_TO_ESPN.get(code, code)
+        entry = info.get(code) or info.get(espn_code)
+        if entry and entry.get('status') == 'in':
+            return {
+                'period': entry.get('period', 0),
+                'clock': entry.get('clock', ''),
+                'score_diff': entry.get('score_diff', 0),
+                'status_detail': entry.get('status_detail', ''),
+            }
+    return {}
 
 
 def _get_game_time(ticker: str) -> str:
@@ -803,6 +1268,103 @@ def place_single_order():
         return jsonify({'error': str(e)}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════
+# STRAIGHT BET — single-side limit order (no arb bot, no monitoring)
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route('/api/order/place', methods=['POST'])
+def place_straight_order():
+    """
+    Place a simple one-sided limit order — buy YES or buy NO at a specified price.
+    No dual-arb logic, no bot monitoring. Just a plain limit order on Kalshi.
+    Optionally creates a watch-bot to auto stop-loss / take-profit.
+    """
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        data = request.json
+        ticker   = data.get('ticker')
+        side     = data.get('side', 'yes')         # 'yes' or 'no'
+        price    = int(data.get('price', 0))        # limit price in cents
+        quantity = int(data.get('quantity', 1))
+        add_watch = data.get('add_watch', False)    # auto-create watch bot for SL
+        stop_loss_cents = int(data.get('stop_loss_cents', 5))
+        take_profit_cents = int(data.get('take_profit_cents', 0))
+
+        if not ticker:
+            return jsonify({'error': 'Missing ticker'}), 400
+        if price < 1 or price > 99:
+            return jsonify({'error': f'Price must be 1-99¢, got {price}'}), 400
+        if quantity < 1:
+            return jsonify({'error': 'Quantity must be at least 1'}), 400
+
+        # Place limit order
+        order_kwargs = {
+            'ticker': ticker,
+            'side': side,
+            'action': 'buy',
+            'count': quantity,
+        }
+        if side == 'yes':
+            order_kwargs['yes_price'] = price
+        else:
+            order_kwargs['no_price'] = price
+
+        api_rate_limiter.wait()
+        order_resp = kalshi_client.create_order(**order_kwargs)
+        order_id = order_resp['order']['order_id']
+
+        # Optionally create a watch bot for SL/TP + fill monitoring
+        watch_bot_id = None
+        if add_watch:
+            # Check if the order filled immediately (at or above ask)
+            api_rate_limiter.wait()
+            order_check = kalshi_client.get_order(order_id)
+            order_obj = order_check.get('order', order_check)
+            initial_fill_qty = order_obj.get('amount_filled', 0)
+
+            watch_bot_id = f"watch_{ticker}_{side}_{int(time.time())}"
+            active_bots[watch_bot_id] = {
+                'type':             'watch',
+                'ticker':           ticker,
+                'side':             side,
+                'entry_price':      price,
+                'quantity':         quantity,
+                'stop_loss_cents':  stop_loss_cents,
+                'take_profit_cents': take_profit_cents,
+                'has_sl_tp':        True,
+                'status':           'watching',
+                'created_at':       time.time(),
+                'order_id':         order_id,
+                'order_filled':     initial_fill_qty >= quantity,
+                'fill_qty':         initial_fill_qty,
+            }
+            save_state()
+            # Subscribe WS to this ticker so we get real-time prices
+            if ws_manager.connected:
+                ws_manager.add_ticker(ticker)
+
+        cost_dollars = (price * quantity) / 100
+        payout_dollars = quantity  # $1 per contract at settlement
+        profit_dollars = payout_dollars - cost_dollars
+
+        return jsonify({
+            'success':    True,
+            'order_id':   order_id,
+            'side':       side,
+            'price':      price,
+            'quantity':   quantity,
+            'cost':       cost_dollars,
+            'potential_profit': profit_dollars,
+            'watch_bot_id': watch_bot_id,
+            'message':    f'{side.upper()} limit buy: {quantity}× at {price}¢ (cost ${cost_dollars:.2f}, pays ${payout_dollars:.2f} if wins)'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/bot/create', methods=['POST'])
 def create_bot():
     """
@@ -836,22 +1398,18 @@ def create_bot():
         if profit_per <= 0:
             return jsonify({'error': f'Not an arb: yes({yes_price}¢) + no({no_price}¢) = {yes_price+no_price}¢ ≥ 100¢'}), 400
 
-        # ── PRICE VALIDATION: fetch current market and verify prices ──────────
-        # Don't place orders based on stale scanner data
+        # ── PRICE VALIDATION: fetch ORDERBOOK for real-time best bids ──────────
+        # The market endpoint returns stale prices; orderbook is real-time
         try:
             api_rate_limiter.wait()
-            live_mkt = kalshi_client.get_market(ticker)
-            lm = live_mkt.get('market', live_mkt)
-            def _lc(f):
-                d = lm.get(f + '_dollars')
-                if d: return round(float(d) * 100)
-                return lm.get(f, 0)
-            live_yes_bid = _lc('yes_bid')
-            live_no_bid  = _lc('no_bid')
+            ob_data = kalshi_client.get_market_orderbook(ticker)
+            ob = ob_data.get('orderbook', ob_data)
+            yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+            no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+            live_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
+            live_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
 
             # Rule: NEVER place a limit buy ABOVE the current bid.
-            # If our price > bid, that means the market has moved and our order
-            # would fill at a worse price than intended (or the scanner was stale).
             if yes_price > live_yes_bid and live_yes_bid > 0:
                 return jsonify({'error': f'YES price {yes_price}¢ is ABOVE current bid {live_yes_bid}¢ — market has moved. Refresh and retry.'}), 400
             if no_price > live_no_bid and live_no_bid > 0:
@@ -862,7 +1420,7 @@ def create_bot():
             if live_total >= 100:
                 return jsonify({'error': f'Market bids now total {live_total}¢ ≥ 100 — no arb exists. Refresh and retry.'}), 400
 
-            print(f'✅ Price validation passed: YES {yes_price}¢ ≤ bid {live_yes_bid}¢, NO {no_price}¢ ≤ bid {live_no_bid}¢')
+            print(f'✅ Price validation (orderbook): YES {yes_price}¢ ≤ bid {live_yes_bid}¢, NO {no_price}¢ ≤ bid {live_no_bid}¢')
         except Exception as pv_err:
             print(f'⚠ Price validation skipped: {pv_err}')
 
@@ -875,6 +1433,10 @@ def create_bot():
             ticker=ticker, side='no', action='buy',
             count=quantity, no_price=no_price
         )
+
+        # Subscribe WS to this ticker for real-time price updates
+        if ws_manager.connected:
+            ws_manager.add_ticker(ticker)
 
         bot_id = f"{ticker}_{int(time.time())}"
         active_bots[bot_id] = {
@@ -1132,7 +1694,7 @@ def _run_monitor():
         auto_reset_daily_pnl()
 
         actions = []
-        active_statuses = ('pending_fills', 'yes_filled', 'no_filled', 'watching')
+        active_statuses = ('pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat')
 
         # ── Auto-phase: switch pregame → live when ESPN shows game in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -1165,17 +1727,68 @@ def _run_monitor():
                     entry = bot.get('entry_price', 50)
                     sl = bot.get('stop_loss_cents', 5)
                     tp = bot.get('take_profit_cents', 0)
+                    has_sl_tp = bot.get('has_sl_tp', sl > 0 or tp > 0)
 
-                    api_rate_limiter.wait()
-                    mkt_resp = kalshi_client.get_market(ticker)
-                    mkt = mkt_resp.get('market', mkt_resp)
+                    # ── Step 1: Check if the limit order has filled ──
+                    if not bot.get('order_filled', False) and bot.get('order_id'):
+                        try:
+                            api_rate_limiter.wait()
+                            order_check = kalshi_client.get_order(bot['order_id'])
+                            order_obj = order_check.get('order', order_check)
+                            filled_qty = order_obj.get('amount_filled', 0)
+                            bot['fill_qty'] = filled_qty
+                            order_status = order_obj.get('status', '')
 
-                    def tc_watch(field):
-                        d = mkt.get(field + '_dollars')
-                        if d: return round(float(d) * 100)
-                        return mkt.get(field, 50)
+                            if filled_qty >= qty:
+                                bot['order_filled'] = True
+                                bot['filled_at'] = now
+                                actions.append({
+                                    'bot_id': bot_id, 'action': 'straight_bet_filled',
+                                    'ticker': ticker, 'side': watch_side,
+                                    'price': entry, 'quantity': qty
+                                })
+                                print(f'💰 STRAIGHT BET FILLED: {bot_id} — {watch_side.upper()} {qty}× at {entry}¢')
+                                save_state()
+                            elif order_status in ('canceled', 'cancelled', 'expired', 'declined'):
+                                # Order was cancelled/expired — remove tracker
+                                bot['status'] = 'stopped'
+                                bot['stopped_at'] = now
+                                actions.append({
+                                    'bot_id': bot_id, 'action': 'straight_bet_cancelled',
+                                    'ticker': ticker, 'side': watch_side
+                                })
+                                print(f'❌ STRAIGHT BET CANCELLED: {bot_id} — {order_status}')
+                                save_state()
+                                continue
+                        except Exception as fill_err:
+                            print(f'⚠ Fill check error for {bot_id}: {fill_err}')
 
-                    cur_bid = tc_watch(f'{watch_side}_bid')
+                    # ── Step 2: If order hasn't filled yet, skip SL/TP monitoring ──
+                    if not bot.get('order_filled', False):
+                        continue
+
+                    # ── Step 3: If no SL/TP configured, auto-complete after fill ──
+                    if not has_sl_tp:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        save_state()
+                        continue
+
+                    # Try WS cache first, fall back to REST
+                    ws_price = ws_manager.get_price(ticker)
+                    if ws_price:
+                        cur_bid = ws_price.get(f'{watch_side}_bid', 0)
+                    else:
+                        api_rate_limiter.wait()
+                        mkt_resp = kalshi_client.get_market(ticker)
+                        mkt = mkt_resp.get('market', mkt_resp)
+
+                        def tc_watch(field):
+                            d = mkt.get(field + '_dollars')
+                            if d: return round(float(d) * 100)
+                            return mkt.get(field, 50)
+
+                        cur_bid = tc_watch(f'{watch_side}_bid')
                     bot['live_bid'] = cur_bid
                     bot['last_price_update'] = now
 
@@ -1200,6 +1813,8 @@ def _run_monitor():
                         'timestamp': now,
                         'placed_at': bot.get('created_at', now),
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'stop_loss_cents': sl,
+                        'game_context': _get_game_context(ticker),
                     })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
                                            'loss_cents': loss})
@@ -1228,6 +1843,7 @@ def _run_monitor():
                         'timestamp': now,
                         'placed_at': bot.get('created_at', now),
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'game_context': _get_game_context(ticker),
                     })
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
                                            'profit_cents': profit})
@@ -1235,6 +1851,101 @@ def _run_monitor():
                             print(f'⚠ Watch TP sell FAILED for {bot_id} — will retry next cycle')
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch_FAILED',
                                            'info': str(sell_info)})
+                    continue
+
+                # ── WAITING REPEAT: keep checking for spread to reopen ─────
+                if bot['status'] == 'waiting_repeat':
+                    target_width = bot.get('arb_width', bot.get('profit_per', 5))
+                    wait_age_min = (now - bot.get('waiting_repeat_since', now)) / 60.0
+
+                    # Give up after 15 minutes of waiting
+                    if wait_age_min > 15:
+                        bot['status'] = 'completed'
+                        print(f'⏰ REPEAT TIMEOUT: {bot_id} waited {wait_age_min:.1f}m — giving up on repeat')
+                        actions.append({'bot_id': bot_id, 'action': 'repeat_timeout'})
+                        continue
+
+                    # Check current market prices via ORDERBOOK (real-time)
+                    fresh_yes_bid = 0
+                    fresh_no_bid  = 0
+                    try:
+                        api_rate_limiter.wait()
+                        ob_data = kalshi_client.get_market_orderbook(ticker)
+                        ob = ob_data.get('orderbook', ob_data)
+                        y_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                        n_levels = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                        fresh_yes_bid = (y_levels[0][0] if isinstance(y_levels[0], list) else y_levels[0].get('price', 0)) if y_levels else 0
+                        fresh_no_bid  = (n_levels[0][0] if isinstance(n_levels[0], list) else n_levels[0].get('price', 0)) if n_levels else 0
+                    except Exception as ob_err:
+                        print(f'⚠ Orderbook fetch for repeat check failed: {ob_err}')
+                        # Fallback to WS cache
+                        ws_price = ws_manager.get_price(ticker)
+                        if ws_price:
+                            fresh_yes_bid = ws_price.get('yes_bid', 0)
+                            fresh_no_bid  = ws_price.get('no_bid', 0)
+
+                    # Check if bids are high enough to place orders below them
+                    # that still achieve the target width.
+                    # We need: yes_bid + no_bid >= 100 - target_width
+                    # (so we can shave from bids and still have room)
+                    bid_sum = fresh_yes_bid + fresh_no_bid
+                    target_total = 100 - target_width
+                    if bid_sum >= target_total and fresh_yes_bid > 0 and fresh_no_bid > 0:
+                        # Spread reopened — place new orders
+                        try:
+                            total_shave = max(0, bid_sum - target_total)
+                            yes_is_fav = fresh_yes_bid >= fresh_no_bid
+                            fav_shave = total_shave * 4 // 10
+                            dog_shave = total_shave - fav_shave
+                            if yes_is_fav:
+                                new_yes = fresh_yes_bid - fav_shave
+                                new_no  = fresh_no_bid - dog_shave
+                            else:
+                                new_yes = fresh_yes_bid - dog_shave
+                                new_no  = fresh_no_bid - fav_shave
+                            new_yes = max(1, min(new_yes, fresh_yes_bid))
+                            new_no  = max(1, min(new_no, fresh_no_bid))
+                            new_profit = 100 - new_yes - new_no
+
+                            if new_profit >= target_width:
+                                api_rate_limiter.wait()
+                                ny = kalshi_client.create_order(
+                                    ticker=ticker, side='yes', action='buy',
+                                    count=qty, yes_price=new_yes)
+                                api_rate_limiter.wait()
+                                nn = kalshi_client.create_order(
+                                    ticker=ticker, side='no', action='buy',
+                                    count=qty, no_price=new_no)
+
+                                bot['yes_price']    = new_yes
+                                bot['no_price']     = new_no
+                                bot['profit_per']   = new_profit
+                                bot['yes_order_id'] = ny['order']['order_id']
+                                bot['no_order_id']  = nn['order']['order_id']
+                                bot['yes_fill_qty'] = 0
+                                bot['no_fill_qty']  = 0
+                                bot['status']       = 'pending_fills'
+                                bot['posted_at']    = time.time()
+                                bot['repost_count'] = 0
+                                bot['first_fill_at'] = None
+                                bot['first_leg']     = None
+                                if 'completed_at' in bot:
+                                    del bot['completed_at']
+
+                                cycle = bot.get('repeats_done', 0)
+                                total = bot.get('repeat_count', 0)
+                                print(f'🔄 REPEAT ARB cycle {cycle + 1}/{total + 1}: '
+                                      f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢ profit '
+                                      f'(waited {wait_age_min:.1f}m)')
+                                actions.append({
+                                    'bot_id': bot_id, 'action': 'repeat_cycle',
+                                    'cycle': cycle + 1, 'total': total + 1,
+                                    'yes_price': new_yes, 'no_price': new_no,
+                                    'profit_per': new_profit,
+                                })
+                                save_state()
+                        except Exception as rep_err:
+                            print(f'⚠ Repeat arb order failed: {rep_err} — will retry next cycle')
                     continue
 
                 # ── Rate-limited fill checks ──────────────────────────────
@@ -1280,6 +1991,12 @@ def _run_monitor():
                         'verified_prices': actual_yes is not None and actual_no is not None,
                         'placed_at': bot.get('created_at', now),
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                        'first_leg': bot.get('first_leg', ''),
+                        'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                        'game_phase': bot.get('game_phase', ''),
+                        'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                        'game_context': _get_game_context(ticker),
                     })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
 
@@ -1292,92 +2009,43 @@ def _run_monitor():
                     repeat_total = bot.get('repeat_count', 0)
 
                     if repeats_done_now <= repeat_total:
-                        try:
-                            target_width = bot.get('arb_width', bot['profit_per'])
-                            api_rate_limiter.wait()
-                            fresh_mkt = kalshi_client.get_market(ticker)
-                            fm = fresh_mkt.get('market', fresh_mkt)
-
-                            def tc_repeat(field):
-                                d = fm.get(field + '_dollars')
-                                if d: return round(float(d) * 100)
-                                return fm.get(field, 0)
-
-                            fresh_yes_bid = tc_repeat('yes_bid')
-                            fresh_no_bid  = tc_repeat('no_bid')
-                            current_gap   = 100 - fresh_yes_bid - fresh_no_bid
-
-                            if current_gap >= target_width and fresh_yes_bid > 0 and fresh_no_bid > 0:
-                                bid_sum = fresh_yes_bid + fresh_no_bid
-                                target_total = 100 - target_width
-                                total_shave = max(0, bid_sum - target_total)
-                                yes_is_fav = fresh_yes_bid >= fresh_no_bid
-                                fav_shave = total_shave * 4 // 10
-                                dog_shave = total_shave - fav_shave
-                                if yes_is_fav:
-                                    new_yes = fresh_yes_bid - fav_shave
-                                    new_no  = fresh_no_bid - dog_shave
-                                else:
-                                    new_yes = fresh_yes_bid - dog_shave
-                                    new_no  = fresh_no_bid - fav_shave
-                                new_yes = max(1, min(new_yes, fresh_yes_bid))
-                                new_no  = max(1, min(new_no, fresh_no_bid))
-                                new_profit = 100 - new_yes - new_no
-
-                                if new_profit >= 1:
-                                    api_rate_limiter.wait()
-                                    ny = kalshi_client.create_order(
-                                        ticker=ticker, side='yes', action='buy',
-                                        count=qty, yes_price=new_yes)
-                                    api_rate_limiter.wait()
-                                    nn = kalshi_client.create_order(
-                                        ticker=ticker, side='no', action='buy',
-                                        count=qty, no_price=new_no)
-
-                                    # ── Update bot IN-PLACE — same bot_id, fresh legs ──
-                                    bot['yes_price']    = new_yes
-                                    bot['no_price']     = new_no
-                                    bot['profit_per']   = new_profit
-                                    bot['yes_order_id'] = ny['order']['order_id']
-                                    bot['no_order_id']  = nn['order']['order_id']
-                                    bot['yes_fill_qty'] = 0
-                                    bot['no_fill_qty']  = 0
-                                    bot['status']       = 'pending_fills'
-                                    bot['posted_at']    = time.time()
-                                    bot['repost_count'] = 0
-                                    del bot['completed_at']
-
-                                    print(f'🔄 REPEAT ARB cycle {repeats_done_now + 1}/{repeat_total}: '
-                                          f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢ profit')
-                                    actions.append({
-                                        'bot_id': bot_id, 'action': 'repeat_cycle',
-                                        'cycle': repeats_done_now + 1, 'total': repeat_total,
-                                        'yes_price': new_yes, 'no_price': new_no,
-                                        'profit_per': new_profit,
-                                    })
-                                else:
-                                    print(f'⚠ Repeat skipped: new spread too tight ({new_profit}¢ < 1¢) — bot stays completed')
-                            else:
-                                print(f'⚠ Repeat skipped: market gap {current_gap}¢ < target {target_width}¢ — bot stays completed')
-                        except Exception as rep_err:
-                            print(f'⚠ Repeat arb failed: {rep_err} — bot stays completed')
+                        # Don't try to repeat immediately — the spread likely
+                        # closed when our fills consumed liquidity.
+                        # Instead, enter waiting_repeat and let the monitor loop
+                        # check for spread reopening on subsequent cycles.
+                        bot['status'] = 'waiting_repeat'
+                        bot['waiting_repeat_since'] = time.time()
+                        print(f'🔄 REPEAT: {bot_id} entering waiting_repeat — '
+                              f'cycle {repeats_done_now}/{repeat_total}, '
+                              f'watching for {bot.get("arb_width", bot["profit_per"])}¢ spread to reopen')
+                        actions.append({
+                            'bot_id': bot_id, 'action': 'waiting_repeat',
+                            'cycle': repeats_done_now, 'total': repeat_total,
+                        })
 
                     continue
 
-                # ── Fetch current market prices ────────────────────────────
-                api_rate_limiter.wait()
-                market_resp = kalshi_client.get_market(ticker)
-                market = market_resp.get('market', market_resp)
+                # ── Fetch current market prices (WS cache → REST fallback) ─
+                ws_price = ws_manager.get_price(ticker)
+                if ws_price:
+                    yes_bid = ws_price.get('yes_bid', 0)
+                    no_bid  = ws_price.get('no_bid', 0)
+                    yes_ask = ws_price.get('yes_ask', 0)
+                    no_ask  = ws_price.get('no_ask', 0)
+                else:
+                    api_rate_limiter.wait()
+                    market_resp = kalshi_client.get_market(ticker)
+                    market = market_resp.get('market', market_resp)
 
-                def to_cents(field):
-                    d = market.get(field + '_dollars')
-                    if d: return round(float(d) * 100)
-                    return market.get(field, 50)
+                    def to_cents(field):
+                        d = market.get(field + '_dollars')
+                        if d: return round(float(d) * 100)
+                        return market.get(field, 50)
 
-                yes_bid  = to_cents('yes_bid')
-                no_bid   = to_cents('no_bid')
-                yes_ask  = to_cents('yes_ask')
-                no_ask   = to_cents('no_ask')
+                    yes_bid  = to_cents('yes_bid')
+                    no_bid   = to_cents('no_bid')
+                    yes_ask  = to_cents('yes_ask')
+                    no_ask   = to_cents('no_ask')
 
                 # Store live market data on bot for frontend display
                 bot['live_yes_bid'] = yes_bid
@@ -1396,6 +2064,9 @@ def _run_monitor():
                     # Update status labels for UI display
                     if yes_filled >= qty and no_filled < qty:
                         bot['status'] = 'yes_filled'
+                        if not bot.get('first_fill_at'):
+                            bot['first_fill_at'] = now
+                            bot['first_leg'] = 'yes'
                         # SAFETY STOP-LOSS even in pregame
                         if yes_bid <= bot['yes_price'] - stop:
                             print(f'🛑 PREGAME SAFETY SL: {bot_id} YES bid {yes_bid}¢ dropped below {bot["yes_price"] - stop}¢')
@@ -1422,6 +2093,12 @@ def _run_monitor():
                                     'verified_cleared': verified, 'timestamp': now,
                                     'placed_at': bot.get('created_at', now),
                                     'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                                    'first_leg': bot.get('first_leg', 'yes'),
+                                    'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                                    'game_phase': 'pregame',
+                                    'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                                    'game_context': _get_game_context(ticker),
                                 })
                                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
                                 actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
@@ -1430,6 +2107,9 @@ def _run_monitor():
                                                 'note': 'pregame safety SL'})
                     elif no_filled >= qty and yes_filled < qty:
                         bot['status'] = 'no_filled'
+                        if not bot.get('first_fill_at'):
+                            bot['first_fill_at'] = now
+                            bot['first_leg'] = 'no'
                         # SAFETY STOP-LOSS even in pregame
                         if no_bid <= bot['no_price'] - stop:
                             print(f'🛑 PREGAME SAFETY SL: {bot_id} NO bid {no_bid}¢ dropped below {bot["no_price"] - stop}¢')
@@ -1456,6 +2136,12 @@ def _run_monitor():
                                     'verified_cleared': verified, 'timestamp': now,
                                     'placed_at': bot.get('created_at', now),
                                     'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                                    'first_leg': bot.get('first_leg', 'no'),
+                                    'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                                    'game_phase': 'pregame',
+                                    'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                                    'game_context': _get_game_context(ticker),
                                 })
                                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
                                 actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
@@ -1504,42 +2190,63 @@ def _run_monitor():
 
                 # ── Partial fill: resize unfilled leg after STALE_CANCEL_MINUTES ──
                 if yes_filled > 0 and no_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
-                    # Repost NO at current no_bid (never above)
-                    new_no_price = min(no_bid, 98)
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(bot['no_order_id'])
-                        api_rate_limiter.wait()
-                        nn = kalshi_client.create_order(ticker=ticker, side='no', action='buy',
-                                                        count=yes_filled, no_price=new_no_price)
-                        bot.update({'no_order_id': nn['order']['order_id'],
-                                    'quantity': yes_filled, 'no_price': new_no_price,
-                                    'posted_at': now})
-                        actions.append({'bot_id': bot_id, 'action': 'partial_resize_no', 'yes_filled': yes_filled})
-                    except Exception as pe:
-                        print(f"Partial resize NO failed for {bot_id}: {pe}")
+                    # Repost NO — NEVER above current bid, and PRESERVE arb width
+                    target_w = bot.get('arb_width', bot.get('profit_per', 5))
+                    max_no_for_width = 100 - bot['yes_price'] - target_w  # preserve width
+                    new_no_price = min(no_bid, max_no_for_width, 98)
+                    new_no_price = max(1, new_no_price)
+                    if new_no_price > no_bid:
+                        print(f'⚠ Resize NO skipped: cap {new_no_price}¢ > bid {no_bid}¢ — would overpay')
+                    else:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                            api_rate_limiter.wait()
+                            nn = kalshi_client.create_order(ticker=ticker, side='no', action='buy',
+                                                            count=yes_filled, no_price=new_no_price)
+                            bot.update({'no_order_id': nn['order']['order_id'],
+                                        'quantity': yes_filled, 'no_price': new_no_price,
+                                        'profit_per': 100 - bot['yes_price'] - new_no_price,
+                                        'posted_at': now})
+                            print(f'🔄 Resize NO: {bot_id} YES@{bot["yes_price"]}¢ + NO@{new_no_price}¢ → {100 - bot["yes_price"] - new_no_price}¢ width (target {target_w}¢)')
+                            actions.append({'bot_id': bot_id, 'action': 'partial_resize_no',
+                                            'yes_filled': yes_filled, 'new_no': new_no_price})
+                        except Exception as pe:
+                            print(f"Partial resize NO failed for {bot_id}: {pe}")
                     continue
 
                 if no_filled > 0 and yes_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
-                    # Repost YES at current yes_bid (never above)
-                    new_yes_price = min(yes_bid, 98)
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(bot['yes_order_id'])
-                        api_rate_limiter.wait()
-                        ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy',
-                                                        count=no_filled, yes_price=new_yes_price)
-                        bot.update({'yes_order_id': ny['order']['order_id'],
-                                    'quantity': no_filled, 'yes_price': new_yes_price,
-                                    'posted_at': now})
-                        actions.append({'bot_id': bot_id, 'action': 'partial_resize_yes', 'no_filled': no_filled})
-                    except Exception as pe:
-                        print(f"Partial resize YES failed for {bot_id}: {pe}")
+                    # Repost YES — NEVER above current bid, and PRESERVE arb width
+                    target_w = bot.get('arb_width', bot.get('profit_per', 5))
+                    max_yes_for_width = 100 - bot['no_price'] - target_w  # preserve width
+                    new_yes_price = min(yes_bid, max_yes_for_width, 98)
+                    new_yes_price = max(1, new_yes_price)
+                    if new_yes_price > yes_bid:
+                        print(f'⚠ Resize YES skipped: cap {new_yes_price}¢ > bid {yes_bid}¢ — would overpay')
+                    else:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                            api_rate_limiter.wait()
+                            ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy',
+                                                            count=no_filled, yes_price=new_yes_price)
+                            bot.update({'yes_order_id': ny['order']['order_id'],
+                                        'quantity': no_filled, 'yes_price': new_yes_price,
+                                        'profit_per': 100 - new_yes_price - bot['no_price'],
+                                        'posted_at': now})
+                            print(f'🔄 Resize YES: {bot_id} YES@{new_yes_price}¢ + NO@{bot["no_price"]}¢ → {100 - new_yes_price - bot["no_price"]}¢ width (target {target_w}¢)')
+                            actions.append({'bot_id': bot_id, 'action': 'partial_resize_yes',
+                                            'no_filled': no_filled, 'new_yes': new_yes_price})
+                        except Exception as pe:
+                            print(f"Partial resize YES failed for {bot_id}: {pe}")
                     continue
 
                 # ── YES fully filled, NO still open — check stop loss ──────
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
+                    if not bot.get('first_fill_at'):
+                        bot['first_fill_at'] = now
+                        bot['first_leg'] = 'yes'
                     if yes_bid <= bot['yes_price'] - stop:
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
@@ -1582,6 +2289,12 @@ def _run_monitor():
                                 'verified_cleared': verified, 'timestamp': now,
                                 'placed_at': bot.get('created_at', now),
                                 'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                                'first_leg': bot.get('first_leg', 'yes'),
+                                'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                                'game_phase': bot.get('game_phase', 'live'),
+                                'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                                'game_context': _get_game_context(ticker),
                             })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
                                             'entry': bot['yes_price'], 'exit_bid': actual_sell,
@@ -1600,6 +2313,9 @@ def _run_monitor():
                 # ── NO fully filled, YES still open — check stop loss ──────
                 if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
+                    if not bot.get('first_fill_at'):
+                        bot['first_fill_at'] = now
+                        bot['first_leg'] = 'no'
                     if no_bid <= bot['no_price'] - stop:
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
@@ -1642,6 +2358,12 @@ def _run_monitor():
                                 'verified_cleared': verified, 'timestamp': now,
                                 'placed_at': bot.get('created_at', now),
                                 'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                                'first_leg': bot.get('first_leg', 'no'),
+                                'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                                'game_phase': bot.get('game_phase', 'live'),
+                                'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                                'game_context': _get_game_context(ticker),
                             })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
                                             'entry': bot['no_price'], 'exit_bid': actual_sell,
@@ -1695,6 +2417,132 @@ def clear_history():
     session_pnl['stopped_bots'] = 0
     save_state()
     return jsonify({'success': True, 'message': 'History cleared, P&L reset'})
+
+
+@app.route('/api/bot/history/stats', methods=['GET'])
+def history_stats():
+    """Compute analytics from trade history for the optimization dashboard."""
+    arb_trades = [t for t in trade_history if t.get('type') != 'watch']
+    watch_trades = [t for t in trade_history if t.get('type') == 'watch']
+
+    arb_wins = [t for t in arb_trades if t.get('result') == 'completed']
+    arb_losses = [t for t in arb_trades if t.get('result', '').startswith('stop_loss')]
+
+    # Fill rate by width
+    width_stats = {}  # {width: {wins, losses, total_profit, total_loss}}
+    for t in arb_trades:
+        w = t.get('arb_width', 0)
+        if w <= 0:
+            continue
+        if w not in width_stats:
+            width_stats[w] = {'wins': 0, 'losses': 0, 'total_profit': 0, 'total_loss': 0, 'fill_durations': []}
+        if t['result'] == 'completed':
+            width_stats[w]['wins'] += 1
+            width_stats[w]['total_profit'] += t.get('profit_cents', 0)
+        else:
+            width_stats[w]['losses'] += 1
+            width_stats[w]['total_loss'] += t.get('loss_cents', 0)
+        if t.get('fill_duration_s') is not None:
+            width_stats[w]['fill_durations'].append(t['fill_duration_s'])
+
+    # Compute averages per width
+    width_breakdown = []
+    for w, s in sorted(width_stats.items()):
+        total = s['wins'] + s['losses']
+        fill_rate = round(s['wins'] / total * 100, 1) if total > 0 else 0
+        avg_fill_dur = round(sum(s['fill_durations']) / len(s['fill_durations'])) if s['fill_durations'] else None
+        avg_profit = round(s['total_profit'] / s['wins']) if s['wins'] > 0 else 0
+        avg_loss = round(s['total_loss'] / s['losses']) if s['losses'] > 0 else 0
+        width_breakdown.append({
+            'width': w, 'wins': s['wins'], 'losses': s['losses'],
+            'fill_rate': fill_rate, 'net_cents': s['total_profit'] - s['total_loss'],
+            'avg_profit_cents': avg_profit, 'avg_loss_cents': avg_loss,
+            'avg_fill_duration_s': avg_fill_dur,
+        })
+
+    # Phase breakdown
+    phase_stats = {'pregame': {'wins': 0, 'losses': 0}, 'live': {'wins': 0, 'losses': 0}}
+    for t in arb_trades:
+        p = t.get('game_phase', 'live')
+        if p not in phase_stats:
+            phase_stats[p] = {'wins': 0, 'losses': 0}
+        if t['result'] == 'completed':
+            phase_stats[p]['wins'] += 1
+        else:
+            phase_stats[p]['losses'] += 1
+
+    # Quarter/period breakdown
+    quarter_stats = {}
+    for t in arb_trades:
+        gc = t.get('game_context', {})
+        period = gc.get('period', 0)
+        if period <= 0:
+            continue
+        q_key = f'Q{period}' if period <= 4 else f'OT'
+        if q_key not in quarter_stats:
+            quarter_stats[q_key] = {'wins': 0, 'losses': 0}
+        if t['result'] == 'completed':
+            quarter_stats[q_key]['wins'] += 1
+        else:
+            quarter_stats[q_key]['losses'] += 1
+
+    # Score differential breakdown (close game vs blowout)
+    margin_stats = {'close_0_5': {'wins': 0, 'losses': 0}, 'mid_6_15': {'wins': 0, 'losses': 0}, 'blowout_16plus': {'wins': 0, 'losses': 0}}
+    for t in arb_trades:
+        gc = t.get('game_context', {})
+        diff = gc.get('score_diff', -1)
+        if diff < 0:
+            continue
+        if diff <= 5:
+            bucket = 'close_0_5'
+        elif diff <= 15:
+            bucket = 'mid_6_15'
+        else:
+            bucket = 'blowout_16plus'
+        if t['result'] == 'completed':
+            margin_stats[bucket]['wins'] += 1
+        else:
+            margin_stats[bucket]['losses'] += 1
+
+    # First leg analysis
+    first_leg_stats = {'yes': {'wins': 0, 'losses': 0}, 'no': {'wins': 0, 'losses': 0}}
+    for t in arb_trades:
+        fl = t.get('first_leg', '')
+        if fl in first_leg_stats:
+            if t['result'] == 'completed':
+                first_leg_stats[fl]['wins'] += 1
+            else:
+                first_leg_stats[fl]['losses'] += 1
+
+    # Average fill duration (overall)
+    all_durations = [t['fill_duration_s'] for t in arb_trades if t.get('fill_duration_s') is not None]
+    win_durations = [t['fill_duration_s'] for t in arb_wins if t.get('fill_duration_s') is not None]
+    loss_durations = [t['fill_duration_s'] for t in arb_losses if t.get('fill_duration_s') is not None]
+
+    total_arb = len(arb_wins) + len(arb_losses)
+    total_profit = sum(t.get('profit_cents', 0) for t in arb_wins)
+    total_loss = sum(t.get('loss_cents', 0) for t in arb_losses)
+
+    return jsonify({
+        'arb_total': total_arb,
+        'arb_wins': len(arb_wins),
+        'arb_losses': len(arb_losses),
+        'arb_fill_rate': round(len(arb_wins) / total_arb * 100, 1) if total_arb > 0 else 0,
+        'arb_net_cents': total_profit - total_loss,
+        'arb_avg_profit': round(total_profit / len(arb_wins)) if arb_wins else 0,
+        'arb_avg_loss': round(total_loss / len(arb_losses)) if arb_losses else 0,
+        'avg_fill_duration_s': round(sum(all_durations) / len(all_durations)) if all_durations else None,
+        'avg_win_duration_s': round(sum(win_durations) / len(win_durations)) if win_durations else None,
+        'avg_loss_duration_s': round(sum(loss_durations) / len(loss_durations)) if loss_durations else None,
+        'width_breakdown': width_breakdown,
+        'phase_stats': phase_stats,
+        'quarter_stats': quarter_stats,
+        'margin_stats': margin_stats,
+        'first_leg_stats': first_leg_stats,
+        'watch_total': len(watch_trades),
+        'watch_wins': len([t for t in watch_trades if t.get('result') == 'take_profit_watch']),
+        'watch_losses': len([t for t in watch_trades if t.get('result') == 'stop_loss_watch']),
+    })
 
 
 @app.route('/api/bot/set_phase/<bot_id>', methods=['POST'])
@@ -2335,4 +3183,4 @@ def watch_position():
 
 if __name__ == '__main__':
     load_state()
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

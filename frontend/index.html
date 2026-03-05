@@ -172,6 +172,7 @@
         @keyframes botArmL { 0%,100%{transform:rotate(0deg)} 50%{transform:rotate(-25deg)} }
         @keyframes botArmR { 0%{transform:rotate(0deg)} 100%{transform:rotate(25deg)} }
         @keyframes botPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
         .bot-buddy.idle .bot-buddy-body { animation: botIdle 3s ease-in-out infinite; }
         .bot-buddy.idle .bot-buddy-arm.left, .bot-buddy.idle .bot-buddy-arm.right { animation: none; }
         .bot-buddy.idle .bot-buddy-antenna::after { animation: none; opacity:0.3; box-shadow:none; }
@@ -339,10 +340,18 @@
         <!-- HISTORY TAB                                            -->
         <!-- ═══════════════════════════════════════════════════════ -->
         <div class="tab-page" id="tab-history">
-            <h2 style="color:#ffaa00;margin-bottom:16px;">📜 Trade History</h2>
-            <p style="color:#8892a6;font-size:12px;margin-bottom:16px;">
-                All bot actions — fills, stop-losses, take-profits, completions. Persisted across refreshes.
-            </p>
+            <h2 style="color:#ffaa00;margin-bottom:16px;">📜 Trade Analytics</h2>
+
+            <!-- Analytics Summary Panel -->
+            <div id="history-stats-panel" style="margin-bottom:20px;">
+                <p style="color:#555;text-align:center;font-size:12px;">Loading analytics...</p>
+            </div>
+
+            <!-- Width Breakdown Table -->
+            <div id="width-breakdown-panel" style="margin-bottom:20px;"></div>
+
+            <!-- Trade Log -->
+            <h3 style="color:#8892a6;font-size:13px;margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em;">Trade Log</h3>
             <div id="trade-history-list">
                 <div class="empty-state">
                     <div class="icon">📜</div>
@@ -358,112 +367,185 @@
     <!-- MODALS                                                     -->
     <!-- ═══════════════════════════════════════════════════════════ -->
 
-    <!-- Dual Arb Bot Modal -->
+    <!-- Unified Trade Modal (Straight Bet / Dual Arb Bot) -->
     <div class="modal" id="bot-modal">
         <div class="modal-content" style="max-width: 580px; border: 1px solid #2a3550; border-top: 3px solid #00ff88; padding: 0; overflow-y: auto;">
             <!-- Top bar -->
             <div style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; background:#0d1120; border-bottom:1px solid #1e2740;">
                 <div style="display:flex; align-items:center; gap:10px;">
-                    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);display:flex;align-items:center;justify-content:center;font-size:16px;">⚡</div>
+                    <div id="modal-icon" style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);display:flex;align-items:center;justify-content:center;font-size:16px;">💰</div>
                     <div>
-                        <div style="color:#fff;font-weight:700;font-size:14px;letter-spacing:.02em;">Dual-Arb Bot</div>
-                        <div style="color:#8892a6;font-size:10px;letter-spacing:.04em;text-transform:uppercase;">Settlement Arbitrage Engine</div>
+                        <div id="modal-mode-title" style="color:#fff;font-weight:700;font-size:14px;letter-spacing:.02em;">Straight Bet</div>
+                        <div id="modal-mode-subtitle" style="color:#8892a6;font-size:10px;letter-spacing:.04em;text-transform:uppercase;">Limit Order</div>
                     </div>
                 </div>
                 <button onclick="closeModal()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;" onmouseenter="this.style.borderColor='#ff4444';this.style.color='#ff4444'" onmouseleave="this.style.borderColor='#2a3550';this.style.color='#8892a6'">✕</button>
             </div>
             <div style="padding: 20px;">
-                <!-- Strategy description (collapsible) -->
-                <div id="strategy-info" style="margin-bottom:16px;">
-                    <div onclick="toggleStrategyInfo()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:10px 14px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;">
-                        <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:12px;">📖</span><span style="color:#8892a6;font-size:12px;font-weight:600;">How does this strategy work?</span></div>
-                        <span id="strategy-chevron" style="color:#8892a6;font-size:10px;">▼</span>
-                    </div>
-                    <div id="strategy-details" style="display:none;padding:14px;background:#080b14;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;font-size:12px;line-height:1.6;color:#8892a6;">
-                        <div style="margin-bottom:10px;"><span style="color:#00ff88;font-weight:700;">Core principle:</span> Every contract settles at <strong style="color:#fff;">100¢</strong>. Buy YES + NO below 100¢ = <strong style="color:#00ff88;">guaranteed profit</strong>.</div>
-                        <div style="padding:8px 12px;background:#0d1120;border-radius:6px;border-left:3px solid #00ff88;">
-                            <strong style="color:#fff;">Example:</strong> YES 45¢ + NO 50¢ = 95¢ → <strong style="color:#00ff88;">+5¢ profit</strong> per contract.
-                        </div>
-                    </div>
+                <!-- ── Mode Toggle ── -->
+                <div style="display:flex;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
+                    <button id="mode-straight" onclick="setTradeMode('straight')"
+                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
+                        💰 Straight Bet
+                    </button>
+                    <button id="mode-arb" onclick="setTradeMode('arb')"
+                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        ⚡ Dual Arb Bot
+                    </button>
                 </div>
-                <!-- Risk warning area -->
-                <div id="bot-risk-warnings"></div>
-                <!-- Market card -->
+                <!-- Market card (shared) -->
                 <div id="bot-market-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
                     <div id="bot-market-title" style="color:#fff;font-weight:600;font-size:14px;margin-bottom:10px;"></div>
                     <div id="bot-market-prices" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
                 </div>
-                <!-- Arb Width Slider -->
-                <div style="margin-bottom:16px;">
-                    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-                        <label style="color:#8892a6;font-size:12px;font-weight:600;">Target Profit Width</label>
-                        <span id="width-display" style="color:#00ff88;font-weight:800;font-size:18px;">5¢</span>
+
+                <!-- ═══════ STRAIGHT BET SECTION ═══════ -->
+                <div id="straight-section">
+                    <!-- Side selector -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+                        <button id="straight-yes-btn" onclick="setStraightSide('yes')"
+                            style="padding:14px;border-radius:8px;cursor:pointer;font-size:15px;font-weight:800;transition:all .15s;border:2px solid #00ff88;background:#00ff8822;color:#00ff88;">
+                            ✓ BUY YES
+                        </button>
+                        <button id="straight-no-btn" onclick="setStraightSide('no')"
+                            style="padding:14px;border-radius:8px;cursor:pointer;font-size:15px;font-weight:800;transition:all .15s;border:2px solid #ff444444;background:transparent;color:#ff444466;">
+                            ✗ BUY NO
+                        </button>
                     </div>
-                    <input type="range" id="bot-arb-width" min="1" max="20" value="5" step="1" oninput="recalcArbPrices()"
-                           style="width:100%;height:6px;border-radius:3px;outline:none;cursor:pointer;accent-color:#00ff88;">
-                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px;">
-                        <span>1¢ (tight)</span><span>10¢</span><span>20¢ (wide)</span>
-                    </div>
-                </div>
-                <!-- YES / NO Price Inputs -->
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-                    <div style="background:#0a0e1a;border:1px solid #00ff8844;border-radius:8px;padding:12px;text-align:center;">
-                        <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">YES LIMIT BUY</label>
-                        <div style="position:relative;">
-                            <input type="number" id="bot-yes-price" min="1" max="98" oninput="onPriceManualChange()"
-                                   style="width:100%;padding:8px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
-                                   onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
-                            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
+                    <!-- Price + Qty -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                        <div>
+                            <label id="straight-price-label" style="display:block;color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:6px;">YOUR LIMIT PRICE</label>
+                            <div style="position:relative;">
+                                <input type="number" id="straight-price" min="1" max="99" oninput="updateStraightPreview()"
+                                    style="width:100%;padding:10px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                    onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
+                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
+                            </div>
+                            <div id="straight-price-hint" style="color:#555;font-size:10px;margin-top:4px;text-align:center;"></div>
                         </div>
-                        <div id="yes-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
-                    </div>
-                    <div style="background:#0a0e1a;border:1px solid #ff444444;border-radius:8px;padding:12px;text-align:center;">
-                        <label style="color:#ff4444;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">NO LIMIT BUY</label>
-                        <div style="position:relative;">
-                            <input type="number" id="bot-no-price" min="1" max="98" oninput="onPriceManualChange()"
-                                   style="width:100%;padding:8px;background:#060a14;border:2px solid #ff444466;border-radius:6px;color:#ff4444;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
-                                   onfocus="this.style.borderColor='#ff4444'" onblur="this.style.borderColor='#ff444466'">
-                            <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ff444466;font-size:12px;pointer-events:none;">¢</span>
-                        </div>
-                        <div id="no-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
-                    </div>
-                </div>
-                <!-- Profit Preview -->
-                <div id="profit-preview" style="margin-bottom:16px;"></div>
-                <!-- Qty, Stop Loss, Phase, Repeat -->
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
-                    <div>
-                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
-                        <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview()"
-                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                    </div>
-                    <div>
-                        <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop Loss <span style="color:#555;font-weight:400;">(¢)</span></label>
-                        <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5" oninput="updateProfitPreview()"
-                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                    </div>
-                    <div>
-                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Phase</label>
-                        <div id="bot-game-phase-display"
-                             style="width:100%;padding:8px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#8892a6;font-size:12px;font-weight:600;text-align:center;">
-                            🔄 Auto
+                        <div>
+                            <label style="display:block;color:#8892a6;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:6px;">CONTRACTS</label>
+                            <input type="number" id="straight-qty" min="1" value="1" oninput="updateStraightPreview()"
+                                style="width:100%;padding:10px;background:#060a14;border:2px solid #1e274066;border-radius:6px;color:#fff;font-size:1.5rem;font-weight:800;text-align:center;outline:none;">
                         </div>
                     </div>
-                    <div>
-                        <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(extra×)</span></label>
-                        <input type="number" id="bot-repeat-count" min="0" max="50" value="0"
-                               style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
-                               title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
+                    <!-- Payout preview -->
+                    <div id="straight-preview" style="margin-bottom:16px;"></div>
+                    <!-- Optional watch (stop-loss) toggle -->
+                    <div style="margin-bottom:16px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:12px;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="checkbox" id="straight-add-watch" style="accent-color:#9966ff;width:16px;height:16px;">
+                            <span style="color:#8892a6;font-size:12px;font-weight:600;">Add auto stop-loss after fill</span>
+                        </label>
+                        <div id="straight-watch-opts" style="display:none;margin-top:10px;grid-template-columns:1fr 1fr;gap:10px;">
+                            <div>
+                                <label style="display:block;color:#8892a6;font-size:10px;margin-bottom:3px;">Stop-Loss (¢ drop)</label>
+                                <input type="number" id="straight-sl" min="1" max="30" value="5"
+                                    style="width:100%;padding:6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;text-align:center;">
+                            </div>
+                            <div>
+                                <label style="display:block;color:#8892a6;font-size:10px;margin-bottom:3px;">Take-Profit (¢ rise, 0=off)</label>
+                                <input type="number" id="straight-tp" min="0" max="50" value="0"
+                                    style="width:100%;padding:6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;text-align:center;">
+                            </div>
+                        </div>
                     </div>
+                    <!-- Place order button -->
+                    <button onclick="placeStraightBet()" style="width:100%;padding:14px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
+                        💰 Place Limit Order
+                    </button>
                 </div>
-                <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
-                    <strong style="color:#8892a6;">⏳ Pregame:</strong> Orders sit patiently — no repost, no stop-loss timeout.<br>
-                    <strong style="color:#8892a6;">🔴 Live:</strong> Active management — reposts stale orders, triggers stop-losses.
-                </div>
-                <!-- Action buttons -->
-                <div style="display:flex;gap:10px;">
-                    <button onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Deploy Bot</button>
-                    <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+
+                <!-- ═══════ DUAL ARB BOT SECTION ═══════ -->
+                <div id="arb-section" style="display:none;">
+                    <!-- Strategy description (collapsible) -->
+                    <div id="strategy-info" style="margin-bottom:16px;">
+                        <div onclick="toggleStrategyInfo()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:10px 14px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;">
+                            <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:12px;">📖</span><span style="color:#8892a6;font-size:12px;font-weight:600;">How does this strategy work?</span></div>
+                            <span id="strategy-chevron" style="color:#8892a6;font-size:10px;">▼</span>
+                        </div>
+                        <div id="strategy-details" style="display:none;padding:14px;background:#080b14;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;font-size:12px;line-height:1.6;color:#8892a6;">
+                            <div style="margin-bottom:10px;"><span style="color:#00ff88;font-weight:700;">Core principle:</span> Every contract settles at <strong style="color:#fff;">100¢</strong>. Buy YES + NO below 100¢ = <strong style="color:#00ff88;">guaranteed profit</strong>.</div>
+                            <div style="padding:8px 12px;background:#0d1120;border-radius:6px;border-left:3px solid #00ff88;">
+                                <strong style="color:#fff;">Example:</strong> YES 45¢ + NO 50¢ = 95¢ → <strong style="color:#00ff88;">+5¢ profit</strong> per contract.
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Risk warning area -->
+                    <div id="bot-risk-warnings"></div>
+                    <!-- Arb Width Slider -->
+                    <div style="margin-bottom:16px;">
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+                            <label style="color:#8892a6;font-size:12px;font-weight:600;">Target Profit Width</label>
+                            <span id="width-display" style="color:#00ff88;font-weight:800;font-size:18px;">5¢</span>
+                        </div>
+                        <input type="range" id="bot-arb-width" min="1" max="20" value="5" step="1" oninput="recalcArbPrices()"
+                               style="width:100%;height:6px;border-radius:3px;outline:none;cursor:pointer;accent-color:#00ff88;">
+                        <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px;">
+                            <span>1¢ (tight)</span><span>10¢</span><span>20¢ (wide)</span>
+                        </div>
+                    </div>
+                    <!-- YES / NO Price Inputs -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                        <div style="background:#0a0e1a;border:1px solid #00ff8844;border-radius:8px;padding:12px;text-align:center;">
+                            <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">YES LIMIT BUY</label>
+                            <div style="position:relative;">
+                                <input type="number" id="bot-yes-price" min="1" max="98" oninput="onPriceManualChange()"
+                                       style="width:100%;padding:8px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                       onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
+                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
+                            </div>
+                            <div id="yes-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
+                        </div>
+                        <div style="background:#0a0e1a;border:1px solid #ff444444;border-radius:8px;padding:12px;text-align:center;">
+                            <label style="color:#ff4444;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">NO LIMIT BUY</label>
+                            <div style="position:relative;">
+                                <input type="number" id="bot-no-price" min="1" max="98" oninput="onPriceManualChange()"
+                                       style="width:100%;padding:8px;background:#060a14;border:2px solid #ff444466;border-radius:6px;color:#ff4444;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                       onfocus="this.style.borderColor='#ff4444'" onblur="this.style.borderColor='#ff444466'">
+                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ff444466;font-size:12px;pointer-events:none;">¢</span>
+                            </div>
+                            <div id="no-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
+                        </div>
+                    </div>
+                    <!-- Profit Preview -->
+                    <div id="profit-preview" style="margin-bottom:16px;"></div>
+                    <!-- Qty, Stop Loss, Phase, Repeat -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
+                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview()"
+                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                        </div>
+                        <div>
+                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop Loss <span style="color:#555;font-weight:400;">(¢)</span></label>
+                            <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5" oninput="updateProfitPreview()"
+                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Phase</label>
+                            <div id="bot-game-phase-display"
+                                 style="width:100%;padding:8px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#8892a6;font-size:12px;font-weight:600;text-align:center;">
+                                🔄 Auto
+                            </div>
+                        </div>
+                        <div>
+                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(extra×)</span></label>
+                            <input type="number" id="bot-repeat-count" min="0" max="50" value="0"
+                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
+                                   title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
+                        </div>
+                    </div>
+                    <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
+                        <strong style="color:#8892a6;">⏳ Pregame:</strong> Orders sit patiently — no repost, no stop-loss timeout.<br>
+                        <strong style="color:#8892a6;">🔴 Live:</strong> Active management — reposts stale orders, triggers stop-losses.
+                    </div>
+                    <!-- Action buttons -->
+                    <div style="display:flex;gap:10px;">
+                        <button onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Deploy Arb Bot</button>
+                        <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -552,6 +634,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260304b"></script>
+    <script src="app.js?v=20260304s"></script>
 </body>
 </html>

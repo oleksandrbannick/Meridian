@@ -592,28 +592,63 @@
                             <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;">Breakeven: 29%</span>
                         </div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;" id="preset-grid">
-                            <button onclick="applyPreset(10, 4)" class="arb-preset-btn" data-width="10" data-sl="4"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #00ff8844;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 29%</div>
-                            </button>
-                            <button onclick="applyPreset(8, 4)" class="arb-preset-btn" data-width="8" data-sl="4"
+                            <!-- Row 1: Tight (5¢–6¢) -->
+                            <button onclick="applyPreset(5, 2)" class="arb-preset-btn" data-width="5" data-sl="2"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 33%</div>
-                            </button>
-                            <button onclick="applyPreset(6, 3)" class="arb-preset-btn" data-width="6" data-sl="3"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 33%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 2¢ · 29%</div>
                             </button>
                             <button onclick="applyPreset(5, 3)" class="arb-preset-btn" data-width="5" data-sl="3"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
                                 <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 38%</div>
                             </button>
+                            <button onclick="applyPreset(6, 2)" class="arb-preset-btn" data-width="6" data-sl="2"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 2¢ · 25%</div>
+                            </button>
+                            <button onclick="applyPreset(6, 3)" class="arb-preset-btn" data-width="6" data-sl="3"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 33%</div>
+                            </button>
                         </div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-top:6px;">
+                            <!-- Row 2: Medium (8¢–10¢) -->
+                            <button onclick="applyPreset(8, 3)" class="arb-preset-btn" data-width="8" data-sl="3"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 27%</div>
+                            </button>
+                            <button onclick="applyPreset(8, 4)" class="arb-preset-btn" data-width="8" data-sl="4"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 33%</div>
+                            </button>
+                            <button onclick="applyPreset(10, 3)" class="arb-preset-btn" data-width="10" data-sl="3"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #00ff8844;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 23%</div>
+                            </button>
+                            <button onclick="applyPreset(10, 4)" class="arb-preset-btn" data-width="10" data-sl="4"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 29%</div>
+                            </button>
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-top:6px;">
+                            <!-- Row 3: Wide (10¢–15¢) -->
+                            <button onclick="applyPreset(10, 5)" class="arb-preset-btn" data-width="10" data-sl="5"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 33%</div>
+                            </button>
+                            <button onclick="applyPreset(12, 4)" class="arb-preset-btn" data-width="12" data-sl="4"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 25%</div>
+                            </button>
                             <button onclick="applyPreset(12, 5)" class="arb-preset-btn" data-width="12" data-sl="5"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
@@ -623,16 +658,6 @@
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
                                 <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 25%</div>
-                            </button>
-                            <button onclick="applyPreset(8, 3)" class="arb-preset-btn" data-width="8" data-sl="3"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 27%</div>
-                            </button>
-                            <button onclick="applyPreset(10, 5)" class="arb-preset-btn" data-width="10" data-sl="5"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 33%</div>
                             </button>
                         </div>
                     </div>

@@ -103,3 +103,25 @@ On first load, the app auto-logs in using the API key and private key configured
 ## License
 
 Private — not for redistribution.
+
+---
+
+## TODO — Next Session (March 5, 2026)
+
+### 1. Fix modal prop labels (PRIORITY)
+- Modal currently shows "YES — 25 wins" / "NO — 25 loses" for prop markets
+- Should show "YES — 25+ points" / "NO — Under 25" (parse the actual stat from the title)
+- Root cause: `getTeamLabelFromTicker()` returns a player string (e.g. "JGREEN4") for props, so `isWinnerRow` check fires before the `threshMatch` branch
+- Fix: add prop detection (`/KXNBA(PTS|REB|AST|3PT|STL|BLK)/`) BEFORE the winner check in both `openBotModal()` and `refreshModalPriceCards()` in `frontend/app.js`
+- Also: run the app and hit the API to see exactly how prop data comes in (ticker format, title, subtitle)
+
+### 2. Add tennis markets
+- Currently only NBA/NHL/soccer series are configured
+- Find Kalshi tennis series tickers and add to the series map in `/api/markets` in `backend/app.py`
+
+### 3. Mobile phone access
+- User wants to access Meridian from phone
+- Options: ngrok, tailscale, or deploy to cloud
+
+### 4. File cleanup — DONE (nothing to remove)
+- Project is clean — no leftover test/temp files found

@@ -123,17 +123,19 @@ async function loadLiveScores() {
         addGames(mlbRes, 'MLB');
         addGames(ncaabRes, 'NCAAB');
 
-        // Build lookup tables
+        // Build lookup tables — keyed by sport:abbreviation to avoid cross-sport collisions
+        // (e.g. HOU = Rockets NBA, Texans NFL, Astros MLB)
         liveGames = {};
         allGameData = {};
         games.forEach(g => {
+            const sport = g.sport || '';
             // ALL games for score display (pre, in, post)
-            if (g.homeAbbr) allGameData[g.homeAbbr] = g;
-            if (g.awayAbbr) allGameData[g.awayAbbr] = g;
+            if (g.homeAbbr) allGameData[`${sport}:${g.homeAbbr}`] = g;
+            if (g.awayAbbr) allGameData[`${sport}:${g.awayAbbr}`] = g;
             // Live filter only uses in-progress games
             if (g.state === 'in') {
-                liveGames[g.awayAbbr] = g;
-                liveGames[g.homeAbbr] = g;
+                liveGames[`${sport}:${g.awayAbbr}`] = g;
+                liveGames[`${sport}:${g.homeAbbr}`] = g;
             }
         });
 
@@ -276,7 +278,8 @@ function applyFilters() {
                 case 'ncaab': return et.includes('NCAAB') || et.includes('KXNCAA');
                 case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
                 case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL');
+                case 'tennis': return et.includes('KXATP') || et.includes('KXWTA');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA');
                 default: return true;
             }
         });
@@ -287,7 +290,8 @@ function applyFilters() {
         filtered = filtered.filter(m => {
             const eventTicker = m.event_ticker || m.ticker || '';
             const gameId = extractGameId(eventTicker);
-            return !!getLiveScoreForGame(gameId);
+            const sport = detectSport(eventTicker);
+            return !!getLiveScoreForGame(gameId, sport);
         });
     }
 
@@ -306,20 +310,36 @@ function applyFilters() {
 
 // ─── LIVE BADGE on game event rows ────────────────────────────────────────────
 
-function getLiveScoreForGame(gameId) {
+function getLiveScoreForGame(gameId, sport) {
     // gameId example: "26FEB27DENOKC" — last 6 chars are team codes
     const match = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
     if (!match) return null;
     const [, t1, t2] = match;
-    return liveGames[t1] || liveGames[t2] || null;
+    if (sport) {
+        return liveGames[`${sport}:${t1}`] || liveGames[`${sport}:${t2}`] || null;
+    }
+    // Fallback: search all sports (slower but works for unknown sport)
+    for (const key in liveGames) {
+        const abbr = key.split(':')[1];
+        if (abbr === t1 || abbr === t2) return liveGames[key];
+    }
+    return null;
 }
 
 // Get game data for ANY state (pre/in/post) for scoreboard display
-function getGameScore(gameId) {
+function getGameScore(gameId, sport) {
     const match = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
     if (!match) return null;
     const [, t1, t2] = match;
-    return allGameData[t1] || allGameData[t2] || null;
+    if (sport) {
+        return allGameData[`${sport}:${t1}`] || allGameData[`${sport}:${t2}`] || null;
+    }
+    // Fallback: search all sports
+    for (const key in allGameData) {
+        const abbr = key.split(':')[1];
+        if (abbr === t1 || abbr === t2) return allGameData[key];
+    }
+    return null;
 }
 
 // Auto-login with stored credentials
@@ -606,6 +626,7 @@ function detectSport(eventTicker) {
     if (upper.includes('KXMLS')) return 'MLS';
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
+    if (upper.includes('KXATP') || upper.includes('KXWTA')) return 'Tennis';
     if (upper.includes('KXLOL') || upper.includes('KXDOTA') || upper.includes('KXCS')) return 'Esports';
     return 'Sports';
 }
@@ -615,7 +636,7 @@ function getSportEmoji(sport) {
     const emojis = {
         'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 
         'MLS': '⚽', 'NCAAB': '🎓', 'NCAAF': '🎓', 'EPL': '⚽', 'UCL': '⚽',
-        'Esports': '🎮', 'Sports': '🏆'
+        'Tennis': '🎾', 'Esports': '🎮', 'Sports': '🏆'
     };
     return emojis[sport] || '🏆';
 }
@@ -625,6 +646,12 @@ function getSportEmoji(sport) {
 function buildGameTitle(gameId, market) {
     // Try to extract from market title first (most reliable)
     const title = market.title || '';
+    
+    // Tennis: "Will X win the Y vs Z : Round Of N match?" -> "Y vs Z"
+    const tennisMatch = title.match(/win the\s+(.+?)\s+vs\.?\s+(.+?)\s*(?::|\?)/i);
+    if (tennisMatch) {
+        return `${tennisMatch[1].trim()} vs ${tennisMatch[2].trim()}`;
+    }
     
     // Titles like "Denver at Utah Winner?" or "Toronto at Washington: Spread"
     const atMatch = title.match(/^(.+?)\s+at\s+(.+?)[\s:?]/i);
@@ -764,10 +791,10 @@ function buildScoreboard(gameScore) {
 
 // Display one compact event row (trading floor style)
 function displayEventRow(eventData, container) {
-    const liveScore = getLiveScoreForGame(eventData.gameId);
-    const isLive = !!liveScore;
-    const gameScore = getGameScore(eventData.gameId);
     const sport = eventData.sport || detectSport(eventData.eventTicker);
+    const liveScore = getLiveScoreForGame(eventData.gameId, sport);
+    const isLive = !!liveScore;
+    const gameScore = getGameScore(eventData.gameId, sport);
     const emoji = getSportEmoji(sport);
 
     const card = document.createElement('div');
@@ -798,6 +825,17 @@ function displayEventRow(eventData, container) {
         dateBadge.textContent = `📅 ${gameDate}`;
         badgeWrap.appendChild(dateBadge);
     }
+    
+    // Tennis round badge
+    if (sport === 'Tennis' && eventData.markets.length > 0) {
+        const roundMatch = (eventData.markets[0].title || '').match(/(Round\s+Of\s+\d+|Quarterfinal|Semifinal|Final)/i);
+        if (roundMatch) {
+            const roundBadge = document.createElement('span');
+            roundBadge.style.cssText = 'background: #1a2a3a; color: #60a5fa; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600;';
+            roundBadge.textContent = roundMatch[1].replace('Round Of ', 'R');
+            badgeWrap.appendChild(roundBadge);
+        }
+    }
     header.appendChild(badgeWrap);
     card.appendChild(header);
 
@@ -816,8 +854,16 @@ function displayEventRow(eventData, container) {
     
     // Display winner markets — each team is its own row with clear team label
     categorized.winners.forEach(m => {
-        const teamLabel = getTeamLabelFromTicker(m.ticker);
-        const winLabel = teamLabel && teamLabel !== 'Winner' ? `${teamLabel} Win` : 'Winner';
+        let winLabel;
+        const isTennis = (m.event_ticker || m.ticker || '').toUpperCase().match(/KXATP|KXWTA/);
+        if (isTennis) {
+            // Extract full player name from title: "Will Mackenzie McDonald win the ..."
+            const nameMatch = (m.title || '').match(/^Will\s+(.+?)\s+win\s/i);
+            winLabel = nameMatch ? nameMatch[1] : getTeamLabelFromTicker(m.ticker);
+        } else {
+            const teamLabel = getTeamLabelFromTicker(m.ticker);
+            winLabel = teamLabel && teamLabel !== 'Winner' ? `${teamLabel} Win` : 'Winner';
+        }
         marketsGrid.appendChild(createMarketRow(m, winLabel));
     });
     
@@ -938,39 +984,10 @@ function createMarketRow(market, label) {
     
     const yesBtn = document.createElement('button');
     yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${yesStyle}`;
-    
-    // Smart button labels based on market type
-    const mtype = market.market_type || '';
-    const isWinnerRow = label && (label.endsWith(' Win') || label === 'Winner');
-    const isTotalRow = mtype === 'total' || (label && label.startsWith('O/U'));
-    const isSpreadRow = mtype === 'spread' || (label && /^[A-Z]{2,4}\s-/.test(label));
-    
-    let yesLabel, noLabel;
-    if (isWinnerRow) {
-        const teamFromTicker = getTeamLabelFromTicker(market.ticker);
-        yesLabel = `✓ Wins`;
-        noLabel = `✗ Loses`;
-    } else if (isTotalRow) {
-        yesLabel = `✓ Over`;
-        noLabel = `✗ Under`;
-    } else if (isSpreadRow) {
-        yesLabel = `✓ Covers`;
-        noLabel = `✗ Misses`;
-    } else {
-        // Player props — extract threshold like "30+" from title "Player: 30+ points"
-        const threshMatch = (market.title || '').match(/(\d+)\+/);
-        if (threshMatch) {
-            yesLabel = `${threshMatch[1]}+ ✓`;
-            noLabel = `Under ${threshMatch[1]}`;
-        } else {
-            yesLabel = 'YES';
-            noLabel = 'NO';
-        }
-    }
 
     yesBtn.setAttribute('data-ticker', market.ticker);
     yesBtn.setAttribute('data-side', 'yes');
-    yesBtn.innerHTML = `<div>${yesPrice > 0 ? yesPrice + '¢' : '—'}</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${yesLabel}</div>`;
+    yesBtn.innerHTML = yesPrice > 0 ? yesPrice + '¢' : '—';
     yesBtn.onclick = () => openBotModal(market, 'yes', yesAsk);
     yesBtn.onmouseenter = () => yesBtn.style.transform = 'scale(1.05)';
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
@@ -985,7 +1002,7 @@ function createMarketRow(market, label) {
     noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${noStyle}`;
     noBtn.setAttribute('data-ticker', market.ticker);
     noBtn.setAttribute('data-side', 'no');
-    noBtn.innerHTML = `<div>${noPrice > 0 ? noPrice + '¢' : '—'}</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${noLabel}</div>`;
+    noBtn.innerHTML = noPrice > 0 ? noPrice + '¢' : '—';
     noBtn.onclick = () => openBotModal(market, 'no', noAsk);
     noBtn.onmouseenter = () => noBtn.style.transform = 'scale(1.05)';
     noBtn.onmouseleave = () => noBtn.style.transform = 'scale(1)';
@@ -1077,7 +1094,13 @@ function getTeamLabelFromTicker(ticker) {
         'BRI': 'Brighton', 'SUN': 'Sunderland',
         'TIE': 'Draw',
     };
-    return teamMap[suffix.toUpperCase()] || suffix;
+    // For tennis: extract player name from title (suffix is just 3-letter abbrev like MCD, ARN)
+    if (!teamMap[suffix.toUpperCase()]) {
+        // This might be a tennis ticker — try to extract full player name from the title in the modal
+        // For now just capitalize the abbreviation nicely
+        return suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase();
+    }
+    return teamMap[suffix.toUpperCase()];
 }
 
 // Extract team sides from market title for winner markets
@@ -1973,10 +1996,25 @@ function refreshModalPriceCards() {
     const fmtPrice = (v) => v > 0 ? `${v}¢` : '—';
 
     const teamFromTicker = getTeamLabelFromTicker(market.ticker);
-    const yesTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
-        ? `YES — ${teamFromTicker} wins` : 'YES';
-    const noTeamLabel = teamFromTicker && teamFromTicker !== 'Winner'
-        ? `NO — ${teamFromTicker} loses` : 'NO';
+    // Smart labels for refresh modal price cards
+    const mtype = market.market_type || '';
+    const isWinnerRow = teamFromTicker && teamFromTicker !== 'Winner';
+    const isTotalRow = mtype === 'total';
+    const threshMatch = (market.title || '').match(/(\d+)\+/);
+    let yesTeamLabel, noTeamLabel;
+    if (isWinnerRow) {
+        yesTeamLabel = `YES — ${teamFromTicker} wins`;
+        noTeamLabel = `NO — ${teamFromTicker} loses`;
+    } else if (threshMatch) {
+        yesTeamLabel = `YES — ${threshMatch[1]}+ ✓`;
+        noTeamLabel = `NO — Under ${threshMatch[1]}`;
+    } else if (isTotalRow) {
+        yesTeamLabel = `YES — Over`;
+        noTeamLabel = `NO — Under`;
+    } else {
+        yesTeamLabel = 'YES';
+        noTeamLabel = 'NO';
+    }
 
     document.getElementById('bot-market-prices').innerHTML = `
         <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">

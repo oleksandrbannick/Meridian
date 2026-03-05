@@ -414,21 +414,6 @@
       "first_leg": "yes",
       "stopped_at": 1772686479.83157,
       "net_pnl_cents": -15
-    },
-    "watch_KXNBAGAME-26MAR05LALDEN-LAL_yes_1772690737": {
-      "type": "watch",
-      "ticker": "KXNBAGAME-26MAR05LALDEN-LAL",
-      "side": "yes",
-      "entry_price": 35,
-      "quantity": 1,
-      "stop_loss_cents": 0,
-      "take_profit_cents": 0,
-      "has_sl_tp": false,
-      "status": "watching",
-      "created_at": 1772690737.50942,
-      "order_id": "1ade976c-6f33-46e1-ac4b-65474e8fc3d6",
-      "order_filled": false,
-      "fill_qty": 0
     }
   },
   "trade_history": [
@@ -698,11 +683,11 @@
     }
   ],
   "session_pnl": {
-    "gross_profit_cents": 66,
-    "gross_loss_cents": 155,
-    "completed_bots": 3,
-    "stopped_bots": 5,
-    "session_start": 1772691696.7751129,
-    "day_key": "2026-03-04"
+    "gross_profit_cents": 0,
+    "gross_loss_cents": 0,
+    "completed_bots": 0,
+    "stopped_bots": 0,
+    "session_start": 1772738775.610487,
+    "day_key": "2026-03-05"
   }
 }

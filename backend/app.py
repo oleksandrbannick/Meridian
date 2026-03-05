@@ -172,6 +172,9 @@ def get_markets():
             'KXEPLGOAL': 'total', 'KXEPLBTTS': 'prop',
             'KXUCLGAME': 'winner', 'KXUCLSPREAD': 'spread', 'KXUCLTOTAL': 'total',
             'KXUCLGOAL': 'total', 'KXUCLBTTS': 'prop',
+            # Tennis
+            'KXATPMATCH': 'winner',
+            'KXWTAMATCH': 'winner',
         }
         SPORTS_SERIES = {
             'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL',
@@ -185,6 +188,7 @@ def get_markets():
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
+            'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
         }
         
         # Determine which series to fetch
@@ -2624,6 +2628,7 @@ def scan_arb_opportunities():
             'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
+            'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
         }
 
         if sport_filter and sport_filter.lower() not in ('', 'all'):

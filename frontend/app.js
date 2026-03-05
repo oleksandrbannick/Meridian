@@ -3478,6 +3478,41 @@ async function loadHistoryStats() {
                     </table>
                 </div>
             `;
+
+            // Combo breakdown (Width + SL vs Breakeven)
+            if (s.combo_breakdown && s.combo_breakdown.length > 0) {
+                const comboRows = s.combo_breakdown.map(c => {
+                    const frColor = c.fill_rate >= c.breakeven_pct ? '#00ff88' : c.fill_rate >= c.breakeven_pct * 0.8 ? '#ffaa00' : '#ff4444';
+                    const edgeColor = c.edge >= 0 ? '#00ff88' : '#ff4444';
+                    const nColor = c.net_cents >= 0 ? '#00ff88' : '#ff4444';
+                    const edgeIcon = c.edge >= 5 ? '🟢' : c.edge >= 0 ? '🟡' : '🔴';
+                    return `<tr style="border-bottom:1px solid #1e274033;">
+                        <td style="padding:6px 10px;color:#fff;font-weight:700;">${c.width}¢ / ${c.sl}¢</td>
+                        <td style="padding:6px 10px;color:${frColor};font-weight:700;">${c.fill_rate}%</td>
+                        <td style="padding:6px 10px;color:#ffaa33;font-weight:600;">${c.breakeven_pct}%</td>
+                        <td style="padding:6px 10px;color:${edgeColor};font-weight:700;">${edgeIcon} ${c.edge >= 0 ? '+' : ''}${c.edge}%</td>
+                        <td style="padding:6px 10px;color:#8892a6;">${c.wins}W / ${c.losses}L</td>
+                        <td style="padding:6px 10px;color:${nColor};font-weight:700;">${c.net_cents >= 0 ? '+' : ''}${c.net_cents}¢</td>
+                    </tr>`;
+                }).join('');
+                widthPanel.innerHTML += `
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;margin-top:12px;">
+                        <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Fill Rate vs Breakeven by Preset</div>
+                        <div style="color:#555;font-size:10px;margin-bottom:10px;">Your actual fill rate compared to the required breakeven % for each width/SL combo</div>
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                            <tr style="border-bottom:1px solid #1e2740;">
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width / SL</th>
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Breakeven</th>
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Edge</th>
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Record</th>
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Net</th>
+                            </tr>
+                            ${comboRows}
+                        </table>
+                    </div>
+                `;
+            }
         } else if (widthPanel) {
             widthPanel.innerHTML = '';
         }

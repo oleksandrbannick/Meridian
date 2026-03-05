@@ -2579,6 +2579,38 @@ def history_stats():
             'avg_fill_duration_s': avg_fill_dur,
         })
 
+    # Fill rate by width+SL combo (with breakeven comparison)
+    combo_stats = {}  # key: "width_sl" → {wins, losses, total_profit, total_loss}
+    for t in arb_trades:
+        w = t.get('arb_width', 0)
+        sl = t.get('stop_loss_cents', 0)
+        if w <= 0 or sl <= 0:
+            continue
+        key = f'{w}_{sl}'
+        if key not in combo_stats:
+            combo_stats[key] = {'width': w, 'sl': sl, 'wins': 0, 'losses': 0,
+                                'total_profit': 0, 'total_loss': 0}
+        if t['result'] == 'completed':
+            combo_stats[key]['wins'] += 1
+            combo_stats[key]['total_profit'] += t.get('profit_cents', 0)
+        else:
+            combo_stats[key]['losses'] += 1
+            combo_stats[key]['total_loss'] += t.get('loss_cents', 0)
+
+    combo_breakdown = []
+    for key, cs in sorted(combo_stats.items(), key=lambda x: (-x[1]['width'], x[1]['sl'])):
+        total = cs['wins'] + cs['losses']
+        fill_rate = round(cs['wins'] / total * 100, 1) if total > 0 else 0
+        breakeven_pct = round(cs['sl'] / (cs['sl'] + cs['width']) * 100, 1)
+        edge = round(fill_rate - breakeven_pct, 1)
+        combo_breakdown.append({
+            'width': cs['width'], 'sl': cs['sl'],
+            'wins': cs['wins'], 'losses': cs['losses'],
+            'fill_rate': fill_rate, 'breakeven_pct': breakeven_pct,
+            'edge': edge,  # positive = profitable, negative = losing
+            'net_cents': cs['total_profit'] - cs['total_loss'],
+        })
+
     # Phase breakdown
     phase_stats = {'pregame': {'wins': 0, 'losses': 0}, 'live': {'wins': 0, 'losses': 0}}
     for t in arb_trades:
@@ -2654,6 +2686,7 @@ def history_stats():
         'avg_win_duration_s': round(sum(win_durations) / len(win_durations)) if win_durations else None,
         'avg_loss_duration_s': round(sum(loss_durations) / len(loss_durations)) if loss_durations else None,
         'width_breakdown': width_breakdown,
+        'combo_breakdown': combo_breakdown,
         'phase_stats': phase_stats,
         'quarter_stats': quarter_stats,
         'margin_stats': margin_stats,

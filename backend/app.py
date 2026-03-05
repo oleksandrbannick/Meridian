@@ -72,6 +72,45 @@ def login():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/auto-login', methods=['POST'])
+def auto_login():
+    """Auto-login using server-side config.json (credentials never sent over the wire)"""
+    global kalshi_client
+
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+        if not os.path.exists(config_path):
+            return jsonify({'error': 'config.json not found. Create backend/config.json with api_key_id and private_key_path.'}), 400
+
+        import json as _json
+        with open(config_path) as f:
+            config = _json.load(f)
+
+        api_key_id = config.get('api_key_id')
+        key_file = config.get('private_key_path', 'kalshi_private_key.pem')
+        demo = config.get('demo', False)
+
+        if not api_key_id:
+            return jsonify({'error': 'api_key_id missing from config.json'}), 400
+
+        # Resolve key path relative to backend directory
+        key_path = os.path.join(os.path.dirname(__file__), key_file)
+        if not os.path.exists(key_path):
+            return jsonify({'error': f'Private key file not found: {key_file}'}), 400
+
+        kalshi_client = KalshiAPI(api_key_id, key_path, demo=demo)
+        balance = kalshi_client.get_balance()
+
+        return jsonify({
+            'success': True,
+            'balance': balance.get('balance', 0) / 100,
+            'portfolio_value': balance.get('portfolio_value', 0) / 100
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/markets', methods=['GET'])
 def get_markets():
     """Get sports markets by querying Kalshi series tickers directly"""
@@ -84,17 +123,45 @@ def get_markets():
         sport_filter = request.args.get('sport')  # Optional: 'nba', 'nhl', 'epl', etc.
         
         # ALL sports series tickers in Kalshi
+        # Map: series_ticker -> market_type for frontend categorization
+        SERIES_TYPE_MAP = {
+            # NBA
+            'KXNBAGAME': 'winner', 'KXNBASPREAD': 'spread', 'KXNBATOTAL': 'total',
+            'KXNBAPTS': 'prop', 'KXNBAREB': 'prop', 'KXNBAAST': 'prop',
+            'KXNBA3PT': 'prop', 'KXNBASTL': 'prop', 'KXNBABLK': 'prop',
+            'KXNBAMVP': 'prop',
+            # NFL
+            'KXNFLGAME': 'winner', 'KXNFLSPREAD': 'spread', 'KXNFLTOTAL': 'total',
+            # NHL
+            'KXNHLGAME': 'winner', 'KXNHLSPREAD': 'spread', 'KXNHLTOTAL': 'total',
+            'KXNHLGOAL': 'prop',
+            # MLB
+            'KXMLBGAME': 'winner', 'KXMLBSPREAD': 'spread', 'KXMLBTOTAL': 'total',
+            # MLS
+            'KXMLSGAME': 'winner', 'KXMLSSPREAD': 'spread', 'KXMLSTOTAL': 'total',
+            'KXMLSBTTS': 'prop',
+            # NCAAB
+            'KXNCAABGAME': 'winner', 'KXNCAABSPREAD': 'spread', 'KXNCAABTOTAL': 'total',
+            # NCAAF
+            'KXNCAAFGAME': 'winner', 'KXNCAAFSPREAD': 'spread', 'KXNCAAFTOTAL': 'total',
+            # Soccer
+            'KXEPLGAME': 'winner', 'KXEPLSPREAD': 'spread', 'KXEPLTOTAL': 'total',
+            'KXEPLGOAL': 'total', 'KXEPLBTTS': 'prop',
+            'KXUCLGAME': 'winner', 'KXUCLSPREAD': 'spread', 'KXUCLTOTAL': 'total',
+            'KXUCLGOAL': 'total', 'KXUCLBTTS': 'prop',
+        }
         SPORTS_SERIES = {
-            'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL', 'KXNBAPOINTS', 
-                     'KXNBAREBOUNDS', 'KXNBAASSISTS', 'KXNBA3PM', 'KXNBASTEALS', 
-                     'KXNBABLOCKS', 'KXNBAANNOUNCER'],
+            'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL',
+                    'KXNBAPTS', 'KXNBAREB', 'KXNBAAST', 'KXNBA3PT',
+                    'KXNBASTL', 'KXNBABLK', 'KXNBAMVP'],
             'nfl': ['KXNFLGAME', 'KXNFLSPREAD', 'KXNFLTOTAL'],
             'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
             'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL'],
+            'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
             'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
-            'epl': ['KXEPLGAME', 'KXEPLGOAL', 'KXEPLBTTS'],
-            'ucl': ['KXUCLGAME', 'KXUCLGOAL', 'KXUCLBTTS'],
+            'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
+            'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
         }
         
         # Determine which series to fetch
@@ -116,6 +183,11 @@ def get_markets():
                 if markets:
                     markets = [m for m in markets if 'mve_selected_legs' not in m 
                              and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+                    # Enrich each market with the type based on series prefix
+                    mtype = SERIES_TYPE_MAP.get(series, 'prop')
+                    for m in markets:
+                        m['market_type'] = mtype
+                        m['series_ticker'] = series  # API returns None, fill it
                     if markets:
                         series_counts[series] = len(markets)
                         all_markets.extend(markets)
@@ -549,7 +621,7 @@ REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
-_espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: True} for teams in live games
+_espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}
 _ESPN_CACHE_TTL = 60  # seconds
 
 # Kalshi 3-letter codes that differ from ESPN abbreviations
@@ -558,12 +630,36 @@ _KALSHI_TO_ESPN = {
     'GSW': 'GS', 'UTA': 'UTAH', 'PHX': 'PHO',
 }
 
+# Reverse map ESPN → Kalshi for game time lookups
+_ESPN_TO_KALSHI = {v: k for k, v in _KALSHI_TO_ESPN.items()}
+
+
+def _parse_game_date(event_ticker: str) -> str:
+    """Parse game date from event ticker like KXNBAGAME-26MAR05LALDEN → 'Mar 5'.
+    Returns empty string if unable to parse."""
+    import re as _re
+    parts = event_ticker.split('-')
+    if len(parts) < 2:
+        return ''
+    date_match = _re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts[1])
+    if not date_match:
+        return ''
+    year_2d = date_match.group(1)
+    month_abbr = date_match.group(2)  # 'MAR', 'APR', etc.
+    day = int(date_match.group(3))
+    # Format nicely: "Mar 5"
+    month_map = {'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
+                 'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
+                 'SEP': 'Sep', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'}
+    month = month_map.get(month_abbr.upper(), month_abbr.capitalize())
+    return f'{month} {day}'
+
 def _refresh_espn_cache():
-    """Fetch all ESPN scoreboards and cache live team abbreviations."""
+    """Fetch all ESPN scoreboards and cache team info including game times."""
     global _espn_cache
     if time.time() - _espn_cache['ts'] < _ESPN_CACHE_TTL:
         return
-    live_teams = {}
+    team_info = {}  # {ABBR: {'live': bool, 'game_time': 'HH:MM', 'status': 'pre'|'in'|'post'}}
     sport_paths = {
         'nba': 'basketball/nba',
         'nhl': 'hockey/nhl',
@@ -580,41 +676,84 @@ def _refresh_espn_cache():
             for ev in events:
                 comp = (ev.get('competitions') or [{}])[0]
                 status = (ev.get('status') or {}).get('type', {}).get('state', 'pre')
-                if status == 'in':  # game is live
-                    for team in comp.get('competitors', []):
-                        abbr = (team.get('team') or {}).get('abbreviation', '')
-                        if abbr:
-                            live_teams[abbr.upper()] = True
+                is_live = status == 'in'
+                # Game start time (ISO 8601) → local time string
+                game_dt_str = ev.get('date', '')  # e.g. "2026-03-05T00:00Z"
+                game_time = ''
+                if game_dt_str:
+                    try:
+                        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                        dt_utc = _dt.fromisoformat(game_dt_str.replace('Z', '+00:00'))
+                        # Convert to ET (UTC-5, approximate — good enough for display)
+                        dt_et = dt_utc - _td(hours=5)
+                        game_time = dt_et.strftime('%-I:%M %p')
+                    except Exception:
+                        pass
+                for team in comp.get('competitors', []):
+                    abbr = (team.get('team') or {}).get('abbreviation', '')
+                    if abbr:
+                        abbr_upper = abbr.upper()
+                        team_info[abbr_upper] = {
+                            'live': is_live,
+                            'game_time': game_time,
+                            'status': status,
+                        }
+                        # Also store under Kalshi code if different
+                        kalshi_code = _ESPN_TO_KALSHI.get(abbr_upper)
+                        if kalshi_code:
+                            team_info[kalshi_code] = team_info[abbr_upper]
         except Exception:
             continue
-    _espn_cache = {'data': live_teams, 'ts': time.time()}
+    _espn_cache = {'data': team_info, 'ts': time.time()}
+    live_teams = [k for k, v in team_info.items() if v.get('live')]
     if live_teams:
-        print(f'🏟 ESPN cache refreshed: {len(live_teams)} live teams: {", ".join(sorted(live_teams.keys()))}')
+        print(f'🏟 ESPN cache refreshed: {len(live_teams)} live teams: {", ".join(sorted(live_teams))}')
+
+
+def _parse_ticker_teams(ticker: str):
+    """Extract team codes from a Kalshi ticker. Returns (t1, t2) or (None, None)."""
+    parts = ticker.split('-')
+    if len(parts) < 2:
+        return None, None
+    import re as _re
+    stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
+    if len(stripped) < 6:
+        return None, None
+    return stripped[:3].upper(), stripped[3:6].upper()
 
 
 def _is_game_live(ticker: str) -> bool:
     """Check if the game referenced by a Kalshi ticker is currently live."""
     _refresh_espn_cache()
-    live = _espn_cache['data']
-    if not live:
+    info = _espn_cache['data']
+    if not info:
         return False
-    # Parse teams from ticker: KXSERIES-YYMMMDDTEAM1TEAM2-VARIANT
-    parts = ticker.split('-')
-    if len(parts) < 2:
+    t1, t2 = _parse_ticker_teams(ticker)
+    if not t1:
         return False
-    date_teams = parts[1]
-    import re as _re
-    stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', date_teams)
-    if len(stripped) < 6:
-        return False
-    t1 = stripped[:3].upper()
-    t2 = stripped[3:6].upper()
-    # Check both Kalshi codes and ESPN-mapped codes
     for code in [t1, t2]:
         espn_code = _KALSHI_TO_ESPN.get(code, code)
-        if code in live or espn_code in live:
+        entry = info.get(code) or info.get(espn_code)
+        if entry and entry.get('live'):
             return True
     return False
+
+
+def _get_game_time(ticker: str) -> str:
+    """Get game start time from ESPN cache for a given ticker. Returns e.g. '7:30 PM' or ''."""
+    _refresh_espn_cache()
+    info = _espn_cache['data']
+    if not info:
+        return ''
+    t1, t2 = _parse_ticker_teams(ticker)
+    if not t1:
+        return ''
+    for code in [t1, t2]:
+        espn_code = _KALSHI_TO_ESPN.get(code, code)
+        entry = info.get(code) or info.get(espn_code)
+        if entry and entry.get('game_time'):
+            return entry['game_time']
+    return ''
 
 
 # ─── Single Order Endpoint ─────────────────────────────────────────────────────
@@ -1627,15 +1766,16 @@ def scan_arb_opportunities():
 
         # Use the same series map as /api/markets
         SPORTS_SERIES = {
-            'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL', 'KXNBAPOINTS',
-                     'KXNBAREBOUNDS', 'KXNBAASSISTS', 'KXNBA3PM', 'KXNBASTEALS',
-                     'KXNBABLOCKS'],
+            'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL',
+                    'KXNBAPTS', 'KXNBAREB', 'KXNBAAST', 'KXNBA3PT',
+                    'KXNBASTL', 'KXNBABLK', 'KXNBAMVP'],
             'nfl': ['KXNFLGAME', 'KXNFLSPREAD', 'KXNFLTOTAL'],
             'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
             'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL'],
+            'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
             'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
-            'epl': ['KXEPLGAME', 'KXEPLGOAL', 'KXEPLBTTS'],
-            'ucl': ['KXUCLGAME', 'KXUCLGOAL', 'KXUCLBTTS'],
+            'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
+            'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
         }
 
         if sport_filter and sport_filter.lower() not in ('', 'all'):
@@ -1709,6 +1849,10 @@ def scan_arb_opportunities():
             if min_bid_val < 5:
                 continue
 
+            # Skip extreme width — phantom bids on dead markets
+            if width > 50:
+                continue
+
             # ── Liquidity score (0-1): tight spread = high ─────────
             # Perfect spread = 1¢ each side (total 2) → liquidity 1.0
             # 5¢ each side (total 10) → liquidity 0.2
@@ -1717,32 +1861,36 @@ def scan_arb_opportunities():
 
             # ── Live game detection ────────────────────────────────
             ticker_str = m.get('ticker', '')
+            event_ticker = m.get('event_ticker', '')
             is_live = _is_game_live(ticker_str)
 
+            # ── Game date & time ───────────────────────────────────
+            game_date = _parse_game_date(event_ticker)
+            game_time = _get_game_time(ticker_str)  # from ESPN (today's games only)
+
             # ── CATCH SCORE ────────────────────────────────────────
-            # The core metric: how quickly and reliably you'll catch
-            # the width as price oscillates during live play.
+            # How quickly and reliably you'll catch the width as
+            # price oscillates during live play.
             #
-            # Formula: width × liquidity × balance × live_multiplier
+            # Formula: width × balance × live_multiplier
             #
-            # Sweet spot: 3-8¢ width, 1-2¢ spreads, balanced bids,
-            # live game = high catch score.
-            # Wide width + wide spread + extreme odds = low score.
+            # NOTE: Liquidity (1/spread) is intentionally EXCLUDED.
+            # On Kalshi's single order book, spread ≈ width, so
+            # width × (1/width) = 1 — the terms cancel out and
+            # everything scores ~1.  Dropping liquidity lets width
+            # and balance differentiate properly.
             #
-            # Research basis:
-            # - Tight spread = active market, orders fill fast
-            # - Balance near 50/50 = price likely to cross both bids
-            # - Live game = volatility happening NOW (3x multiplier)
-            # - Width is the profit if both fill
+            # Sweet spot: 3-8¢ width, balanced bids, live game.
+            # Extreme odds (5¢/92¢) → low balance → low score.
             live_mult = 3.0 if is_live else 1.0
-            catch_score = round(width * liquidity * balance * live_mult, 1)
+            catch_score = round(width * balance * live_mult, 1)
 
             # ── Catch speed label ──────────────────────────────────
-            if catch_score >= 8:
+            if catch_score >= 15:
                 catch_speed = 'prime'    # best opportunities
-            elif catch_score >= 4:
+            elif catch_score >= 8:
                 catch_speed = 'fast'     # good fill speed
-            elif catch_score >= 1.5:
+            elif catch_score >= 3:
                 catch_speed = 'moderate' # decent, may take time
             else:
                 catch_speed = 'slow'     # wide spread or unbalanced
@@ -1750,7 +1898,7 @@ def scan_arb_opportunities():
             opportunities.append({
                 'ticker':        ticker_str,
                 'title':         m.get('title', ''),
-                'event_ticker':  m.get('event_ticker', ''),
+                'event_ticker':  event_ticker,
                 'series_ticker': m.get('series_ticker', ''),
                 'yes_bid':       yes_bid,
                 'no_bid':        no_bid,
@@ -1768,6 +1916,8 @@ def scan_arb_opportunities():
                 'balance':       balance,
                 'min_bid':       min_bid_val,
                 'is_live':       is_live,
+                'game_date':     game_date,
+                'game_time':     game_time,
             })
 
         opportunities.sort(key=lambda x: x['catch_score'], reverse=True)
@@ -1875,6 +2025,8 @@ def scan_middles():
         # ── Parse each market to extract team + spread number ─────────
         # Title format: "Orlando wins by over 7.5 Points?"
         # or: "TOR -3.5" etc.
+        # Ticker format: KXNBASPREAD-26MAR03OKCCHI-OKC24
+        #   last segment = {TEAM_CODE}{SPREAD_TIER_DIGITS}
         parsed_markets = []
         for m in all_spreads:
             title = m.get('title', '')
@@ -1891,38 +2043,20 @@ def scan_middles():
             team_name = sp_match.group(1).strip()
             spread_num = float(sp_match.group(2))
 
-            # Extract game ID from event ticker
-            ev_match = re.match(r'KX\w+SPREAD-(.+)', et, re.IGNORECASE)
-            game_id = ev_match.group(1) if ev_match else et
+            # Use event_ticker as game_id (same for all spread tiers)
+            game_id = et
 
-            # Extract 3-letter team codes from the game_id portion
-            # e.g. '26MAR02ORLMIA' → teams ORL, MIA
-            date_stripped = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', game_id)
-            team_a_code = date_stripped[:3] if len(date_stripped) >= 6 else ''
-            team_b_code = date_stripped[3:6] if len(date_stripped) >= 6 else ''
-
-            # Figure out which team this market references
-            # Match team_name to one of the two team codes
+            # Extract team code from the LAST segment of the market ticker
+            # e.g. 'KXNHLSPREAD-26MAR05NYILA-NYI2' → last='NYI2' → team='NYI'
+            # e.g. 'KXNBASPREAD-26MAR03OKCCHI-OKC24' → last='OKC24' → team='OKC'
+            ticker_parts = ticker.split('-')
             team_code = ''
-            opponent_code = ''
-            tn_upper = team_name.upper()
-            for code in [team_a_code, team_b_code]:
-                if code and (code in tn_upper or tn_upper.startswith(code)
-                             or code in ticker.upper()):
-                    team_code = code
-                    opponent_code = team_b_code if code == team_a_code else team_a_code
-                    break
-            # Fallback: use the last part of the ticker
-            if not team_code:
-                ticker_parts = ticker.split('-')
-                if len(ticker_parts) >= 3:
-                    last = ticker_parts[-1].split('_')[0]
-                    if last == team_a_code:
-                        team_code, opponent_code = team_a_code, team_b_code
-                    elif last == team_b_code:
-                        team_code, opponent_code = team_b_code, team_a_code
-                    else:
-                        team_code = last
+            if len(ticker_parts) >= 3:
+                last_seg = ticker_parts[-1]
+                # Team code = alphabetic prefix (strip trailing digits)
+                code_match = re.match(r'^([A-Z]+)', last_seg)
+                team_code = code_match.group(1) if code_match else last_seg
+
             if not team_code:
                 team_code = team_name[:3].upper()
 
@@ -1930,7 +2064,6 @@ def scan_middles():
                 'market': m,
                 'game_id': game_id,
                 'team_code': team_code,
-                'opponent_code': opponent_code,
                 'team_name': team_name,
                 'spread': spread_num,
                 'yes_bid': tc(m, 'yes_bid'),
@@ -1977,6 +2110,11 @@ def scan_middles():
                             if no_a <= 0 or no_b <= 0:
                                 continue
 
+                            # Skip phantom bids on extreme spreads
+                            # (e.g. 3¢ NO bid on "wins by 29.5+" = dead market)
+                            if no_a < 15 or no_b < 15:
+                                continue
+
                             cost = no_a + no_b
                             # Middle zone: game margin between
                             #   "Team A wins by ≤ spread_a" and
@@ -1988,17 +2126,17 @@ def scan_middles():
                             guaranteed_profit = 100 - cost   # one NO always wins
                             middle_profit = 200 - cost       # both NOs win
 
-                            # Suggested prices for guaranteed arb (total < 100)
-                            if cost >= 100:
-                                # Need to bid lower for guaranteed profit
-                                target = 95  # 5¢ guaranteed profit
-                                # Split proportionally
-                                ratio_a = no_a / (no_a + no_b) if (no_a + no_b) > 0 else 0.5
-                                sug_a = max(1, int(target * ratio_a))
-                                sug_b = max(1, target - sug_a)
-                            else:
-                                sug_a = no_a
-                                sug_b = no_b
+                            # Suggested prices: always target total < 100¢ for
+                            # guaranteed arb.  Place at 48¢ each (96¢ total = 4¢
+                            # guaranteed), capped at the current NO bid so we
+                            # don't overpay.  During live play, volatility can
+                            # push prices down to fill these.
+                            target_total = 96  # 4¢ guaranteed profit
+                            sug_a = min(target_total // 2, no_a)
+                            sug_b = min(target_total - sug_a, no_b)
+                            sug_a = max(1, sug_a)
+                            sug_b = max(1, sug_b)
+                            suggested_profit = 100 - sug_a - sug_b
 
                             # ── Spread & liquidity for each NO leg ────────
                             no_spread_a = (mkt_a['no_ask'] - mkt_a['no_bid']) if mkt_a['no_ask'] and mkt_a['no_bid'] else 99
@@ -2013,8 +2151,13 @@ def scan_middles():
 
                             # ── Live game detection ───────────────────────
                             ticker_a_str = mkt_a['market'].get('ticker', '')
+                            event_ticker_a = mkt_a['market'].get('event_ticker', '')
                             is_live = _is_game_live(ticker_a_str)
                             live_mult = 3.0 if is_live else 1.0
+
+                            # ── Game date & time ─────────────────────────
+                            game_date = _parse_game_date(event_ticker_a)
+                            game_time = _get_game_time(ticker_a_str)
 
                             # ── CATCH SCORE for middles ───────────────────
                             # Same philosophy: width × liquidity × balance × live
@@ -2051,6 +2194,7 @@ def scan_middles():
                                 'middle_profit': middle_profit,
                                 'suggested_a': sug_a,
                                 'suggested_b': sug_b,
+                                'suggested_profit': suggested_profit,
                                 'ticker_a': mkt_a['market']['ticker'],
                                 'ticker_b': mkt_b['market']['ticker'],
                                 'title_a': mkt_a['market']['title'],
@@ -2060,6 +2204,8 @@ def scan_middles():
                                 'liquidity': liquidity,
                                 'balance': balance,
                                 'is_live': is_live,
+                                'game_date': game_date,
+                                'game_time': game_time,
                             })
 
         # Sort: guaranteed arbs first, then by catch_score

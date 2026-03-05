@@ -190,7 +190,9 @@ function applyFilters() {
                 case 'mlb':   return et.includes('MLB') || et.includes('KXMLB');
                 case 'nhl':   return et.includes('NHL') || et.includes('KXNHL');
                 case 'ncaab': return et.includes('NCAAB') || et.includes('KXNCAA');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA');
+                case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
+                case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL');
                 default: return true;
             }
         });
@@ -231,44 +233,12 @@ function getLiveScoreForGame(gameId) {
 // Auto-login with stored credentials
 async function autoLogin() {
     console.log('🔐 Starting auto-login...');
-    const apiKey = 'e0623465-ab2e-4e6b-af50-a896fe5ddacc';
-    const privateKey = `-----BEGIN RSA PRIVATE KEY-----
-MIIEoQIBAAKCAQEA5vovFqOwM6v2yT4bu/kRggMULlxTAUS20ufKk1VYITYmlIFO
-7hSqCQf6KDtntF0hl4DTmsme7VTvC8zli+cNHGGUa3OA9W7qSh+2ERFdSF+41RKC
-yFuFxA12xn8fq1nBq4Bgh+cjP6rOkTvSXWpCnf0Hus/ZMFuwPCeMtnL+EAJ9OU8s
-pqZHlaPkNBCgZ71syT2bIbS6m045DqeEB8vTJHp9VSFbs7fQmlFJKds9jBeL9unn
-8yKcDWaxTJUlfYx9O169Qx1HewZAnG9zMP9ra9qIIQKaXD4+RKEXJnegGbAjMjf9
-ulCW241M8BLL/9ryTZLq269TOmiHK9D1ltDhWwIDAQABAoIBACVXsnA7E5wvA62i
-fHJmALYf0E30gDj2xoYPknlCdYadDhy5USz9q0Xdg8yoWgpXejxXyB5A1ZBySFmE
-jWISf1Sk1A2RNXq4rWlBejqFL6spSqUsInfJEDXTpW3PFKwrzTtwfGrMbC75av8h
-CFAxA0cupubFfswqLrJzBHVk3v1wUu+JoMrspoZvz+0LwIe3pY+TxCxukxEG+EWQ
-NIiMow3sniDuZA+93RMCZuSD02DDnZg6K7QoefXrfOotjiXLIefuXVsUlWaWUdkQ
-wF8BQaGO585K92YFOrkVMh8koy8P0ZFy6JMrtjViq6TQx1JPGc8n1tnitfSjdBhk
-RgBuTwkCgYEA7apnS5G0QEobu/xYP2VltIcc7Rgj0bIV0V6tOUcxRvklhkJ91wKp
-tQ2nZ/iqpyUKVEqtGiMUCU+0B5IGGJpRNOAxzOr9ICf46e766JZ+AhngtC2KL2id
-uEvlxaeEnb3Y/gaZgt/KLYBQiIqWa3220n20IIPl1CoTWP5Ma0lBunkCgYEA+Mux
-ngVpQM8FY06rSB+00XcRq29sdnHjJR9chFvMjwfoTIFxCJ7jQAYcRfJEzQp6Z8T7
-+BMl8kCzgCSwBcODYw2AuROqktZvdXMagZjoZS5ZbM1WYdGtbn3QRfNjTXWC+fzk
-UTjRvKyH2O8MrStz3Y5H9sUaWwsIE4s30aVjxXMCgYAv4ik1nIGIgmXcFhdhjnhT
-SvWU/0wYL50dtcmIxMM03XWl+zeHXk364GleFUesrVXLbdA6d97NkXVgIReBVXYP
-BSyDcMTW+ba4yyFaQxfYLIaNRq+UpatBOmlszTd24I0bgRDkwVnmmPegyutLdOSk
-vBbShkCD4oZLY9DZvMS1YQKBgQCI2+wp5AohJ4BsP3NDKoXaD+i9aH6+rSlpW1YW
-TTU6nPvxUecu+dBCgNn+tCWasR/ig16j+UyPdX4IiKX3lbRpwZzEsofLXIBVmGrF
-TarRNezlSBMznhcMR9NRF3DRxEm3YKDr+RiO9E2KTP2pKNUE1GbL3WMBIBFiRtv+
-zD8U9wJ/ZyogIUaMX7Rcu+KvbSujKg8nQHG/KdJeVO6NECD2+0iDden/c+ax9FFJ
-mEE1rz0cViIPcKbw3hkKymdBdrHS6tKsPqMB7L4WQqjILYXJOiTJQQy0Gd+YEhSX
-lSEc96isSV4HXYuYz2fNUUoH8e5s0+xRraON1cwscci9tC2vKg==
------END RSA PRIVATE KEY-----`;
 
     try {
-        const response = await fetch(`${API_BASE}/login`, {
+        // Credentials are stored server-side in config.json — never in frontend code
+        const response = await fetch(`${API_BASE}/auto-login`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                api_key_id: apiKey,
-                private_key: privateKey,
-                demo: false  // Using production, not demo
-            })
+            headers: { 'Content-Type': 'application/json' }
         });
         
         const data = await response.json();
@@ -433,6 +403,7 @@ function detectSport(eventTicker) {
     if (upper.includes('KXMLB')) return 'MLB';
     if (upper.includes('KXNCAAB')) return 'NCAAB';
     if (upper.includes('KXNCAAF')) return 'NCAAF';
+    if (upper.includes('KXMLS')) return 'MLS';
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
     if (upper.includes('KXLOL') || upper.includes('KXDOTA') || upper.includes('KXCS')) return 'Esports';
@@ -443,7 +414,7 @@ function detectSport(eventTicker) {
 function getSportEmoji(sport) {
     const emojis = {
         'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 
-        'NCAAB': '🎓', 'NCAAF': '🎓', 'EPL': '⚽', 'UCL': '⚽',
+        'MLS': '⚽', 'NCAAB': '🎓', 'NCAAF': '🎓', 'EPL': '⚽', 'UCL': '⚽',
         'Esports': '🎮', 'Sports': '🏆'
     };
     return emojis[sport] || '🏆';
@@ -523,6 +494,18 @@ function parseTeamNames(gameId) {
     return gameId;
 }
 
+// Parse game date from gameId like "26MAR04ATLMIL" → "Mar 4"
+function parseGameDate(gameId) {
+    if (!gameId) return '';
+    const match = gameId.match(/^(\d{2})([A-Z]{3})(\d{2})/);
+    if (!match) return '';
+    const monthMap = {JAN:'Jan',FEB:'Feb',MAR:'Mar',APR:'Apr',MAY:'May',JUN:'Jun',
+                      JUL:'Jul',AUG:'Aug',SEP:'Sep',OCT:'Oct',NOV:'Nov',DEC:'Dec'};
+    const month = monthMap[match[2]] || match[2];
+    const day = parseInt(match[3]);
+    return `${month} ${day}`;
+}
+
 // Display one compact event row (trading floor style)
 function displayEventRow(eventData, container) {
     const liveScore = getLiveScoreForGame(eventData.gameId);
@@ -547,6 +530,15 @@ function displayEventRow(eventData, container) {
     sportBadge.style.cssText = 'background: #2a3447; color: #8892a6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600; margin-left: 8px;';
     sportBadge.textContent = sport;
     titleSpan.appendChild(sportBadge);
+
+    // Date badge
+    const gameDate = parseGameDate(eventData.gameId);
+    if (gameDate) {
+        const dateBadge = document.createElement('span');
+        dateBadge.style.cssText = 'color: #6a7488; font-size: 11px; margin-left: 8px;';
+        dateBadge.textContent = `📅 ${gameDate}`;
+        titleSpan.appendChild(dateBadge);
+    }
     header.appendChild(titleSpan);
 
     if (isLive) {
@@ -576,7 +568,7 @@ function displayEventRow(eventData, container) {
         marketsGrid.appendChild(createMarketRow(m, winLabel));
     });
     
-    // Display spreads — show primary spread (closest to pick-em), rest in collapsible
+    // Display spreads — show primary spread (closest to pick-em), rest in own collapsible
     if (categorized.spreads.length > 0) {
         // Sort by spread number (smallest first = closest to pick-em)
         const sorted = [...categorized.spreads].sort((a, b) => {
@@ -589,23 +581,31 @@ function displayEventRow(eventData, container) {
             marketsGrid.appendChild(createMarketRow(m, extractSubtitle(m.title) || 'Spread'));
         });
         if (sorted.length > 2) {
-            categorized.props.push(...sorted.slice(2));
+            const spreadSection = createCollapsible('📊 More Spreads', sorted.slice(2), m => extractSubtitle(m.title) || 'Spread');
+            marketsGrid.appendChild(spreadSection);
         }
     }
     
-    // Display totals — show the middle total, rest in collapsible
+    // Display totals — show the middle total with line number, rest in own collapsible
     if (categorized.totals.length > 0) {
-        const midIdx = Math.floor(categorized.totals.length / 2);
-        marketsGrid.appendChild(createMarketRow(categorized.totals[midIdx], extractSubtitle(categorized.totals[midIdx].title) || 'Total'));
-        const otherTotals = categorized.totals.filter((_, i) => i !== midIdx);
+        // Sort by line number
+        const sortedTotals = [...categorized.totals].sort((a, b) => {
+            const numA = parseInt((a.ticker || '').match(/(\d+)$/)?.[1] || '999');
+            const numB = parseInt((b.ticker || '').match(/(\d+)$/)?.[1] || '999');
+            return numA - numB;
+        });
+        const midIdx = Math.floor(sortedTotals.length / 2);
+        marketsGrid.appendChild(createMarketRow(sortedTotals[midIdx], extractTotalLine(sortedTotals[midIdx])));
+        const otherTotals = sortedTotals.filter((_, i) => i !== midIdx);
         if (otherTotals.length > 0) {
-            categorized.props.push(...otherTotals);
+            const totalSection = createCollapsible('📊 More Totals', otherTotals, m => extractTotalLine(m));
+            marketsGrid.appendChild(totalSection);
         }
     }
     
-    // Player props + extra spreads/totals in collapsible section
+    // Player props — group by stat type with readable labels
     if (categorized.props.length > 0) {
-        const propsSection = createPropsCollapsible(categorized.props);
+        const propsSection = createPropsSection(categorized.props);
         marketsGrid.appendChild(propsSection);
     }
     
@@ -613,78 +613,54 @@ function displayEventRow(eventData, container) {
     container.appendChild(card);
 }
 
-// Categorize markets by type using ticker prefix (most reliable with series-based backend)
-// KXNBAGAME → winner, KXNBASPREAD → spread, KXNBATOTAL → total, etc.
+// Categorize markets by type
+// Primary: use backend-provided market_type field (100% reliable)
+// Fallback: parse from ticker prefix (KXNBAGAME → winner, KXNBASPREAD → spread, etc.)
 function categorizeMarkets(markets) {
     const result = {
-        winners: [],   // ALL winner markets (one per team/outcome)
-        spreads: [],   // ALL spread markets
-        totals: [],    // ALL total markets
+        winners: [],
+        spreads: [],
+        totals: [],
         props: []
     };
     
-    // Type detection by ticker/event_ticker prefix
-    const WINNER_PATTERNS = ['GAME', 'WIN', 'MONEYLINE'];
-    const SPREAD_PATTERNS = ['SPREAD'];
-    const TOTAL_PATTERNS  = ['TOTAL'];
-    
     function getMarketType(market) {
+        // Backend enriches each market with market_type
+        if (market.market_type) return market.market_type;
+        
+        // Fallback: detect from ticker/event_ticker prefix
         const ticker = (market.ticker || '').toUpperCase();
         const event = (market.event_ticker || '').toUpperCase();
-        const series = (market.series_ticker || '').toUpperCase();
         const title = (market.title || '').toUpperCase();
         
-        // Primary: check ticker/event_ticker prefix (e.g., KXNBAGAME-26FEB28TORWAS)
-        for (const p of WINNER_PATTERNS) {
-            if (ticker.includes(p) || event.includes(p) || series.includes(p) || title.includes('WINNER')) return 'winner';
-        }
-        for (const p of SPREAD_PATTERNS) {
-            if (ticker.includes(p) || event.includes(p) || series.includes(p) || title.includes('SPREAD') || title.includes('WINS BY')) return 'spread';
-        }
-        for (const p of TOTAL_PATTERNS) {
-            if (ticker.includes(p) || event.includes(p) || series.includes(p) || title.includes('TOTAL POINTS') || title.includes('TOTAL GOALS')) return 'total';
-        }
+        // Check series-based prefix in ticker (most reliable)
+        if (ticker.includes('GAME') || event.includes('GAME') || title.includes('WINNER')) return 'winner';
+        if (ticker.includes('SPREAD') || event.includes('SPREAD') || title.includes('WINS BY')) return 'spread';
+        if (ticker.includes('TOTAL') || event.includes('TOTAL') || title.includes('TOTAL POINTS') || title.includes('TOTAL GOALS')) return 'total';
         
         return 'prop';
     }
     
     markets.forEach(market => {
         const type = getMarketType(market);
-        
-        if (type === 'winner') {
-            result.winners.push(market);
-        } else if (type === 'spread') {
-            result.spreads.push(market);
-        } else if (type === 'total') {
-            result.totals.push(market);
-        } else {
-            result.props.push(market);
-        }
+        result[type === 'winner' ? 'winners' : type === 'spread' ? 'spreads' : type === 'total' ? 'totals' : 'props'].push(market);
     });
     
     console.log(`  Categorized: W=${result.winners.length} S=${result.spreads.length} T=${result.totals.length} Props=${result.props.length}`);
-    
     return result;
 }
 
 // Create single market row (compact button-grid style)
 function createMarketRow(market, label) {
     const row = document.createElement('div');
-    row.style.cssText = 'display: grid; grid-template-columns: 120px 1fr 1fr auto; gap: 10px; align-items: center; padding: 8px; background: #0f1419; border-radius: 6px;';
+    const isProp = market.market_type === 'prop';
+    const cols = isProp ? '1fr 80px 80px auto' : '120px 1fr 1fr auto';
+    row.style.cssText = `display: grid; grid-template-columns: ${cols}; gap: 10px; align-items: center; padding: 8px; background: #0f1419; border-radius: 6px;`;
     
-    // Market label
+    // Market label — trust the caller's label (they compute the right one)
     const labelDiv = document.createElement('div');
     labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6;';
-    labelDiv.textContent = label;
-    
-    // Extract clean subtitle from market title (only for spread/total rows, NEVER overwrite team labels)
-    const isWinnerLabel = label === 'Winner' || label.endsWith(' Win');
-    if (!isWinnerLabel) {
-        const subtitle = extractSubtitle(market.title);
-        if (subtitle) {
-            labelDiv.textContent = subtitle;
-        }
-    }
+    labelDiv.textContent = label || extractSubtitle(market.title) || market.title;
     
     // YES button (compact price button with value-based styling)
     const yesBid = getPrice(market, 'yes_bid');
@@ -694,12 +670,28 @@ function createMarketRow(market, label) {
     
     const yesBtn = document.createElement('button');
     yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${yesStyle}`;
-    // For winner markets with team label, show team name + YES/NO context
-    // Each row is now one specific team's market (e.g., MIA ticker = "Will Miami win?")
-    const isTeamRow = label && label !== 'Winner' && label !== 'Spread' && label !== 'Total';
-    const teams = (!isTeamRow && label === 'Winner') ? extractTeamSides(market.title) : null;
-    const yesLabel = isTeamRow ? `✓ Wins` : (teams ? shortenTeam(teams.yes) : 'YES');
-    const noLabel  = isTeamRow ? `✗ Loses` : (teams ? shortenTeam(teams.no)  : 'NO');
+    
+    // Smart button labels based on market type
+    const mtype = market.market_type || '';
+    const isWinnerRow = label && (label.endsWith(' Win') || label === 'Winner');
+    const isTotalRow = mtype === 'total' || (label && label.startsWith('O/U'));
+    const isSpreadRow = mtype === 'spread' || (label && /^[A-Z]{2,4}\s-/.test(label));
+    
+    let yesLabel, noLabel;
+    if (isWinnerRow) {
+        const teamFromTicker = getTeamLabelFromTicker(market.ticker);
+        yesLabel = `✓ Wins`;
+        noLabel = `✗ Loses`;
+    } else if (isTotalRow) {
+        yesLabel = `✓ Over`;
+        noLabel = `✗ Under`;
+    } else if (isSpreadRow) {
+        yesLabel = `✓ Covers`;
+        noLabel = `✗ Misses`;
+    } else {
+        yesLabel = 'YES';
+        noLabel = 'NO';
+    }
 
     yesBtn.innerHTML = `<div>${yesPrice}¢</div><div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">${yesLabel}</div>`;
     yesBtn.onclick = () => openBotModal(market, 'yes', yesAsk);
@@ -852,7 +844,17 @@ function shortenTeam(name) {
 function extractSubtitle(title) {
     if (!title) return '';
     
-    // For spread: "DEN vs OKC: DEN -3.5" -> "DEN -3.5"
+    // For spread: "Milwaukee wins by over 17.5 Points?" -> "MIL -17.5"
+    const spreadMatch = title.match(/^(\w[\w\s.]+?)\s+wins?\s+by\s+over\s+([\d.]+)/i);
+    if (spreadMatch) {
+        const teamWord = spreadMatch[1].trim();
+        const num = spreadMatch[2];
+        // Use first 3-4 chars as abbreviation
+        const abbr = teamWord.length <= 4 ? teamWord.toUpperCase() : teamWord.substring(0, 3).toUpperCase();
+        return `${abbr} -${num}`;
+    }
+    
+    // For total: "Portland at Memphis: Total Points" -> "Total Points" (line added elsewhere)
     if (title.includes(':')) {
         const parts = title.split(':');
         return parts[1]?.trim() || parts[0];
@@ -864,6 +866,29 @@ function extractSubtitle(title) {
     }
     
     return title.length > 40 ? title.substring(0, 37) + '...' : title;
+}
+
+// Extract the line number from a total market
+// Ticker KXNBATOTAL-26MAR04PORMEM-252 → "O/U 252.5"
+// Fallback to yes_sub_title: "Over 252.5 points scored" → "O/U 252.5"
+function extractTotalLine(market) {
+    // Try ticker last segment first (most reliable)
+    const ticker = market.ticker || '';
+    const parts = ticker.split('-');
+    if (parts.length >= 3) {
+        const lastSeg = parts[parts.length - 1];
+        const numMatch = lastSeg.match(/^[A-Z]*(\d+)$/);
+        if (numMatch) {
+            return `O/U ${numMatch[1]}.5`;
+        }
+    }
+    // Fallback to yes_sub_title
+    const sub = market.yes_sub_title || '';
+    const subMatch = sub.match(/over\s+([\d.]+)/i);
+    if (subMatch) {
+        return `O/U ${subMatch[1]}`;
+    }
+    return 'Total Points';
 }
 
 // ── Sportsbook-style display name from a Kalshi ticker ──────────────────────
@@ -927,22 +952,24 @@ function formatBotDisplayName(ticker) {
 }
 
 // Create collapsible player props section
-function createPropsCollapsible(props) {
+// Generic collapsible section (used for spreads, totals, and props)
+function createCollapsible(label, items, labelFn) {
     const section = document.createElement('div');
     section.style.cssText = 'margin-top: 8px;';
     
     const header = document.createElement('div');
     header.style.cssText = 'padding: 8px; background: #0f1419; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;';
     header.innerHTML = `
-        <span style="color: #8892a6; font-size: 12px; font-weight: 600;">📊 Player Props (${props.length})</span>
+        <span style="color: #8892a6; font-size: 12px; font-weight: 600;">${label} (${items.length})</span>
         <span style="color: #8892a6; font-size: 12px;">▼</span>
     `;
     
     const content = document.createElement('div');
     content.style.cssText = 'display: none; padding-top: 8px; gap: 6px; flex-direction: column;';
     
-    props.slice(0, 20).forEach(prop => {
-        content.appendChild(createMarketRow(prop, extractSubtitle(prop.title)));
+    items.slice(0, 30).forEach(item => {
+        const itemLabel = labelFn ? labelFn(item) : extractSubtitle(item.title);
+        content.appendChild(createMarketRow(item, itemLabel));
     });
     
     header.onclick = () => {
@@ -954,6 +981,88 @@ function createPropsCollapsible(props) {
     section.appendChild(header);
     section.appendChild(content);
     return section;
+}
+
+// Legacy alias
+function createPropsCollapsible(props) {
+    return createPropsSection(props);
+}
+
+// Create grouped player props section — groups by stat type (points, rebounds, etc.)
+function createPropsSection(props) {
+    const STAT_LABELS = {
+        'KXNBAPTS': '🏀 Points',  'KXNBAREB': '🏀 Rebounds', 'KXNBAAST': '🏀 Assists',
+        'KXNBA3PT': '🏀 3-Pointers', 'KXNBASTL': '🏀 Steals', 'KXNBABLK': '🏀 Blocks',
+        'KXNBAMVP': '🏆 MVP',     'KXNHLGOAL': '🏒 Goals',   'KXEPLBTTS': '⚽ BTTS',
+        'KXUCLBTTS': '⚽ BTTS',   'KXMLSBTTS': '⚽ BTTS',
+    };
+
+    // Group by series_ticker (stat type)
+    const groups = {};
+    props.forEach(m => {
+        const key = m.series_ticker || 'other';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(m);
+    });
+
+    // If only one group or few total props, use simple collapsible
+    const groupKeys = Object.keys(groups);
+    if (groupKeys.length <= 1 || props.length <= 6) {
+        return createCollapsible('📊 Player Props', props, m => extractPropLabel(m));
+    }
+
+    // Multiple groups — create outer collapsible with inner sub-groups
+    const section = document.createElement('div');
+    section.style.cssText = 'margin-top: 8px;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding: 8px; background: #0f1419; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;';
+    header.innerHTML = `
+        <span style="color: #8892a6; font-size: 12px; font-weight: 600;">📊 Player Props (${props.length})</span>
+        <span style="color: #8892a6; font-size: 12px;">▼</span>
+    `;
+
+    const content = document.createElement('div');
+    content.style.cssText = 'display: none; padding-top: 8px; gap: 4px; flex-direction: column;';
+
+    // Sort groups: points first, then alphabetical
+    const groupOrder = ['KXNBAPTS', 'KXNBAREB', 'KXNBAAST', 'KXNBA3PT', 'KXNBASTL', 'KXNBABLK'];
+    const sortedKeys = groupKeys.sort((a, b) => {
+        const ai = groupOrder.indexOf(a);
+        const bi = groupOrder.indexOf(b);
+        if (ai >= 0 && bi >= 0) return ai - bi;
+        if (ai >= 0) return -1;
+        if (bi >= 0) return 1;
+        return a.localeCompare(b);
+    });
+
+    sortedKeys.forEach(key => {
+        const items = groups[key];
+        const groupLabel = STAT_LABELS[key] || key.replace('KXNBA', '').replace('KX', '');
+        const subCollapsible = createCollapsible(`${groupLabel} (${items.length})`, items, m => extractPropLabel(m));
+        content.appendChild(subCollapsible);
+    });
+
+    header.onclick = () => {
+        const isHidden = content.style.display === 'none';
+        content.style.display = isHidden ? 'flex' : 'none';
+        header.querySelector('span:last-child').textContent = isHidden ? '▲' : '▼';
+    };
+
+    section.appendChild(header);
+    section.appendChild(content);
+    return section;
+}
+
+// Extract a readable label for a player prop market
+// Title format: "Shai Gilgeous-Alexander: 40+ points" -> use as-is, it's great
+function extractPropLabel(market) {
+    const title = market.title || '';
+    // Prop titles are already clean: "Player Name: N+ stat"
+    if (title.includes(':')) {
+        return title;  // Already "Player: 40+ points" — perfect
+    }
+    return extractSubtitle(title) || title;
 }
 
 // Open orderbook in right sidebar (split-pane layout)
@@ -1978,6 +2087,10 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             const liveTag = opp.is_live
                 ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">🔴 LIVE</span>`
                 : '';
+            // Game date/time tag
+            const dateStr = opp.game_date || '';
+            const timeStr = opp.game_time || '';
+            const dateTimeLabel = dateStr ? `<span style="color:#6a7488;font-size:10px;margin-left:6px;">📅 ${dateStr}${timeStr ? ' · ' + timeStr : ''}</span>` : '';
             // Catch speed badge
             const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
             const speedColor = speedColors[opp.catch_speed] || '#555';
@@ -1985,7 +2098,7 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                        ${opp.title || opp.ticker}${liveTag}
+                        ${opp.title || opp.ticker}${liveTag}${dateTimeLabel}
                         <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${speedLabel}</span>
                     </div>
                     <div style="color:#8892a6;font-size:11px;margin-top:3px;">
@@ -2103,6 +2216,10 @@ function showMiddlesResults(data) {
             const liveTag = m.is_live
                 ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">🔴 LIVE</span>`
                 : '';
+            // Game date/time
+            const mDateStr = m.game_date || '';
+            const mTimeStr = m.game_time || '';
+            const mDateTimeLabel = mDateStr ? `<span style="color:#6a7488;font-size:10px;margin-left:6px;">📅 ${mDateStr}${mTimeStr ? ' · ' + mTimeStr : ''}</span>` : '';
             const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
             const speedColor = speedColors[m.catch_speed] || '#555';
             const speedLabel = (m.catch_speed || 'slow').toUpperCase();
@@ -2111,7 +2228,7 @@ function showMiddlesResults(data) {
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                     <div>
                         <span style="color:#fff;font-weight:700;font-size:14px;">${m.team_a} vs ${m.team_b}</span>
-                        ${guarLabel}${liveTag}
+                        ${guarLabel}${liveTag}${mDateTimeLabel}
                         <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px;">${speedLabel}</span>
                     </div>
                     <div style="text-align:right;">
@@ -2129,14 +2246,13 @@ function showMiddlesResults(data) {
                         <span>${m.title_b} @ <strong style="color:#fff;">${m.no_b_bid}¢</strong> <span style="color:#6a7488;font-size:10px;">(spread ${m.no_spread_b || 0}¢)</span></span>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:6px;padding:6px 8px;background:#0f1419;border-radius:6px;">
-                        <div>Cost: <strong style="color:#fff;">${m.cost}¢</strong></div>
+                        <div>Mkt cost: <strong style="color:#fff;">${m.cost}¢</strong></div>
                         <div>Middle: <strong style="color:#fff;">${midWidth} pts</strong></div>
                         <div>Both win: <strong style="color:#00ff88;">+${m.middle_profit}¢</strong></div>
                         <div>Catch: <strong style="color:${speedColor};">${m.catch_score}</strong> · Liq ${Math.round((m.liquidity || 0) * 100)}%</div>
                     </div>
                     <div style="margin-top:6px;color:#6a7488;font-size:10px;">
-                        ↳ One NO always wins (100¢). If game within ${midWidth} pts of either spread, both NOs win (200¢).
-                        ${m.cost >= 100 ? `<br>⚠ Cost ${m.cost}¢ > 100¢ — suggest lower bids: NO ${m.suggested_a}¢ + NO ${m.suggested_b}¢ = ${m.suggested_a + m.suggested_b}¢ for guaranteed profit` : ''}
+                        ↳ Post at NO ${m.suggested_a}¢ + NO ${m.suggested_b}¢ = ${m.suggested_a + m.suggested_b}¢ → <strong style="color:#00ff88;">+${m.suggested_profit || (100 - m.suggested_a - m.suggested_b)}¢ guaranteed</strong>
                     </div>
                 </div>
                 <div style="display:flex;gap:8px;">

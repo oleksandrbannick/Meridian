@@ -28,8 +28,11 @@ wheels/
 *.key
 .env
 config.ini
+config.json
 credentials.txt
 kalshi_private_key.pem
+backend/config.json
+backend/kalshi_private_key.pem
 /tmp/
 
 # IDE

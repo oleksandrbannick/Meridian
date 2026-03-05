@@ -1,5 +1,5 @@
 // Meridian — Sports Trading Terminal
-const API_BASE = 'http://localhost:5001/api';
+const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 let allMarkets = [];
 let autoMonitorInterval = null;
 let liveScoresInterval = null;
@@ -95,7 +95,12 @@ function switchTab(tab) {
     // Load tab-specific data
     if (tab === 'positions') loadPositions();
     if (tab === 'history') loadTradeHistory();
-    if (tab === 'bots') { loadBots(); loadPnL(); }
+    if (tab === 'bots') {
+        loadBots(); loadPnL();
+        // Always show buddy on bots tab
+        const buddy = document.getElementById('bot-buddy');
+        if (buddy) buddy.style.display = 'flex';
+    }
 }
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
@@ -275,11 +280,11 @@ function applyFilters() {
                 case 'nfl':   return et.includes('NFL') || et.includes('NFLG');
                 case 'mlb':   return et.includes('MLB') || et.includes('KXMLB');
                 case 'nhl':   return et.includes('NHL') || et.includes('KXNHL');
-                case 'ncaab': return et.includes('NCAAB') || et.includes('KXNCAA');
+                case 'ncaab': return et.includes('NCAAB') || et.includes('KXNCAA') || et.includes('KXMARMAD');
                 case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
                 case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
                 case 'tennis': return et.includes('KXATP') || et.includes('KXWTA');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA');
                 default: return true;
             }
         });
@@ -358,6 +363,13 @@ async function autoLogin() {
         
         if (data.success) {
             console.log('✅ Auto-login successful - Balance: $' + data.balance.toFixed(2));
+
+            // Show logged-in user name
+            if (data.display_name) {
+                const loginBtn = document.getElementById('login-status');
+                loginBtn.textContent = `✓ ${data.display_name}`;
+                loginBtn.title = `Logged in as ${data.display_name}`;
+            }
 
             await loadBalance();
             await loadBots();
@@ -621,7 +633,8 @@ function detectSport(eventTicker) {
     if (upper.includes('KXNFL')) return 'NFL';
     if (upper.includes('KXNHL')) return 'NHL';
     if (upper.includes('KXMLB')) return 'MLB';
-    if (upper.includes('KXNCAAB')) return 'NCAAB';
+    if (upper.includes('KXNCAAMB') || upper.includes('KXNCAAB') || upper.includes('KXMARMAD')) return 'NCAAB';
+    if (upper.includes('KXNCAAWB')) return 'NCAAB';
     if (upper.includes('KXNCAAF')) return 'NCAAF';
     if (upper.includes('KXMLS')) return 'MLS';
     if (upper.includes('KXEPL')) return 'EPL';
@@ -2052,7 +2065,7 @@ function toggleStrategyInfo() {
 /** Recalculate YES/NO limit prices whenever the arb-width changes */
 function recalcArbPrices() {
     if (!currentArbMarket) return;
-    const width = parseInt(document.getElementById('bot-arb-width').value) || 5;
+    const width = parseInt(document.getElementById('bot-arb-width').value) || 10;
     document.getElementById('width-display').textContent = `${width}¢`;
 
     const arb = calculateArbPrices(currentArbMarket, width);
@@ -2077,6 +2090,8 @@ function recalcArbPrices() {
     }
 
     updateProfitPreview();
+    updateBreakevenDisplay();
+    highlightActivePreset();
 }
 
 /** Called when user manually edits YES or NO price — sync width display */
@@ -2168,6 +2183,43 @@ function updateProfitPreview() {
                 </div>
             </div>
         </div>`;
+}
+
+// --- Arb Preset Helpers ---
+
+function applyPreset(width, sl) {
+    const widthSlider = document.getElementById('bot-arb-width');
+    const slInput = document.getElementById('bot-stop-loss-cents');
+    if (widthSlider) { widthSlider.value = width; }
+    if (slInput) { slInput.value = sl; }
+    document.getElementById('width-display').textContent = `${width}¢`;
+    recalcArbPrices();
+}
+
+function updateBreakevenDisplay() {
+    const width = parseInt(document.getElementById('bot-arb-width').value) || 10;
+    const sl = parseInt(document.getElementById('bot-stop-loss-cents').value) || 5;
+    const be = ((sl / (sl + width)) * 100).toFixed(1);
+    const el = document.getElementById('breakeven-display');
+    if (el) el.textContent = `Breakeven: ${be}%`;
+}
+
+function highlightActivePreset() {
+    const width = parseInt(document.getElementById('bot-arb-width').value) || 10;
+    const sl = parseInt(document.getElementById('bot-stop-loss-cents').value) || 5;
+    document.querySelectorAll('.arb-preset-btn').forEach(btn => {
+        const bw = parseInt(btn.dataset.width);
+        const bs = parseInt(btn.dataset.sl);
+        if (bw === width && bs === sl) {
+            btn.style.borderColor = '#00ff88';
+            btn.style.background = 'rgba(0,255,136,0.12)';
+            btn.style.color = '#00ff88';
+        } else {
+            btn.style.borderColor = '#333';
+            btn.style.background = 'rgba(255,255,255,0.03)';
+            btn.style.color = '#8892a6';
+        }
+    });
 }
 
 // Close modal
@@ -2375,8 +2427,25 @@ async function loadBots() {
                 const sl = bot.stop_loss_cents || 5;
                 const tp = bot.take_profit_cents || 0;
                 const liveBid = bot.live_bid || '?';
+                const watchQty = bot.quantity || 1;
+                const fillQty = bot.fill_qty || 0;
+                const orderFilled = bot.order_filled || false;
                 const nowSec = Date.now() / 1000;
                 const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
+                const watchDisplayName = formatBotDisplayName(bot.ticker);
+
+                // Unrealized P&L for watch
+                const curBidNum = typeof liveBid === 'number' ? liveBid : 0;
+                const unrealizedPnl = orderFilled && curBidNum > 0 ? (curBidNum - entry) * watchQty : 0;
+                const unrealColor = unrealizedPnl >= 0 ? '#00ff88' : '#ff4444';
+
+                // Fill status
+                let fillStatusHtml = '';
+                if (!orderFilled) {
+                    fillStatusHtml = fillQty > 0 
+                        ? `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">FILLING ${fillQty}/${watchQty}</span>` 
+                        : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">PENDING</span>`;
+                }
 
                 const item = document.createElement('div');
                 item.className = 'bot-item';
@@ -2385,19 +2454,27 @@ async function loadBots() {
                     <div style="display:flex;justify-content:space-between;align-items:center;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <span style="color:#9966ff;font-size:11px;font-weight:700;">👁 WATCH</span>
-                            <strong style="color:#fff;font-size:13px;">${bot.ticker}</strong>
-                            <span class="bot-status watching">WATCHING</span>
+                            <strong style="color:#fff;font-size:13px;">${watchDisplayName}</strong>
+                            <span class="bot-status watching">${orderFilled ? 'WATCHING' : 'PENDING'}</span>
                             <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
+                            ${fillStatusHtml}
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
+                            ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
                             <span style="color:#555;font-size:10px;">${ageMin}m</span>
                             <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
                         </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px;color:#8892a6;">
+                    <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;font-size:11px;color:#8892a6;">
                         <div>Entry: <strong style="color:#fff;">${entry}¢</strong></div>
+                        <div>Qty: <strong style="color:#fff;">×${watchQty}</strong></div>
                         <div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
                         <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:4px;">
+                        <span>🎟 ${bot.ticker || '?'}</span>
+                        <span>Cost: $${(entry * watchQty / 100).toFixed(2)}</span>
+                        <span>Pays: $${(watchQty).toFixed(2)} if wins</span>
                     </div>
                 `;
                 botsList.appendChild(item);
@@ -2478,17 +2555,28 @@ async function loadBots() {
                 timeoutInfo = `<span style="color:#818cf8;font-size:10px;">🔄 Waiting repeat</span>`;
             }
 
-            // Stop-loss info
+            // Stop-loss info + first leg indicator
             let stopLossInfo = '';
+            const firstLeg = bot.first_leg || '';
+            const firstFillAt = bot.first_fill_at || 0;
+            const fillAgeMin = firstFillAt > 0 ? Math.floor((Date.now()/1000 - firstFillAt) / 60) : 0;
             if (bot.status === 'yes_filled') {
                 const triggerAt = (bot.yes_price || 0) - stopLoss;
-                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;">
-                    🛑 Stop-loss: sells YES if bid drops to <strong>${triggerAt}¢</strong> (−${stopLoss}¢ from entry)
+                const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
+                const distFromSL = typeof yBid === 'number' ? yBid - triggerAt : '?';
+                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>🛑 SL: sells YES if bid ≤ <strong>${triggerAt}¢</strong> (−${stopLoss}¢)</span>
+                    <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromSL === 'number' && distFromSL <= 2 ? '#ff4444' : '#ffaa00'};">${distFromSL}¢</strong> from trigger</span>
+                    <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
                 </div>`;
             } else if (bot.status === 'no_filled') {
                 const triggerAt = (bot.no_price || 0) - stopLoss;
-                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;">
-                    🛑 Stop-loss: sells NO if bid drops to <strong>${triggerAt}¢</strong> (−${stopLoss}¢ from entry)
+                const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
+                const distFromSL = typeof nBid === 'number' ? nBid - triggerAt : '?';
+                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>🛑 SL: sells NO if bid ≤ <strong>${triggerAt}¢</strong> (−${stopLoss}¢)</span>
+                    <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromSL === 'number' && distFromSL <= 2 ? '#ff4444' : '#ffaa00'};">${distFromSL}¢</strong> from trigger</span>
+                    <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
                 </div>`;
             }
 
@@ -2552,11 +2640,14 @@ async function loadBots() {
                         </div>` : ''}
                     </div>
                 </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
                     <span>🎟 ${bot.ticker || '?'}</span>
-                    <span>Stop-loss: <strong style="color:#ff6666;">−${stopLoss}¢</strong></span>
-                    <span>${phase === 'live' ? '🔴 Active mgmt' : '⏳ Patient mode'}</span>
-                    <span>${!autoMonitorInterval ? '⚠️ Monitor OFF' : '🤖 Monitoring'}</span>
+                    <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
+                    <span>SL: <strong style="color:#ff6666;">−${stopLoss}¢</strong></span>
+                    <span>Cost: <strong style="color:#8892a6;">$${((bot.yes_price + bot.no_price) * qty / 100).toFixed(2)}</strong></span>
+                    <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
+                    <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
+                    <span>${!autoMonitorInterval ? '⚠️ OFF' : '🤖 On'}</span>
                 </div>
                 ${stopLossInfo}
                 ${waitRepeatInfo}`;
@@ -2591,6 +2682,9 @@ async function autoResumeMonitor() {
         const buddy  = document.getElementById('bot-buddy');
         if (button) button.textContent = '⏸️ Pause Monitor';
         if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
+        setBuddyMood('happy');
+        buddyMonitorStart = Date.now();
+        buddyMonitorCycles = 0;
         monitorBots();
     }
 }
@@ -2643,23 +2737,31 @@ function toggleAutoMonitor() {
         if (button) button.textContent = '▶️ Resume Monitor';
         if (buddy) { buddy.classList.add('idle'); buddy.classList.remove('active'); }
         updateBotBuddyMsg('idle');
+        setBuddyMood('neutral');
+        buddyMonitorStart = null;
+        buddyMonitorCycles = 0;
     } else {
         autoMonitorInterval = setInterval(monitorBots, 2000);
         if (button) button.textContent = '⏸️ Pause Monitor';
         if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
         updateBotBuddyMsg('scanning');
+        setBuddyMood('happy');
+        buddyMonitorStart = Date.now();
+        buddyMonitorCycles = 0;
         monitorBots();
     }
     // Re-render bots so the "Monitor OFF/ON" label updates
     loadBots();
 }
 
-// Bot buddy messages — rotates through fun status messages
+// Bot buddy messages — rotates through fun status messages with personality
 const botBuddyMessages = {
     idle: [
         `<strong>Idle</strong> — Enable Auto-Monitor to put me to work!`,
         `<strong>Sleeping...</strong> Hit the monitor button and I'll watch your bots 24/7`,
         `<strong>Standing by</strong> — Your bots aren't being watched right now`,
+        `<strong>Bored...</strong> Give me something to monitor! 🥱`,
+        `<strong>Waiting</strong> — I promise I'll be fast once you turn me on`,
     ],
     scanning: [
         `<strong>Working!</strong> Checking fills every 2 seconds...`,
@@ -2667,16 +2769,60 @@ const botBuddyMessages = {
         `<strong>Monitoring</strong> — I'll repost stale orders & trigger stop-losses`,
         `<strong>Scanning...</strong> Keeping an eye on your positions`,
         `<strong>Active!</strong> I'll handle reposts, resizes & stop-losses`,
+        `<strong>Locked in</strong> — Nothing gets past me 🔍`,
+        `<strong>Patrolling</strong> — Order books under surveillance`,
     ],
     filled: [
         `<strong>Nice!</strong> A leg just filled — watching the other side closely`,
         `<strong>Progress!</strong> One side is in, guarding against adverse moves`,
+        `<strong>Order filled!</strong> Now watching for the other side...`,
     ],
     completed: [
         `<strong>Locked in!</strong> Both sides filled — profit secured at settlement 🎉`,
     ],
+    celebrating: [
+        `<strong>LET'S GO!</strong> Profit locked — I love when a plan comes together 🎉`,
+        `<strong>MONEY!</strong> Another win in the books 💰`,
+        `<strong>Nailed it!</strong> Clean fill, clean profit. You're welcome 😎`,
+    ],
+    stop_loss: [
+        `<strong>Ouch.</strong> Had to cut that one — SL triggered to protect capital`,
+        `<strong>Stop loss hit.</strong> Smart risk management > diamond hands`,
+        `<strong>Pulled the plug.</strong> Live to trade another day 🛡️`,
+    ],
+    take_profit: [
+        `<strong>Cha-ching!</strong> Take profit hit — securing those gains 🎯`,
+        `<strong>Target reached!</strong> Sold for profit. Discipline pays off`,
+    ],
+    watching: [
+        `<strong>Eyes on it</strong> — Watching your positions like a hawk 🦅`,
+        `<strong>Position active</strong> — Monitoring price vs your SL/TP levels`,
+    ],
+    near_sl: [
+        `<strong>⚠️ Getting close...</strong> A position is near its stop-loss level`,
+        `<strong>Heads up!</strong> Price is drifting toward SL territory`,
+    ],
+    profitable: [
+        `<strong>Looking good!</strong> Session is in the green — keep it rolling 📈`,
+        `<strong>Making money!</strong> Your strategy is working today 💪`,
+    ],
+    losing: [
+        `<strong>Rough patch.</strong> Session is red, but that's trading. Stick to the plan`,
+        `<strong>Down but not out.</strong> Risk is managed, we'll bounce back`,
+    ],
 };
+
+// ── Bot Buddy State ──────────────────────────────────────────────────
 let lastBuddyMsgIdx = -1;
+let buddyMonitorStart = null;
+let buddyMonitorCycles = 0;
+let buddyEventCount = 0;
+let buddyLastEvent = '';
+let buddyCurrentMood = 'neutral';
+let buddyPetCount = 0;
+let buddyStatsExpanded = false;
+let buddyCelebrationTimeout = null;
+let buddySessionPnl = 0;
 
 function updateBotBuddyMsg(state) {
     const el = document.getElementById('bot-buddy-msg');
@@ -2685,8 +2831,171 @@ function updateBotBuddyMsg(state) {
     let idx = Math.floor(Math.random() * pool.length);
     if (idx === lastBuddyMsgIdx && pool.length > 1) idx = (idx + 1) % pool.length;
     lastBuddyMsgIdx = idx;
-    const dotColor = state === 'idle' ? '#555' : (state === 'completed' ? '#00ff88' : '#00ff88');
-    el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${state === 'idle' ? 'animation:none;' : ''}"></span>${pool[idx]}`;
+    const dotColor = state === 'idle' ? '#555' : 
+                     state === 'stop_loss' || state === 'near_sl' || state === 'losing' ? '#ffaa33' :
+                     state === 'celebrating' || state === 'take_profit' ? '#ffdd00' : '#00ff88';
+    const dotAnim = state === 'idle' ? 'animation:none;' : '';
+    el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${dotAnim}"></span>${pool[idx]}`;
+}
+
+// Set buddy mood (changes face expression and colors)
+function setBuddyMood(mood) {
+    const buddy = document.getElementById('bot-buddy');
+    if (!buddy) return;
+    // Remove all mood classes
+    buddy.classList.remove('mood-happy', 'mood-neutral', 'mood-worried', 'mood-celebrating');
+    buddy.classList.add(`mood-${mood}`);
+    buddyCurrentMood = mood;
+}
+
+// React to monitor events (called from monitorBots when actions come in)
+function buddyReactToEvent(action) {
+    buddyEventCount++;
+    buddyLastEvent = action.action;
+    
+    if (action.action === 'completed') {
+        setBuddyMood('celebrating');
+        updateBotBuddyMsg('celebrating');
+        // Celebrate for 8 seconds, then return to normal
+        clearTimeout(buddyCelebrationTimeout);
+        buddyCelebrationTimeout = setTimeout(() => {
+            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
+        }, 8000);
+    } else if (action.action === 'stop_loss_yes' || action.action === 'stop_loss_no' || action.action === 'stop_loss_watch') {
+        setBuddyMood('worried');
+        updateBotBuddyMsg('stop_loss');
+        clearTimeout(buddyCelebrationTimeout);
+        buddyCelebrationTimeout = setTimeout(() => {
+            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
+        }, 6000);
+    } else if (action.action === 'take_profit_watch') {
+        setBuddyMood('celebrating');
+        updateBotBuddyMsg('take_profit');
+        clearTimeout(buddyCelebrationTimeout);
+        buddyCelebrationTimeout = setTimeout(() => {
+            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
+        }, 6000);
+    } else if (action.action === 'straight_bet_filled') {
+        setBuddyMood('happy');
+        updateBotBuddyMsg('filled');
+    } else if (action.action === 'reposted') {
+        // brief message, no mood change
+        updateBotBuddyMsg('scanning');
+    }
+    
+    updateBuddyStats();
+}
+
+// Update buddy based on P&L data
+function buddyUpdateFromPnl(pnlData) {
+    if (!pnlData) return;
+    buddySessionPnl = pnlData.net_dollars ?? 0;
+    
+    // Update the stats panel
+    const pnlEl = document.getElementById('buddy-pnl');
+    if (pnlEl) {
+        const color = buddySessionPnl >= 0 ? '#00ff88' : '#ff4444';
+        pnlEl.style.color = color;
+        pnlEl.textContent = `${buddySessionPnl >= 0 ? '+' : ''}$${buddySessionPnl.toFixed(2)}`;
+    }
+    
+    // Update mood based on P&L (unless celebrating/reacting)
+    if (buddyCurrentMood !== 'celebrating') {
+        if (buddySessionPnl > 1) {
+            setBuddyMood('happy');
+        } else if (buddySessionPnl < -2) {
+            setBuddyMood('worried');
+        } else {
+            setBuddyMood('neutral');
+        }
+    }
+}
+
+// Track monitor cycles
+function buddyTrackCycle() {
+    buddyMonitorCycles++;
+    if (!buddyMonitorStart) buddyMonitorStart = Date.now();
+    updateBuddyStats();
+}
+
+// Update stats panel
+function updateBuddyStats() {
+    const uptimeEl = document.getElementById('buddy-uptime');
+    const cyclesEl = document.getElementById('buddy-cycles');
+    const eventsEl = document.getElementById('buddy-events');
+    
+    if (uptimeEl && buddyMonitorStart) {
+        const mins = Math.floor((Date.now() - buddyMonitorStart) / 60000);
+        if (mins < 60) {
+            uptimeEl.textContent = `${mins}m`;
+        } else {
+            uptimeEl.textContent = `${Math.floor(mins/60)}h ${mins%60}m`;
+        }
+    }
+    if (cyclesEl) cyclesEl.textContent = buddyMonitorCycles.toLocaleString();
+    if (eventsEl) eventsEl.textContent = buddyEventCount.toString();
+}
+
+// Toggle stats panel (click on buddy body, not avatar)
+function toggleBuddyStats(e) {
+    // Don't toggle if clicking the avatar (that's for petting)
+    if (e.target.closest('.bot-buddy-avatar')) return;
+    
+    const stats = document.getElementById('buddy-stats');
+    const buddy = document.getElementById('bot-buddy');
+    if (!stats || !buddy) return;
+    
+    buddyStatsExpanded = !buddyStatsExpanded;
+    stats.classList.toggle('show', buddyStatsExpanded);
+    buddy.classList.toggle('expanded', buddyStatsExpanded);
+    updateBuddyStats();
+}
+
+// Pet the buddy! (click on avatar)
+function petBuddy(e) {
+    e.stopPropagation();
+    buddyPetCount++;
+    
+    const avatar = e.target.closest('.bot-buddy-avatar');
+    if (!avatar) return;
+    
+    // Add pet animation
+    avatar.classList.add('petted');
+    setTimeout(() => avatar.classList.remove('petted'), 500);
+    
+    // Spawn hearts
+    const hearts = document.getElementById('buddy-hearts');
+    if (hearts) {
+        hearts.innerHTML = '<span class="bot-buddy-heart">💚</span><span class="bot-buddy-heart">💚</span><span class="bot-buddy-heart">💚</span>';
+        setTimeout(() => hearts.innerHTML = '', 1200);
+    }
+    
+    // Fun messages based on pet count
+    const el = document.getElementById('bot-buddy-msg');
+    if (el) {
+        const petMessages = [
+            `<strong>Hey!</strong> That tickles! 😊 Back to work...`,
+            `<strong>Hehe!</strong> ${buddyPetCount} pets received. I feel appreciated 💚`,
+            `<strong>Stop!</strong> I'm trying to monitor here! 😄`,
+            `<strong>Again?</strong> ${buddyPetCount} times now! You must really like me`,
+            `<strong>Okay okay!</strong> I'll work extra hard for you today 💪`,
+            `<strong>*purrs in binary*</strong> 01101000 01101001`,
+        ];
+        if (buddyPetCount >= 10) {
+            el.innerHTML = `<span class="bot-buddy-status-dot" style="background:#00ff88;"></span><strong>Best friends!</strong> ${buddyPetCount} pets — we're bonded for life now 💚`;
+        } else {
+            const msg = petMessages[Math.min(buddyPetCount - 1, petMessages.length - 1)];
+            el.innerHTML = `<span class="bot-buddy-status-dot" style="background:#00ff88;"></span>${msg}`;
+        }
+        // Restore normal message after a few seconds
+        setTimeout(() => {
+            if (autoMonitorInterval) {
+                updateBotBuddyMsg('scanning');
+            } else {
+                updateBotBuddyMsg('idle');
+            }
+        }, 3000);
+    }
 }
 
 function updateBotBuddy(activeCount, filledLegs) {
@@ -2698,12 +3007,16 @@ function updateBotBuddy(activeCount, filledLegs) {
     }
     if (!autoMonitorInterval) {
         updateBotBuddyMsg('idle');
+        setBuddyMood('neutral');
         return;
     }
     if (filledLegs > 0) {
         updateBotBuddyMsg('filled');
     } else if (activeCount > 0) {
-        updateBotBuddyMsg('scanning');
+        // Only update message if not in a reaction state
+        if (buddyCurrentMood !== 'celebrating' && buddyCurrentMood !== 'worried') {
+            updateBotBuddyMsg('scanning');
+        }
     }
 }
 
@@ -2719,12 +3032,14 @@ async function monitorBots() {
         
         if (data.success) {
             // Upgrade #1: always refresh fill counts and P&L on every monitor cycle
+            buddyTrackCycle();
             loadBots();
             loadPnL();
 
             if (data.actions && data.actions.length > 0) {
                 data.actions.forEach(action => {
                     console.log('Bot action:', action);
+                    buddyReactToEvent(action);
                     if (action.action === 'completed') {
                         showNotification(`✅ ARB COMPLETE! +${(action.profit_cents/100).toFixed(2)} profit locked`);
                     } else if (action.action === 'repeat_spawned') {
@@ -3049,6 +3364,8 @@ async function loadPnL() {
             <span style="color:#8892a6;font-size:11px;">${pnl.completed_bots || 0}W / ${pnl.stopped_bots || 0}L &nbsp; ${sessionH}h</span>
             <button onclick="resetPnL()" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;">Reset</button>
         `;
+        // Feed P&L data to bot buddy
+        buddyUpdateFromPnl(pnl);
     } catch (e) { /* P&L display is optional */ }
 }
 
@@ -3267,9 +3584,16 @@ async function loadTradeHistory() {
                 gameCtxHtml += `<span style="background:#1e274022;color:${diffColor};padding:1px 5px;border-radius:3px;font-size:9px;">±${gc.score_diff}</span>`;
             }
 
-            // Analytics detail row (only for arb trades)
+            // Analytics detail row (arb + watch trades)
             let analyticsRow = '';
-            if (t.type !== 'watch' && (width || firstLeg || durStr || phase)) {
+            if (t.type === 'watch') {
+                const wParts = [];
+                if (t.side) wParts.push(`<span style="color:#8892a6;">Side: <strong style="color:${t.side==='yes'?'#00ff88':'#ff4444'};">${t.side.toUpperCase()}</strong></span>`);
+                if (slSetting) wParts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
+                if (t.take_profit_cents) wParts.push(`<span style="color:#8892a6;">TP: <strong style="color:#00ff88;">${t.take_profit_cents}¢</strong></span>`);
+                if (phase) wParts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                if (wParts.length > 0) analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${wParts.join('')}</div>`;
+            } else if (width || firstLeg || durStr || phase) {
                 const parts = [];
                 if (width) parts.push(`<span style="color:#8892a6;">Width: <strong style="color:#00aaff;">${width}¢</strong></span>`);
                 if (firstLeg) parts.push(`<span style="color:#8892a6;">1st: <strong style="color:#fff;">${firstLeg.toUpperCase()}</strong></span>`);
@@ -3295,11 +3619,13 @@ async function loadTradeHistory() {
                             <span style="color:#8892a6;">Closed: <strong style="color:#aaa;">${time}</strong></span>
                             <span style="color:#8892a6;">${date}</span>
                         </div>
-                        <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;">
-                            ${t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢</span>` : ''}
-                            ${t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢</span>` : ''}
+                        <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;flex-wrap:wrap;">
+                            ${t.type === 'watch' && t.entry_price ? `<span style="color:${(t.side||'yes')==='yes'?'#00ff88':'#ff4444'};">${(t.side||'YES').toUpperCase()} Entry ${t.entry_price}¢</span>` : ''}
+                            ${t.type !== 'watch' && t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢</span>` : ''}
+                            ${t.type !== 'watch' && t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢</span>` : ''}
                             ${t.exit_bid ? `<span style="color:#ffaa00;">Exit ${t.exit_bid}¢</span>` : ''}
                             <span style="color:#8892a6;">×${t.quantity || 1}</span>
+                            ${t.type !== 'watch' ? `<span style="color:#555;">Cost $${(((t.yes_price||0) + (t.no_price||0)) * (t.quantity||1) / 100).toFixed(2)}</span>` : `<span style="color:#555;">Cost $${((t.entry_price||0) * (t.quantity||1) / 100).toFixed(2)}</span>`}
                         </div>
                         ${analyticsRow}
                     </div>

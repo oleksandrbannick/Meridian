@@ -115,7 +115,8 @@ def auto_login():
         return jsonify({
             'success': True,
             'balance': balance.get('balance', 0) / 100,
-            'portfolio_value': balance.get('portfolio_value', 0) / 100
+            'portfolio_value': balance.get('portfolio_value', 0) / 100,
+            'display_name': config.get('display_name', '')
         })
 
     except Exception as e:
@@ -160,11 +161,16 @@ def get_markets():
             'KXNHLGOAL': 'prop',
             # MLB
             'KXMLBGAME': 'winner', 'KXMLBSPREAD': 'spread', 'KXMLBTOTAL': 'total',
+            'KXMLBSTGAME': 'winner',  # Spring Training
             # MLS
             'KXMLSGAME': 'winner', 'KXMLSSPREAD': 'spread', 'KXMLSTOTAL': 'total',
             'KXMLSBTTS': 'prop',
-            # NCAAB
-            'KXNCAABGAME': 'winner', 'KXNCAABSPREAD': 'spread', 'KXNCAABTOTAL': 'total',
+            # NCAAB (Men's College Basketball — Kalshi uses KXNCAAMB prefix)
+            'KXNCAAMBGAME': 'winner', 'KXNCAAMBSPREAD': 'spread', 'KXNCAAMBTOTAL': 'total',
+            'KXNCAAMB1HWINNER': '1h_winner', 'KXNCAAMB1HSPREAD': '1h_spread', 'KXNCAAMB1HTOTAL': '1h_total',
+            'KXMARMAD': 'prop',  # March Madness Champion
+            # NCAAB Women's
+            'KXNCAAWBGAME': 'winner',
             # NCAAF
             'KXNCAAFGAME': 'winner', 'KXNCAAFSPREAD': 'spread', 'KXNCAAFTOTAL': 'total',
             # Soccer
@@ -182,9 +188,11 @@ def get_markets():
                     'KXNBASTL', 'KXNBABLK', 'KXNBAMVP'],
             'nfl': ['KXNFLGAME', 'KXNFLSPREAD', 'KXNFLTOTAL'],
             'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
-            'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL'],
+            'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL', 'KXMLBSTGAME'],
             'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
-            'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
+            'ncaab': ['KXNCAAMBGAME', 'KXNCAAMBSPREAD', 'KXNCAAMBTOTAL',
+                      'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
+                      'KXMARMAD', 'KXNCAAWBGAME'],
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
@@ -233,6 +241,31 @@ def get_markets():
             if ticker not in seen:
                 seen.add(ticker)
                 unique_markets.append(m)
+        
+        # Filter out stale/postponed markets (e.g. postponed games still technically 'open'
+        # but with expected_expiration_time far in the past and zero recent activity)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        before_filter = len(unique_markets)
+        filtered_markets = []
+        for m in unique_markets:
+            exp_str = m.get('expected_expiration_time', '')
+            if exp_str:
+                try:
+                    exp_time = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
+                    days_past = (now - exp_time).days
+                    # If expected expiration was > 30 days ago, always skip (clearly stale)
+                    if days_past > 30:
+                        continue
+                    # If expected expiration was > 7 days ago AND no recent volume, skip
+                    if days_past > 7 and m.get('volume_24h', 0) == 0 and m.get('liquidity', 0) == 0:
+                        continue
+                except:
+                    pass
+            filtered_markets.append(m)
+        unique_markets = filtered_markets
+        if before_filter != len(unique_markets):
+            print(f'🗑️ Filtered {before_filter - len(unique_markets)} stale/postponed markets')
         
         # Sort by event_ticker for grouping
         unique_markets.sort(key=lambda m: m.get('event_ticker', ''))
@@ -960,6 +993,7 @@ class KalshiWSManager:
                     'price': msg.get('price', 0),
                     'volume': msg.get('volume', 0),
                     'ts': msg.get('ts', 0),
+                    '_local_ts': time.time(),
                 }
                 # Compute no_bid/no_ask properly (Kalshi reports yes side)
                 # no_bid = 100 - yes_ask, no_ask = 100 - yes_bid
@@ -991,9 +1025,14 @@ class KalshiWSManager:
             return
 
     # ── Price lookups ───────────────────────────────────────────
-    def get_price(self, ticker):
-        """Get cached price data for a ticker. Returns None if not cached."""
-        return self.ticker_cache.get(ticker)
+    def get_price(self, ticker, max_age_s=60):
+        """Get cached price data for a ticker. Returns None if not cached or stale (>max_age_s)."""
+        entry = self.ticker_cache.get(ticker)
+        if entry and max_age_s > 0:
+            cache_age = time.time() - entry.get('_local_ts', 0)
+            if cache_age > max_age_s:
+                return None  # stale — force REST fallback
+        return entry
 
     def get_fills_for_order(self, order_id):
         """Get all WS fill events for a given order_id."""
@@ -1389,7 +1428,7 @@ def create_bot():
         yes_price      = int(data.get('yes_price'))   # limit buy price for YES, in cents
         no_price       = int(data.get('no_price'))    # limit buy price for NO, in cents
         quantity       = int(data.get('quantity', 1))
-        stop_loss_cents = int(data.get('stop_loss_cents', 5))  # ¢ drop to trigger stop loss
+        stop_loss_cents = max(1, int(data.get('stop_loss_cents', 5)))  # ¢ drop to trigger stop loss (min 1¢)
         # Auto-detect game phase from ESPN — no manual setting needed
         game_phase = 'live' if _is_game_live(ticker) else 'pregame'
         repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times (N+1 total runs)
@@ -1556,8 +1595,38 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
     Returns (success: bool, order_info: dict)
     """
     MAX_ATTEMPTS = 3
+    remaining_to_sell = count  # Track how many we still need to sell
+    total_sold = 0
+    last_sell_price = None
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
+            # Before each attempt, check actual position to avoid overselling
+            if attempt > 1:
+                try:
+                    api_rate_limiter.wait()
+                    pos_resp = kalshi_client.get_positions(ticker=ticker)
+                    positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+                    actual_held = 0
+                    for p in positions:
+                        if p.get('ticker') == ticker:
+                            pos_qty = p.get('position', 0)
+                            if side == 'yes' and pos_qty > 0:
+                                actual_held = pos_qty
+                            elif side == 'no' and pos_qty < 0:
+                                actual_held = abs(pos_qty)
+                    if actual_held == 0:
+                        # Position already fully sold (previous partial fills cleared it)
+                        print(f'✅ execute_sell({reason}): position already cleared after partial fills')
+                        return True, {'order_id': 'partial_cleared', 'filled': count,
+                                      'sell_price': last_sell_price or 0,
+                                      'verified_cleared': True, 'remaining': 0,
+                                      'actual_fill_price': last_sell_price}
+                    remaining_to_sell = actual_held
+                    print(f'   Retry attempt {attempt}: actual position = {actual_held} {side} (was {count})')
+                except Exception as pos_err:
+                    print(f'⚠ Position check before retry failed: {pos_err} — using original count')
+
             # Fetch the CURRENT bid for this side right before selling
             api_rate_limiter.wait()
             mkt_resp = kalshi_client.get_market(ticker)
@@ -1578,7 +1647,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
                 'ticker': ticker,
                 'side': side,
                 'action': 'sell',
-                'count': count,
+                'count': remaining_to_sell,
             }
             if side == 'yes':
                 sell_kwargs['yes_price'] = cur_bid
@@ -1604,12 +1673,12 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             order_data = check.get('order', check) if isinstance(check, dict) else {}
             filled = order_data.get('filled_count', order_data.get('fill_count', 0))
 
-            if filled >= count:
+            if filled >= remaining_to_sell:
                 # VERIFY: confirm position is actually gone on Kalshi
                 cleared, remaining = verify_position_cleared(ticker, side, count)
                 actual_price = get_actual_fill_price(order_id, side)
                 sell_price = actual_price if actual_price else cur_bid
-                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}) | verified={cleared}')
+                print(f'✅ execute_sell({reason}): {side} {remaining_to_sell}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}) | verified={cleared}')
                 return True, {'order_id': order_id, 'filled': filled, 'sell_price': sell_price,
                               'verified_cleared': cleared, 'remaining': remaining,
                               'actual_fill_price': actual_price}
@@ -1621,18 +1690,20 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             order_data2 = check2.get('order', check2) if isinstance(check2, dict) else {}
             filled2 = order_data2.get('filled_count', order_data2.get('fill_count', 0))
 
-            if filled2 >= count:
+            if filled2 >= remaining_to_sell:
                 # VERIFY: confirm position is actually gone on Kalshi
                 cleared, remaining = verify_position_cleared(ticker, side, count)
                 actual_price = get_actual_fill_price(order_id, side)
                 sell_price = actual_price if actual_price else cur_bid
-                print(f'✅ execute_sell({reason}): {side} {count}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}, 2nd check) | verified={cleared}')
+                print(f'✅ execute_sell({reason}): {side} {remaining_to_sell}x {ticker} SOLD at {sell_price}¢ (attempt {attempt}, 2nd check) | verified={cleared}')
                 return True, {'order_id': order_id, 'filled': filled2, 'sell_price': sell_price,
                               'verified_cleared': cleared, 'remaining': remaining,
                               'actual_fill_price': actual_price}
 
-            # Not filled — cancel this order and retry at the NEW bid
-            print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} {count}x {ticker} not filled at {cur_bid}¢ ({filled2}/{count}), cancelling...')
+            # Not fully filled — cancel remaining and retry at the NEW bid
+            last_sell_price = cur_bid  # Track for partial fill P&L
+            total_sold += filled2
+            print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} {remaining_to_sell}x {ticker} not filled at {cur_bid}¢ ({filled2}/{remaining_to_sell}), cancelling...')
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(order_id)
@@ -1720,10 +1791,27 @@ def _run_monitor():
             try:
                 ticker  = bot['ticker']
                 qty     = bot['quantity']
-                stop    = bot['stop_loss_cents']
+                stop    = max(1, bot.get('stop_loss_cents', 5))  # enforce min 1¢
                 now     = time.time()
                 age_min = (now - bot.get('posted_at', now)) / 60.0
                 phase   = bot.get('game_phase', 'pregame')
+
+                # ── Settlement guard: skip if market is closed/settled ──
+                if bot.get('type') != 'watch':  # arb bots only
+                    try:
+                        api_rate_limiter.wait()
+                        mkt_check = kalshi_client.get_market(ticker)
+                        mkt_status = mkt_check.get('market', mkt_check).get('status', 'active')
+                        if mkt_status in ('closed', 'settled', 'finalized'):
+                            # Market is done — mark bot completed, don't try to trade
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            print(f'🏁 MARKET SETTLED: {bot_id} — market status={mkt_status}, auto-completing bot')
+                            actions.append({'bot_id': bot_id, 'action': 'market_settled', 'market_status': mkt_status})
+                            save_state()
+                            continue
+                    except Exception:
+                        pass  # If API fails, proceed with normal monitoring
 
                 # ── Watch Bots: monitor existing positions ───────────
                 if bot.get('type') == 'watch':
@@ -1746,6 +1834,27 @@ def _run_monitor():
                             if filled_qty >= qty:
                                 bot['order_filled'] = True
                                 bot['filled_at'] = now
+                                # Sync quantity to actual Kalshi position (user may have
+                                # had fewer contracts than they ordered)
+                                try:
+                                    api_rate_limiter.wait()
+                                    pos_resp = kalshi_client.get_positions(ticker=ticker)
+                                    positions = pos_resp.get('market_positions', [])
+                                    actual_pos = 0
+                                    for p in positions:
+                                        if watch_side == 'yes':
+                                            actual_pos = max(actual_pos, p.get('yes_contracts', 0) + p.get('total_traded', 0) if p.get('yes_contracts', 0) > 0 else p.get('yes_contracts', 0))
+                                        else:
+                                            actual_pos = max(actual_pos, p.get('no_contracts', 0))
+                                    if watch_side == 'yes':
+                                        actual_pos = max(0, sum(p.get('yes_contracts', 0) for p in positions))
+                                    else:
+                                        actual_pos = max(0, sum(p.get('no_contracts', 0) for p in positions))
+                                    if actual_pos > 0 and actual_pos != qty:
+                                        print(f'🔄 Watch {bot_id}: syncing qty {qty}→{actual_pos} (actual position)')
+                                        bot['quantity'] = actual_pos
+                                except Exception as pos_err:
+                                    print(f'⚠ Position sync for {bot_id}: {pos_err}')
                                 actions.append({
                                     'bot_id': bot_id, 'action': 'straight_bet_filled',
                                     'ticker': ticker, 'side': watch_side,
@@ -1804,7 +1913,8 @@ def _run_monitor():
                             continue
                         sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
                         if sold:
-                            loss = (entry - cur_bid) * qty
+                            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', cur_bid)
+                            loss = (entry - actual_sell) * qty
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
                             session_pnl['gross_loss_cents'] += loss
@@ -1812,7 +1922,7 @@ def _run_monitor():
                             trade_history.insert(0, {
                         'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
                         'side': watch_side, 'entry_price': entry,
-                        'exit_bid': cur_bid, 'quantity': qty,
+                        'exit_bid': actual_sell, 'quantity': qty,
                         'loss_cents': loss, 'result': 'stop_loss_watch',
                         'timestamp': now,
                         'placed_at': bot.get('created_at', now),
@@ -1834,7 +1944,8 @@ def _run_monitor():
                             continue
                         sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
                         if sold:
-                            profit = (cur_bid - entry) * qty
+                            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', cur_bid)
+                            profit = (actual_sell - entry) * qty
                             bot['status'] = 'completed'
                             bot['completed_at'] = now
                             session_pnl['gross_profit_cents'] += profit
@@ -1842,11 +1953,13 @@ def _run_monitor():
                             trade_history.insert(0, {
                         'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
                         'side': watch_side, 'entry_price': entry,
-                        'exit_bid': cur_bid, 'quantity': qty,
+                        'exit_bid': actual_sell, 'quantity': qty,
                         'profit_cents': profit, 'result': 'take_profit_watch',
                         'timestamp': now,
                         'placed_at': bot.get('created_at', now),
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'stop_loss_cents': sl,
+                        'take_profit_cents': tp,
                         'game_context': _get_game_context(ticker),
                     })
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
@@ -2166,7 +2279,9 @@ def _run_monitor():
                     # Repost at current bids (never above, just refresh position in queue)
                     new_yes = min(yes_bid, 98)
                     new_no  = min(no_bid,  98)
-                    if new_yes + new_no < 100:
+                    new_profit = 100 - new_yes - new_no
+                    min_width = bot.get('arb_width', bot.get('profit_per', 3))
+                    if new_profit >= min_width:
                         try:
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
@@ -2569,31 +2684,78 @@ def set_bot_phase(bot_id):
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])
 def cancel_bot(bot_id):
-    """Cancel a bot and its outstanding limit orders"""
+    """Cancel a bot and its outstanding limit orders.
+    SAFETY: If one side has filled contracts, sell them first to avoid orphaned positions.
+    """
     if bot_id not in active_bots:
         return jsonify({'error': 'Bot not found'}), 404
 
     bot = active_bots[bot_id]
     cancelled = []
+    sold_positions = []
+    warnings = []
+    ticker = bot.get('ticker', '')
 
-    # Cancel any unfilled limit orders
     if kalshi_client:
-        if bot.get('yes_order_id') and bot.get('yes_fill_qty', 0) < bot.get('quantity', 1):
-            try:
-                kalshi_client.cancel_order(bot['yes_order_id'])
-                cancelled.append('YES')
-            except Exception:
-                pass
-        if bot.get('no_order_id') and bot.get('no_fill_qty', 0) < bot.get('quantity', 1):
-            try:
-                kalshi_client.cancel_order(bot['no_order_id'])
-                cancelled.append('NO')
-            except Exception:
-                pass
+        yes_filled = bot.get('yes_fill_qty', 0)
+        no_filled = bot.get('no_fill_qty', 0)
+        qty = bot.get('quantity', 1)
+        bot_type = bot.get('type', 'arb')
+
+        # ── Handle watch bots ──
+        if bot_type == 'watch':
+            watch_side = bot.get('side', 'yes')
+            if bot.get('order_filled', False):
+                # Position exists — sell it before deleting
+                watch_qty = bot.get('fill_qty', bot.get('quantity', 1))
+                sold, sell_info = execute_sell(ticker, watch_side, watch_qty, reason=f'cancel_watch_{bot_id}')
+                if sold:
+                    sold_positions.append(f'{watch_side.upper()} {watch_qty}x')
+                else:
+                    warnings.append(f'FAILED to sell {watch_side.upper()} {watch_qty}x — position may still be open on Kalshi!')
+            elif bot.get('order_id'):
+                try:
+                    kalshi_client.cancel_order(bot['order_id'])
+                    cancelled.append(watch_side.upper())
+                except Exception:
+                    pass
+
+        # ── Handle arb bots ──
+        else:
+            # SELL any filled positions FIRST (prevents orphaned exposure)
+            if yes_filled >= qty:
+                sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_yes_{bot_id}')
+                if sold:
+                    sold_positions.append(f'YES {yes_filled}x')
+                else:
+                    warnings.append(f'FAILED to sell YES {yes_filled}x — position may still be open on Kalshi!')
+            elif bot.get('yes_order_id'):
+                try:
+                    kalshi_client.cancel_order(bot['yes_order_id'])
+                    cancelled.append('YES')
+                except Exception:
+                    pass
+
+            if no_filled >= qty:
+                sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'cancel_sell_no_{bot_id}')
+                if sold:
+                    sold_positions.append(f'NO {no_filled}x')
+                else:
+                    warnings.append(f'FAILED to sell NO {no_filled}x — position may still be open on Kalshi!')
+            elif bot.get('no_order_id'):
+                try:
+                    kalshi_client.cancel_order(bot['no_order_id'])
+                    cancelled.append('NO')
+                except Exception:
+                    pass
 
     del active_bots[bot_id]
     save_state()
-    return jsonify({'success': True, 'cancelled_orders': cancelled})
+
+    result = {'success': True, 'cancelled_orders': cancelled, 'sold_positions': sold_positions}
+    if warnings:
+        result['warnings'] = warnings
+    return jsonify(result)
 
 
 @app.route('/api/bot/scan', methods=['GET'])
@@ -2623,9 +2785,11 @@ def scan_arb_opportunities():
                     'KXNBASTL', 'KXNBABLK', 'KXNBAMVP'],
             'nfl': ['KXNFLGAME', 'KXNFLSPREAD', 'KXNFLTOTAL'],
             'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
-            'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL'],
+            'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL', 'KXMLBSTGAME'],
             'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
-            'ncaab': ['KXNCAABGAME', 'KXNCAABSPREAD', 'KXNCAABTOTAL'],
+            'ncaab': ['KXNCAAMBGAME', 'KXNCAAMBSPREAD', 'KXNCAAMBTOTAL',
+                      'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
+                      'KXMARMAD', 'KXNCAAWBGAME'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
             'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
@@ -2649,6 +2813,21 @@ def scan_arb_opportunities():
                 all_markets.extend(markets)
             except Exception:
                 continue
+
+        # Filter stale/postponed markets
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        def _is_stale(m):
+            exp_str = m.get('expected_expiration_time', '')
+            if not exp_str: return False
+            try:
+                exp_time = datetime.fromisoformat(exp_str.replace('Z','+00:00'))
+                days_past = (now - exp_time).days
+                if days_past > 30: return True
+                if days_past > 7 and m.get('volume_24h',0) == 0 and m.get('liquidity',0) == 0: return True
+            except: pass
+            return False
+        all_markets = [m for m in all_markets if not _is_stale(m)]
 
         def tc(m, field):
             d = m.get(field + '_dollars')

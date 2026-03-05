@@ -133,20 +133,24 @@
         .hidden { display: none !important; }
 
         /* ── Bot Buddy Animated Character ──────────────────────────── */
-        .bot-buddy { display:none; align-items:center; gap:10px; padding:8px 14px; background:#0a0e1a; border:1px solid #1e2740; border-radius:10px; margin-bottom:12px; }
+        .bot-buddy { display:none; align-items:center; gap:10px; padding:10px 14px; background:#0a0e1a; border:1px solid #1e2740; border-radius:12px; margin-bottom:12px; cursor:pointer; transition: all 0.3s ease; position:relative; user-select:none; }
+        .bot-buddy:hover { border-color:#2a3a5a; background:#0c1120; }
         .bot-buddy.active { display:flex; }
-        .bot-buddy-avatar { width:48px; height:48px; position:relative; flex-shrink:0; }
+        .bot-buddy-avatar { width:48px; height:48px; position:relative; flex-shrink:0; cursor:pointer; }
         .bot-buddy-body {
             width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#00ff88,#00cc6a);
-            position:absolute; bottom:0; left:6px; display:flex; align-items:center; justify-content:center;
+            position:absolute; bottom:0; left:6px; display:flex; align-items:center; justify-content:center; flex-direction:column;
             animation: botBounce 1.2s ease-in-out infinite; box-shadow: 0 0 12px rgba(0,255,136,0.3);
+            transition: background 0.5s ease, box-shadow 0.5s ease;
         }
+        .bot-buddy-face { display:flex; flex-direction:column; align-items:center; gap:1px; }
         .bot-buddy-eyes { display:flex; gap:5px; margin-top:-2px; }
         .bot-buddy-eye {
             width:5px; height:6px; background:#000; border-radius:50%;
-            animation: botBlink 3s ease-in-out infinite;
+            animation: botBlink 3s ease-in-out infinite; transition: all 0.3s ease;
         }
         .bot-buddy-eye:nth-child(2) { animation-delay: 0.1s; }
+        .bot-buddy-mouth { width:8px; height:3px; border-radius:0 0 4px 4px; background:#000; margin-top:1px; transition:all 0.3s ease; }
         .bot-buddy-antenna {
             width:2px; height:10px; background:#00ff88; position:absolute; top:0; left:23px;
             border-radius:1px; animation: botAntenna 2s ease-in-out infinite;
@@ -156,15 +160,51 @@
             border-radius:50%; background:#00ff88; box-shadow: 0 0 8px #00ff88;
             animation: botGlow 1.5s ease-in-out infinite;
         }
-        .bot-buddy-arm { position:absolute; width:8px; height:3px; background:#00cc6a; border-radius:2px; }
+        .bot-buddy-arm { position:absolute; width:8px; height:3px; background:#00cc6a; border-radius:2px; transition: background 0.5s ease; }
         .bot-buddy-arm.left { bottom:12px; left:0; animation: botArmL 0.8s ease-in-out infinite; transform-origin: right center; }
         .bot-buddy-arm.right { bottom:12px; right:0; animation: botArmR 0.8s ease-in-out infinite alternate; transform-origin: left center; }
+        .bot-buddy-content { flex:1; min-width:0; }
+        .bot-buddy-name { font-size:10px; color:#00ff88; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:2px; }
         .bot-buddy-msg { color:#8892a6; font-size:12px; line-height:1.4; }
         .bot-buddy-msg strong { color:#00ff88; }
         .bot-buddy-status-dot {
             width:6px; height:6px; border-radius:50%; background:#00ff88;
             display:inline-block; margin-right:6px; animation: botPulse 1s ease-in-out infinite;
         }
+        .bot-buddy-stats { display:none; margin-top:8px; padding-top:8px; border-top:1px solid #1e2740; font-size:11px; color:#8892a6; gap:12px; flex-wrap:wrap; }
+        .bot-buddy-stats.show { display:flex; }
+        .bot-buddy-stat { display:flex; flex-direction:column; gap:1px; }
+        .bot-buddy-stat-label { font-size:9px; text-transform:uppercase; letter-spacing:0.06em; color:#556; }
+        .bot-buddy-stat-value { font-size:13px; font-weight:700; color:#ccc; }
+        .bot-buddy-expand { position:absolute; right:12px; top:50%; transform:translateY(-50%); color:#556; font-size:10px; transition:transform 0.3s ease; }
+        .bot-buddy.expanded .bot-buddy-expand { transform:translateY(-50%) rotate(180deg); }
+
+        /* Mood states */
+        .bot-buddy.mood-happy .bot-buddy-body { background:linear-gradient(135deg,#00ff88,#00cc6a); box-shadow:0 0 16px rgba(0,255,136,0.4); }
+        .bot-buddy.mood-happy .bot-buddy-mouth { border-radius:0 0 5px 5px; width:10px; height:4px; }
+        .bot-buddy.mood-neutral .bot-buddy-body { background:linear-gradient(135deg,#00cc6a,#00aa55); }
+        .bot-buddy.mood-neutral .bot-buddy-mouth { border-radius:2px; width:6px; height:2px; }
+        .bot-buddy.mood-worried .bot-buddy-body { background:linear-gradient(135deg,#ffaa33,#cc8800); box-shadow:0 0 12px rgba(255,170,51,0.3); }
+        .bot-buddy.mood-worried .bot-buddy-mouth { border-radius:4px 4px 0 0; width:8px; height:3px; }
+        .bot-buddy.mood-worried .bot-buddy-arm, .bot-buddy.mood-worried .bot-buddy-antenna { background:#cc8800; }
+        .bot-buddy.mood-worried .bot-buddy-antenna::after { background:#ffaa33; box-shadow:0 0 8px #ffaa33; }
+        .bot-buddy.mood-worried .bot-buddy-name { color:#ffaa33; }
+        .bot-buddy.mood-worried .bot-buddy-msg strong { color:#ffaa33; }
+        .bot-buddy.mood-celebrating .bot-buddy-body { background:linear-gradient(135deg,#ffdd00,#ffaa00); box-shadow:0 0 20px rgba(255,221,0,0.5); animation: botCelebrate 0.4s ease-in-out infinite; }
+        .bot-buddy.mood-celebrating .bot-buddy-mouth { border-radius:0 0 6px 6px; width:12px; height:5px; }
+        .bot-buddy.mood-celebrating .bot-buddy-eye { animation: none; transform:scaleY(0.6) scaleX(1.3); border-radius:50%; }
+        .bot-buddy.mood-celebrating .bot-buddy-name { color:#ffdd00; }
+        .bot-buddy.mood-celebrating .bot-buddy-msg strong { color:#ffdd00; }
+
+        /* Pet reaction */
+        .bot-buddy-avatar.petted .bot-buddy-body { animation: botPetReact 0.5s ease-out !important; }
+        .bot-buddy-avatar.petted .bot-buddy-eye { animation: none !important; transform:scaleY(0.3) scaleX(1.4); }
+        .bot-buddy-hearts { position:absolute; top:-5px; left:50%; transform:translateX(-50%); pointer-events:none; }
+        .bot-buddy-heart { position:absolute; font-size:12px; opacity:0; animation: heartFloat 1s ease-out forwards; }
+        .bot-buddy-heart:nth-child(1) { left:-8px; animation-delay:0s; }
+        .bot-buddy-heart:nth-child(2) { left:4px; animation-delay:0.15s; }
+        .bot-buddy-heart:nth-child(3) { left:16px; animation-delay:0.3s; }
+
         @keyframes botBounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
         @keyframes botBlink { 0%,42%,46%,100%{transform:scaleY(1)} 44%{transform:scaleY(0.1)} }
         @keyframes botAntenna { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
@@ -173,6 +213,9 @@
         @keyframes botArmR { 0%{transform:rotate(0deg)} 100%{transform:rotate(25deg)} }
         @keyframes botPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        @keyframes botCelebrate { 0%{transform:translateY(0) rotate(0deg)} 25%{transform:translateY(-5px) rotate(-5deg)} 50%{transform:translateY(-2px) rotate(0deg)} 75%{transform:translateY(-5px) rotate(5deg)} 100%{transform:translateY(0) rotate(0deg)} }
+        @keyframes botPetReact { 0%{transform:scale(1)} 30%{transform:scale(1.15)} 60%{transform:scale(0.95)} 100%{transform:scale(1)} }
+        @keyframes heartFloat { 0%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-25px)} }
         .bot-buddy.idle .bot-buddy-body { animation: botIdle 3s ease-in-out infinite; }
         .bot-buddy.idle .bot-buddy-arm.left, .bot-buddy.idle .bot-buddy-arm.right { animation: none; }
         .bot-buddy.idle .bot-buddy-antenna::after { animation: none; opacity:0.3; box-shadow:none; }
@@ -186,6 +229,35 @@
         .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.3; }
         .empty-state .title { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 6px; }
         .empty-state .desc { font-size: 13px; line-height: 1.6; }
+
+        /* ── Mobile Responsive ──────────────────────────────────── */
+        @media (max-width: 768px) {
+            .header { padding: 0.75rem 1rem; flex-direction: column; gap: 8px; align-items: flex-start; }
+            .header h1 { font-size: 1.1rem; }
+            .balance-info { font-size: 0.8rem; gap: 1rem; }
+            .main-nav { padding: 0 0.5rem; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            .nav-tab { padding: 10px 14px; font-size: 11px; }
+            .main-container { padding: 0.75rem; }
+            .controls { gap: 0.5rem; }
+            .search-box { min-width: 0; font-size: 14px; padding: 0.6rem 0.75rem; }
+            .btn { padding: 0.6rem 1rem; font-size: 12px; }
+            .sport-pill { padding: 4px 10px; font-size: 11px; }
+            .modal-content { padding: 1.25rem; width: 95%; max-height: 85vh; }
+            .modal-header { font-size: 1.2rem; }
+            .form-group input, .form-group select { font-size: 16px; padding: 0.6rem; }
+            .bot-item { flex-direction: column; gap: 8px; align-items: flex-start; }
+            .position-card { padding: 12px; }
+            .bots-section { padding: 1rem; }
+            #pnl-display { font-size: 11px; gap: 8px; }
+        }
+        @media (max-width: 480px) {
+            .header h1 span:last-child { display: none; }
+            .header h1 span:nth-child(2) { display: none; }
+            .nav-tab { padding: 8px 10px; font-size: 10px; }
+            .main-container { padding: 0.5rem; }
+            .controls { flex-direction: column; }
+            .search-box { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -271,22 +343,48 @@
                     <h2 style="margin:0;">Active Trading Bots</h2>
                 </div>
                 <!-- Bot Buddy -->
-                <div class="bot-buddy idle" id="bot-buddy">
-                    <div class="bot-buddy-avatar">
+                <div class="bot-buddy idle" id="bot-buddy" onclick="toggleBuddyStats(event)">
+                    <div class="bot-buddy-avatar" onclick="petBuddy(event)">
                         <div class="bot-buddy-antenna"></div>
                         <div class="bot-buddy-body">
-                            <div class="bot-buddy-eyes">
-                                <div class="bot-buddy-eye"></div>
-                                <div class="bot-buddy-eye"></div>
+                            <div class="bot-buddy-face">
+                                <div class="bot-buddy-eyes">
+                                    <div class="bot-buddy-eye"></div>
+                                    <div class="bot-buddy-eye"></div>
+                                </div>
+                                <div class="bot-buddy-mouth"></div>
                             </div>
                         </div>
                         <div class="bot-buddy-arm left"></div>
                         <div class="bot-buddy-arm right"></div>
+                        <div class="bot-buddy-hearts" id="buddy-hearts"></div>
                     </div>
-                    <div class="bot-buddy-msg" id="bot-buddy-msg">
-                        <span class="bot-buddy-status-dot"></span>
-                        <strong>Idle</strong> — Enable Auto-Monitor to put me to work!
+                    <div class="bot-buddy-content">
+                        <div class="bot-buddy-name">Meridian</div>
+                        <div class="bot-buddy-msg" id="bot-buddy-msg">
+                            <span class="bot-buddy-status-dot"></span>
+                            <strong>Idle</strong> — Enable Auto-Monitor to put me to work!
+                        </div>
+                        <div class="bot-buddy-stats" id="buddy-stats">
+                            <div class="bot-buddy-stat">
+                                <span class="bot-buddy-stat-label">Uptime</span>
+                                <span class="bot-buddy-stat-value" id="buddy-uptime">0m</span>
+                            </div>
+                            <div class="bot-buddy-stat">
+                                <span class="bot-buddy-stat-label">Cycles</span>
+                                <span class="bot-buddy-stat-value" id="buddy-cycles">0</span>
+                            </div>
+                            <div class="bot-buddy-stat">
+                                <span class="bot-buddy-stat-label">Events</span>
+                                <span class="bot-buddy-stat-value" id="buddy-events">0</span>
+                            </div>
+                            <div class="bot-buddy-stat">
+                                <span class="bot-buddy-stat-label">Session P&L</span>
+                                <span class="bot-buddy-stat-value" id="buddy-pnl">$0.00</span>
+                            </div>
+                        </div>
                     </div>
+                    <span class="bot-buddy-expand">▼</span>
                 </div>
                 <!-- P&L Dashboard -->
                 <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
@@ -479,12 +577,63 @@
                     <div style="margin-bottom:16px;">
                         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
                             <label style="color:#8892a6;font-size:12px;font-weight:600;">Target Profit Width</label>
-                            <span id="width-display" style="color:#00ff88;font-weight:800;font-size:18px;">5¢</span>
+                            <span id="width-display" style="color:#00ff88;font-weight:800;font-size:18px;">10¢</span>
                         </div>
-                        <input type="range" id="bot-arb-width" min="1" max="20" value="5" step="1" oninput="recalcArbPrices()"
+                        <input type="range" id="bot-arb-width" min="1" max="20" value="10" step="1" oninput="recalcArbPrices()"
                                style="width:100%;height:6px;border-radius:3px;outline:none;cursor:pointer;accent-color:#00ff88;">
                         <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-top:4px;">
                             <span>1¢ (tight)</span><span>10¢</span><span>20¢ (wide)</span>
+                        </div>
+                    </div>
+                    <!-- Preset Strategy Table -->
+                    <div style="margin-bottom:16px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                            <span style="color:#8892a6;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">⚡ Quick Presets</span>
+                            <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;">Breakeven: 29%</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;" id="preset-grid">
+                            <button onclick="applyPreset(10, 4)" class="arb-preset-btn" data-width="10" data-sl="4"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #00ff8844;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 29%</div>
+                            </button>
+                            <button onclick="applyPreset(8, 4)" class="arb-preset-btn" data-width="8" data-sl="4"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 33%</div>
+                            </button>
+                            <button onclick="applyPreset(6, 3)" class="arb-preset-btn" data-width="6" data-sl="3"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 33%</div>
+                            </button>
+                            <button onclick="applyPreset(5, 3)" class="arb-preset-btn" data-width="5" data-sl="3"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 38%</div>
+                            </button>
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-top:6px;">
+                            <button onclick="applyPreset(12, 5)" class="arb-preset-btn" data-width="12" data-sl="5"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 29%</div>
+                            </button>
+                            <button onclick="applyPreset(15, 5)" class="arb-preset-btn" data-width="15" data-sl="5"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 25%</div>
+                            </button>
+                            <button onclick="applyPreset(8, 3)" class="arb-preset-btn" data-width="8" data-sl="3"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 27%</div>
+                            </button>
+                            <button onclick="applyPreset(10, 5)" class="arb-preset-btn" data-width="10" data-sl="5"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 33%</div>
+                            </button>
                         </div>
                     </div>
                     <!-- YES / NO Price Inputs -->
@@ -521,7 +670,7 @@
                         </div>
                         <div>
                             <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop Loss <span style="color:#555;font-weight:400;">(¢)</span></label>
-                            <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5" oninput="updateProfitPreview()"
+                            <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5" oninput="updateProfitPreview(); updateBreakevenDisplay(); highlightActivePreset()"
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
@@ -635,6 +784,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260305c"></script>
+    <script src="app.js?v=20260305e"></script>
 </body>
 </html>

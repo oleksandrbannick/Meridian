@@ -2832,8 +2832,15 @@ async function loadBots() {
                 const dogSide = (bot.dog_side || '?').toUpperCase();
                 const favPrice = bot.fav_price || '?';
                 const dogPrice = bot.dog_price || '?';
+                // Current market bid for the fav side
+                const favBid = favSide === 'YES' ? bot.live_yes_bid : bot.live_no_bid;
+                const hasBid = favBid != null && favBid > 0;
+                const dist = hasBid && typeof favPrice === 'number' ? favPrice - favBid : null;
+                const distText = dist != null ? (dist > 0 ? dist + '¢ above bid' : dist === 0 ? 'AT bid' : Math.abs(dist) + '¢ below bid') : '';
+                const distColor = dist != null ? (dist <= 0 ? '#00ff88' : dist <= 2 ? '#ffaa00' : '#ff6666') : '#8892a6';
                 stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>⭐ <strong>${favSide}</strong> at ${favPrice}¢ posted — waiting for fill</span>
+                    ${hasBid ? '<span style="color:#8892a6;">Bid: <strong style="color:' + distColor + ';">' + favBid + '¢</strong> (' + distText + ')</span>' : ''}
                     <span style="color:#555;">${dogSide} at ${dogPrice}¢ queued after fill</span>
                     <span style="color:#8892a6;">${ageMin}m ago</span>
                 </div>`;

@@ -1029,7 +1029,12 @@
       "repost_count": 0,
       "repeat_count": 3,
       "repeats_done": 0,
-      "arb_width": 10
+      "arb_width": 10,
+      "live_yes_bid": 9,
+      "live_no_bid": 90,
+      "live_yes_ask": 10,
+      "live_no_ask": 91,
+      "last_price_update": 1772815978.715349
     }
   },
   "trade_history": [
@@ -1809,7 +1814,7 @@
     "gross_loss_cents": 0,
     "completed_bots": 0,
     "stopped_bots": 0,
-    "session_start": 1772781574.067282,
+    "session_start": 1772815247.853562,
     "day_key": "2026-03-06"
   }
 }

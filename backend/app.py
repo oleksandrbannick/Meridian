@@ -1590,6 +1590,11 @@ def create_bot():
             'repeat_count':     repeat_count,
             'repeats_done':     0,
             'arb_width':        arb_width if arb_width > 0 else profit_per,
+            'live_yes_bid':     live_yes_bid,
+            'live_no_bid':      live_no_bid,
+            'live_yes_ask':     0,
+            'live_no_ask':      0,
+            'last_price_update': time.time(),
         }
         save_state()
         bot_log('BOT_CREATED', bot_id, {'fav_side': fav_side, 'fav_price': fav_price, 'dog_side': dog_side, 'dog_price': dog_price, 'profit_per': profit_per, 'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count})
@@ -2163,6 +2168,30 @@ def _run_monitor():
                             bot_log('FAV_STALE_CANCELLED', bot_id, {'fav_side': fav_side, 'age_min': round(age_min, 1)})
                             print(f'⏰ FAV STALE: {bot_id} favorite {fav_side.upper()} unfilled after {age_min:.1f}m — cancelled')
                             actions.append({'bot_id': bot_id, 'action': 'fav_stale_cancelled'})
+
+                        # Store live prices for frontend display even while waiting
+                        try:
+                            ws_p = ws_manager.get_price(ticker)
+                            if ws_p:
+                                bot['live_yes_bid'] = ws_p.get('yes_bid', 0)
+                                bot['live_no_bid']  = ws_p.get('no_bid', 0)
+                                bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
+                                bot['live_no_ask']  = ws_p.get('no_ask', 0)
+                            else:
+                                api_rate_limiter.wait()
+                                _m = kalshi_client.get_market(ticker)
+                                _mk = _m.get('market', _m)
+                                def _tc(f):
+                                    d = _mk.get(f + '_dollars')
+                                    if d: return round(float(d) * 100)
+                                    return _mk.get(f, 0)
+                                bot['live_yes_bid'] = _tc('yes_bid')
+                                bot['live_no_bid']  = _tc('no_bid')
+                                bot['live_yes_ask'] = _tc('yes_ask')
+                                bot['live_no_ask']  = _tc('no_ask')
+                            bot['last_price_update'] = now
+                        except Exception:
+                            pass
                     continue
 
                 # ── Watch Bots: monitor existing positions ───────────
@@ -3114,6 +3143,16 @@ def _run_monitor():
 @app.route('/api/bot/list', methods=['GET'])
 def list_bots():
     """Get all bots with live market data"""
+    # Enrich bots with WS prices if they don't have fresh data
+    for bid, bot in active_bots.items():
+        if bot.get('status') in ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching'):
+            if not bot.get('live_yes_bid') and bot.get('ticker'):
+                ws_p = ws_manager.get_price(bot['ticker']) if ws_manager else None
+                if ws_p:
+                    bot['live_yes_bid'] = ws_p.get('yes_bid', 0)
+                    bot['live_no_bid']  = ws_p.get('no_bid', 0)
+                    bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
+                    bot['live_no_ask']  = ws_p.get('no_ask', 0)
     return jsonify({'bots': active_bots})
 
 

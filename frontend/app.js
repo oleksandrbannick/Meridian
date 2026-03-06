@@ -107,8 +107,8 @@ function switchTab(tab) {
 
 async function loadLiveScores() {
     try {
-        // Fetch ALL sports in parallel (including women's college basketball)
-        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes, ncaawRes, mlsRes, eplRes, uclRes] = await Promise.allSettled([
+        // Fetch ALL sports in parallel (including women's college basketball + tennis)
+        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes, ncaawRes, mlsRes, eplRes, uclRes, atpRes, wtaRes] = await Promise.allSettled([
             fetch(`${API_BASE}/scoreboard/nba`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nfl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nhl`).then(r => r.json()),
@@ -118,6 +118,8 @@ async function loadLiveScores() {
             fetch(`${API_BASE}/scoreboard/mls`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/epl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/ucl`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/atp`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/wta`).then(r => r.json()),
         ]);
 
         const games = [];
@@ -135,6 +137,9 @@ async function loadLiveScores() {
         addGames(mlsRes, 'MLS');
         addGames(eplRes, 'EPL');
         addGames(uclRes, 'UCL');
+        // Tennis: both ATP and WTA use sport='Tennis' to match detectSport()
+        addGames(atpRes, 'Tennis');
+        addGames(wtaRes, 'Tennis');
 
         // Build lookup tables — keyed by sport:abbreviation to avoid cross-sport collisions
         // (e.g. HOU = Rockets NBA, Texans NFL, Astros MLB)
@@ -145,10 +150,20 @@ async function loadLiveScores() {
             // ALL games for score display (pre, in, post)
             if (g.homeAbbr) allGameData[`${sport}:${g.homeAbbr}`] = g;
             if (g.awayAbbr) allGameData[`${sport}:${g.awayAbbr}`] = g;
+            // Tennis: also store under combined pair key to avoid 3-letter collisions
+            // (e.g. SHE = Shelton AND Sherif — need pair key to disambiguate)
+            if (g.homeAbbr && g.awayAbbr) {
+                allGameData[`${sport}:${g.homeAbbr}${g.awayAbbr}`] = g;
+                allGameData[`${sport}:${g.awayAbbr}${g.homeAbbr}`] = g;
+            }
             // Live filter only uses in-progress games
             if (g.state === 'in') {
                 liveGames[`${sport}:${g.awayAbbr}`] = g;
                 liveGames[`${sport}:${g.homeAbbr}`] = g;
+                if (g.homeAbbr && g.awayAbbr) {
+                    liveGames[`${sport}:${g.homeAbbr}${g.awayAbbr}`] = g;
+                    liveGames[`${sport}:${g.awayAbbr}${g.homeAbbr}`] = g;
+                }
             }
         });
 
@@ -197,6 +212,9 @@ function parseESPNGame(event, sport) {
         } else if (sport === 'MLB') {
             // Baseball: use ESPN's detail (Top/Bot of inning)
             periodLabel = statusType.shortDetail || `Inn ${period}`;
+        } else if (sport === 'Tennis') {
+            // Tennis: sets
+            periodLabel = `Set ${period}`;
         } else {
             // Soccer / other: use half or ESPN detail
             if (period <= 2) periodLabel = `${period}H`;
@@ -236,6 +254,9 @@ function parseESPNGame(event, sport) {
         periodLabel,
         startTime,
         statusDetail,
+        // Tennis: set-by-set scores (e.g. "7-5 6-4 3-2")
+        homeSetScores: home.setScores || '',
+        awaySetScores: away.setScores || '',
     };
 }
 
@@ -364,18 +385,33 @@ function _findGameInLookup(lookup, gameId, sport) {
     // ONLY check exact sport — no cross-sport fallback (prevents men's cards showing women's scores)
     if (!sport) return null;
     
-    // Try all valid split points — only match when BOTH halves
-    // correspond to teams in the lookup (prevents SC+ARMISS from matching when SCAR+MISS is correct)
+    // 1. Try combined pair key first — most reliable, avoids 3-letter code collisions
+    //    (e.g. tennis: SHE = Shelton AND Sherif, but SHEOPE is unique)
+    const pairMatch = lookup[`${sport}:${cleaned}`];
+    if (pairMatch) return pairMatch;
+    
+    // 2. Try all valid split points — only match when BOTH halves
+    // correspond to teams in the lookup AND they reference the SAME game
     // Try longest codes first (more specific = better match)
     for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
         const t1 = cleaned.substring(0, i);
         const t2 = cleaned.substring(i);
-        // Prefer splits where BOTH teams are found in lookup
+        const g1 = lookup[`${sport}:${t1}`];
+        const g2 = lookup[`${sport}:${t2}`];
+        // Both found AND same game (same ESPN ID) — prevents cross-match collisions
+        if (g1 && g2 && g1.espnGameId === g2.espnGameId) {
+            return g1;
+        }
+    }
+    // 3. Fallback: both halves found (even if different games) — for sports without espnGameId
+    for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
+        const t1 = cleaned.substring(0, i);
+        const t2 = cleaned.substring(i);
         if (lookup[`${sport}:${t1}`] && lookup[`${sport}:${t2}`]) {
             return lookup[`${sport}:${t1}`];
         }
     }
-    // If no perfect pair, try finding either team individually (longest first)
+    // 4. Last resort: find either team individually (longest first)
     for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
         const t1 = cleaned.substring(0, i);
         const t2 = cleaned.substring(i);
@@ -559,29 +595,13 @@ function getRecommendedPresets(tier, signalType) {
     // swing = need wider presets (more room for oscillation)
     // caution/pregame = medium as default
     if (signalType === 'anchor') {
-        const presets = {
-            tight:  [{ w: 5, sl: 3 }, { w: 6, sl: 3 }, { w: 6, sl: 4 }, { w: 8, sl: 4 }],
-            medium: [{ w: 8, sl: 5 }, { w: 10, sl: 5 }, { w: 10, sl: 6 }, { w: 10, sl: 8 }],
-            wide:   [{ w: 10, sl: 6 }, { w: 12, sl: 6 }, { w: 12, sl: 8 }, { w: 15, sl: 8 }],
-        };
-        return presets[tier] || presets.medium;
+        return { tight: [5, 6, 7, 8], medium: [8, 9, 10, 11], wide: [10, 12, 13, 15] }[tier] || [8, 9, 10, 11];
     }
     if (signalType === 'swing') {
-        // Swing needs wider stops — the game WILL move against you temporarily
-        const presets = {
-            tight:  [{ w: 8, sl: 5 }, { w: 10, sl: 6 }, { w: 10, sl: 8 }, { w: 12, sl: 8 }],
-            medium: [{ w: 10, sl: 8 }, { w: 12, sl: 8 }, { w: 15, sl: 8 }, { w: 15, sl: 10 }],
-            wide:   [{ w: 12, sl: 8 }, { w: 15, sl: 8 }, { w: 15, sl: 10 }, { w: 15, sl: 10 }],
-        };
-        return presets[tier] || presets.medium;
+        return { tight: [8, 9, 10, 11], medium: [10, 11, 12, 13], wide: [12, 13, 15, 18] }[tier] || [10, 11, 12, 13];
     }
     // Default: medium presets for caution/pregame
-    const presets = {
-        tight:  [{ w: 5, sl: 3 }, { w: 6, sl: 3 }, { w: 6, sl: 4 }, { w: 8, sl: 4 }],
-        medium: [{ w: 8, sl: 5 }, { w: 10, sl: 5 }, { w: 10, sl: 6 }, { w: 10, sl: 8 }],
-        wide:   [{ w: 12, sl: 6 }, { w: 12, sl: 8 }, { w: 15, sl: 8 }, { w: 15, sl: 10 }],
-    };
-    return presets[tier] || presets.medium;
+    return { tight: [5, 6, 7, 8], medium: [8, 10, 11, 12], wide: [12, 13, 15, 18] }[tier] || [8, 10, 11, 12];
 }
 
 function isKalshiLive(market) {
@@ -1151,55 +1171,94 @@ function parseGameDate(gameId) {
 function buildScoreboard(gameScore) {
     if (!gameScore) return null;
     const { state, awayAbbr, homeAbbr, awayName, homeName, awayScore, homeScore,
-            awayLogo, homeLogo, clock, period, periodLabel, startTime, statusDetail } = gameScore;
+            awayLogo, homeLogo, clock, period, periodLabel, startTime, statusDetail,
+            sport, homeSetScores, awaySetScores } = gameScore;
 
     const wrap = document.createElement('div');
+    const isTennis = sport === 'Tennis';
 
     if (state === 'pre') {
         // ── Pregame: show scheduled start time ──
         const timeStr = startTime || statusDetail || '';
         wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+        // Tennis: show full last name instead of 3-letter code
+        const awayLabel = isTennis ? (awayName || awayAbbr) : awayAbbr;
+        const homeLabel = isTennis ? (homeName || homeAbbr) : homeAbbr;
         wrap.innerHTML = `
-            <span style="color:#8892a6;font-size:13px;font-weight:600;">${awayAbbr}</span>
+            <span style="color:#8892a6;font-size:13px;font-weight:600;">${awayLabel}</span>
             <span style="color:#4a5568;font-size:12px;">vs</span>
-            <span style="color:#8892a6;font-size:13px;font-weight:600;">${homeAbbr}</span>
+            <span style="color:#8892a6;font-size:13px;font-weight:600;">${homeLabel}</span>
             <span style="color:#2a3447;margin:0 6px;">│</span>
             <span style="color:#6a7488;font-size:12px;">🕐 ${timeStr || 'Scheduled'}</span>`;
         return wrap;
     }
 
     if (state === 'post') {
-        // ── Final: show final score ──
         const awayWon = parseInt(awayScore) > parseInt(homeScore);
         const homeWon = parseInt(homeScore) > parseInt(awayScore);
         wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:6px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
-        wrap.innerHTML = `
-            <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
-            <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${awayScore}</span>
-            <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
-            <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${homeScore}</span>
-            <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
-            <span style="color:#2a3447;margin:0 6px;">│</span>
-            <span style="color:#8892a6;font-size:11px;font-weight:600;">${periodLabel || 'Final'}</span>`;
+        if (isTennis) {
+            // Tennis final: show player names + set scores
+            const awayLabel = awayName || awayAbbr;
+            const homeLabel = homeName || homeAbbr;
+            const awaySets = awaySetScores || awayScore;
+            const homeSets = homeSetScores || homeScore;
+            wrap.innerHTML = `
+                <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:13px;font-weight:${awayWon ? '700' : '500'};">${awayLabel}</span>
+                <span style="color:${awayWon ? '#60a5fa' : '#6a7488'};font-size:12px;font-weight:600;margin:0 4px;">${awaySets}</span>
+                <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
+                <span style="color:${homeWon ? '#60a5fa' : '#6a7488'};font-size:12px;font-weight:600;margin:0 4px;">${homeSets}</span>
+                <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:13px;font-weight:${homeWon ? '700' : '500'};">${homeLabel}</span>
+                <span style="color:#2a3447;margin:0 6px;">│</span>
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">${periodLabel || 'Final'}</span>`;
+        } else {
+            // ── Final: show final score ──
+            wrap.innerHTML = `
+                <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
+                <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${awayScore}</span>
+                <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
+                <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${homeScore}</span>
+                <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
+                <span style="color:#2a3447;margin:0 6px;">│</span>
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">${periodLabel || 'Final'}</span>`;
+        }
         return wrap;
     }
 
-    // ── LIVE: prominent scoreboard ──
+    // ── LIVE ──
     const awayLeading = parseInt(awayScore) > parseInt(homeScore);
     const homeLeading = parseInt(homeScore) > parseInt(awayScore);
     const isHalftime = (statusDetail || '').toLowerCase().includes('half');
     const clockDisplay = isHalftime ? 'Halftime' : (clock ? `${periodLabel} ${clock}` : periodLabel || 'Live');
 
     wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:12px 20px;margin-bottom:12px;position:relative;';
-    wrap.innerHTML = `
-        <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
-        <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
-        <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${awayScore}</span>
-        <span style="color:#4a5568;font-size:18px;margin:0 2px;">–</span>
-        <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${homeScore}</span>
-        <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
-        <span style="color:#2a3447;margin:0 6px;">│</span>
-        <span style="color:#00ff88;font-size:12px;font-weight:600;">${clockDisplay}</span>`;
+
+    if (isTennis) {
+        // Tennis live scoreboard: player names + set scores + current set indicator
+        const awayLabel = awayName || awayAbbr;
+        const homeLabel = homeName || homeAbbr;
+        const awaySets = awaySetScores || awayScore;
+        const homeSets = homeSetScores || homeScore;
+        wrap.innerHTML = `
+            <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
+            <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:14px;font-weight:700;">${awayLabel}</span>
+            <span style="color:${awayLeading ? '#00ff88' : '#60a5fa'};font-size:13px;font-weight:600;margin:0 2px;">${awaySets}</span>
+            <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
+            <span style="color:${homeLeading ? '#00ff88' : '#60a5fa'};font-size:13px;font-weight:600;margin:0 2px;">${homeSets}</span>
+            <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:14px;font-weight:700;">${homeLabel}</span>
+            <span style="color:#2a3447;margin:0 6px;">│</span>
+            <span style="color:#00ff88;font-size:12px;font-weight:600;">${periodLabel || 'Live'}</span>`;
+    } else {
+        wrap.innerHTML = `
+            <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
+            <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
+            <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${awayScore}</span>
+            <span style="color:#4a5568;font-size:18px;margin:0 2px;">–</span>
+            <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${homeScore}</span>
+            <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
+            <span style="color:#2a3447;margin:0 6px;">│</span>
+            <span style="color:#00ff88;font-size:12px;font-weight:600;">${clockDisplay}</span>`;
+    }
     return wrap;
 }
 
@@ -1304,7 +1363,14 @@ function displayEventRow(eventData, container) {
             winLabel = nameMatch ? nameMatch[1] : getTeamLabelFromTicker(m.ticker);
         } else {
             const teamLabel = getTeamLabelFromTicker(m.ticker);
-            winLabel = teamLabel && teamLabel !== 'Winner' ? `${teamLabel} Win` : 'Winner';
+            // Avoid 'Win Win' for teams whose name is 'Win' (e.g. Winthrop code WIN)
+            if (!teamLabel || teamLabel === 'Winner') {
+                winLabel = 'Winner';
+            } else if (teamLabel.toLowerCase().endsWith('win')) {
+                winLabel = teamLabel;
+            } else {
+                winLabel = `${teamLabel} Win`;
+            }
         }
         marketsGrid.appendChild(createMarketRow(m, winLabel));
     });
@@ -1384,7 +1450,13 @@ function categorizeMarkets(markets) {
     
     markets.forEach(market => {
         const type = getMarketType(market);
-        result[type === 'winner' ? 'winners' : type === 'spread' ? 'spreads' : type === 'total' ? 'totals' : 'props'].push(market);
+        // Map type to category — handle variants like 1h_spread, 1h_total, 1h_winner
+        let cat;
+        if (type === 'winner' || type.endsWith('_winner')) cat = 'winners';
+        else if (type === 'spread' || type.endsWith('_spread')) cat = 'spreads';
+        else if (type === 'total' || type.endsWith('_total')) cat = 'totals';
+        else cat = 'props';
+        result[cat].push(market);
     });
     
     console.log(`  Categorized: W=${result.winners.length} S=${result.spreads.length} T=${result.totals.length} Props=${result.props.length}`);
@@ -1481,29 +1553,38 @@ function createMarketRow(market, label) {
     return row;
 }
 
-// Get button styling based on price (dim extremes, highlight mid-range)
+// Get button styling based on price — highlights ANCHOR zone (65-85¢) for volatility capture
+// Strong favorites are where the bot places limit orders to catch dips
 function getPriceButtonStyle(price, side) {
-    const isActive = price >= 35 && price <= 65;
+    const isAnchor = price >= 65 && price <= 85;   // ← BEST for volatility capture
+    const isSettled = price > 85;                   // Very strong fav — less vol opportunity
+    const isMid = price >= 40 && price < 65;        // Coin-flip / volatile
+    const isUnderdog = price >= 20 && price < 40;   // Underdog side
+    const isLongShot = price < 20;                   // Deep underdog
     
     if (side === 'yes') {
-        if (isActive) {
+        if (isAnchor) {
             return 'background: rgba(0, 255, 136, 0.2); color: #00ff88; border: 2px solid #00ff88;';
-        } else if (price > 80) {
-            return 'background: rgba(0, 255, 136, 0.05); color: #00ff8855; border: 1px solid #00ff8833;';
-        } else if (price < 20) {
-            return 'background: rgba(0, 255, 136, 0.03); color: #00ff8833; border: 1px solid #00ff8822;';
+        } else if (isSettled) {
+            return 'background: rgba(0, 255, 136, 0.12); color: #00ff88cc; border: 1px solid #00ff8866;';
+        } else if (isMid) {
+            return 'background: rgba(0, 255, 136, 0.08); color: #00ff88aa; border: 1px solid #00ff8844;';
+        } else if (isUnderdog) {
+            return 'background: rgba(0, 255, 136, 0.04); color: #00ff8866; border: 1px solid #00ff8833;';
         } else {
-            return 'background: rgba(0, 255, 136, 0.1); color: #00ff88; border: 1px solid #00ff8866;';
+            return 'background: rgba(0, 255, 136, 0.02); color: #00ff8833; border: 1px solid #00ff8822;';
         }
     } else {
-        if (isActive) {
+        if (isAnchor) {
             return 'background: rgba(255, 68, 68, 0.2); color: #ff4444; border: 2px solid #ff4444;';
-        } else if (price > 80) {
-            return 'background: rgba(255, 68, 68, 0.05); color: #ff444455; border: 1px solid #ff444433;';
-        } else if (price < 20) {
-            return 'background: rgba(255, 68, 68, 0.03); color: #ff444433; border: 1px solid #ff444422;';
+        } else if (isSettled) {
+            return 'background: rgba(255, 68, 68, 0.12); color: #ff4444cc; border: 1px solid #ff444466;';
+        } else if (isMid) {
+            return 'background: rgba(255, 68, 68, 0.08); color: #ff4444aa; border: 1px solid #ff444444;';
+        } else if (isUnderdog) {
+            return 'background: rgba(255, 68, 68, 0.04); color: #ff444466; border: 1px solid #ff444433;';
         } else {
-            return 'background: rgba(255, 68, 68, 0.1); color: #ff4444; border: 1px solid #ff444466;';
+            return 'background: rgba(255, 68, 68, 0.02); color: #ff444433; border: 1px solid #ff444422;';
         }
     }
 }
@@ -1545,6 +1626,8 @@ function getTeamLabelFromTicker(ticker) {
         'IPS': 'Ipswich', 'LEI': 'Leicester', 'BOH': 'Bournemouth', 'BOU': 'Bournemouth',
         'BRI': 'Brighton', 'SUN': 'Sunderland',
         'TIE': 'Draw',
+        // NCAAB common codes
+        'WIN': 'Winthrop', 'DRKE': 'Drake', 'BEL': 'Belmont', 'OWIN': 'Winthrop',
     };
     // For tennis: extract player name from title (suffix is just 3-letter abbrev like MCD, ARN)
     if (!teamMap[suffix.toUpperCase()]) {
@@ -2591,7 +2674,7 @@ function openBotModal(market, _side, _price) {
     const recEl = document.getElementById('preset-recommendation');
     if (recEl && liq.arbEdge <= 20 && liq.arbEdge >= 1) {
         const recPresets = getRecommendedPresets(liq.tier, sigType);
-        const recLabel = recPresets.map(p => `${p.w}/${p.sl}`).join(', ');
+        const recLabel = recPresets.join('¢, ') + '¢';
         // Signal-aware recommendation text
         let sigText = '', sigColor = liq.tierColor;
         if (sigType === 'anchor') {
@@ -2618,8 +2701,7 @@ function openBotModal(market, _side, _price) {
         // Highlight recommended tier buttons
         document.querySelectorAll('.arb-preset-btn').forEach(btn => {
             const bw = parseInt(btn.dataset.width);
-            const bs = parseInt(btn.dataset.sl);
-            const isRec = recPresets.some(p => p.w === bw && p.sl === bs);
+            const isRec = recPresets.includes(bw);
             if (isRec) {
                 btn.style.boxShadow = `0 0 8px ${sigColor}44`;
                 btn.dataset.recommended = 'true';
@@ -2630,7 +2712,7 @@ function openBotModal(market, _side, _price) {
         });
         // Auto-apply middle preset from recommended tier
         const midPreset = recPresets[Math.floor(recPresets.length / 2)];
-        applyPreset(midPreset.w, midPreset.sl);
+        applyPreset(midPreset);
     } else if (recEl) {
         recEl.style.display = 'none';
         document.querySelectorAll('.arb-preset-btn').forEach(btn => {
@@ -2795,7 +2877,7 @@ function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
-    const sl     = parseInt(document.getElementById('bot-stop-loss-cents').value) || 5;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 40;
     const total  = yes + no;
     const profit = 100 - total;
     const isArb  = profit > 0;
@@ -2803,13 +2885,13 @@ function updateProfitPreview() {
     const dollarCost   = (total * qty / 100).toFixed(2);
     const roi = total > 0 ? ((profit / total) * 100).toFixed(1) : '0.0';
 
-    // Stop-loss breakdown per leg
-    const yesExitPrice = Math.max(0, yes - sl);
-    const noExitPrice  = Math.max(0, no - sl);
-    const yesLossCents = sl * qty;           // loss if YES leg triggers SL
-    const noLossCents  = sl * qty;           // loss if NO leg triggers SL
-    const yesLossDollar = (yesLossCents / 100).toFixed(2);
-    const noLossDollar  = (noLossCents / 100).toFixed(2);
+    // Flip threshold risk: worst case is selling at flip floor
+    const yesFlipLoss = yes >= flipFloor ? (yes - flipFloor) * qty : 0;
+    const noFlipLoss  = no >= flipFloor ? (no - flipFloor) * qty : 0;
+    const yesLossDollar = (yesFlipLoss / 100).toFixed(2);
+    const noLossDollar  = (noFlipLoss / 100).toFixed(2);
+    const yesHasFlip = yes >= flipFloor;
+    const noHasFlip  = no >= flipFloor;
 
     const borderColor = isArb ? '#00ff88' : '#ff4444';
     const bgColor     = isArb ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,68,0.04)';
@@ -2847,25 +2929,37 @@ function updateProfitPreview() {
             </div>
             ${!isArb ? `<div style="padding:6px 16px 10px;text-align:center;font-size:11px;color:#ff4444;">⚠ Not profitable — reduce prices or increase width</div>` : ''}
             ${isArb && qty > 1 ? `<div style="padding:2px 16px 10px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
-            <!-- Stop-loss risk breakdown -->
-            <div style="padding:8px 16px 10px;border-top:1px solid #ff444422;">
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-                    <span style="color:#ff6666;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛑 Stop-Loss Risk (−${sl}¢)</span>
+            <!-- Flip threshold protection + Breakeven % -->
+            <div style="padding:8px 16px 10px;border-top:1px solid #00aaff22;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
+                    <span style="color:#00aaff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛡 Flip Protection (≤${flipFloor}¢)</span>
+                    ${(() => {
+                        // Breakeven %: how many arbs must complete to offset one flip loss
+                        // Flip loss = favEntry - flipFloor.  Profit per fill = width.
+                        // BE% = flipLoss / (flipLoss + width)
+                        const favEntry = Math.max(yes, no);
+                        const flipLoss = favEntry >= flipFloor ? favEntry - flipFloor : 0;
+                        if (flipLoss <= 0 || profit <= 0) return `<span style="color:#00ff88;font-size:10px;font-weight:700;">✅ No flip risk</span>`;
+                        const bePct = (flipLoss / (flipLoss + profit) * 100).toFixed(1);
+                        const fillsToRecover = Math.ceil(flipLoss / profit);
+                        const beColor = parseFloat(bePct) >= 75 ? '#ff4444' : parseFloat(bePct) >= 50 ? '#ffaa00' : '#00ff88';
+                        return `<span style="color:${beColor};font-size:10px;font-weight:700;" title="${fillsToRecover} completed arbs needed to recover 1 flip loss">BE: ${bePct}% (${fillsToRecover}:1)</span>`;
+                    })()}
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                    <div style="background:#ff444408;border:1px solid #ff444422;border-radius:6px;padding:6px 10px;">
+                    <div style="background:#00aaff08;border:1px solid #00aaff22;border-radius:6px;padding:6px 10px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="color:#00ff88;font-size:10px;font-weight:600;">YES leg</span>
-                            <span style="color:#ff4444;font-weight:800;font-size:13px;">−$${yesLossDollar}</span>
+                            ${yesHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${yesLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">sells at ${yesExitPrice}¢ (entry ${yes}¢) × ${qty}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${yesHasFlip ? `sells at ${flipFloor}¢ if flipped (entry ${yes}¢)` : `entry ${yes}¢ < ${flipFloor}¢ — rides to settlement`}</div>
                     </div>
-                    <div style="background:#ff444408;border:1px solid #ff444422;border-radius:6px;padding:6px 10px;">
+                    <div style="background:#00aaff08;border:1px solid #00aaff22;border-radius:6px;padding:6px 10px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="color:#ff4444;font-size:10px;font-weight:600;">NO leg</span>
-                            <span style="color:#ff4444;font-weight:800;font-size:13px;">−$${noLossDollar}</span>
+                            ${noHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${noLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">sells at ${noExitPrice}¢ (entry ${no}¢) × ${qty}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${noHasFlip ? `sells at ${flipFloor}¢ if flipped (entry ${no}¢)` : `entry ${no}¢ < ${flipFloor}¢ — rides to settlement`}</div>
                     </div>
                 </div>
             </div>
@@ -2874,31 +2968,39 @@ function updateProfitPreview() {
 
 // --- Arb Preset Helpers ---
 
-function applyPreset(width, sl) {
+function applyPreset(width) {
     const widthSlider = document.getElementById('bot-arb-width');
-    const slInput = document.getElementById('bot-stop-loss-cents');
     if (widthSlider) { widthSlider.value = width; }
-    if (slInput) { slInput.value = sl; }
     document.getElementById('width-display').textContent = `${width}¢`;
     recalcArbPrices();
 }
 
 function updateBreakevenDisplay() {
-    const width = parseInt(document.getElementById('bot-arb-width').value) || 10;
-    const sl = parseInt(document.getElementById('bot-stop-loss-cents').value) || 5;
-    const be = ((sl / (sl + width)) * 100).toFixed(1);
+    const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
+    const no  = parseInt(document.getElementById('bot-no-price')?.value)  || 0;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 40;
+    const width = 100 - yes - no;
+    const favEntry = Math.max(yes, no);
+    const flipLoss = favEntry >= flipFloor ? favEntry - flipFloor : 0;
     const el = document.getElementById('breakeven-display');
-    if (el) el.textContent = `Breakeven: ${be}%`;
+    if (!el) return;
+    if (flipLoss <= 0 || width <= 0) {
+        el.textContent = `Flip floor: ${flipFloor}¢ · No flip risk`;
+        el.style.color = '#00ff88';
+        return;
+    }
+    const bePct = (flipLoss / (flipLoss + width) * 100).toFixed(1);
+    const ratio = Math.ceil(flipLoss / width);
+    el.textContent = `Flip floor: ${flipFloor}¢ · BE: ${bePct}% (${ratio}:1)`;
+    el.style.color = parseFloat(bePct) >= 75 ? '#ff4444' : parseFloat(bePct) >= 50 ? '#ffaa00' : '#00aaff';
 }
 
 function highlightActivePreset() {
     const width = parseInt(document.getElementById('bot-arb-width').value) || 10;
-    const sl = parseInt(document.getElementById('bot-stop-loss-cents').value) || 5;
     document.querySelectorAll('.arb-preset-btn').forEach(btn => {
         const bw = parseInt(btn.dataset.width);
-        const bs = parseInt(btn.dataset.sl);
         const isRec = btn.dataset.recommended === 'true';
-        if (bw === width && bs === sl) {
+        if (bw === width) {
             btn.style.borderColor = '#00ff88';
             btn.style.background = 'rgba(0,255,136,0.12)';
             btn.style.color = '#00ff88';
@@ -3034,7 +3136,7 @@ async function createBot() {
     const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
-    const stop_loss_cents = parseInt(document.getElementById('bot-stop-loss-cents').value);
+    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 40;
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
@@ -3055,7 +3157,8 @@ async function createBot() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ticker: currentArbMarket.ticker,
-                yes_price, no_price, quantity, stop_loss_cents,
+                yes_price, no_price, quantity, flip_threshold,
+                stop_loss_cents: 5,  // kept for backward compat, arb bots use flip_threshold
                 repeat_count, arb_width,
             }),
         });
@@ -3266,7 +3369,7 @@ async function loadBots() {
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
             const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
-            const stopLoss    = bot.stop_loss_cents || 5;
+            const flipThresh  = bot.flip_threshold || 40;
             const statusClass = {
                 fav_posted:     'monitoring',
                 pending_fills:  'monitoring',
@@ -3346,55 +3449,41 @@ async function loadBots() {
                     <span style="color:#8892a6;">${ageMin}m ago</span>
                 </div>`;
             } else if (bot.status === 'yes_filled') {
-                const triggerAt = (bot.yes_price || 0) - stopLoss;
+                const entryYes = bot.yes_price || 0;
                 const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
-                const distFromSL = typeof yBid === 'number' ? yBid - triggerAt : '?';
-                const slBreached = typeof distFromSL === 'number' && distFromSL <= 0;
-                const graceActive = bot.sl_breach_since && slBreached;
-                const graceElapsed = graceActive ? (Date.now()/1000 - bot.sl_breach_since) / 60 : 0;
-                const graceLeft = Math.max(0, 2 - graceElapsed);
-                const recovering = graceActive && typeof yBid === 'number' && bot.sl_last_bid != null && yBid > bot.sl_last_bid;
-                let graceHtml = '';
-                if (graceActive && recovering && graceLeft <= 0) {
-                    graceHtml = `<span style="color:#00ff88;font-weight:700;">📈 Recovering (held)</span>`;
-                } else if (graceActive) {
-                    graceHtml = graceLeft > 0
-                        ? `<span style="color:#ff8800;font-weight:700;">⏳ SL in ${graceLeft.toFixed(1)}m</span>`
-                        : `<span style="color:#ff4444;font-weight:700;">⚠ SL pending</span>`;
-                } else if (typeof distFromSL === 'number' && distFromSL <= 3) {
-                    graceHtml = `<span style="color:#ffaa00;font-size:9px;">2m grace buffer</span>`;
+                const hasFlipSL = entryYes >= flipThresh;
+                if (hasFlipSL) {
+                    const distFromFlip = typeof yBid === 'number' ? yBid - flipThresh : '?';
+                    const flipped = typeof distFromFlip === 'number' && distFromFlip <= 0;
+                    stopLossInfo = `<div style="background:${flipped ? '#ff444411' : '#00aaff11'};border:1px solid ${flipped ? '#ff444433' : '#00aaff33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${flipped ? '#ff6666' : '#00aaff'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                        <span>🛡 Flip floor: sells YES if bid ≤ <strong>${flipThresh}¢</strong></span>
+                        <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromFlip === 'number' && distFromFlip <= 5 ? '#ff4444' : '#00ff88'};">${distFromFlip}¢</strong> from flip</span>
+                        <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
+                    </div>`;
+                } else {
+                    stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
+                        <span>✅ Underdog entry (${entryYes}¢ < ${flipThresh}¢) — no SL, rides to settlement</span>
+                        <span style="color:#8892a6;margin-left:8px;">Filled ${fillAgeMin}m ago</span>
+                    </div>`;
                 }
-                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>🛑 SL: sells YES if bid ≤ <strong>${triggerAt}¢</strong> (−${stopLoss}¢)</span>
-                    <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromSL === 'number' && distFromSL <= 2 ? '#ff4444' : '#ffaa00'};">${distFromSL}¢</strong> from trigger</span>
-                    ${graceHtml}
-                    <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
-                </div>`;
             } else if (bot.status === 'no_filled') {
-                const triggerAt = (bot.no_price || 0) - stopLoss;
+                const entryNo = bot.no_price || 0;
                 const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-                const distFromSL = typeof nBid === 'number' ? nBid - triggerAt : '?';
-                const slBreached = typeof distFromSL === 'number' && distFromSL <= 0;
-                const graceActive = bot.sl_breach_since && slBreached;
-                const graceElapsed = graceActive ? (Date.now()/1000 - bot.sl_breach_since) / 60 : 0;
-                const graceLeft = Math.max(0, 2 - graceElapsed);
-                const recovering = graceActive && typeof nBid === 'number' && bot.sl_last_bid != null && nBid > bot.sl_last_bid;
-                let graceHtml = '';
-                if (graceActive && recovering && graceLeft <= 0) {
-                    graceHtml = `<span style="color:#00ff88;font-weight:700;">📈 Recovering (held)</span>`;
-                } else if (graceActive) {
-                    graceHtml = graceLeft > 0
-                        ? `<span style="color:#ff8800;font-weight:700;">⏳ SL in ${graceLeft.toFixed(1)}m</span>`
-                        : `<span style="color:#ff4444;font-weight:700;">⚠ SL pending</span>`;
-                } else if (typeof distFromSL === 'number' && distFromSL <= 3) {
-                    graceHtml = `<span style="color:#ffaa00;font-size:9px;">2m grace buffer</span>`;
+                const hasFlipSL = entryNo >= flipThresh;
+                if (hasFlipSL) {
+                    const distFromFlip = typeof nBid === 'number' ? nBid - flipThresh : '?';
+                    const flipped = typeof distFromFlip === 'number' && distFromFlip <= 0;
+                    stopLossInfo = `<div style="background:${flipped ? '#ff444411' : '#00aaff11'};border:1px solid ${flipped ? '#ff444433' : '#00aaff33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${flipped ? '#ff6666' : '#00aaff'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                        <span>🛡 Flip floor: sells NO if bid ≤ <strong>${flipThresh}¢</strong></span>
+                        <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromFlip === 'number' && distFromFlip <= 5 ? '#ff4444' : '#00ff88'};">${distFromFlip}¢</strong> from flip</span>
+                        <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
+                    </div>`;
+                } else {
+                    stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
+                        <span>✅ Underdog entry (${entryNo}¢ < ${flipThresh}¢) — no SL, rides to settlement</span>
+                        <span style="color:#8892a6;margin-left:8px;">Filled ${fillAgeMin}m ago</span>
+                    </div>`;
                 }
-                stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>🛑 SL: sells NO if bid ≤ <strong>${triggerAt}¢</strong> (−${stopLoss}¢)</span>
-                    <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromSL === 'number' && distFromSL <= 2 ? '#ff4444' : '#ffaa00'};">${distFromSL}¢</strong> from trigger</span>
-                    ${graceHtml}
-                    <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
-                </div>`;
             }
 
             // Net P&L so far (from previous completed cycles)
@@ -3490,7 +3579,7 @@ async function loadBots() {
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
                     <span>🎟 ${bot.ticker || '?'}</span>
                     <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
-                    <span>SL: <strong style="color:#ff6666;">−${stopLoss}¢</strong></span>
+                    <span>🛡 Flip: <strong style="color:#00aaff;">${flipThresh}¢</strong></span>
                     <span>Cost: <strong style="color:#8892a6;">$${((bot.yes_price + bot.no_price) * qty / 100).toFixed(2)}</strong></span>
                     <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
@@ -3614,9 +3703,9 @@ const botBuddyMessages = {
     scanning: [
         `<strong>Working!</strong> Checking fills every 2 seconds...`,
         `<strong>On it!</strong> Watching order books, detecting fills...`,
-        `<strong>Monitoring</strong> — I'll repost stale orders & trigger stop-losses`,
+        `<strong>Monitoring</strong> — Reposting stale orders & watching for flips`,
         `<strong>Scanning...</strong> Keeping an eye on your positions`,
-        `<strong>Active!</strong> I'll handle reposts, resizes & stop-losses`,
+        `<strong>Active!</strong> Reposts, resizes & flip protection running`,
         `<strong>Locked in</strong> — Nothing gets past me 🔍`,
         `<strong>Patrolling</strong> — Order books under surveillance`,
     ],
@@ -3631,9 +3720,9 @@ const botBuddyMessages = {
         `<strong>Nice fill!</strong> Liquid side done, posting the other leg 🎯`,
     ],
     filled: [
-        `<strong>Nice!</strong> A leg just filled — watching the other side closely`,
-        `<strong>Progress!</strong> One side is in, guarding against adverse moves`,
-        `<strong>Order filled!</strong> Now watching for the other side...`,
+        `<strong>Nice!</strong> A leg just filled — holding until the other side fills or the game settles`,
+        `<strong>Progress!</strong> One side is in — no SL panic, just waiting for the arb to complete`,
+        `<strong>Order filled!</strong> Riding it out. Only selling if the favorite flips below the flip floor`,
     ],
     completed: [
         `<strong>Locked in!</strong> Both sides filled — profit secured at settlement 🎉`,
@@ -3643,10 +3732,15 @@ const botBuddyMessages = {
         `<strong>MONEY!</strong> Another win in the books 💰`,
         `<strong>Nailed it!</strong> Clean fill, clean profit. You're welcome 😎`,
     ],
+    flip_triggered: [
+        `<strong>Favorite flipped.</strong> Bid dropped below the flip floor — sold to cut losses 🛡️`,
+        `<strong>Flip detected.</strong> The favorite is no longer favored — exited the position`,
+        `<strong>Flip protection fired.</strong> Thesis broken, sold before it got worse`,
+    ],
     stop_loss: [
-        `<strong>Ouch.</strong> Had to cut that one — SL triggered to protect capital`,
-        `<strong>Stop loss hit.</strong> Smart risk management > diamond hands`,
-        `<strong>Pulled the plug.</strong> Live to trade another day 🛡️`,
+        `<strong>Watch SL fired.</strong> Straight bet dropped past the stop — exiting to protect capital`,
+        `<strong>Position stopped.</strong> This is why we set SLs on directional bets 🛡️`,
+        `<strong>SL triggered.</strong> Prop/straight bet hit the limit — sold`,
     ],
     take_profit: [
         `<strong>Cha-ching!</strong> Take profit hit — securing those gains 🎯`,
@@ -3656,9 +3750,14 @@ const botBuddyMessages = {
         `<strong>Eyes on it</strong> — Watching your positions like a hawk 🦅`,
         `<strong>Position active</strong> — Monitoring price vs your SL/TP levels`,
     ],
-    near_sl: [
-        `<strong>⚠️ Getting close...</strong> A position is near its stop-loss level`,
-        `<strong>Heads up!</strong> Price is drifting toward SL territory`,
+    near_flip: [
+        `<strong>⚠️ Getting close...</strong> A position is approaching the flip floor`,
+        `<strong>Heads up!</strong> Bid is drifting toward the flip threshold`,
+    ],
+    holding: [
+        `<strong>Holding steady</strong> — Bid is above the flip floor, no reason to sell`,
+        `<strong>Riding it out</strong> — Normal volatility, just oscillation. No panic`,
+        `<strong>Diamond hands (the smart kind)</strong> — Only a real flip triggers a sell`,
     ],
     profitable: [
         `<strong>Looking good!</strong> Session is in the green — keep it rolling 📈`,
@@ -3719,7 +3818,14 @@ function buddyReactToEvent(action) {
         buddyCelebrationTimeout = setTimeout(() => {
             setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
         }, 8000);
-    } else if (action.action === 'stop_loss_yes' || action.action === 'stop_loss_no' || action.action === 'stop_loss_watch') {
+    } else if (action.action === 'flip_yes' || action.action === 'flip_no') {
+        setBuddyMood('worried');
+        updateBotBuddyMsg('flip_triggered');
+        clearTimeout(buddyCelebrationTimeout);
+        buddyCelebrationTimeout = setTimeout(() => {
+            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
+        }, 6000);
+    } else if (action.action === 'stop_loss_watch') {
         setBuddyMood('worried');
         updateBotBuddyMsg('stop_loss');
         clearTimeout(buddyCelebrationTimeout);
@@ -3740,6 +3846,8 @@ function buddyReactToEvent(action) {
         updateBotBuddyMsg('fav_posted');
     } else if (action.action === 'fav_stale_cancelled') {
         updateBotBuddyMsg('scanning');
+    } else if (action.action === 'holding_yes' || action.action === 'holding_no') {
+        updateBotBuddyMsg('holding');
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled');
@@ -4051,17 +4159,17 @@ function showScanResults(opportunities, minWidth, totalScanned) {
 async function quickBot(ticker, yesPrice, noPrice) {
     // Read qty from scan modal first, fall back to controls bar
     const quantity        = parseInt(document.getElementById('scan-modal-qty')?.value || document.getElementById('scan-qty')?.value || '1');
-    const stop_loss_cents = 5;
+    const flip_threshold  = 40;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
-    if (!confirm(`⚡ Place Dual-Arb Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n\nConfirm?`)) return;
+    if (!confirm(`⚡ Place Dual-Arb Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nFlip floor: ${flip_threshold}¢\n\nConfirm?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, stop_loss_cents }),
+            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, stop_loss_cents: 5, flip_threshold }),
         });
         const data = await resp.json();
         if (data.success) {
@@ -4378,11 +4486,11 @@ async function loadHistoryStats() {
                 }).join('');
                 widthPanel.innerHTML += `
                     <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;margin-top:12px;">
-                        <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Fill Rate vs Breakeven by Preset</div>
-                        <div style="color:#555;font-size:10px;margin-bottom:10px;">Your actual fill rate compared to the required breakeven % for each width/SL combo</div>
+                        <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Fill Rate vs Breakeven by Width / Flip Floor</div>
+                        <div style="color:#555;font-size:10px;margin-bottom:10px;">Your actual fill rate compared to the required breakeven % for each width/flip combo</div>
                         <table style="width:100%;border-collapse:collapse;font-size:12px;">
                             <tr style="border-bottom:1px solid #1e2740;">
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width / SL</th>
+                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width / Flip</th>
                                 <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
                                 <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Breakeven</th>
                                 <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Edge</th>
@@ -4457,11 +4565,12 @@ async function loadTradeHistory() {
             
             // Result styling
             const isWin = t.result === 'completed' || t.result === 'take_profit_watch';
-            const isSL = t.result?.includes('stop_loss');
+            const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
             const pnl = isWin ? (t.profit_cents || 0) : -(t.loss_cents || 0);
             const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
             const icon = isWin ? '✅' : '⛔';
-            const resultLabel = isWin ? 'FILLED' : (isSL ? 'STOP LOSS' : 'STOPPED');
+            const isFlip = t.result?.includes('flip_');
+            const resultLabel = isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'));
             
             // Display name
             const teamName = formatBotDisplayName(t.ticker || '');
@@ -4514,7 +4623,8 @@ async function loadTradeHistory() {
                 if (width) parts.push(`<span style="color:#8892a6;">Width: <strong style="color:#00aaff;">${width}¢</strong></span>`);
                 if (firstLeg) parts.push(`<span style="color:#8892a6;">1st: <strong style="color:#fff;">${firstLeg.toUpperCase()}</strong></span>`);
                 if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
-                if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
+                if (t.flip_threshold) parts.push(`<span style="color:#8892a6;">Flip: <strong style="color:#00aaff;">${t.flip_threshold}¢</strong></span>`);
+                else if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
                 if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
             }
@@ -4727,7 +4837,7 @@ function generateBotRiskWarnings() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const sl = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 5;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 40;
     const total = yes + no;
 
     const warnings = [];
@@ -4743,11 +4853,24 @@ function generateBotRiskWarnings() {
     if (yes < 5 || no < 5) {
         warnings.push({ level: 'warn', msg: `Buying at ${Math.min(yes,no)}¢ is very unlikely to fill — the market may not have liquidity there.` });
     }
-    if (sl < 3) {
-        warnings.push({ level: 'warn', msg: `Stop-loss of ${sl}¢ is very tight. Normal price fluctuations could trigger it.` });
+    if (flipFloor < 25) {
+        warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is very low — only sells if favorite is nearly eliminated.` });
     }
-    if (sl > 15) {
-        warnings.push({ level: 'warn', msg: `Stop-loss of ${sl}¢ means you could lose up to $${(sl * qty / 100).toFixed(2)} before exiting.` });
+    if (flipFloor > 45) {
+        warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is above midpoint — you'll sell during close games, not just flips.` });
+    }
+    // Breakeven warning for flip threshold
+    const favEntry = Math.max(yes, no);
+    const width = 100 - total;
+    if (favEntry >= flipFloor && width > 0) {
+        const flipLoss = favEntry - flipFloor;
+        const bePct = (flipLoss / (flipLoss + width) * 100).toFixed(1);
+        const ratio = Math.ceil(flipLoss / width);
+        if (parseFloat(bePct) >= 80) {
+            warnings.push({ level: 'error', msg: `Breakeven ${bePct}% — you need ${ratio} completions per flip. Very risky with this width.` });
+        } else if (parseFloat(bePct) >= 65) {
+            warnings.push({ level: 'warn', msg: `Breakeven ${bePct}% — ${ratio} completions needed per flip loss. Widening helps.` });
+        }
     }
 
     const el = document.getElementById('bot-risk-warnings');

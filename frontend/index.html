@@ -700,77 +700,62 @@
                             <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;">Breakeven: 33%</span>
                         </div>
                         <div id="preset-recommendation" style="display:none;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff8866;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;"></div>
-                        <div style="color:#556;font-size:9px;margin-bottom:8px;line-height:1.4;">Tight = fast fills, small profit · Medium = balanced · Wide = patient, max profit · <span style="color:#ffaa33;">★ = best win rate</span></div>
+                        <div style="color:#556;font-size:9px;margin-bottom:8px;line-height:1.4;">Tight = fast fills, small profit · Medium = balanced · Wide = patient, max profit · <span style="color:#ffaa33;">★ = recommended</span></div>
                         <div style="color:#8892a6;font-size:9px;font-weight:600;margin-bottom:3px;">TIGHT — liquid markets, fast games</div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;" id="preset-grid">
-                            <!-- Row 1: Tight (5¢–8¢) — SL ≥ 50% width -->
-                            <button onclick="applyPreset(5, 3)" class="arb-preset-btn" data-width="5" data-sl="3"
+                            <button onclick="applyPreset(5)" class="arb-preset-btn" data-width="5"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 38%</div>
                             </button>
-                            <button onclick="applyPreset(6, 3)" class="arb-preset-btn" data-width="6" data-sl="3"
+                            <button onclick="applyPreset(6)" class="arb-preset-btn" data-width="6"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 33%</div>
                             </button>
-                            <button onclick="applyPreset(6, 4)" class="arb-preset-btn" data-width="6" data-sl="4"
+                            <button onclick="applyPreset(7)" class="arb-preset-btn" data-width="7"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 40%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">7¢</div>
                             </button>
-                            <button onclick="applyPreset(8, 4)" class="arb-preset-btn" data-width="8" data-sl="4"
+                            <button onclick="applyPreset(8)" class="arb-preset-btn" data-width="8"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 33%</div>
                             </button>
                         </div>
                         <div style="color:#8892a6;font-size:9px;font-weight:600;margin-top:8px;margin-bottom:3px;">MEDIUM — most games, default choice</div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;">
-                            <!-- Row 2: Medium (8¢–10¢) — balanced risk/reward -->
-                            <button onclick="applyPreset(8, 5)" class="arb-preset-btn" data-width="8" data-sl="5"
+                            <button onclick="applyPreset(9)" class="arb-preset-btn" data-width="9"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 38%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">9¢</div>
                             </button>
-                            <button onclick="applyPreset(10, 5)" class="arb-preset-btn" data-width="10" data-sl="5"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 33%</div>
-                            </button>
-                            <button onclick="applyPreset(10, 6)" class="arb-preset-btn" data-width="10" data-sl="6"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 6¢ · 38%</div>
-                            </button>
-                            <button onclick="applyPreset(10, 8)" class="arb-preset-btn" data-width="10" data-sl="8"
+                            <button onclick="applyPreset(10)" class="arb-preset-btn" data-width="10"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #00ff8844;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#ffaa33;">10¢ ★</div>
-                                <div style="color:#ffaa33;font-size:9px;margin-top:2px;">SL 8¢ · 44%</div>
+                            </button>
+                            <button onclick="applyPreset(11)" class="arb-preset-btn" data-width="11"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">11¢</div>
+                            </button>
+                            <button onclick="applyPreset(12)" class="arb-preset-btn" data-width="12"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
                             </button>
                         </div>
                         <div style="color:#8892a6;font-size:9px;font-weight:600;margin-top:8px;margin-bottom:3px;">WIDE — slow markets, big spreads</div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;">
-                            <!-- Row 3: Wide (12¢–15¢) — patient, max profit -->
-                            <button onclick="applyPreset(12, 6)" class="arb-preset-btn" data-width="12" data-sl="6"
+                            <button onclick="applyPreset(13)" class="arb-preset-btn" data-width="13"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 6¢ · 33%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">13¢</div>
                             </button>
-                            <button onclick="applyPreset(12, 8)" class="arb-preset-btn" data-width="12" data-sl="8"
+                            <button onclick="applyPreset(14)" class="arb-preset-btn" data-width="14"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 8¢ · 40%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">14¢</div>
                             </button>
-                            <button onclick="applyPreset(15, 8)" class="arb-preset-btn" data-width="15" data-sl="8"
+                            <button onclick="applyPreset(15)" class="arb-preset-btn" data-width="15"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 8¢ · 35%</div>
                             </button>
-                            <button onclick="applyPreset(15, 10)" class="arb-preset-btn" data-width="15" data-sl="10"
+                            <button onclick="applyPreset(18)" class="arb-preset-btn" data-width="18"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 10¢ · 40%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">18¢</div>
                             </button>
                         </div>
                     </div>
@@ -799,7 +784,7 @@
                     </div>
                     <!-- Profit Preview -->
                     <div id="profit-preview" style="margin-bottom:16px;"></div>
-                    <!-- Qty, Stop Loss, Phase, Repeat -->
+                    <!-- Qty, Flip Threshold, Phase, Repeat -->
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
@@ -807,9 +792,10 @@
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
-                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop Loss <span style="color:#555;font-weight:400;">(¢)</span></label>
-                            <input type="number" id="bot-stop-loss-cents" min="1" max="30" value="5" oninput="updateProfitPreview(); updateBreakevenDisplay(); highlightActivePreset()"
-                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Flip Floor <span style="color:#555;font-weight:400;">(¢)</span></label>
+                            <input type="number" id="bot-stop-loss-cents" min="10" max="50" value="40" oninput="updateProfitPreview()"
+                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
+                                   title="Sell if bid drops to this level (favorite flipped). Default 40¢.">
                         </div>
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Phase</label>
@@ -826,8 +812,8 @@
                         </div>
                     </div>
                     <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#8892a6;">⏳ Pregame:</strong> Orders sit patiently — no repost, no stop-loss timeout.<br>
-                        <strong style="color:#8892a6;">🔴 Live:</strong> Active management — reposts stale orders, triggers stop-losses.
+                        <strong style="color:#8892a6;">🛡 Flip Protection:</strong> Sells only if bid drops to ≤ flip floor (favorite flipped). No stop-loss on normal dips.<br>
+                        <strong style="color:#8892a6;">🔴 Live:</strong> Active — reposts stale orders. <strong style="color:#8892a6;">⏳ Pregame:</strong> Patient — orders wait for game start.
                     </div>
                     <!-- Action buttons -->
                     <div style="display:flex;gap:10px;">

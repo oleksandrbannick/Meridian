@@ -742,6 +742,68 @@ def get_fills():
 active_bots = {}  # bot_id -> bot_config
 trade_history = []  # completed/stopped bots log (newest first)
 
+# ─── Activity Log ─────────────────────────────────────────────────────────────
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'activity_log.jsonl')
+_log_lock = threading.Lock()
+
+def bot_log(event: str, bot_id: str = '', details: dict = None, level: str = 'INFO'):
+    """Write a structured log entry. Every bot decision gets logged here.
+    
+    Events:
+      BOT_CREATED, ORDER_PLACED, ORDER_CANCELLED, ORDER_FILLED,
+      FAV_POSTED, FAV_FILLED, DOG_POSTED, FAV_REPOSTED, FAV_STALE_CANCELLED,
+      SL_TRIGGERED, SL_BLOCKED_STALE, SL_FIRED, SL_FAILED,
+      TP_TRIGGERED, TP_FIRED, TP_FAILED,
+      REPOST, RESIZE, SETTLEMENT, MARKET_SETTLED,
+      WATCH_FILLED, WATCH_SL, WATCH_TP, WATCH_SETTLED,
+      REPEAT_STARTED, REPEAT_TIMEOUT,
+      MONITOR_CYCLE, ERROR
+    """
+    import datetime
+    entry = {
+        'ts': datetime.datetime.now().isoformat(),
+        'epoch': time.time(),
+        'event': event,
+        'level': level,
+        'bot_id': bot_id,
+    }
+    # Snapshot bot state if it exists
+    if bot_id and bot_id in active_bots:
+        b = active_bots[bot_id]
+        entry['bot_snapshot'] = {
+            'type': b.get('type', 'arb'),
+            'ticker': b.get('ticker'),
+            'status': b.get('status'),
+            'side': b.get('side'),
+            'yes_price': b.get('yes_price'),
+            'no_price': b.get('no_price'),
+            'entry_price': b.get('entry_price'),
+            'quantity': b.get('quantity'),
+            'yes_fill_qty': b.get('yes_fill_qty', 0),
+            'no_fill_qty': b.get('no_fill_qty', 0),
+            'fill_qty': b.get('fill_qty', 0),
+            'live_bid': b.get('live_bid'),
+            'stop_loss_cents': b.get('stop_loss_cents'),
+            'game_phase': b.get('game_phase'),
+            'fav_side': b.get('fav_side'),
+            'profit_per': b.get('profit_per'),
+            'repost_count': b.get('repost_count', 0),
+            'fair_value_cents': b.get('fair_value_cents'),
+        }
+    if details:
+        entry['details'] = details
+    
+    with _log_lock:
+        try:
+            with open(LOG_FILE, 'a') as f:
+                f.write(json.dumps(entry, default=str) + '\n')
+        except Exception as e:
+            print(f'⚠ bot_log write failed: {e}')
+    
+    # Also print a compact summary to console
+    det_str = f' | {details}' if details else ''
+    print(f'📋 [{level}] {event} {bot_id}{det_str}')
+
 # ─── State Persistence ────────────────────────────────────────────────────────
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
 
@@ -1395,6 +1457,7 @@ def place_straight_order():
         cost_dollars = (price * quantity) / 100
         payout_dollars = quantity  # $1 per contract at settlement
         profit_dollars = payout_dollars - cost_dollars
+        bot_log('ORDER_PLACED', watch_bot_id or '', {'ticker': ticker, 'side': side, 'price': price, 'qty': quantity, 'order_id': order_id, 'watch': add_watch, 'fair_value': fair_value_cents})
 
         return jsonify({
             'success':    True,
@@ -1529,6 +1592,7 @@ def create_bot():
             'arb_width':        arb_width if arb_width > 0 else profit_per,
         }
         save_state()
+        bot_log('BOT_CREATED', bot_id, {'fav_side': fav_side, 'fav_price': fav_price, 'dog_side': dog_side, 'dog_price': dog_price, 'profit_per': profit_per, 'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count})
 
         return jsonify({
             'success':      True,
@@ -1811,6 +1875,7 @@ def _run_monitor():
                         bot['game_phase'] = 'live'
                         bot['posted_at'] = time.time()  # restart timeout counters
                         actions.append({'bot_id': bot_id, 'action': 'auto_phase_live'})
+                        bot_log('AUTO_PHASE_LIVE', bot_id, {'reason': 'ESPN detected game in progress'})
                         print(f'🏟 AUTO-PHASE: {bot_id} switched to LIVE (ESPN detected game in progress)')
                 except Exception:
                     pass
@@ -1872,6 +1937,7 @@ def _run_monitor():
                                     'note': f'market {mkt_status} — both legs filled',
                                     'game_phase': bot.get('game_phase', ''),
                                 })
+                                bot_log('SETTLEMENT_COMPLETE', bot_id, {'profit_cents': profit_cents, 'real_yes': real_yes, 'real_no': real_no, 'market_status': mkt_status})
                                 print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
                             elif yes_f >= qty and no_f < qty:
                                 # YES filled, NO never filled — market settled as loss
@@ -1900,6 +1966,7 @@ def _run_monitor():
                                     'note': f'market {mkt_status} — YES filled but NO never filled',
                                     'game_phase': bot.get('game_phase', ''),
                                 })
+                                bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'loss_cents': loss, 'market_status': mkt_status})
                                 print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢) but NO unfilled, market {mkt_status}')
                             elif no_f >= qty and yes_f < qty:
                                 # NO filled, YES never filled — same as above but for NO side
@@ -1923,11 +1990,13 @@ def _run_monitor():
                                     'note': f'market {mkt_status} — NO filled but YES never filled',
                                     'game_phase': bot.get('game_phase', ''),
                                 })
+                                bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'loss_cents': loss, 'market_status': mkt_status})
                                 print(f'⚠ SETTLED LOSS: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢) but YES unfilled, market {mkt_status}')
                             else:
                                 # Neither leg filled — no cost, just clean up
                                 bot['status'] = 'completed'
                                 bot['completed_at'] = now
+                                bot_log('SETTLEMENT_CLEAN', bot_id, {'market_status': mkt_status})
                                 print(f'🏁 MARKET SETTLED: {bot_id} — no fills, clean exit')
                             actions.append({'bot_id': bot_id, 'action': 'market_settled', 'market_status': mkt_status})
                             save_state()
@@ -2024,6 +2093,7 @@ def _run_monitor():
                             bot['posted_at'] = now
                             bot['profit_per'] = 100 - bot['yes_price'] - bot['no_price']
 
+                            bot_log('FAV_FILLED_DOG_POSTED', bot_id, {'fav_side': fav_side, 'fav_price': fav_price, 'dog_side': dog_side, 'dog_price': dog_price, 'profit_per': bot['profit_per']})
                             print(f'🎯 FAV-FIRST FILL: {bot_id} {fav_side.upper()} filled at {fav_price}¢ → '
                                   f'posted {dog_side.upper()} at {dog_price}¢ '
                                   f'(profit target: {bot["profit_per"]}¢)')
@@ -2073,6 +2143,7 @@ def _run_monitor():
                                     bot['fav_price'] = new_fav_price
                                 bot['posted_at'] = now
                                 bot['repost_count'] = bot.get('repost_count', 0) + 1
+                                bot_log('FAV_REPOSTED', bot_id, {'fav_side': fav_side, 'new_price': new_fav_price, 'repost_count': bot['repost_count']})
                                 print(f'🔄 FAV REPOST: {bot_id} {fav_side.upper()} at {new_fav_price}¢ '
                                       f'(repost #{bot["repost_count"]})')
                                 actions.append({'bot_id': bot_id, 'action': 'fav_reposted',
@@ -2089,6 +2160,7 @@ def _run_monitor():
                                 pass
                             bot['status'] = 'completed'
                             bot['completed_at'] = now
+                            bot_log('FAV_STALE_CANCELLED', bot_id, {'fav_side': fav_side, 'age_min': round(age_min, 1)})
                             print(f'⏰ FAV STALE: {bot_id} favorite {fav_side.upper()} unfilled after {age_min:.1f}m — cancelled')
                             actions.append({'bot_id': bot_id, 'action': 'fav_stale_cancelled'})
                     continue
@@ -2117,6 +2189,7 @@ def _run_monitor():
                                         pass
                                 bot['status'] = 'stopped'
                                 bot['stopped_at'] = now
+                                bot_log('WATCH_SETTLED_UNFILLED', bot_id, {'market_status': mkt_status_w})
                                 print(f'🏁 WATCH SETTLED (unfilled): {bot_id} — market {mkt_status_w}, order never filled')
                                 actions.append({'bot_id': bot_id, 'action': 'watch_settled_unfilled'})
                                 save_state()
@@ -2125,6 +2198,7 @@ def _run_monitor():
                                 # Position was filled — market settled, Kalshi auto-settles it
                                 bot['status'] = 'completed'
                                 bot['completed_at'] = now
+                                bot_log('WATCH_SETTLED_FILLED', bot_id, {'market_status': mkt_status_w})
                                 print(f'🏁 WATCH SETTLED (filled): {bot_id} — market {mkt_status_w}, position auto-settles on Kalshi')
                                 actions.append({'bot_id': bot_id, 'action': 'watch_settled_filled'})
                                 save_state()
@@ -2181,6 +2255,7 @@ def _run_monitor():
                                     'ticker': ticker, 'side': watch_side,
                                     'price': entry, 'quantity': qty
                                 })
+                                bot_log('WATCH_ORDER_FILLED', bot_id, {'side': watch_side, 'qty': qty, 'entry': entry})
                                 print(f'💰 STRAIGHT BET FILLED: {bot_id} — {watch_side.upper()} {qty}× at {entry}¢')
                                 save_state()
                             elif order_status in ('canceled', 'cancelled', 'expired', 'declined'):
@@ -2191,6 +2266,7 @@ def _run_monitor():
                                     'bot_id': bot_id, 'action': 'straight_bet_cancelled',
                                     'ticker': ticker, 'side': watch_side
                                 })
+                                bot_log('WATCH_ORDER_CANCELLED', bot_id, {'order_status': order_status})
                                 print(f'❌ STRAIGHT BET CANCELLED: {bot_id} — {order_status}')
                                 save_state()
                                 continue
@@ -2245,6 +2321,7 @@ def _run_monitor():
                                 rest_bid = mkt_v_data.get(f'{watch_side}_bid', 0)
                             if rest_bid > entry - sl:
                                 # REST says bid is actually fine — WS was stale
+                                bot_log('SL_BLOCKED_STALE_WS', bot_id, {'ws_bid': cur_bid, 'rest_bid': rest_bid, 'trigger': entry - sl}, level='WARN')
                                 print(f'🛡 WATCH SL BLOCKED: {bot_id} WS bid {cur_bid}¢ but REST bid {rest_bid}¢ > trigger {entry - sl}¢ — WS was stale')
                                 bot['live_bid'] = rest_bid  # correct the cached bid
                                 cur_bid = rest_bid
@@ -2253,6 +2330,7 @@ def _run_monitor():
                                 # Skip this SL — bid is not actually breached
                             else:
                                 # REST confirms SL breach — update cur_bid to REST value
+                                bot_log('SL_CONFIRMED_REST', bot_id, {'rest_bid': rest_bid, 'trigger': entry - sl, 'ws_bid': cur_bid})
                                 print(f'✅ WATCH SL CONFIRMED: {bot_id} REST bid {rest_bid}¢ ≤ trigger {entry - sl}¢ (WS was {cur_bid}¢)')
                                 cur_bid = rest_bid
                                 bot['live_bid'] = rest_bid
@@ -2288,7 +2366,9 @@ def _run_monitor():
                     })
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
                                            'loss_cents': loss})
+                            bot_log('WATCH_SL_FIRED', bot_id, {'entry': entry, 'exit': actual_sell, 'loss_cents': loss, 'sl_trigger': entry - sl, 'live_bid': cur_bid})
                         else:
+                            bot_log('WATCH_SL_FAILED', bot_id, {'sell_info': str(sell_info)}, level='ERROR')
                             print(f'⚠ Watch SL sell FAILED for {bot_id} — will retry next cycle')
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch_FAILED',
                                            'info': str(sell_info)})
@@ -2320,7 +2400,9 @@ def _run_monitor():
                     })
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
                                            'profit_cents': profit})
+                            bot_log('WATCH_TP_FIRED', bot_id, {'entry': entry, 'exit': actual_sell, 'profit_cents': profit, 'tp_trigger': entry + tp, 'live_bid': cur_bid})
                         else:
+                            bot_log('WATCH_TP_FAILED', bot_id, {'sell_info': str(sell_info)}, level='ERROR')
                             print(f'⚠ Watch TP sell FAILED for {bot_id} — will retry next cycle')
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch_FAILED',
                                            'info': str(sell_info)})
@@ -2495,6 +2577,7 @@ def _run_monitor():
                         'game_context': _get_game_context(ticker),
                     })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
+                    bot_log('ARB_COMPLETED', bot_id, {'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents, 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None})
 
                     # Track cumulative P&L on the bot itself
                     bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
@@ -2752,6 +2835,7 @@ def _run_monitor():
                             bot['sl_breach_since'] = now
                             bot['sl_last_bid'] = yes_bid
                             grace_left = SL_GRACE_MINUTES
+                            bot_log('ARB_SL_GRACE_START', bot_id, {'leg': 'yes', 'bid': yes_bid, 'trigger': sl_trigger, 'grace_min': SL_GRACE_MINUTES})
                             print(f'⏳ SL GRACE: {bot_id} YES bid {yes_bid}¢ ≤ trigger {sl_trigger}¢ — '
                                   f'waiting {SL_GRACE_MINUTES}m for recovery before firing')
                         grace_elapsed = (now - bot['sl_breach_since']) / 60.0
@@ -2829,6 +2913,7 @@ def _run_monitor():
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes',
                                             'entry': bot['yes_price'], 'exit_bid': actual_sell,
                                             'loss_cents': loss, 'verified': verified})
+                            bot_log('ARB_SL_FIRED', bot_id, {'leg': 'yes', 'entry': bot['yes_price'], 'exit': actual_sell, 'loss_cents': loss, 'trigger': sl_trigger, 'bid_at_fire': yes_bid, 'grace_elapsed_min': round(grace_elapsed, 1)})
 
                             # Track cumulative P&L on the bot (stop-loss = no repeat)
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
@@ -2886,6 +2971,7 @@ def _run_monitor():
                         if not bot.get('sl_breach_since'):
                             bot['sl_breach_since'] = now
                             bot['sl_last_bid'] = no_bid
+                            bot_log('ARB_SL_GRACE_START', bot_id, {'leg': 'no', 'bid': no_bid, 'trigger': sl_trigger_no, 'grace_min': SL_GRACE_MINUTES})
                             print(f'⏳ SL GRACE: {bot_id} NO bid {no_bid}¢ ≤ trigger {sl_trigger_no}¢ — '
                                   f'waiting {SL_GRACE_MINUTES}m for recovery before firing')
                         grace_elapsed_no = (now - bot['sl_breach_since']) / 60.0
@@ -2963,6 +3049,7 @@ def _run_monitor():
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_no',
                                             'entry': bot['no_price'], 'exit_bid': actual_sell,
                                             'loss_cents': loss, 'verified': verified})
+                            bot_log('ARB_SL_FIRED', bot_id, {'leg': 'no', 'entry': bot['no_price'], 'exit': actual_sell, 'loss_cents': loss, 'trigger': sl_trigger_no, 'bid_at_fire': no_bid, 'grace_elapsed_min': round(grace_elapsed_no, 1)})
 
                             # Track cumulative P&L on the bot (stop-loss = no repeat)
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
@@ -3011,10 +3098,13 @@ def _run_monitor():
                 continue
 
         save_state()
+        active_count = len([b for b in active_bots.values() if b['status'] in active_statuses])
+        if actions:
+            bot_log('MONITOR_CYCLE', '', {'active_bots': active_count, 'actions_count': len(actions), 'actions_summary': [a.get('action', '?') for a in actions]})
         return jsonify({
             'success':     True,
             'actions':     actions,
-            'active_bots': len([b for b in active_bots.values() if b['status'] in active_statuses]),
+            'active_bots': active_count,
         })
 
     except Exception as e:
@@ -3032,6 +3122,57 @@ def bot_history():
     """Get completed/stopped trade history"""
     limit = int(request.args.get('limit', 50))
     return jsonify({'trades': trade_history[:limit], 'total': len(trade_history)})
+
+
+@app.route('/api/logs', methods=['GET'])
+def get_activity_logs():
+    """Get the activity log for debugging. Supports ?lines=N (default 200) and ?event=X filter."""
+    try:
+        lines = int(request.args.get('lines', 200))
+        event_filter = request.args.get('event', '').strip()
+        bot_filter = request.args.get('bot_id', '').strip()
+        level_filter = request.args.get('level', '').strip().upper()
+
+        if not os.path.exists(LOG_FILE):
+            return jsonify({'logs': [], 'total': 0})
+
+        with open(LOG_FILE, 'r') as f:
+            all_lines = f.readlines()
+
+        # Parse from newest to oldest
+        entries = []
+        for line in reversed(all_lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event_filter and entry.get('event', '') != event_filter:
+                continue
+            if bot_filter and bot_filter not in entry.get('bot_id', ''):
+                continue
+            if level_filter and entry.get('level', '') != level_filter:
+                continue
+            entries.append(entry)
+            if len(entries) >= lines:
+                break
+
+        return jsonify({'logs': entries, 'total': len(all_lines)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/logs/clear', methods=['POST'])
+def clear_activity_logs():
+    """Clear the activity log file."""
+    try:
+        with open(LOG_FILE, 'w') as f:
+            f.write('')
+        return jsonify({'success': True, 'message': 'Activity log cleared'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/bot/history/clear', methods=['POST'])

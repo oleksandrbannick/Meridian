@@ -211,15 +211,19 @@ def get_markets():
             for sport_series in SPORTS_SERIES.values():
                 series_to_fetch.extend(sport_series)
         
-        # Fetch markets from each series
+        # Fetch markets from each series (with pagination for large series)
         all_markets = []
         series_counts = {}
         
         for series in series_to_fetch:
             try:
-                result = kalshi_client.get_markets_by_series(series, status=status, limit=200)
-                markets = result.get('markets', [])
-                if markets:
+                series_markets = []
+                cursor = None
+                while True:
+                    result = kalshi_client.get_markets_by_series(series, status=status, limit=200, cursor=cursor)
+                    markets = result.get('markets', [])
+                    if not markets:
+                        break
                     markets = [m for m in markets if 'mve_selected_legs' not in m 
                              and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
                     # Enrich each market with the type based on series prefix
@@ -227,9 +231,14 @@ def get_markets():
                     for m in markets:
                         m['market_type'] = mtype
                         m['series_ticker'] = series  # API returns None, fill it
-                    if markets:
-                        series_counts[series] = len(markets)
-                        all_markets.extend(markets)
+                    series_markets.extend(markets)
+                    # Check for next page
+                    cursor = result.get('cursor')
+                    if not cursor or len(result.get('markets', [])) < 200:
+                        break
+                if series_markets:
+                    series_counts[series] = len(series_markets)
+                    all_markets.extend(series_markets)
             except Exception as e:
                 continue
         
@@ -3530,15 +3539,22 @@ def scan_arb_opportunities():
             for s in SPORTS_SERIES.values():
                 series_to_fetch.extend(s)
 
-        # Fetch all open markets from each series
+        # Fetch all open markets from each series (with pagination)
         all_markets = []
         for series in series_to_fetch:
             try:
-                result = kalshi_client.get_markets_by_series(series, status='open', limit=200)
-                markets = result.get('markets', [])
-                markets = [m for m in markets if 'mve_selected_legs' not in m
-                           and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
-                all_markets.extend(markets)
+                cursor = None
+                while True:
+                    result = kalshi_client.get_markets_by_series(series, status='open', limit=200, cursor=cursor)
+                    markets = result.get('markets', [])
+                    if not markets:
+                        break
+                    markets = [m for m in markets if 'mve_selected_legs' not in m
+                               and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+                    all_markets.extend(markets)
+                    cursor = result.get('cursor')
+                    if not cursor or len(result.get('markets', [])) < 200:
+                        break
             except Exception:
                 continue
 
@@ -3776,10 +3792,17 @@ def scan_middles():
         all_spreads = []
         for series in series_to_fetch:
             try:
-                result = kalshi_client.get_markets_by_series(series, status='open', limit=200)
-                markets = result.get('markets', [])
-                markets = [m for m in markets if 'mve_selected_legs' not in m]
-                all_spreads.extend(markets)
+                cursor = None
+                while True:
+                    result = kalshi_client.get_markets_by_series(series, status='open', limit=200, cursor=cursor)
+                    markets = result.get('markets', [])
+                    if not markets:
+                        break
+                    markets = [m for m in markets if 'mve_selected_legs' not in m]
+                    all_spreads.extend(markets)
+                    cursor = result.get('cursor')
+                    if not cursor or len(result.get('markets', [])) < 200:
+                        break
             except Exception:
                 continue
 

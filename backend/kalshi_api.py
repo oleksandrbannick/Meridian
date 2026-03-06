@@ -119,11 +119,13 @@ class KalshiAPI:
             params['series_ticker'] = self._series_ticker
         return self._make_request('GET', '/markets', params=params, authenticated=False)
     
-    def get_markets_by_series(self, series_ticker: str, status: str = 'open', limit: int = 200) -> Dict:
+    def get_markets_by_series(self, series_ticker: str, status: str = 'open', limit: int = 200, cursor: str = None) -> Dict:
         """Get markets filtered by series_ticker (e.g., KXNBAGAME, KXNBASPREAD)"""
         params = {'limit': limit, 'series_ticker': series_ticker}
         if status:
             params['status'] = status
+        if cursor:
+            params['cursor'] = cursor
         return self._make_request('GET', '/markets', params=params, authenticated=False)
     
     def get_events_by_series(self, series_ticker: str, status: str = 'open', limit: int = 200) -> Dict:

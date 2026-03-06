@@ -1034,7 +1034,7 @@
       "live_no_bid": 90,
       "live_yes_ask": 10,
       "live_no_ask": 91,
-      "last_price_update": 1772816723.9841542
+      "last_price_update": 1772817315.835989
     }
   },
   "trade_history": [
@@ -1814,7 +1814,7 @@
     "gross_loss_cents": 0,
     "completed_bots": 0,
     "stopped_bots": 0,
-    "session_start": 1772816262.349204,
+    "session_start": 1772817292.278233,
     "day_key": "2026-03-06"
   }
 }

@@ -168,6 +168,8 @@ def get_markets():
             # NCAAB (Men's College Basketball — Kalshi uses KXNCAAMB prefix)
             'KXNCAAMBGAME': 'winner', 'KXNCAAMBSPREAD': 'spread', 'KXNCAAMBTOTAL': 'total',
             'KXNCAAMB1HWINNER': '1h_winner', 'KXNCAAMB1HSPREAD': '1h_spread', 'KXNCAAMB1HTOTAL': '1h_total',
+            'KXNCAAMBPTS': 'prop', 'KXNCAAMBREB': 'prop', 'KXNCAAMBAST': 'prop',
+            'KXNCAAMB3PT': 'prop', 'KXNCAAMBSTL': 'prop', 'KXNCAAMBBLK': 'prop',
             'KXMARMAD': 'prop',  # March Madness Champion
             # NCAAB Women's
             'KXNCAAWBGAME': 'winner',
@@ -192,6 +194,8 @@ def get_markets():
             'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
             'ncaab': ['KXNCAAMBGAME', 'KXNCAAMBSPREAD', 'KXNCAAMBTOTAL',
                       'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
+                      'KXNCAAMBPTS', 'KXNCAAMBREB', 'KXNCAAMBAST',
+                      'KXNCAAMB3PT', 'KXNCAAMBSTL', 'KXNCAAMBBLK',
                       'KXMARMAD', 'KXNCAAWBGAME'],
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
@@ -3511,6 +3515,8 @@ def scan_arb_opportunities():
             'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
             'ncaab': ['KXNCAAMBGAME', 'KXNCAAMBSPREAD', 'KXNCAAMBTOTAL',
                       'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
+                      'KXNCAAMBPTS', 'KXNCAAMBREB', 'KXNCAAMBAST',
+                      'KXNCAAMB3PT', 'KXNCAAMBSTL', 'KXNCAAMBBLK',
                       'KXMARMAD', 'KXNCAAWBGAME'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],

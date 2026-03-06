@@ -590,7 +590,7 @@ function groupByEvent(markets) {
                 gameId: gameId,
                 eventTicker: eventTicker,
                 seriesTicker: market.series_ticker || eventTicker.split('-')[0] || '',
-                eventTitle: buildGameTitle(gameId, market),
+                eventTitle: null, // set after grouping
                 teamNames: parseTeamNames(gameId),
                 sport: detectSport(eventTicker),
                 markets: []
@@ -598,6 +598,12 @@ function groupByEvent(markets) {
         }
         
         games[gameId].markets.push(market);
+    });
+    
+    // Second pass: build titles using ALL markets in each group
+    // This ensures winner/spread market titles (which are cleaner) are preferred
+    Object.values(games).forEach(g => {
+        g.eventTitle = buildGameTitle(g.gameId, g.markets);
     });
     
     console.log(`✅ Grouped into ${Object.keys(games).length} games`);
@@ -654,27 +660,44 @@ function getSportEmoji(sport) {
     return emojis[sport] || '🏆';
 }
 
-// Build game title from gameId and market data
+// Build game title from gameId and market data (or array of markets)
 // 26FEB28TORWAS -> "Toronto vs Washington"
-function buildGameTitle(gameId, market) {
-    // Try to extract from market title first (most reliable)
-    const title = market.title || '';
+function buildGameTitle(gameId, marketOrMarkets) {
+    // Accept single market or array of markets
+    const markets = Array.isArray(marketOrMarkets) ? marketOrMarkets : [marketOrMarkets];
     
-    // Tennis: "Will X win the Y vs Z : Round Of N match?" -> "Y vs Z"
-    const tennisMatch = title.match(/win the\s+(.+?)\s+vs\.?\s+(.+?)\s*(?::|\?)/i);
-    if (tennisMatch) {
-        return `${tennisMatch[1].trim()} vs ${tennisMatch[2].trim()}`;
-    }
+    // Try every market's title — winner/spread titles are cleanest
+    // Sort so winner/spread markets are tried first
+    const sorted = [...markets].sort((a, b) => {
+        const typeOrder = { 'winner': 0, 'spread': 1, 'total': 2, '1h_winner': 3 };
+        return (typeOrder[a.market_type] ?? 99) - (typeOrder[b.market_type] ?? 99);
+    });
     
-    // Titles like "Denver at Utah Winner?" or "Toronto at Washington: Spread"
-    const atMatch = title.match(/^(.+?)\s+at\s+(.+?)[\s:?]/i);
-    if (atMatch) {
-        return `${atMatch[1].trim()} vs ${atMatch[2].trim()}`;
-    }
-    
-    const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)[\s:?]/i);
-    if (vsMatch) {
-        return `${vsMatch[1].trim()} vs ${vsMatch[2].trim()}`;
+    for (const market of sorted) {
+        const title = market.title || '';
+        
+        // Tennis: "Will X win the Y vs Z : Round Of N match?" -> "Y vs Z"
+        const tennisMatch = title.match(/win the\s+(.+?)\s+vs\.?\s+(.+?)\s*(?::|\?)/i);
+        if (tennisMatch) {
+            return `${tennisMatch[1].trim()} vs ${tennisMatch[2].trim()}`;
+        }
+        
+        // Titles like "Denver at Utah Winner?" or "Toronto at Washington: Spread"
+        const atMatch = title.match(/^(.+?)\s+at\s+(.+?)(?:[\s:?]|Winner|Moneyline|Spread|Total|$)/i);
+        if (atMatch) {
+            return `${atMatch[1].trim()} vs ${atMatch[2].trim()}`;
+        }
+        
+        const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:[\s:?]|Winner|Moneyline|Spread|Total|$)/i);
+        if (vsMatch) {
+            return `${vsMatch[1].trim()} vs ${vsMatch[2].trim()}`;
+        }
+        
+        // Prop titles like "Will X score 20+ pts in Team1 at Team2?" or "... in the Team1 vs Team2 game"
+        const inGameMatch = title.match(/in(?:\s+the)?\s+(.+?)\s+(?:at|vs\.?)\s+(.+?)(?:\s+game|\s*\?|$)/i);
+        if (inGameMatch) {
+            return `${inGameMatch[1].trim()} vs ${inGameMatch[2].trim()}`;
+        }
     }
     
     // Parse from gameId: 26FEB28TORWAS -> TOR vs WAS
@@ -685,8 +708,9 @@ function buildGameTitle(gameId, market) {
 function parseTeamNames(gameId) {
     if (!gameId || gameId === 'UNKNOWN') return 'Unknown Game';
     
-    // NBA team abbreviations to full names
+    // Comprehensive team abbreviations (NBA, NHL, MLB, EPL, UCL, MLS, NCAAB, NCAAF)
     const teamMap = {
+        // NBA
         'ATL': 'Atlanta', 'BOS': 'Boston', 'BKN': 'Brooklyn', 'CHA': 'Charlotte',
         'CHI': 'Chicago', 'CLE': 'Cleveland', 'DAL': 'Dallas', 'DEN': 'Denver',
         'DET': 'Detroit', 'GSW': 'Golden State', 'HOU': 'Houston', 'IND': 'Indiana',
@@ -696,7 +720,7 @@ function parseTeamNames(gameId) {
         'POR': 'Portland', 'SAC': 'Sacramento', 'SAS': 'San Antonio', 'TOR': 'Toronto',
         'UTA': 'Utah', 'WAS': 'Washington',
         // NHL
-        'CAR': 'Carolina', 'SEA': 'Seattle', 'COL': 'Colorado', 
+        'CAR': 'Carolina', 'SEA': 'Seattle', 'COL': 'Colorado',
         'VGK': 'Vegas', 'WPG': 'Winnipeg', 'WSH': 'Washington',
         'VAN': 'Vancouver', 'FLA': 'Florida', 'NYR': 'NY Rangers',
         'NYI': 'NY Islanders', 'TBL': 'Tampa Bay', 'NJD': 'New Jersey',
@@ -704,6 +728,10 @@ function parseTeamNames(gameId) {
         'STL': 'St. Louis', 'EDM': 'Edmonton', 'CGY': 'Calgary',
         'OTT': 'Ottawa', 'MTL': 'Montreal', 'BUF': 'Buffalo',
         'ARI': 'Arizona', 'ANA': 'Anaheim', 'SJS': 'San Jose',
+        // MLB
+        'NYY': 'Yankees', 'NYM': 'Mets', 'TB': 'Rays', 'BAL': 'Orioles',
+        'KC': 'Royals', 'CWS': 'White Sox', 'TEX': 'Rangers', 'SD': 'Padres',
+        'SF': 'Giants', 'LAD': 'Dodgers', 'CIN': 'Reds', 'MIL2': 'Brewers',
         // EPL
         'LEE': 'Leeds', 'MCI': 'Man City', 'LFC': 'Liverpool', 'TOT': 'Tottenham',
         'NFO': 'Nottingham', 'FUL': 'Fulham', 'BRE': 'Brentford', 'WOL': 'Wolves',
@@ -713,17 +741,94 @@ function parseTeamNames(gameId) {
         'IPS': 'Ipswich', 'LEI': 'Leicester', 'BOH': 'Bournemouth',
         // UCL
         'ATM': 'Atletico Madrid', 'RMA': 'Real Madrid', 'BAR': 'Barcelona',
-        'PSG': 'PSG', 'CFC': 'Chelsea',
-        'TIE': 'Draw'
+        'PSG': 'PSG', 'CFC': 'Chelsea', 'TIE': 'Draw',
+        // NCAAB — Kalshi uses variable-length codes (2-5 chars)
+        'AKR': 'Akron', 'ALA': 'Alabama', 'ALBNY': 'Albany', 'AMERN': 'American',
+        'APP': 'App State', 'ARIZ': 'Arizona', 'ARK': 'Arkansas', 'ARM': 'Army',
+        'AUB': 'Auburn', 'BALL': 'Ball State', 'BAY': 'Baylor', 'BC': 'Boston College',
+        'BGSU': 'Bowling Green', 'BING': 'Binghamton', 'BOISE': 'Boise State',
+        'BRAD': 'Bradley', 'BRWN': 'Brown', 'BRYNT': 'Bryant', 'BUCK': 'Bucknell',
+        'BUFF': 'Buffalo', 'BUTLR': 'Butler', 'BYU': 'BYU', 'CAL': 'Cal',
+        'CAMP': 'Campbell', 'CMICH': 'Central Michigan', 'CIN': 'Cincinnati',
+        'CLEM': 'Clemson', 'CLM': 'Clemson', 'CLEV': 'Cleveland State',
+        'COAST': 'Coastal Carolina', 'COLG': 'Colgate', 'COLO': 'Colorado',
+        'CONN': 'UConn', 'CORN': 'Cornell', 'CREIG': 'Creighton',
+        'DART': 'Dartmouth', 'DAV': 'Davidson', 'DAYT': 'Dayton', 'DEL': 'Delaware',
+        'DEPL': 'DePaul', 'DRAKE': 'Drake', 'DREX': 'Drexel', 'DUKE': 'Duke',
+        'DUQ': 'Duquesne', 'ECU': 'East Carolina', 'EMU': 'Eastern Michigan',
+        'EVAN': 'Evansville', 'FAIR': 'Fairfield', 'FAU': 'FAU', 'FDU': 'FDU',
+        'FLOR': 'Florida', 'FLA': 'Florida', 'FGCU': 'FGCU', 'FSU': 'Florida State',
+        'FORD': 'Fordham', 'FRES': 'Fresno State', 'FTO': 'Fordham',
+        'GTOWN': 'Georgetown', 'GW': 'George Washington', 'GMU': 'George Mason',
+        'GT': 'Georgia Tech', 'GONZ': 'Gonzaga', 'GRAM': 'Grambling',
+        'HALL': 'Seton Hall', 'HARV': 'Harvard', 'HAW': 'Hawaii', 'HIGH': 'High Point',
+        'HOFST': 'Hofstra', 'HOLY': 'Holy Cross', 'HTOWN': 'Houston',
+        'IDAHO': 'Idaho', 'ILL': 'Illinois', 'IONA': 'Iona', 'IOWA': 'Iowa',
+        'ISU': 'Iowa State', 'IUPU': 'IUPUI', 'JAX': 'Jacksonville',
+        'JMU': 'James Madison', 'KAN': 'Kansas', 'KENT': 'Kent State', 'UK': 'Kentucky',
+        'LAS': 'La Salle', 'LAF': 'Lafayette', 'LAM': 'Lamar', 'LEH': 'Lehigh',
+        'LIB': 'Liberty', 'LIP': 'Lipscomb', 'LOU': 'Louisville', 'LSU': 'LSU',
+        'LOY': 'Loyola Chicago', 'MAINE': 'Maine', 'MANH': 'Manhattan',
+        'MARQ': 'Marquette', 'MARSH': 'Marshall', 'MD': 'Maryland', 'MCNS': 'McNeese',
+        'MERC': 'Mercer', 'MERR': 'Merrimack', 'MIFL': 'Miami (FL)',
+        'MOH': 'Miami (OH)', 'MICH': 'Michigan', 'MSU': 'Michigan State',
+        'MTSU': 'Middle Tennessee', 'MISS': 'Ole Miss', 'MSST': 'Mississippi State',
+        'MO': 'Missouri', 'MONM': 'Monmouth', 'MONT': 'Montana', 'MURR': 'Murray State',
+        'NAVY': 'Navy', 'NEB': 'Nebraska', 'NEV': 'Nevada', 'UNLV': 'UNLV',
+        'NH': 'New Hampshire', 'NJIT': 'NJIT', 'NM': 'New Mexico', 'NMSU': 'New Mexico State',
+        'NIAG': 'Niagara', 'NIU': 'Northern Illinois', 'NC': 'North Carolina',
+        'NCST': 'NC State', 'ND': 'Notre Dame', 'NWST': 'Northwestern State',
+        'NW': 'Northwestern', 'OAK': 'Oakland', 'OHIO': 'Ohio', 'OSU': 'Ohio State',
+        'OKLA': 'Oklahoma', 'OKST': 'Oklahoma State', 'ODU': 'Old Dominion',
+        'OREG': 'Oregon', 'ORST': 'Oregon State', 'PAC': 'Pacific',
+        'PENN': 'Penn', 'PSU': 'Penn State', 'PEPP': 'Pepperdine',
+        'PROV': 'Providence', 'PURD': 'Purdue', 'QUIN': 'Quinnipiac',
+        'RAD': 'Radford', 'RICE': 'Rice', 'RICH': 'Richmond', 'RID': 'Rider',
+        'RUTG': 'Rutgers', 'SAM': 'Samford', 'SDSU': 'San Diego State',
+        'SCU': 'Santa Clara', 'SETON': 'Seton Hall', 'SHU': 'Sacred Heart',
+        'SIENA': 'Siena', 'SIU': 'Southern Illinois', 'SMU': 'SMU',
+        'SC': 'South Carolina', 'USF': 'South Florida', 'SMC': 'Saint Mary\'s',
+        'SJU': 'St. John\'s', 'STBONA': 'St. Bonaventure', 'SJSU': 'San Jose State',
+        'STAN': 'Stanford', 'STONY': 'Stony Brook', 'SYRCU': 'Syracuse', 'SYR': 'Syracuse',
+        'TCU': 'TCU', 'TEMP': 'Temple', 'TENN': 'Tennessee', 'TEX': 'Texas',
+        'TXAM': 'Texas A&M', 'TTU': 'Texas Tech', 'TLDO': 'Toledo', 'TOL': 'Toledo',
+        'TLNE': 'Tulane', 'TLSA': 'Tulsa', 'UAB': 'UAB', 'UCF': 'UCF',
+        'UCLA': 'UCLA', 'UCSB': 'UC Santa Barbara', 'UGA': 'Georgia',
+        'UMASS': 'UMass', 'UNC': 'North Carolina', 'UNLV': 'UNLV',
+        'URI': 'Rhode Island', 'USC': 'USC', 'USU': 'Utah State',
+        'UTAH': 'Utah', 'UTEP': 'UTEP', 'UTSA': 'UTSA',
+        'VALPO': 'Valparaiso', 'VANDY': 'Vanderbilt', 'VCU': 'VCU',
+        'VILL': 'Villanova', 'UVA': 'Virginia', 'VT': 'Virginia Tech',
+        'WAKE': 'Wake Forest', 'WASHI': 'Washington', 'WVU': 'West Virginia',
+        'WKU': 'Western Kentucky', 'WMICH': 'Western Michigan', 'WICH': 'Wichita State',
+        'WISC': 'Wisconsin', 'WIS': 'Wisconsin', 'WOF': 'Wofford', 'WRIGHT': 'Wright State',
+        'WYO': 'Wyoming', 'XAV': 'Xavier', 'YALE': 'Yale', 'YSU': 'Youngstown State',
+        // Additional NCAAB codes seen on Kalshi
+        'BRIGHTN': 'Brighton', 'PENNBRWN': 'Penn vs Brown',
     };
     
     // Remove date prefix: 26FEB28TORWAS -> TORWAS
     const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
     
+    if (!cleaned || cleaned.length < 2) return gameId;
+    
+    // Try all possible split points (variable-length team codes: 2-5 chars each)
+    // Try longest codes first for best match
+    for (let split = Math.min(5, cleaned.length - 2); split >= 2; split--) {
+        const team1 = cleaned.substring(0, split);
+        const team2 = cleaned.substring(split);
+        if (teamMap[team1] && teamMap[team2]) {
+            // Check for special entries that already contain "vs"
+            const n1 = teamMap[team1];
+            const n2 = teamMap[team2];
+            return `${n1} vs ${n2}`;
+        }
+    }
+    
+    // Try 3+3 split as fallback even if not in map (show raw codes)
     if (cleaned.length >= 6) {
-        // Try 3+3 split first
         const team1 = cleaned.substring(0, 3);
-        const team2 = cleaned.substring(3, 6);
+        const team2 = cleaned.substring(3);
         const name1 = teamMap[team1] || team1;
         const name2 = teamMap[team2] || team2;
         if (name1 !== team1 || name2 !== team2) {

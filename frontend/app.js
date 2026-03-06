@@ -2947,7 +2947,7 @@ async function loadBots() {
                         const yPriceColor = yesQueued ? '#00ff8844' : '#00ff88';
                         const yStatusTxt = yesQueued ? 'QUEUED' : (yFill >= qty ? `${yFill}/${qty} ✓ FILLED` : `${yFill}/${qty}`);
                         const yStatusColor = yesQueued ? '#555' : (yFill >= qty ? '#00ff88' : '#8892a6');
-                        const yBidLabel = yesIsPosted && yFill < qty ? 'Your bid' : 'Mkt bid';
+                        const yBidLabel = 'Mkt bid';
                         // NO leg
                         const nBarH = noQueued ? 2 : 6;
                         const nBarBg = noQueued ? '#0a0e18' : '#1e2740';
@@ -2956,7 +2956,7 @@ async function loadBots() {
                         const nPriceColor = noQueued ? '#ff444444' : '#ff4444';
                         const nStatusTxt = noQueued ? 'QUEUED' : (nFill >= qty ? `${nFill}/${qty} ✓ FILLED` : `${nFill}/${qty}`);
                         const nStatusColor = noQueued ? '#555' : (nFill >= qty ? '#ff4444' : '#8892a6');
-                        const nBidLabel = noIsPosted && nFill < qty ? 'Your bid' : 'Mkt bid';
+                        const nBidLabel = 'Mkt bid';
                         return `
                     <div style="opacity:${yesQueued ? '0.45' : '1'};transition:opacity .5s;">
                         <div style="display:flex;justify-content:space-between;color:${yLabelColor};margin-bottom:3px;">
@@ -2968,7 +2968,7 @@ async function loadBots() {
                         </div>
                         ` + (!yesQueued && bot.live_yes_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
                             <span>${yBidLabel}: <strong style="color:#00ff8899;">${bot.live_yes_bid}¢</strong></span>
-                            <span>Ask: <strong style="color:#00ff8899;">${bot.live_yes_ask || '?'}¢</strong></span>
+                            <span>Mkt ask: <strong style="color:#00ff8899;">${bot.live_yes_ask || '?'}¢</strong></span>
                         </div>` : '') + `
                     </div>
                     <div style="opacity:${noQueued ? '0.45' : '1'};transition:opacity .5s;">
@@ -2981,7 +2981,7 @@ async function loadBots() {
                         </div>
                         ` + (!noQueued && bot.live_no_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
                             <span>${nBidLabel}: <strong style="color:#ff444499;">${bot.live_no_bid}¢</strong></span>
-                            <span>Ask: <strong style="color:#ff444499;">${bot.live_no_ask || '?'}¢</strong></span>
+                            <span>Mkt ask: <strong style="color:#ff444499;">${bot.live_no_ask || '?'}¢</strong></span>
                         </div>` : '') + `
                     </div>`;
                     })()}

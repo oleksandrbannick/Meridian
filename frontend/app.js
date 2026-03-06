@@ -4404,6 +4404,18 @@ async function loadHistoryStats() {
             return `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`;
         };
 
+        // ── Result breakdown counts ──
+        const rb = s.result_breakdown || {};
+        const completedN  = rb.completed || 0;
+        const flipN       = (rb.flip_yes || 0) + (rb.flip_no || 0);
+        const oldSlN      = (rb.stop_loss_yes || 0) + (rb.stop_loss_no || 0);
+        const settledN    = (rb.settled_loss_yes || 0) + (rb.settled_loss_no || 0);
+        const forceExitN  = (rb.force_exit_yes || 0) + (rb.force_exit_no || 0);
+        const totalResults = completedN + flipN + oldSlN + settledN + forceExitN;
+
+        // ── Flip stats ──
+        const fs = s.flip_stats || {};
+
         // Main stats grid
         panel.innerHTML = `
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
@@ -4415,7 +4427,7 @@ async function loadHistoryStats() {
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&L</div>
                     <div style="color:${netColor};font-size:24px;font-weight:800;">${s.arb_net_cents >= 0 ? '+' : ''}$${netDollars}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">Avg: +${s.arb_avg_profit}¢ win / -${s.arb_avg_loss}¢ loss</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">Win: +${s.arb_avg_profit}¢ / Loss: -${s.arb_avg_loss}¢</div>
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Fill Time</div>
@@ -4430,6 +4442,65 @@ async function loadHistoryStats() {
                 </div>` : ''}
             </div>
 
+            <!-- Result breakdown + Flip analysis -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+                <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">📊 How Trades End</div>
+                    ${totalResults > 0 ? `
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                        ${completedN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#00ff88;font-size:11px;">✅ Completed (both filled)</span>
+                            <span style="color:#00ff88;font-weight:700;font-size:12px;">${completedN} <span style="color:#555;font-weight:400;">(${Math.round(completedN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
+                        ${flipN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ff6666;font-size:11px;">🛡 Flip triggered</span>
+                            <span style="color:#ff6666;font-weight:700;font-size:12px;">${flipN} <span style="color:#555;font-weight:400;">(${Math.round(flipN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
+                        ${oldSlN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ff4444;font-size:11px;">⛔ Old stop-loss (legacy)</span>
+                            <span style="color:#ff4444;font-weight:700;font-size:12px;">${oldSlN} <span style="color:#555;font-weight:400;">(${Math.round(oldSlN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
+                        ${settledN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ffaa00;font-size:11px;">🏁 Game settled (1 leg)</span>
+                            <span style="color:#ffaa00;font-weight:700;font-size:12px;">${settledN} <span style="color:#555;font-weight:400;">(${Math.round(settledN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
+                        ${forceExitN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ff4444;font-size:11px;">🔴 Force exit (sell failed)</span>
+                            <span style="color:#ff4444;font-weight:700;font-size:12px;">${forceExitN}</span>
+                        </div>` : ''}
+                    </div>` : '<div style="color:#555;font-size:11px;">No data yet</div>'}
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis</div>
+                    ${fs.total > 0 ? `
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                        <div style="display:flex;justify-content:space-between;">
+                            <span style="color:#8892a6;font-size:11px;">Total flips</span>
+                            <span style="color:#ff6666;font-weight:700;font-size:12px;">${fs.total}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;">
+                            <span style="color:#8892a6;font-size:11px;">Avg loss per flip</span>
+                            <span style="color:#ff4444;font-weight:700;font-size:12px;">-${fs.avg_loss_cents}¢ ($${(fs.avg_loss_cents/100).toFixed(2)})</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;">
+                            <span style="color:#8892a6;font-size:11px;">Total flip losses</span>
+                            <span style="color:#ff4444;font-weight:700;font-size:12px;">-${fs.total_loss_cents}¢ ($${(fs.total_loss_cents/100).toFixed(2)})</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;">
+                            <span style="color:#8892a6;font-size:11px;">Avg entry at flip</span>
+                            <span style="color:#fff;font-weight:700;font-size:12px;">${fs.avg_entry_price}¢</span>
+                        </div>
+                        ${fs.avg_threshold > 0 ? `<div style="display:flex;justify-content:space-between;">
+                            <span style="color:#8892a6;font-size:11px;">Avg flip floor</span>
+                            <span style="color:#00aaff;font-weight:700;font-size:12px;">${fs.avg_threshold}¢</span>
+                        </div>` : ''}
+                        <div style="margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;">
+                            <span style="color:#555;font-size:9px;">Fills needed to recover all flips: <strong style="color:#ffaa00;">${s.arb_avg_profit > 0 ? Math.ceil(fs.total_loss_cents / s.arb_avg_profit) : '?'}</strong></span>
+                        </div>
+                    </div>` : '<div style="color:#00ff88;font-size:11px;">🎉 No flips yet — no favorites have collapsed</div>'}
+                </div>
+            </div>
+
             <!-- Phase / Quarter / Margin breakdown row -->
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;">
                 ${_renderMiniBreakdown('By Phase', s.phase_stats, {'pregame': 'Pregame', 'live': 'Live'})}
@@ -4439,69 +4510,48 @@ async function loadHistoryStats() {
             </div>
         `;
 
-        // Width breakdown table
+        // ── Width Performance Table (with breakeven %) ──
         if (widthPanel && s.width_breakdown && s.width_breakdown.length > 0) {
             const rows = s.width_breakdown.map(w => {
-                const frColor = w.fill_rate >= 50 ? '#00ff88' : w.fill_rate >= 25 ? '#ffaa00' : '#ff4444';
+                const frColor = w.fill_rate >= w.breakeven_pct ? '#00ff88' : w.fill_rate >= w.breakeven_pct * 0.8 ? '#ffaa00' : '#ff4444';
                 const nColor = w.net_cents >= 0 ? '#00ff88' : '#ff4444';
-                return `<tr>
+                const edgeColor = w.edge >= 0 ? '#00ff88' : '#ff4444';
+                const edgeIcon = w.edge >= 5 ? '🟢' : w.edge >= 0 ? '🟡' : '🔴';
+                const flipInfo = w.flips > 0 ? `<span style="color:#ff6666;font-size:9px;">${w.flips} flip${w.flips > 1 ? 's' : ''}</span>` : '';
+                const settledInfo = w.settled_losses > 0 ? `<span style="color:#ffaa00;font-size:9px;">${w.settled_losses} settled</span>` : '';
+                const lossDetail = (flipInfo || settledInfo) ? ` <span style="color:#555;font-size:9px;">(${[flipInfo, settledInfo].filter(Boolean).join(', ')})</span>` : '';
+                return `<tr style="border-bottom:1px solid #1e274033;">
                     <td style="padding:6px 10px;color:#fff;font-weight:700;">${w.width}¢</td>
                     <td style="padding:6px 10px;color:${frColor};font-weight:700;">${w.fill_rate}%</td>
-                    <td style="padding:6px 10px;color:#8892a6;">${w.wins}W / ${w.losses}L</td>
+                    <td style="padding:6px 10px;color:#ffaa33;font-weight:600;">${w.breakeven_pct}%</td>
+                    <td style="padding:6px 10px;color:${edgeColor};font-weight:700;">${edgeIcon} ${w.edge >= 0 ? '+' : ''}${w.edge}%</td>
+                    <td style="padding:6px 10px;color:#8892a6;">${w.wins}W / ${w.losses}L${lossDetail}</td>
                     <td style="padding:6px 10px;color:${nColor};font-weight:700;">${w.net_cents >= 0 ? '+' : ''}${w.net_cents}¢</td>
+                    <td style="padding:6px 10px;color:#8892a6;font-size:10px;">+${w.avg_profit_cents}¢ / -${w.avg_loss_cents}¢</td>
                     <td style="padding:6px 10px;color:#8892a6;">${w.avg_fill_duration_s !== null ? fmtDur(w.avg_fill_duration_s) : '—'}</td>
                 </tr>`;
             }).join('');
             widthPanel.innerHTML = `
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;font-weight:600;">📊 Fill Rate by Width Setting</div>
-                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Width Performance — Fill Rate vs Breakeven</div>
+                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit). Fill rate must exceed breakeven to be profitable.</div>
+                    <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px;">
                         <tr style="border-bottom:1px solid #1e2740;">
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Breakeven</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Edge</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Record</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Net</th>
-                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Avg Fill</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Avg W/L</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Time</th>
                         </tr>
                         ${rows}
                     </table>
+                    </div>
                 </div>
             `;
-
-            // Combo breakdown (Width + SL vs Breakeven)
-            if (s.combo_breakdown && s.combo_breakdown.length > 0) {
-                const comboRows = s.combo_breakdown.map(c => {
-                    const frColor = c.fill_rate >= c.breakeven_pct ? '#00ff88' : c.fill_rate >= c.breakeven_pct * 0.8 ? '#ffaa00' : '#ff4444';
-                    const edgeColor = c.edge >= 0 ? '#00ff88' : '#ff4444';
-                    const nColor = c.net_cents >= 0 ? '#00ff88' : '#ff4444';
-                    const edgeIcon = c.edge >= 5 ? '🟢' : c.edge >= 0 ? '🟡' : '🔴';
-                    return `<tr style="border-bottom:1px solid #1e274033;">
-                        <td style="padding:6px 10px;color:#fff;font-weight:700;">${c.width}¢ / ${c.sl}¢</td>
-                        <td style="padding:6px 10px;color:${frColor};font-weight:700;">${c.fill_rate}%</td>
-                        <td style="padding:6px 10px;color:#ffaa33;font-weight:600;">${c.breakeven_pct}%</td>
-                        <td style="padding:6px 10px;color:${edgeColor};font-weight:700;">${edgeIcon} ${c.edge >= 0 ? '+' : ''}${c.edge}%</td>
-                        <td style="padding:6px 10px;color:#8892a6;">${c.wins}W / ${c.losses}L</td>
-                        <td style="padding:6px 10px;color:${nColor};font-weight:700;">${c.net_cents >= 0 ? '+' : ''}${c.net_cents}¢</td>
-                    </tr>`;
-                }).join('');
-                widthPanel.innerHTML += `
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;margin-top:12px;">
-                        <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Fill Rate vs Breakeven by Width / Flip Floor</div>
-                        <div style="color:#555;font-size:10px;margin-bottom:10px;">Your actual fill rate compared to the required breakeven % for each width/flip combo</div>
-                        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                            <tr style="border-bottom:1px solid #1e2740;">
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width / Flip</th>
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Breakeven</th>
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Edge</th>
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Record</th>
-                                <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Net</th>
-                            </tr>
-                            ${comboRows}
-                        </table>
-                    </div>
-                `;
-            }
         } else if (widthPanel) {
             widthPanel.innerHTML = '';
         }

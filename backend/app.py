@@ -3322,73 +3322,71 @@ def history_stats():
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
     )]
 
-    # Fill rate by width
-    width_stats = {}  # {width: {wins, losses, total_profit, total_loss}}
+    # ── Result type breakdown ──────────────────────────────────────
+    result_counts = {}
+    for t in arb_trades:
+        r = t.get('result', 'unknown')
+        result_counts[r] = result_counts.get(r, 0) + 1
+
+    # ── Flip analysis ──────────────────────────────────────────────
+    flip_trades = [t for t in arb_trades if t.get('result', '').startswith('flip_')]
+    flip_total = len(flip_trades)
+    flip_total_loss = sum(t.get('loss_cents', 0) for t in flip_trades)
+    flip_avg_loss = round(flip_total_loss / flip_total) if flip_total > 0 else 0
+    # What were the entry prices when flips happened?
+    flip_entries = []
+    for t in flip_trades:
+        if t['result'] == 'flip_yes':
+            flip_entries.append(t.get('yes_price', 0))
+        elif t['result'] == 'flip_no':
+            flip_entries.append(t.get('no_price', 0))
+    flip_avg_entry = round(sum(flip_entries) / len(flip_entries)) if flip_entries else 0
+    flip_thresholds_used = [t.get('flip_threshold', 0) for t in flip_trades if t.get('flip_threshold')]
+    flip_avg_threshold = round(sum(flip_thresholds_used) / len(flip_thresholds_used)) if flip_thresholds_used else 0
+
+    # ── Fill rate by width (with real breakeven %) ─────────────────
+    width_stats = {}
     for t in arb_trades:
         w = t.get('arb_width', 0)
         if w <= 0:
             continue
         if w not in width_stats:
-            width_stats[w] = {'wins': 0, 'losses': 0, 'total_profit': 0, 'total_loss': 0, 'fill_durations': []}
+            width_stats[w] = {'wins': 0, 'losses': 0, 'total_profit': 0,
+                              'total_loss': 0, 'fill_durations': [],
+                              'flips': 0, 'settled_losses': 0}
         if t['result'] == 'completed':
             width_stats[w]['wins'] += 1
             width_stats[w]['total_profit'] += t.get('profit_cents', 0)
         else:
             width_stats[w]['losses'] += 1
             width_stats[w]['total_loss'] += t.get('loss_cents', 0)
+            if t['result'].startswith('flip_'):
+                width_stats[w]['flips'] += 1
+            elif t['result'].startswith('settled_loss'):
+                width_stats[w]['settled_losses'] += 1
         if t.get('fill_duration_s') is not None:
             width_stats[w]['fill_durations'].append(t['fill_duration_s'])
 
-    # Compute averages per width
     width_breakdown = []
     for w, s in sorted(width_stats.items()):
         total = s['wins'] + s['losses']
         fill_rate = round(s['wins'] / total * 100, 1) if total > 0 else 0
         avg_fill_dur = round(sum(s['fill_durations']) / len(s['fill_durations'])) if s['fill_durations'] else None
-        avg_profit = round(s['total_profit'] / s['wins']) if s['wins'] > 0 else 0
+        avg_profit = round(s['total_profit'] / s['wins']) if s['wins'] > 0 else w
         avg_loss = round(s['total_loss'] / s['losses']) if s['losses'] > 0 else 0
+        # Real breakeven: avg_loss / (avg_loss + avg_profit)
+        breakeven_pct = round(avg_loss / (avg_loss + avg_profit) * 100, 1) if (avg_loss + avg_profit) > 0 else 0
+        edge = round(fill_rate - breakeven_pct, 1)
+        ratio = f'{max(1, round(avg_loss / avg_profit))}:1' if avg_profit > 0 and avg_loss > 0 else '-'
         width_breakdown.append({
             'width': w, 'wins': s['wins'], 'losses': s['losses'],
             'fill_rate': fill_rate, 'net_cents': s['total_profit'] - s['total_loss'],
             'avg_profit_cents': avg_profit, 'avg_loss_cents': avg_loss,
             'avg_fill_duration_s': avg_fill_dur,
-        })
-
-    # Fill rate by width+flip_threshold combo (with breakeven comparison)
-    combo_stats = {}  # key: "width_flip" → {wins, losses, total_profit, total_loss}
-    for t in arb_trades:
-        w = t.get('arb_width', 0)
-        flip = t.get('flip_threshold', t.get('stop_loss_cents', 0))  # backward compat
-        if w <= 0 or flip <= 0:
-            continue
-        key = f'{w}_{flip}'
-        if key not in combo_stats:
-            combo_stats[key] = {'width': w, 'flip': flip, 'wins': 0, 'losses': 0,
-                                'total_profit': 0, 'total_loss': 0}
-        if t['result'] == 'completed':
-            combo_stats[key]['wins'] += 1
-            combo_stats[key]['total_profit'] += t.get('profit_cents', 0)
-        else:
-            combo_stats[key]['losses'] += 1
-            combo_stats[key]['total_loss'] += t.get('loss_cents', 0)
-
-    combo_breakdown = []
-    for key, cs in sorted(combo_stats.items(), key=lambda x: (-x[1]['width'], x[1]['flip'])):
-        total = cs['wins'] + cs['losses']
-        fill_rate = round(cs['wins'] / total * 100, 1) if total > 0 else 0
-        # Breakeven: flip_loss / (flip_loss + width)
-        # Approximate flip_loss: for a typical favorite entry around 60-65¢,
-        # loss would be entry - flip_threshold.  Use avg actual loss if available.
-        avg_loss = round(cs['total_loss'] / cs['losses']) if cs['losses'] > 0 else (cs['flip'] * 0.5)  # estimate
-        avg_profit = round(cs['total_profit'] / cs['wins']) if cs['wins'] > 0 else cs['width']
-        breakeven_pct = round(avg_loss / (avg_loss + avg_profit) * 100, 1) if (avg_loss + avg_profit) > 0 else 50
-        edge = round(fill_rate - breakeven_pct, 1)
-        combo_breakdown.append({
-            'width': cs['width'], 'sl': cs['flip'],  # 'sl' key kept for frontend compat
-            'wins': cs['wins'], 'losses': cs['losses'],
-            'fill_rate': fill_rate, 'breakeven_pct': breakeven_pct,
-            'edge': edge,  # positive = profitable, negative = losing
-            'net_cents': cs['total_profit'] - cs['total_loss'],
+            'breakeven_pct': breakeven_pct,
+            'edge': edge,
+            'ratio': ratio,
+            'flips': s['flips'], 'settled_losses': s['settled_losses'],
         })
 
     # Phase breakdown
@@ -3409,7 +3407,7 @@ def history_stats():
         period = gc.get('period', 0)
         if period <= 0:
             continue
-        q_key = f'Q{period}' if period <= 4 else f'OT'
+        q_key = f'Q{period}' if period <= 4 else 'OT'
         if q_key not in quarter_stats:
             quarter_stats[q_key] = {'wins': 0, 'losses': 0}
         if t['result'] == 'completed':
@@ -3417,7 +3415,7 @@ def history_stats():
         else:
             quarter_stats[q_key]['losses'] += 1
 
-    # Score differential breakdown (close game vs blowout)
+    # Score differential breakdown
     margin_stats = {'close_0_5': {'wins': 0, 'losses': 0}, 'mid_6_15': {'wins': 0, 'losses': 0}, 'blowout_16plus': {'wins': 0, 'losses': 0}}
     for t in arb_trades:
         gc = t.get('game_context', {})
@@ -3445,7 +3443,7 @@ def history_stats():
             else:
                 first_leg_stats[fl]['losses'] += 1
 
-    # Average fill duration (overall)
+    # Average fill duration
     all_durations = [t['fill_duration_s'] for t in arb_trades if t.get('fill_duration_s') is not None]
     win_durations = [t['fill_duration_s'] for t in arb_wins if t.get('fill_duration_s') is not None]
     loss_durations = [t['fill_duration_s'] for t in arb_losses if t.get('fill_duration_s') is not None]
@@ -3466,7 +3464,14 @@ def history_stats():
         'avg_win_duration_s': round(sum(win_durations) / len(win_durations)) if win_durations else None,
         'avg_loss_duration_s': round(sum(loss_durations) / len(loss_durations)) if loss_durations else None,
         'width_breakdown': width_breakdown,
-        'combo_breakdown': combo_breakdown,
+        'result_breakdown': result_counts,
+        'flip_stats': {
+            'total': flip_total,
+            'total_loss_cents': flip_total_loss,
+            'avg_loss_cents': flip_avg_loss,
+            'avg_entry_price': flip_avg_entry,
+            'avg_threshold': flip_avg_threshold,
+        },
         'phase_stats': phase_stats,
         'quarter_stats': quarter_stats,
         'margin_stats': margin_stats,

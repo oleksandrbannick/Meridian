@@ -1179,20 +1179,19 @@ class KalshiWSManager:
         if msg_type == 'ticker':
             ticker = msg.get('market_ticker', '')
             if ticker:
+                yb = msg.get('yes_bid', 0)
+                ya = msg.get('yes_ask', 0)
                 self.ticker_cache[ticker] = {
-                    'yes_bid': msg.get('yes_bid', 0),
-                    'yes_ask': msg.get('yes_ask', 0),
-                    'no_bid': 100 - msg.get('yes_ask', 0) if not msg.get('no_bid') else 0,
-                    'no_ask': 100 - msg.get('yes_bid', 0) if not msg.get('no_ask') else 0,
+                    'yes_bid': yb,
+                    'yes_ask': ya,
+                    # Only compute implied prices when real liquidity exists on the opposite side
+                    'no_bid': (100 - ya) if ya > 0 else 0,
+                    'no_ask': (100 - yb) if yb > 0 else 0,
                     'price': msg.get('price', 0),
                     'volume': msg.get('volume', 0),
                     'ts': msg.get('ts', 0),
                     '_local_ts': time.time(),
                 }
-                # Compute no_bid/no_ask properly (Kalshi reports yes side)
-                # no_bid = 100 - yes_ask, no_ask = 100 - yes_bid
-                self.ticker_cache[ticker]['no_bid'] = 100 - msg.get('yes_ask', 100)
-                self.ticker_cache[ticker]['no_ask'] = 100 - msg.get('yes_bid', 0)
             return
 
         if msg_type == 'fill':

@@ -643,6 +643,9 @@ def get_scoreboard(sport):
         'nhl': 'hockey/nhl',
         'ncaab': 'basketball/mens-college-basketball',
         'ncaaf': 'football/college-football',
+        'mls': 'soccer/usa.1',
+        'epl': 'soccer/eng.1',
+        'ucl': 'soccer/uefa.champions',
     }
     sport_path = sport_map.get(sport.lower())
     if not sport_path:
@@ -1204,6 +1207,9 @@ def _refresh_espn_cache():
         'nfl': 'football/nfl',
         'mlb': 'baseball/mlb',
         'ncaab': 'basketball/mens-college-basketball',
+        'mls': 'soccer/usa.1',
+        'epl': 'soccer/eng.1',
+        'ucl': 'soccer/uefa.champions',
     }
     for sport, path in sport_paths.items():
         try:
@@ -1274,15 +1280,41 @@ def _refresh_espn_cache():
 
 
 def _parse_ticker_teams(ticker: str):
-    """Extract team codes from a Kalshi ticker. Returns (t1, t2) or (None, None)."""
+    """Extract team codes from a Kalshi ticker. Returns list of candidate codes.
+    Handles variable-length codes (2-6 chars) used by college sports.
+    e.g. KXNCAAMBGAME-26MAR06WEBBHP → ['WEB', 'WEBB', 'BHP', 'WEBBH', 'HP', 'WEBBHP']
+    """
     parts = ticker.split('-')
     if len(parts) < 2:
         return None, None
     import re as _re
     stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
-    if len(stripped) < 6:
+    if len(stripped) < 4:
         return None, None
-    return stripped[:3].upper(), stripped[3:6].upper()
+    # Try classic 3+3 first
+    if len(stripped) >= 6:
+        t1, t2 = stripped[:3].upper(), stripped[3:6].upper()
+    else:
+        t1, t2 = stripped[:2].upper(), stripped[2:].upper()
+    return t1, t2
+
+
+def _get_all_ticker_team_candidates(ticker: str):
+    """Get all possible team code substrings from a ticker for ESPN matching.
+    Returns a list of candidate codes to try against the ESPN cache."""
+    parts = ticker.split('-')
+    if len(parts) < 2:
+        return []
+    import re as _re
+    stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
+    if not stripped or len(stripped) < 4:
+        return []
+    candidates = []
+    for i in range(2, min(7, len(stripped) - 1)):
+        candidates.append(stripped[:i].upper())
+        candidates.append(stripped[i:].upper())
+    candidates.append(stripped.upper())
+    return list(dict.fromkeys(candidates))  # dedupe preserving order
 
 
 def _is_game_live(ticker: str) -> bool:
@@ -1291,10 +1323,12 @@ def _is_game_live(ticker: str) -> bool:
     info = _espn_cache['data']
     if not info:
         return False
-    t1, t2 = _parse_ticker_teams(ticker)
-    if not t1:
-        return False
-    for code in [t1, t2]:
+    candidates = _get_all_ticker_team_candidates(ticker)
+    if not candidates:
+        # Fallback to classic parse
+        t1, t2 = _parse_ticker_teams(ticker)
+        candidates = [c for c in [t1, t2] if c]
+    for code in candidates:
         espn_code = _KALSHI_TO_ESPN.get(code, code)
         entry = info.get(code) or info.get(espn_code)
         if entry and entry.get('live'):
@@ -1308,10 +1342,11 @@ def _get_game_context(ticker: str) -> dict:
     info = _espn_cache['data']
     if not info:
         return {}
-    t1, t2 = _parse_ticker_teams(ticker)
-    if not t1:
-        return {}
-    for code in [t1, t2]:
+    candidates = _get_all_ticker_team_candidates(ticker)
+    if not candidates:
+        t1, t2 = _parse_ticker_teams(ticker)
+        candidates = [c for c in [t1, t2] if c]
+    for code in candidates:
         espn_code = _KALSHI_TO_ESPN.get(code, code)
         entry = info.get(code) or info.get(espn_code)
         if entry and entry.get('status') == 'in':

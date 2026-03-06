@@ -108,12 +108,15 @@ function switchTab(tab) {
 async function loadLiveScores() {
     try {
         // Fetch ALL sports in parallel
-        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes] = await Promise.allSettled([
+        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes, mlsRes, eplRes, uclRes] = await Promise.allSettled([
             fetch(`${API_BASE}/scoreboard/nba`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nfl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nhl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/mlb`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/ncaab`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/mls`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/epl`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/ucl`).then(r => r.json()),
         ]);
 
         const games = [];
@@ -127,6 +130,9 @@ async function loadLiveScores() {
         addGames(nhlRes, 'NHL');
         addGames(mlbRes, 'MLB');
         addGames(ncaabRes, 'NCAAB');
+        addGames(mlsRes, 'MLS');
+        addGames(eplRes, 'EPL');
+        addGames(uclRes, 'UCL');
 
         // Build lookup tables — keyed by sport:abbreviation to avoid cross-sport collisions
         // (e.g. HOU = Rockets NBA, Texans NFL, Astros MLB)
@@ -169,10 +175,14 @@ function parseESPNGame(event, sport) {
     let periodLabel = '';
     const state = statusType.state || 'pre';
     if (state === 'in' || state === 'post') {
-        if (sport === 'NBA' || sport === 'NCAAB') {
-            // Basketball: quarters (or OT)
+        if (sport === 'NBA') {
+            // NBA: quarters (or OT)
             if (period <= 4) periodLabel = `Q${period}`;
             else periodLabel = period === 5 ? 'OT' : `${period - 4}OT`;
+        } else if (sport === 'NCAAB') {
+            // College basketball: halves (or OT)
+            if (period <= 2) periodLabel = `${period}H`;
+            else periodLabel = period === 3 ? 'OT' : `${period - 2}OT`;
         } else if (sport === 'NHL') {
             // Hockey: periods (or OT)
             if (period <= 3) periodLabel = `P${period}`;
@@ -315,36 +325,62 @@ function applyFilters() {
 
 // ─── LIVE BADGE on game event rows ────────────────────────────────────────────
 
-function getLiveScoreForGame(gameId, sport) {
-    // gameId example: "26FEB27DENOKC" — last 6 chars are team codes
-    const match = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
-    if (!match) return null;
-    const [, t1, t2] = match;
-    if (sport) {
-        return liveGames[`${sport}:${t1}`] || liveGames[`${sport}:${t2}`] || null;
+// Extract team code candidates from a Kalshi gameId
+// Handles variable-length codes (2-6 chars) used by college sports
+// e.g. "26MAR06WEBBHP" → cleaned="WEBBHP" → tries all split points
+function _extractTeamCodes(gameId) {
+    if (!gameId) return [];
+    // Remove date prefix: 26MAR06WEBBHP → WEBBHP
+    const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
+    if (!cleaned || cleaned.length < 4) return [];
+    
+    // Try all possible split points (each team 2-6 chars)
+    const codes = [];
+    for (let i = 2; i <= cleaned.length - 2 && i <= 6; i++) {
+        codes.push(cleaned.substring(0, i));
+        codes.push(cleaned.substring(cleaned.length - i));
     }
-    // Fallback: search all sports (slower but works for unknown sport)
-    for (const key in liveGames) {
+    // Also add the whole string in case it's just one team code somehow
+    codes.push(cleaned);
+    // Deduplicate
+    return [...new Set(codes)];
+}
+
+function _findGameInLookup(lookup, gameId, sport) {
+    // 1. Try classic 3+3 split first (fastest for NBA/NHL/etc.)
+    const classic = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
+    if (classic) {
+        const [, t1, t2] = classic;
+        const byKey = sport
+            ? (lookup[`${sport}:${t1}`] || lookup[`${sport}:${t2}`])
+            : null;
+        if (byKey) return byKey;
+    }
+    
+    // 2. For variable-length codes (college sports), try all candidate codes
+    const candidates = _extractTeamCodes(gameId);
+    if (sport) {
+        for (const code of candidates) {
+            const g = lookup[`${sport}:${code}`];
+            if (g) return g;
+        }
+    }
+    
+    // 3. Fallback: search all sports
+    for (const key in lookup) {
         const abbr = key.split(':')[1];
-        if (abbr === t1 || abbr === t2) return liveGames[key];
+        if (candidates.includes(abbr)) return lookup[key];
     }
     return null;
 }
 
+function getLiveScoreForGame(gameId, sport) {
+    return _findGameInLookup(liveGames, gameId, sport);
+}
+
 // Get game data for ANY state (pre/in/post) for scoreboard display
 function getGameScore(gameId, sport) {
-    const match = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
-    if (!match) return null;
-    const [, t1, t2] = match;
-    if (sport) {
-        return allGameData[`${sport}:${t1}`] || allGameData[`${sport}:${t2}`] || null;
-    }
-    // Fallback: search all sports
-    for (const key in allGameData) {
-        const abbr = key.split(':')[1];
-        if (abbr === t1 || abbr === t2) return allGameData[key];
-    }
-    return null;
+    return _findGameInLookup(allGameData, gameId, sport);
 }
 
 // Auto-login with stored credentials

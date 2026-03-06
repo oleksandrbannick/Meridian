@@ -2414,9 +2414,72 @@ async function loadBots() {
         let filledLegs = 0;
 
         // ══════════════════════════════════════════════════════════════
-        // ACTIVE BOTS
+        // GROUP BY GAME, NEWEST FIRST
         // ══════════════════════════════════════════════════════════════
+        function getGameKey(ticker) {
+            if (!ticker) return 'unknown';
+            const parts = ticker.split('-');
+            // Game key = date+teams portion only (e.g. "26MAR05BKNMIA")
+            // This merges KXNBAGAME-26MAR05BKNMIA-MIA and KXNBAPTS-26MAR05BKNMIA-BKNNCLOWNEY21-15
+            // into the same group since they're the same game
+            if (parts.length >= 2) return parts[1];
+            return parts[0];
+        }
+
+        // Group bots by game
+        const gameGroups = {};
         activeBots.forEach(botId => {
+            const bot = bots[botId];
+            const gk = getGameKey(bot.ticker);
+            if (!gameGroups[gk]) gameGroups[gk] = [];
+            gameGroups[gk].push(botId);
+        });
+
+        // Sort bots within each group: newest first (by created_at desc)
+        Object.values(gameGroups).forEach(ids => {
+            ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0));
+        });
+
+        // Sort game groups: most-recently-created bot in each group determines group order
+        const sortedGameKeys = Object.keys(gameGroups).sort((a, b) => {
+            const newestA = Math.max(...gameGroups[a].map(id => bots[id].created_at || 0));
+            const newestB = Math.max(...gameGroups[b].map(id => bots[id].created_at || 0));
+            return newestB - newestA;
+        });
+
+        // Render grouped bots
+        sortedGameKeys.forEach(gameKey => {
+            // ── Game group header ──
+            const groupBots = gameGroups[gameKey];
+            const sampleBot = bots[groupBots[0]];
+            const groupMatchup = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
+            const groupPhase = groupBots.some(id => bots[id].game_phase === 'live') ? '🔴 LIVE' : '⏳ PRE';
+            const groupProfitTotal = groupBots.reduce((sum, id) => {
+                const b = bots[id];
+                if (b.type === 'watch') {
+                    // Watch bots: potential = (100 - entry) * qty
+                    return sum + ((100 - (b.entry_price || 50)) * (b.quantity || 1));
+                }
+                return sum + ((b.profit_per ?? (100 - (b.yes_price || 0) - (b.no_price || 0))) * (b.quantity || 1));
+            }, 0);
+
+            const groupHeader = document.createElement('div');
+            groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00aaff;border-radius:4px;font-size:12px;';
+            const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+            const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : '📊';
+            groupHeader.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="color:#00aaff;font-weight:700;">${sportIcon} ${groupMatchup}</span>
+                    <span style="color:#8892a6;font-size:10px;">${groupPhase}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="color:#8892a6;font-size:10px;">${groupBots.length} bot${groupBots.length > 1 ? 's' : ''}</span>
+                    <span style="color:#00ff88;font-size:11px;font-weight:700;">+${(groupProfitTotal / 100).toFixed(2)}</span>
+                </div>
+            `;
+            botsList.appendChild(groupHeader);
+
+            groupBots.forEach(botId => {
             const bot = bots[botId];
 
             // ── Watch Bots (position watchers) ───────────────────────
@@ -2564,18 +2627,50 @@ async function loadBots() {
                 const triggerAt = (bot.yes_price || 0) - stopLoss;
                 const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
                 const distFromSL = typeof yBid === 'number' ? yBid - triggerAt : '?';
+                const slBreached = typeof distFromSL === 'number' && distFromSL <= 0;
+                const graceActive = bot.sl_breach_since && slBreached;
+                const graceElapsed = graceActive ? (Date.now()/1000 - bot.sl_breach_since) / 60 : 0;
+                const graceLeft = Math.max(0, 2 - graceElapsed);
+                const recovering = graceActive && typeof yBid === 'number' && bot.sl_last_bid != null && yBid > bot.sl_last_bid;
+                let graceHtml = '';
+                if (graceActive && recovering && graceLeft <= 0) {
+                    graceHtml = `<span style="color:#00ff88;font-weight:700;">📈 Recovering (held)</span>`;
+                } else if (graceActive) {
+                    graceHtml = graceLeft > 0
+                        ? `<span style="color:#ff8800;font-weight:700;">⏳ SL in ${graceLeft.toFixed(1)}m</span>`
+                        : `<span style="color:#ff4444;font-weight:700;">⚠ SL pending</span>`;
+                } else if (typeof distFromSL === 'number' && distFromSL <= 3) {
+                    graceHtml = `<span style="color:#ffaa00;font-size:9px;">2m grace buffer</span>`;
+                }
                 stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>🛑 SL: sells YES if bid ≤ <strong>${triggerAt}¢</strong> (−${stopLoss}¢)</span>
                     <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromSL === 'number' && distFromSL <= 2 ? '#ff4444' : '#ffaa00'};">${distFromSL}¢</strong> from trigger</span>
+                    ${graceHtml}
                     <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
                 </div>`;
             } else if (bot.status === 'no_filled') {
                 const triggerAt = (bot.no_price || 0) - stopLoss;
                 const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
                 const distFromSL = typeof nBid === 'number' ? nBid - triggerAt : '?';
+                const slBreached = typeof distFromSL === 'number' && distFromSL <= 0;
+                const graceActive = bot.sl_breach_since && slBreached;
+                const graceElapsed = graceActive ? (Date.now()/1000 - bot.sl_breach_since) / 60 : 0;
+                const graceLeft = Math.max(0, 2 - graceElapsed);
+                const recovering = graceActive && typeof nBid === 'number' && bot.sl_last_bid != null && nBid > bot.sl_last_bid;
+                let graceHtml = '';
+                if (graceActive && recovering && graceLeft <= 0) {
+                    graceHtml = `<span style="color:#00ff88;font-weight:700;">📈 Recovering (held)</span>`;
+                } else if (graceActive) {
+                    graceHtml = graceLeft > 0
+                        ? `<span style="color:#ff8800;font-weight:700;">⏳ SL in ${graceLeft.toFixed(1)}m</span>`
+                        : `<span style="color:#ff4444;font-weight:700;">⚠ SL pending</span>`;
+                } else if (typeof distFromSL === 'number' && distFromSL <= 3) {
+                    graceHtml = `<span style="color:#ffaa00;font-size:9px;">2m grace buffer</span>`;
+                }
                 stopLossInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6666;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>🛑 SL: sells NO if bid ≤ <strong>${triggerAt}¢</strong> (−${stopLoss}¢)</span>
                     <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromSL === 'number' && distFromSL <= 2 ? '#ff4444' : '#ffaa00'};">${distFromSL}¢</strong> from trigger</span>
+                    ${graceHtml}
                     <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
                 </div>`;
             }
@@ -2652,7 +2747,8 @@ async function loadBots() {
                 ${stopLossInfo}
                 ${waitRepeatInfo}`;
             botsList.appendChild(item);
-        });
+            });  // end groupBots.forEach
+        });  // end sortedGameKeys.forEach
 
         updateBotBuddy(activeBotCount, filledLegs);
         updateBotsBadge(activeBotCount);
@@ -3135,6 +3231,20 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
             const speedColor = speedColors[opp.catch_speed] || '#555';
             const speedLabel = (opp.catch_speed || 'slow').toUpperCase();
+            // Queue jump info
+            const qjProfit = opp.qj_profit || 0;
+            const qjColor = qjProfit >= 3 ? '#00ccff' : qjProfit >= 1 ? '#8892a6' : '#ff4444';
+            const qjLine = qjProfit >= 1
+                ? `<div style="color:${qjColor};font-size:10px;margin-top:1px;">
+                    ⚡ Queue Jump: YES ${opp.qj_yes}¢ + NO ${opp.qj_no}¢ → +${qjProfit}¢  <span style="color:#6a7488;">(bid+1, fills first)</span>
+                   </div>`
+                : '';
+            const qjButton = qjProfit >= 1
+                ? `<button onclick="quickBot('${opp.ticker}', ${opp.qj_yes}, ${opp.qj_no})"
+                        style="background:#00ccff;color:#000;border:none;padding:4px 10px;border-radius:5px;cursor:pointer;font-weight:700;font-size:10px;margin-top:4px;">
+                    ⚡ +${qjProfit}¢
+                   </button>`
+                : '';
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -3150,8 +3260,9 @@ function showScanResults(opportunities, minWidth, totalScanned) {
                         Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ → lock +${opp.profit_posted}¢/contract
                         &nbsp;·&nbsp; Catch: ${opp.catch_score || 0}
                     </div>
+                    ${qjLine}
                 </div>
-                <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;">
                     <div style="text-align:right;">
                         <div style="color:${profitColor};font-weight:800;font-size:1.3rem;">+${opp.profit_posted}¢</div>
                         <div style="color:#6a7488;font-size:10px;">gap ${opp.width}¢</div>
@@ -3160,6 +3271,7 @@ function showScanResults(opportunities, minWidth, totalScanned) {
                             style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
                         🤖 Bot
                     </button>
+                    ${qjButton}
                 </div>
             </div>`;
         }).join('');

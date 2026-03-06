@@ -1080,6 +1080,8 @@ def auto_reset_daily_pnl():
 # ─── Bot Config (Upgrades #4, #8) ─────────────────────────────────────────────
 REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
+SL_GRACE_MINUTES     = 2    # Arb SL: bid must stay below trigger for this long before firing
+                            # Gives volatility time to bounce back before cutting the arb
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}
@@ -1639,8 +1641,11 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
 
             cur_bid = _tc(f'{side}_bid')
             if cur_bid <= 0:
-                print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} bid is {cur_bid}¢ — no buyers')
-                return False, {'error': 'no_bid', 'bid': cur_bid}
+                # Bid is 0 — try selling at 1¢ (minimum). If this is a settled/
+                # nearly-settled market, Kalshi will either fill it or reject it.
+                # Better than spinning forever holding a worthless position.
+                cur_bid = 1
+                print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} bid is 0¢ — trying sell at 1¢ (emergency exit)')
 
             # Place limit sell at the current bid
             sell_kwargs = {
@@ -1803,10 +1808,95 @@ def _run_monitor():
                         mkt_check = kalshi_client.get_market(ticker)
                         mkt_status = mkt_check.get('market', mkt_check).get('status', 'active')
                         if mkt_status in ('closed', 'settled', 'finalized'):
-                            # Market is done — mark bot completed, don't try to trade
-                            bot['status'] = 'completed'
-                            bot['completed_at'] = now
-                            print(f'🏁 MARKET SETTLED: {bot_id} — market status={mkt_status}, auto-completing bot')
+                            # Check if one leg was filled — that's a LOSS, not a completion
+                            try:
+                                api_rate_limiter.wait()
+                                yes_resp_s = kalshi_client.get_order(bot['yes_order_id'])
+                                api_rate_limiter.wait()
+                                no_resp_s  = kalshi_client.get_order(bot['no_order_id'])
+                                yes_ord_s = yes_resp_s.get('order', yes_resp_s) if isinstance(yes_resp_s, dict) else {}
+                                no_ord_s  = no_resp_s.get('order', no_resp_s)   if isinstance(no_resp_s, dict) else {}
+                                yes_f = yes_ord_s.get('filled_count', yes_ord_s.get('fill_count', 0))
+                                no_f  = no_ord_s.get('filled_count',  no_ord_s.get('fill_count', 0))
+                            except Exception:
+                                yes_f = bot.get('yes_fill_qty', 0)
+                                no_f  = bot.get('no_fill_qty', 0)
+
+                            if yes_f >= qty and no_f >= qty:
+                                # Both legs filled — true completion, profit locked
+                                actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
+                                actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
+                                real_yes = actual_yes if actual_yes else bot['yes_price']
+                                real_no  = actual_no  if actual_no  else bot['no_price']
+                                profit_cents = (100 - real_yes - real_no) * qty
+                                bot['status'] = 'completed'
+                                bot['completed_at'] = now
+                                bot['repeat_count'] = 0
+                                session_pnl['gross_profit_cents'] += profit_cents
+                                session_pnl['completed_bots'] += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': real_yes, 'no_price': real_no,
+                                    'quantity': qty, 'profit_cents': profit_cents,
+                                    'result': 'completed', 'timestamp': now,
+                                    'note': f'market {mkt_status} — both legs filled',
+                                    'game_phase': bot.get('game_phase', ''),
+                                })
+                                print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
+                            elif yes_f >= qty and no_f < qty:
+                                # YES filled, NO never filled — market settled as loss
+                                # Can't sell now (market closed) — record the loss
+                                # YES side: if YES outcome won, we get $1 per contract (profit)
+                                #           if NO outcome won, we lose our cost (yes_price * qty)
+                                # We already bought YES at yes_price. Market settled.
+                                # The position auto-settles on Kalshi, so just record it.
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['no_order_id'])
+                                except Exception:
+                                    pass
+                                bot['status'] = 'stopped'
+                                bot['repeat_count'] = 0
+                                bot['stopped_at'] = now
+                                loss = bot['yes_price'] * yes_f  # worst-case: lost the entire cost
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots'] += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                    'quantity': yes_f, 'loss_cents': loss,
+                                    'result': 'settled_loss_yes', 'timestamp': now,
+                                    'note': f'market {mkt_status} — YES filled but NO never filled',
+                                    'game_phase': bot.get('game_phase', ''),
+                                })
+                                print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢) but NO unfilled, market {mkt_status}')
+                            elif no_f >= qty and yes_f < qty:
+                                # NO filled, YES never filled — same as above but for NO side
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['yes_order_id'])
+                                except Exception:
+                                    pass
+                                bot['status'] = 'stopped'
+                                bot['repeat_count'] = 0
+                                bot['stopped_at'] = now
+                                loss = bot['no_price'] * no_f
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots'] += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                    'quantity': no_f, 'loss_cents': loss,
+                                    'result': 'settled_loss_no', 'timestamp': now,
+                                    'note': f'market {mkt_status} — NO filled but YES never filled',
+                                    'game_phase': bot.get('game_phase', ''),
+                                })
+                                print(f'⚠ SETTLED LOSS: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢) but YES unfilled, market {mkt_status}')
+                            else:
+                                # Neither leg filled — no cost, just clean up
+                                bot['status'] = 'completed'
+                                bot['completed_at'] = now
+                                print(f'🏁 MARKET SETTLED: {bot_id} — no fills, clean exit')
                             actions.append({'bot_id': bot_id, 'action': 'market_settled', 'market_status': mkt_status})
                             save_state()
                             continue
@@ -1820,6 +1910,16 @@ def _run_monitor():
                     sl = bot.get('stop_loss_cents', 5)
                     tp = bot.get('take_profit_cents', 0)
                     has_sl_tp = bot.get('has_sl_tp', sl > 0 or tp > 0)
+
+                    # ── Manual watch bots (no order_id) are pre-filled positions ──
+                    if not bot.get('order_id'):
+                        if not bot.get('order_filled'):
+                            bot['order_filled'] = True
+                            bot['filled_at'] = now
+                            bot['has_sl_tp'] = True
+                            has_sl_tp = True
+                            save_state()
+                            print(f'👁 Watch {bot_id}: manual position — marking as filled')
 
                     # ── Step 1: Check if the limit order has filled ──
                     if not bot.get('order_filled', False) and bot.get('order_id'):
@@ -1876,7 +1976,25 @@ def _run_monitor():
                         except Exception as fill_err:
                             print(f'⚠ Fill check error for {bot_id}: {fill_err}')
 
-                    # ── Step 2: If order hasn't filled yet, skip SL/TP monitoring ──
+                    # ── Step 2: Always fetch live bid (even pre-fill) so UI shows it ──
+                    try:
+                        ws_price_pre = ws_manager.get_price(ticker)
+                        if ws_price_pre:
+                            bot['live_bid'] = ws_price_pre.get(f'{watch_side}_bid', 0)
+                        else:
+                            api_rate_limiter.wait()
+                            mkt_pre = kalshi_client.get_market(ticker)
+                            mkt_pre_data = mkt_pre.get('market', mkt_pre)
+                            d_pre = mkt_pre_data.get(f'{watch_side}_bid_dollars')
+                            if d_pre:
+                                bot['live_bid'] = round(float(d_pre) * 100)
+                            else:
+                                bot['live_bid'] = mkt_pre_data.get(f'{watch_side}_bid', 0)
+                        bot['last_price_update'] = now
+                    except Exception as bid_err:
+                        print(f'⚠ Watch live_bid fetch for {bot_id}: {bid_err}')
+
+                    # If order hasn't filled yet, skip SL/TP monitoring
                     if not bot.get('order_filled', False):
                         continue
 
@@ -1887,23 +2005,8 @@ def _run_monitor():
                         save_state()
                         continue
 
-                    # Try WS cache first, fall back to REST
-                    ws_price = ws_manager.get_price(ticker)
-                    if ws_price:
-                        cur_bid = ws_price.get(f'{watch_side}_bid', 0)
-                    else:
-                        api_rate_limiter.wait()
-                        mkt_resp = kalshi_client.get_market(ticker)
-                        mkt = mkt_resp.get('market', mkt_resp)
-
-                        def tc_watch(field):
-                            d = mkt.get(field + '_dollars')
-                            if d: return round(float(d) * 100)
-                            return mkt.get(field, 50)
-
-                        cur_bid = tc_watch(f'{watch_side}_bid')
-                    bot['live_bid'] = cur_bid
-                    bot['last_price_update'] = now
+                    # Use the live_bid we already fetched above
+                    cur_bid = bot.get('live_bid', 0)
 
                     # Stop-loss: sell at 1¢ (gets price improvement to actual bid)
                     if cur_bid <= entry - sl:
@@ -2366,7 +2469,39 @@ def _run_monitor():
                     if not bot.get('first_fill_at'):
                         bot['first_fill_at'] = now
                         bot['first_leg'] = 'yes'
-                    if yes_bid <= bot['yes_price'] - stop:
+                    sl_trigger = bot['yes_price'] - stop
+                    if yes_bid <= sl_trigger:
+                        # Bid is below SL trigger — start or continue grace timer
+                        if not bot.get('sl_breach_since'):
+                            bot['sl_breach_since'] = now
+                            bot['sl_last_bid'] = yes_bid
+                            grace_left = SL_GRACE_MINUTES
+                            print(f'⏳ SL GRACE: {bot_id} YES bid {yes_bid}¢ ≤ trigger {sl_trigger}¢ — '
+                                  f'waiting {SL_GRACE_MINUTES}m for recovery before firing')
+                        grace_elapsed = (now - bot['sl_breach_since']) / 60.0
+                        grace_left = max(0, SL_GRACE_MINUTES - grace_elapsed)
+                        prev_bid = bot.get('sl_last_bid', yes_bid)
+                        bot['sl_last_bid'] = yes_bid  # track for next cycle
+
+                        if grace_elapsed < SL_GRACE_MINUTES:
+                            # Still in grace period — don't fire yet
+                            actions.append({'bot_id': bot_id, 'action': 'sl_grace_yes',
+                                           'bid': yes_bid, 'trigger': sl_trigger,
+                                           'grace_left_min': round(grace_left, 1)})
+                            continue
+
+                        # Grace period expired — but check if bid is recovering
+                        hard_cap = SL_GRACE_MINUTES * 2  # absolute max wait
+                        if yes_bid > prev_bid and grace_elapsed < hard_cap:
+                            # Bid is moving UP — defer sell, let it recover
+                            print(f'📈 SL DEFERRED: {bot_id} YES bid {yes_bid}¢ recovering '
+                                  f'(was {prev_bid}¢) — holding despite grace expired')
+                            actions.append({'bot_id': bot_id, 'action': 'sl_recovering_yes',
+                                           'bid': yes_bid, 'prev_bid': prev_bid,
+                                           'trigger': sl_trigger})
+                            continue
+
+                        # Bid still dropping/flat or hard cap reached — fire SL now
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate SL YES for {bot_id} — already {bot["status"]}')
@@ -2423,10 +2558,44 @@ def _run_monitor():
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
 
                         else:
-                            # Sell FAILED — do NOT touch hedge, do NOT change status
-                            # Bot stays at yes_filled, retries next monitor cycle
-                            print(f'⚠ Arb SL YES sell FAILED for {bot_id} — hedge kept, retrying next cycle')
-                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes_RETRY'})
+                            # Sell FAILED — track retries, force-exit if stuck too long
+                            bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
+                            retries = bot['sl_retry_count']
+                            print(f'⚠ Arb SL YES sell FAILED for {bot_id} — retry #{retries}, hedge kept')
+
+                            if retries >= 10:
+                                # CIRCUIT BREAKER: force-exit after 10 failed sell attempts
+                                # Market likely has no buyers — position will settle on Kalshi
+                                print(f'🔴 FORCE EXIT: {bot_id} — {retries} sell attempts failed, force-stopping')
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['no_order_id'])
+                                except Exception:
+                                    pass
+                                bot['status'] = 'stopped'
+                                bot['repeat_count'] = 0
+                                bot['stopped_at'] = now
+                                loss = bot['yes_price'] * yes_filled  # worst-case: full cost lost
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots'] += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                    'quantity': yes_filled, 'loss_cents': loss,
+                                    'result': 'force_exit_yes', 'timestamp': now,
+                                    'note': f'sell failed {retries}x — forced exit, position settles on Kalshi',
+                                    'game_phase': bot.get('game_phase', 'live'),
+                                })
+                                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+                                actions.append({'bot_id': bot_id, 'action': 'force_exit_yes', 'retries': retries})
+                            else:
+                                actions.append({'bot_id': bot_id, 'action': 'stop_loss_yes_RETRY', 'retry': retries})
+                    else:
+                        # Bid recovered above trigger — reset grace timer
+                        if bot.get('sl_breach_since'):
+                            print(f'✅ SL RECOVERED: {bot_id} YES bid {yes_bid}¢ > trigger {sl_trigger}¢ — grace timer reset')
+                            bot['sl_breach_since'] = None
+                            bot['sl_retry_count'] = 0
                     continue  # ← prevent fall-through to NO check
 
                 # ── NO fully filled, YES still open — check stop loss ──────
@@ -2435,7 +2604,38 @@ def _run_monitor():
                     if not bot.get('first_fill_at'):
                         bot['first_fill_at'] = now
                         bot['first_leg'] = 'no'
-                    if no_bid <= bot['no_price'] - stop:
+                    sl_trigger_no = bot['no_price'] - stop
+                    if no_bid <= sl_trigger_no:
+                        # Bid is below SL trigger — start or continue grace timer
+                        if not bot.get('sl_breach_since'):
+                            bot['sl_breach_since'] = now
+                            bot['sl_last_bid'] = no_bid
+                            print(f'⏳ SL GRACE: {bot_id} NO bid {no_bid}¢ ≤ trigger {sl_trigger_no}¢ — '
+                                  f'waiting {SL_GRACE_MINUTES}m for recovery before firing')
+                        grace_elapsed_no = (now - bot['sl_breach_since']) / 60.0
+                        grace_left_no = max(0, SL_GRACE_MINUTES - grace_elapsed_no)
+                        prev_bid_no = bot.get('sl_last_bid', no_bid)
+                        bot['sl_last_bid'] = no_bid  # track for next cycle
+
+                        if grace_elapsed_no < SL_GRACE_MINUTES:
+                            # Still in grace period — don't fire yet
+                            actions.append({'bot_id': bot_id, 'action': 'sl_grace_no',
+                                           'bid': no_bid, 'trigger': sl_trigger_no,
+                                           'grace_left_min': round(grace_left_no, 1)})
+                            continue
+
+                        # Grace period expired — but check if bid is recovering
+                        hard_cap_no = SL_GRACE_MINUTES * 2  # absolute max wait
+                        if no_bid > prev_bid_no and grace_elapsed_no < hard_cap_no:
+                            # Bid is moving UP — defer sell, let it recover
+                            print(f'📈 SL DEFERRED: {bot_id} NO bid {no_bid}¢ recovering '
+                                  f'(was {prev_bid_no}¢) — holding despite grace expired')
+                            actions.append({'bot_id': bot_id, 'action': 'sl_recovering_no',
+                                           'bid': no_bid, 'prev_bid': prev_bid_no,
+                                           'trigger': sl_trigger_no})
+                            continue
+
+                        # Bid still dropping/flat or hard cap reached — fire SL now
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate SL NO for {bot_id} — already {bot["status"]}')
@@ -2492,10 +2692,43 @@ def _run_monitor():
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
 
                         else:
-                            # Sell FAILED — do NOT touch hedge, do NOT change status
-                            # Bot stays at no_filled, retries next monitor cycle
-                            print(f'⚠ Arb SL NO sell FAILED for {bot_id} — hedge kept, retrying next cycle')
-                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_no_RETRY'})
+                            # Sell FAILED — track retries, force-exit if stuck too long
+                            bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
+                            retries = bot['sl_retry_count']
+                            print(f'⚠ Arb SL NO sell FAILED for {bot_id} — retry #{retries}, hedge kept')
+
+                            if retries >= 10:
+                                # CIRCUIT BREAKER: force-exit after 10 failed sell attempts
+                                print(f'🔴 FORCE EXIT: {bot_id} — {retries} sell attempts failed, force-stopping')
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(bot['yes_order_id'])
+                                except Exception:
+                                    pass
+                                bot['status'] = 'stopped'
+                                bot['repeat_count'] = 0
+                                bot['stopped_at'] = now
+                                loss = bot['no_price'] * no_filled  # worst-case: full cost lost
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots'] += 1
+                                trade_history.insert(0, {
+                                    'bot_id': bot_id, 'ticker': ticker,
+                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                    'quantity': no_filled, 'loss_cents': loss,
+                                    'result': 'force_exit_no', 'timestamp': now,
+                                    'note': f'sell failed {retries}x — forced exit, position settles on Kalshi',
+                                    'game_phase': bot.get('game_phase', 'live'),
+                                })
+                                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+                                actions.append({'bot_id': bot_id, 'action': 'force_exit_no', 'retries': retries})
+                            else:
+                                actions.append({'bot_id': bot_id, 'action': 'stop_loss_no_RETRY', 'retry': retries})
+                    else:
+                        # Bid recovered above trigger — reset grace timer
+                        if bot.get('sl_breach_since'):
+                            print(f'✅ SL RECOVERED: {bot_id} NO bid {no_bid}¢ > trigger {sl_trigger_no}¢ — grace timer reset')
+                            bot['sl_breach_since'] = None
+                            bot['sl_retry_count'] = 0
 
             except Exception as e:
                 print(f"Error monitoring bot {bot_id}: {e}")
@@ -2960,6 +3193,11 @@ def scan_arb_opportunities():
             else:
                 catch_speed = 'slow'     # wide spread or unbalanced
 
+            # ── Queue-jump prices: bid + 1 to be first in line ──
+            qj_yes = yes_bid + 1
+            qj_no  = no_bid + 1
+            qj_profit = 100 - qj_yes - qj_no  # can be negative if bids already tight
+
             opportunities.append({
                 'ticker':        ticker_str,
                 'title':         m.get('title', ''),
@@ -2975,6 +3213,9 @@ def scan_arb_opportunities():
                 'suggested_yes': sug_yes,
                 'suggested_no':  sug_no,
                 'profit_posted': posted_profit,
+                'qj_yes':        qj_yes,
+                'qj_no':         qj_no,
+                'qj_profit':     qj_profit,
                 'catch_score':   catch_score,
                 'catch_speed':   catch_speed,
                 'liquidity':     liquidity,
@@ -3381,7 +3622,11 @@ def watch_position():
             'quantity':          quantity,
             'stop_loss_cents':   stop_loss_cents,
             'take_profit_cents': take_profit_cents,
+            'has_sl_tp':         True,
             'status':            'watching',
+            'order_filled':      True,     # manual position — already placed
+            'fill_qty':          quantity,
+            'filled_at':         time.time(),
             'game_phase':        'live',
             'created_at':        time.time(),
             'posted_at':         time.time(),
@@ -3400,4 +3645,54 @@ def watch_position():
 
 if __name__ == '__main__':
     load_state()
+
+    # ── Auto-login at startup if config.json exists ──
+    # This ensures bots are monitored immediately after a restart,
+    # without waiting for the frontend to call /api/auto-login.
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+            api_key_id = config.get('api_key_id')
+            key_file = config.get('private_key_path', 'kalshi_private_key.pem')
+            demo = config.get('demo', False)
+            key_path = os.path.join(os.path.dirname(__file__), key_file)
+            if api_key_id and os.path.exists(key_path):
+                kalshi_client = KalshiAPI(api_key_id, key_path, demo=demo)
+                balance = kalshi_client.get_balance()
+                bal_usd = balance.get('balance', 0) / 100
+                print(f'✅ AUTO-LOGIN at startup: balance=${bal_usd:.2f}')
+                # Start WebSocket
+                try:
+                    ws_manager.connect(kalshi_client)
+                    active_tickers = list({b['ticker'] for b in active_bots.values()
+                                           if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching')})
+                    if active_tickers:
+                        threading.Timer(2.0, lambda: ws_manager.subscribe(active_tickers)).start()
+                except Exception as ws_err:
+                    print(f'⚠ WS connect at startup failed (non-fatal): {ws_err}')
+
+                # ── Immediate SL sweep: fire any stop-losses that triggered while offline ──
+                active_count = len([b for b in active_bots.values()
+                                    if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching')])
+                if active_count > 0:
+                    print(f'🔍 STARTUP SL SWEEP: checking {active_count} active bots for overdue stop-losses...')
+                    with app.test_request_context():
+                        acquired = monitor_lock.acquire(blocking=True, timeout=10)
+                        if acquired:
+                            try:
+                                result = _run_monitor()
+                                print(f'🔍 STARTUP SL SWEEP complete')
+                            except Exception as sweep_err:
+                                print(f'⚠ Startup SL sweep error: {sweep_err}')
+                            finally:
+                                monitor_lock.release()
+                        else:
+                            print(f'⚠ Could not acquire monitor lock for startup sweep')
+            else:
+                print('⚠ config.json found but missing api_key_id or private key — skipping auto-login')
+    except Exception as e:
+        print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
+
     app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

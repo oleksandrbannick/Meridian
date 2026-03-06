@@ -521,9 +521,24 @@
                             <span id="novig-chevron" style="color:#8892a6;font-size:10px;">▼</span>
                         </div>
                         <div id="novig-section" style="display:none;padding:0 14px 14px;">
-                            <div style="color:#6a7488;font-size:10px;line-height:1.5;margin-bottom:10px;">
-                                Enter the Over/Under American odds from the sharpest book on OddsJam. Strips the vig to find true probability.
+                            <!-- Direct no-vig input -->
+                            <div style="margin-bottom:12px;">
+                                <label style="display:block;color:#ffaa00;font-size:10px;font-weight:700;margin-bottom:4px;letter-spacing:.04em;">PASTE NO-VIG LINE</label>
+                                <div style="color:#6a7488;font-size:9px;line-height:1.4;margin-bottom:6px;">
+                                    American odds (-130, +150) or cents (45). Auto-detects format.
+                                </div>
+                                <input type="text" id="novig-direct" placeholder="-130 or 45¢" oninput="updateDirectNoVig()"
+                                    style="width:100%;padding:10px;background:#0a0e1a;border:2px solid #ffaa0044;border-radius:6px;color:#ffaa00;font-size:18px;font-weight:800;text-align:center;"
+                                    onfocus="this.style.borderColor='#ffaa00'" onblur="this.style.borderColor='#ffaa0044'">
+                                <div id="novig-direct-hint" style="color:#555;font-size:9px;margin-top:3px;text-align:center;"></div>
                             </div>
+                            <!-- Divider -->
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                                <div style="flex:1;height:1px;background:#1e2740;"></div>
+                                <span style="color:#555;font-size:10px;font-weight:600;">OR CALCULATE FROM BOTH SIDES</span>
+                                <div style="flex:1;height:1px;background:#1e2740;"></div>
+                            </div>
+                            <!-- Two-sided odds input -->
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
                                 <div>
                                     <label style="display:block;color:#00ff88;font-size:10px;font-weight:600;margin-bottom:3px;">OVER / YES ODDS</label>

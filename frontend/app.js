@@ -1762,8 +1762,69 @@ function americanToImplied(oddsStr) {
     return Math.abs(odds) / (Math.abs(odds) + 100);
 }
 
+/** Convert American odds to cents (0-100). Returns null on bad input. */
+function americanToCents(oddsStr) {
+    const impl = americanToImplied(oddsStr);
+    return impl !== null ? Math.round(impl * 100) : null;
+}
+
+/** Handle direct no-vig input — accepts American odds (-130, +150) or cents (1-99) */
+function updateDirectNoVig() {
+    const raw = (document.getElementById('novig-direct').value || '').trim();
+    const hintEl = document.getElementById('novig-direct-hint');
+
+    if (!raw) {
+        currentFairYesCents = null;
+        currentFairNoCents  = null;
+        if (hintEl) hintEl.textContent = '';
+        updateEdgeDisplay();
+        return;
+    }
+
+    // Detect format: starts with + or - → American odds, otherwise try cents
+    const isAmerican = raw.startsWith('+') || raw.startsWith('-');
+
+    if (isAmerican) {
+        const cents = americanToCents(raw);
+        if (cents === null || cents < 1 || cents > 99) {
+            if (hintEl) hintEl.innerHTML = '<span style="color:#ff4444;">Invalid American odds</span>';
+            return;
+        }
+        currentFairYesCents = cents;
+        currentFairNoCents  = 100 - cents;
+        if (hintEl) hintEl.innerHTML = `<span style="color:#ffaa00;">→ Fair YES: ${cents}¢ · Fair NO: ${100 - cents}¢</span>`;
+    } else {
+        const val = parseInt(raw);
+        if (isNaN(val) || val < 1 || val > 99) {
+            if (hintEl) hintEl.innerHTML = '<span style="color:#ff4444;">Enter 1-99 for cents or ±odds for American</span>';
+            return;
+        }
+        currentFairYesCents = val;
+        currentFairNoCents  = 100 - val;
+        if (hintEl) hintEl.innerHTML = `<span style="color:#ffaa00;">→ Fair YES: ${val}¢ · Fair NO: ${100 - val}¢</span>`;
+    }
+
+    // Clear the two-sided inputs since direct takes priority
+    const overEl = document.getElementById('novig-over');
+    const underEl = document.getElementById('novig-under');
+    if (overEl) overEl.value = '';
+    if (underEl) underEl.value = '';
+    const resultEl = document.getElementById('novig-result');
+    if (resultEl) resultEl.innerHTML = '<span style="color:#555;">Direct input used above ↑</span>';
+
+    updateEdgeDisplay();
+}
+
 /** Recalculate no-vig fair values from the OddsJam odds inputs */
 function updateNoVigDisplay() {
+    // Clear direct input since two-sided takes priority when used
+    const directEl = document.getElementById('novig-direct');
+    const directHintEl = document.getElementById('novig-direct-hint');
+    if (directEl && directEl.value.trim()) {
+        directEl.value = '';
+        if (directHintEl) directHintEl.textContent = '';
+    }
+
     const overStr  = (document.getElementById('novig-over').value  || '').trim();
     const underStr = (document.getElementById('novig-under').value || '').trim();
     const resultEl = document.getElementById('novig-result');
@@ -2050,6 +2111,10 @@ function openBotModal(market, _side, _price) {
     const novigUnderEl = document.getElementById('novig-under');
     if (novigOverEl) novigOverEl.value = '';
     if (novigUnderEl) novigUnderEl.value = '';
+    const novigDirectEl = document.getElementById('novig-direct');
+    if (novigDirectEl) novigDirectEl.value = '';
+    const novigDirectHintEl = document.getElementById('novig-direct-hint');
+    if (novigDirectHintEl) novigDirectHintEl.textContent = '';
     const novigResultEl = document.getElementById('novig-result');
     if (novigResultEl) novigResultEl.innerHTML = '<span style="color:#555;">Enter both odds to calculate fair value</span>';
     const novigSectionEl = document.getElementById('novig-section');

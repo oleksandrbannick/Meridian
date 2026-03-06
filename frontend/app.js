@@ -107,13 +107,14 @@ function switchTab(tab) {
 
 async function loadLiveScores() {
     try {
-        // Fetch ALL sports in parallel
-        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes, mlsRes, eplRes, uclRes] = await Promise.allSettled([
+        // Fetch ALL sports in parallel (including women's college basketball)
+        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes, ncaawRes, mlsRes, eplRes, uclRes] = await Promise.allSettled([
             fetch(`${API_BASE}/scoreboard/nba`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nfl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/nhl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/mlb`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/ncaab`).then(r => r.json()),
+            fetch(`${API_BASE}/scoreboard/ncaaw`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/mls`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/epl`).then(r => r.json()),
             fetch(`${API_BASE}/scoreboard/ucl`).then(r => r.json()),
@@ -130,6 +131,7 @@ async function loadLiveScores() {
         addGames(nhlRes, 'NHL');
         addGames(mlbRes, 'MLB');
         addGames(ncaabRes, 'NCAAB');
+        addGames(ncaawRes, 'NCAAW');
         addGames(mlsRes, 'MLS');
         addGames(eplRes, 'EPL');
         addGames(uclRes, 'UCL');
@@ -179,8 +181,8 @@ function parseESPNGame(event, sport) {
             // NBA: quarters (or OT)
             if (period <= 4) periodLabel = `Q${period}`;
             else periodLabel = period === 5 ? 'OT' : `${period - 4}OT`;
-        } else if (sport === 'NCAAB') {
-            // College basketball: halves (or OT)
+        } else if (sport === 'NCAAB' || sport === 'NCAAW') {
+            // College basketball (men's & women's): halves (or OT)
             if (period <= 2) periodLabel = `${period}H`;
             else periodLabel = period === 3 ? 'OT' : `${period - 2}OT`;
         } else if (sport === 'NHL') {
@@ -290,23 +292,31 @@ function applyFilters() {
                 case 'nfl':   return et.includes('NFL') || et.includes('NFLG');
                 case 'mlb':   return et.includes('MLB') || et.includes('KXMLB');
                 case 'nhl':   return et.includes('NHL') || et.includes('KXNHL');
-                case 'ncaab': return et.includes('NCAAB') || et.includes('KXNCAA') || et.includes('KXMARMAD');
+                case 'ncaab': return (et.includes('NCAAMB') || et.includes('KXMARMAD')) && !et.includes('NCAAWB');
+                case 'ncaaw': return et.includes('NCAAWB');
                 case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
                 case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
                 case 'tennis': return et.includes('KXATP') || et.includes('KXWTA');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA');
+                case 'wbc':   return et.includes('KXWBC');
+                case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXWBC') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA');
                 default: return true;
             }
         });
     }
 
     // LIVE sub-filter — works WITHIN whatever sport is selected
+    // Uses ESPN live data when available, falls back to Kalshi-native detection
+    // (expected_expiration_time) for sports ESPN doesn't cover
     if (currentLiveFilter) {
         filtered = filtered.filter(m => {
             const eventTicker = m.event_ticker || m.ticker || '';
             const gameId = extractGameId(eventTicker);
             const sport = detectSport(eventTicker);
-            return !!getLiveScoreForGame(gameId, sport);
+            // 1. ESPN confirms live (most reliable)
+            if (getLiveScoreForGame(gameId, sport)) return true;
+            // 2. Kalshi-native: expected_expiration_time within reasonable window
+            return isKalshiLive(m);
         });
     }
 
@@ -347,30 +357,32 @@ function _extractTeamCodes(gameId) {
 }
 
 function _findGameInLookup(lookup, gameId, sport) {
-    // 1. Try classic 3+3 split first (fastest for NBA/NHL/etc.)
-    const classic = gameId.match(/([A-Z]{3})([A-Z]{3})$/);
-    if (classic) {
-        const [, t1, t2] = classic;
-        const byKey = sport
-            ? (lookup[`${sport}:${t1}`] || lookup[`${sport}:${t2}`])
-            : null;
-        if (byKey) return byKey;
-    }
+    if (!gameId) return null;
+    const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
+    if (!cleaned || cleaned.length < 4) return null;
     
-    // 2. For variable-length codes (college sports), try all candidate codes
-    const candidates = _extractTeamCodes(gameId);
-    if (sport) {
-        for (const code of candidates) {
-            const g = lookup[`${sport}:${code}`];
-            if (g) return g;
+    // ONLY check exact sport — no cross-sport fallback (prevents men's cards showing women's scores)
+    if (!sport) return null;
+    
+    // Try all valid split points — only match when BOTH halves
+    // correspond to teams in the lookup (prevents SC+ARMISS from matching when SCAR+MISS is correct)
+    // Try longest codes first (more specific = better match)
+    for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
+        const t1 = cleaned.substring(0, i);
+        const t2 = cleaned.substring(i);
+        // Prefer splits where BOTH teams are found in lookup
+        if (lookup[`${sport}:${t1}`] && lookup[`${sport}:${t2}`]) {
+            return lookup[`${sport}:${t1}`];
         }
     }
-    
-    // 3. Fallback: search all sports
-    for (const key in lookup) {
-        const abbr = key.split(':')[1];
-        if (candidates.includes(abbr)) return lookup[key];
+    // If no perfect pair, try finding either team individually (longest first)
+    for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
+        const t1 = cleaned.substring(0, i);
+        const t2 = cleaned.substring(i);
+        const g = lookup[`${sport}:${t1}`] || lookup[`${sport}:${t2}`];
+        if (g) return g;
     }
+    
     return null;
 }
 
@@ -381,6 +393,234 @@ function getLiveScoreForGame(gameId, sport) {
 // Get game data for ANY state (pre/in/post) for scoreboard display
 function getGameScore(gameId, sport) {
     return _findGameInLookup(allGameData, gameId, sport);
+}
+
+// ─── KALSHI-NATIVE LIVE DETECTION ─────────────────────────────────────────────
+// Detects if a game is currently live using Kalshi market data alone.
+// Used as fallback for sports ESPN doesn't cover (WBC, BSL, VTB, ABA, etc.)
+// Also works when ESPN doesn't list small-conference college games.
+// ─── LIQUIDITY ASSESSMENT ──────────────────────────────────────────────────
+
+function getMarketLiquidity(market) {
+    const yesBid = getPrice(market, 'yes_bid') || 0;
+    const yesAsk = getPrice(market, 'yes_ask') || 0;
+    const noBid  = getPrice(market, 'no_bid')  || 0;
+    const noAsk  = getPrice(market, 'no_ask')  || 0;
+    const vol    = market.volume_24h || market.volume || 0;
+    const oi     = market.open_interest || 0;
+
+    // Spread on each side
+    const yesSpread = (yesAsk > 0 && yesBid > 0) ? (yesAsk - yesBid) : 99;
+    const noSpread  = (noAsk > 0 && noBid > 0)   ? (noAsk - noBid)   : 99;
+    const avgSpread = Math.min(yesSpread, noSpread);
+
+    // Arb edge: how much under 100 the bids sum to
+    const bidSum = yesBid + noBid;
+    const arbEdge = bidSum > 0 ? (100 - bidSum) : 99;
+
+    // Liquidity tier (for preset recommendation)
+    let tier, tierLabel, tierColor;
+    if (avgSpread <= 4 && vol >= 50) {
+        tier = 'tight'; tierLabel = 'TIGHT'; tierColor = '#00ff88';
+    } else if (avgSpread <= 8 || vol >= 20) {
+        tier = 'medium'; tierLabel = 'MEDIUM'; tierColor = '#60a5fa';
+    } else {
+        tier = 'wide'; tierLabel = 'WIDE'; tierColor = '#ffaa33';
+    }
+
+    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum };
+}
+
+// ─── GAME SIGNAL — combines score, period, edge into actionable signals ───────
+// Returns a signal object: { type, label, color, glowAnim, description }
+//   type: 'anchor' (blowout, anchor fav), 'swing' (close game, volatility play),
+//         'caution' (risky), 'pregame' (no game context), 'none' (no edge)
+
+function getGameSignal(gameId, sport, markets) {
+    // Get live score data from ESPN
+    const gameData = getGameScore(gameId, sport);
+    const liveData = getLiveScoreForGame(gameId, sport);
+
+    // Get liquidity data for display (not for signal gating)
+    const winnerMarkets = markets.filter(m => {
+        const t = (m.ticker || '').toUpperCase();
+        return t.includes('GAME-') && !t.includes('SPREAD') && !t.includes('TOTAL') && !t.includes('1H');
+    });
+    let bestLiq = null;
+    (winnerMarkets.length ? winnerMarkets : markets).forEach(m => {
+        const liq = getMarketLiquidity(m);
+        if (!bestLiq || liq.arbEdge < bestLiq.arbEdge) bestLiq = liq;
+    });
+
+    const liq = bestLiq || { tier: 'medium', tierLabel: 'MEDIUM', tierColor: '#60a5fa', avgSpread: 99, arbEdge: 99, yesBid: 0, noBid: 0, yesAsk: 0, noAsk: 0 };
+
+    // No live game data — pregame
+    if (!gameData || !gameData.state || gameData.state === 'pre') {
+        return {
+            type: 'pregame', label: '', color: '#8892a6',
+            glowAnim: '', description: 'Pregame — waiting for tip-off', liq
+        };
+    }
+
+    // Game is over
+    if (gameData.state === 'post') {
+        return { type: 'none', label: 'Final', color: '#555', glowAnim: '', description: 'Game over', liq };
+    }
+
+    // ── Game is LIVE — analyze the situation ──
+    const homeScore = parseInt(gameData.homeScore) || 0;
+    const awayScore = parseInt(gameData.awayScore) || 0;
+    const scoreDiff = Math.abs(homeScore - awayScore);
+    const period = gameData.period || 0;
+    const clock = gameData.clock || '';
+
+    // Parse clock to minutes remaining (approximate)
+    let clockMins = 0;
+    const clockMatch = clock.match(/(\d+):(\d+)/);
+    if (clockMatch) clockMins = parseInt(clockMatch[1]) + parseInt(clockMatch[2]) / 60;
+
+    // Determine game phase for basketball
+    let gamePhase = 'early'; // early, mid, late, final_stretch
+    if (sport === 'NBA') {
+        if (period >= 4) gamePhase = clockMins <= 5 ? 'final_stretch' : 'late';
+        else if (period === 3) gamePhase = 'mid';
+    } else if (sport === 'NCAAB' || sport === 'NCAAW') {
+        if (period >= 2) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
+    } else if (sport === 'NHL') {
+        if (period >= 3) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
+        else if (period === 2) gamePhase = 'mid';
+    } else {
+        // Soccer, MLB, etc — use period directly
+        if (period >= 2) gamePhase = 'late';
+    }
+
+    // Favorite price (higher bid = market thinks they're winning)
+    const favPrice = Math.max(liq.yesBid, liq.noBid);
+
+    // ── ANCHOR SIGNAL: clear leader, late game — safe to deploy bot ──
+    if (scoreDiff >= 10 && (gamePhase === 'late' || gamePhase === 'final_stretch') && favPrice >= 75) {
+        return {
+            type: 'anchor', label: '🟢 ANCHOR',
+            color: '#00ff88', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} · Fav at ${favPrice}¢ — Blowout late, safe to deploy`,
+            liq
+        };
+    }
+    // Moderate lead, late game — decent but not a lock
+    if (scoreDiff >= 6 && (gamePhase === 'late' || gamePhase === 'final_stretch') && favPrice >= 65) {
+        return {
+            type: 'anchor', label: '🟡 LEAN',
+            color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} · Fav at ${favPrice}¢ — Solid lead late, decent setup`,
+            liq
+        };
+    }
+    // Big lead early — dominating but more game left
+    if (scoreDiff >= 15 && gamePhase === 'mid' && favPrice >= 70) {
+        return {
+            type: 'anchor', label: '🟡 EARLY ANCHOR',
+            color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} · Fav at ${favPrice}¢ — Big lead but more game left`,
+            liq
+        };
+    }
+
+    // ── SWING: close game, risky — info only ──
+    if (scoreDiff <= 5 && (gamePhase === 'mid' || gamePhase === 'late')) {
+        return {
+            type: 'swing', label: '🔵 CLOSE',
+            color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `±${scoreDiff} pts · ${gameData.periodLabel} ${clock} — Close game, risky to deploy`,
+            liq
+        };
+    }
+
+    // ── Early game — wait ──
+    if (gamePhase === 'early') {
+        return {
+            type: 'caution', label: '⚪ EARLY',
+            color: '#8892a6', glowAnim: '',
+            description: `${gameData.periodLabel} ${clock} — Too early to read the game`,
+            liq
+        };
+    }
+    // Mid game, moderate lead — no clear signal
+    return {
+        type: 'caution', label: '',
+        color: '#8892a6', glowAnim: '',
+        description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} — No clear setup`,
+        liq
+    };
+}
+
+function getRecommendedPresets(tier, signalType) {
+    // Signal type affects preset choice:
+    // anchor = can use tighter presets (safer position)
+    // swing = need wider presets (more room for oscillation)
+    // caution/pregame = medium as default
+    if (signalType === 'anchor') {
+        const presets = {
+            tight:  [{ w: 5, sl: 3 }, { w: 6, sl: 3 }, { w: 6, sl: 4 }, { w: 8, sl: 4 }],
+            medium: [{ w: 8, sl: 5 }, { w: 10, sl: 5 }, { w: 10, sl: 6 }, { w: 10, sl: 8 }],
+            wide:   [{ w: 10, sl: 6 }, { w: 12, sl: 6 }, { w: 12, sl: 8 }, { w: 15, sl: 8 }],
+        };
+        return presets[tier] || presets.medium;
+    }
+    if (signalType === 'swing') {
+        // Swing needs wider stops — the game WILL move against you temporarily
+        const presets = {
+            tight:  [{ w: 8, sl: 5 }, { w: 10, sl: 6 }, { w: 10, sl: 8 }, { w: 12, sl: 8 }],
+            medium: [{ w: 10, sl: 8 }, { w: 12, sl: 8 }, { w: 15, sl: 8 }, { w: 15, sl: 10 }],
+            wide:   [{ w: 12, sl: 8 }, { w: 15, sl: 8 }, { w: 15, sl: 10 }, { w: 15, sl: 10 }],
+        };
+        return presets[tier] || presets.medium;
+    }
+    // Default: medium presets for caution/pregame
+    const presets = {
+        tight:  [{ w: 5, sl: 3 }, { w: 6, sl: 3 }, { w: 6, sl: 4 }, { w: 8, sl: 4 }],
+        medium: [{ w: 8, sl: 5 }, { w: 10, sl: 5 }, { w: 10, sl: 6 }, { w: 10, sl: 8 }],
+        wide:   [{ w: 12, sl: 6 }, { w: 12, sl: 8 }, { w: 15, sl: 8 }, { w: 15, sl: 10 }],
+    };
+    return presets[tier] || presets.medium;
+}
+
+function isKalshiLive(market) {
+    const expStr = market.expected_expiration_time;
+    if (!expStr) return false;
+    
+    try {
+        const expTime = new Date(expStr);
+        const now = Date.now();
+        const hoursUntilExp = (expTime.getTime() - now) / (1000 * 60 * 60);
+        
+        // Window: game must be expected to end within 3 hours AND not ended > 30min ago
+        // Basketball games last ~2-2.5h, so a game that JUST started has exp ~2.5-3h away
+        if (hoursUntilExp < -0.5 || hoursUntilExp > 3.0) return false;
+        
+        // Check game date — must be today (or yesterday for late-night games)
+        const ticker = market.event_ticker || '';
+        const dateMatch = ticker.match(/(\d{2})([A-Z]{3})(\d{2})/);
+        if (dateMatch) {
+            const [, yr, mon, day] = dateMatch;
+            const monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+            const gameDate = new Date(2000 + parseInt(yr), monthMap[mon] || 0, parseInt(day));
+            const today = new Date();
+            const diffDays = Math.abs(
+                (new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() -
+                 new Date(gameDate.getFullYear(), gameDate.getMonth(), gameDate.getDate()).getTime())
+                / (1000*60*60*24)
+            );
+            if (diffDays > 1) return false;
+        }
+        
+        // Check if game has already been resolved (result field set)
+        if (market.result && market.result !== '') return false;
+        
+        return true;
+    } catch (e) {
+        // Ignore parse errors
+    }
+    return false;
 }
 
 // Auto-login with stored credentials
@@ -433,10 +673,10 @@ async function loadMarkets() {
     
     try {
         // Build URL with sport filter for backend
-        // Use higher limit for 'all' since it aggregates many series
+        // Use higher limit — NCAAB alone can have 2000+ markets (spreads, totals, props)
         // 'live' filter is client-side only, fetch all
         const isAllOrLive = !currentSportFilter || currentSportFilter === 'all' || currentSportFilter === 'live';
-        const fetchLimit = isAllOrLive ? 2000 : 500;
+        const fetchLimit = isAllOrLive ? 5000 : 3000;
         let url = `${API_BASE}/markets?status=open&limit=${fetchLimit}`;
         if (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live') {
             url += `&sport=${currentSportFilter}`;
@@ -676,12 +916,16 @@ function detectSport(eventTicker) {
     if (upper.includes('KXNHL')) return 'NHL';
     if (upper.includes('KXMLB')) return 'MLB';
     if (upper.includes('KXNCAAMB') || upper.includes('KXNCAAB') || upper.includes('KXMARMAD')) return 'NCAAB';
-    if (upper.includes('KXNCAAWB')) return 'NCAAB';
+    if (upper.includes('KXNCAAWB')) return 'NCAAW';
     if (upper.includes('KXNCAAF')) return 'NCAAF';
     if (upper.includes('KXMLS')) return 'MLS';
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
     if (upper.includes('KXATP') || upper.includes('KXWTA')) return 'Tennis';
+    if (upper.includes('KXWBC')) return 'WBC';
+    if (upper.includes('KXVTB')) return 'VTB';
+    if (upper.includes('KXBSL')) return 'BSL';
+    if (upper.includes('KXABA')) return 'ABA';
     if (upper.includes('KXLOL') || upper.includes('KXDOTA') || upper.includes('KXCS')) return 'Esports';
     return 'Sports';
 }
@@ -690,8 +934,11 @@ function detectSport(eventTicker) {
 function getSportEmoji(sport) {
     const emojis = {
         'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 
-        'MLS': '⚽', 'NCAAB': '🎓', 'NCAAF': '🎓', 'EPL': '⚽', 'UCL': '⚽',
-        'Tennis': '🎾', 'Esports': '🎮', 'Sports': '🏆'
+        'MLS': '⚽', 'NCAAB': '🎓', 'NCAAW': '🎓', 'NCAAF': '🎓',
+        'EPL': '⚽', 'UCL': '⚽',
+        'Tennis': '🎾', 'Esports': '🎮',
+        'WBC': '⚾', 'VTB': '🏀', 'BSL': '🏀', 'ABA': '🏀',
+        'Sports': '🏆'
     };
     return emojis[sport] || '🏆';
 }
@@ -718,13 +965,13 @@ function buildGameTitle(gameId, marketOrMarkets) {
             return `${tennisMatch[1].trim()} vs ${tennisMatch[2].trim()}`;
         }
         
-        // Titles like "Denver at Utah Winner?" or "Toronto at Washington: Spread"
-        const atMatch = title.match(/^(.+?)\s+at\s+(.+?)(?:[\s:?]|Winner|Moneyline|Spread|Total|$)/i);
+        // Titles like "Denver at Utah Winner?" or "South Carolina at Ole Miss Winner?"
+        const atMatch = title.match(/^(.+?)\s+at\s+(.+?)(?:\s*[?:]|\s+(?:Winner|Moneyline|Spread|Total)|\s*$)/i);
         if (atMatch) {
             return `${atMatch[1].trim()} vs ${atMatch[2].trim()}`;
         }
         
-        const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:[\s:?]|Winner|Moneyline|Spread|Total|$)/i);
+        const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s*[?:]|\s+(?:Winner|Moneyline|Spread|Total)|\s*$)/i);
         if (vsMatch) {
             return `${vsMatch[1].trim()} vs ${vsMatch[2].trim()}`;
         }
@@ -840,7 +1087,20 @@ function parseTeamNames(gameId) {
         'WISC': 'Wisconsin', 'WIS': 'Wisconsin', 'WOF': 'Wofford', 'WRIGHT': 'Wright State',
         'WYO': 'Wyoming', 'XAV': 'Xavier', 'YALE': 'Yale', 'YSU': 'Youngstown State',
         // Additional NCAAB codes seen on Kalshi
-        'BRIGHTN': 'Brighton', 'PENNBRWN': 'Penn vs Brown',
+        'BRIGHTN': 'Brighton',
+        // Additional short codes seen on Kalshi
+        'BELL': 'Bellarmine', 'CARK': 'Central Arkansas',
+        'WEBB': 'Gardner-Webb', 'HP': 'High Point',
+        'GTWN': 'Georgetown', 'BUT': 'Butler',
+        'SCAR': 'South Carolina', 'MAN': 'Manhattan',
+        'MRSH': 'Marshall', 'USA': 'South Alabama',
+        'KSU': 'Kansas State', 'WASH': 'Washington',
+        'LCHI': 'Loyola Chicago', 'FUR': 'Furman', 'CHAT': 'Chattanooga',
+        'NOLA': 'New Orleans', 'HCU': 'Houston Christian',
+        'NWST': 'Northwestern State', 'NICH': 'Nicholls State',
+        'DRKE': 'Drake', 'BELM': 'Belmont',
+        'AKR2': 'Akron', 'STON': 'Stony Brook',
+        'BELMNT': 'Belmont',
     };
     
     // Remove date prefix: 26FEB28TORWAS -> TORWAS
@@ -947,12 +1207,26 @@ function buildScoreboard(gameScore) {
 function displayEventRow(eventData, container) {
     const sport = eventData.sport || detectSport(eventData.eventTicker);
     const liveScore = getLiveScoreForGame(eventData.gameId, sport);
-    const isLive = !!liveScore;
+    // A game is "live" if ESPN confirms it OR Kalshi-native detection says so
+    const kalshiLive = !liveScore && eventData.markets.some(m => isKalshiLive(m));
+    const isLive = !!liveScore || kalshiLive;
     const gameScore = getGameScore(eventData.gameId, sport);
     const emoji = getSportEmoji(sport);
 
+    // Compute game signal — factors in score, period, edge (not just liquidity)
+    const signal = getGameSignal(eventData.gameId, sport, eventData.markets);
+    const bestLiq = signal.liq;
+
     const card = document.createElement('div');
-    card.style.cssText = `background: #1a1f2e; border: 1px solid ${isLive ? '#00ff88' : '#2a3447'}; border-radius: 8px; padding: 16px; margin-bottom: 12px;`;
+    // Glow based on game signal (anchor = green, lean/early = gold, swing = blue)
+    let glowStyle = '';
+    if (isLive && signal.glowAnim) {
+        glowStyle = `animation: ${signal.glowAnim} 2s ease-in-out infinite;`;
+    }
+    const borderColor = (isLive && signal.type === 'anchor') ? '#00ff88'
+        : (isLive && signal.type === 'swing') ? '#60a5fa'
+        : isLive ? '#2a6a3a' : '#2a3447';
+    card.style.cssText = `background: #1a1f2e; border: 1px solid ${borderColor}; border-radius: 8px; padding: 16px; margin-bottom: 12px; ${glowStyle}`;
 
     // Event header (title + sport + date)
     const header = document.createElement('div');
@@ -990,6 +1264,14 @@ function displayEventRow(eventData, container) {
             badgeWrap.appendChild(roundBadge);
         }
     }
+    // Signal badge — shows anchor/swing/early/pregame context
+    if (signal.label) {
+        const sigBadge = document.createElement('span');
+        sigBadge.style.cssText = `background:${signal.color}22;color:${signal.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;`;
+        sigBadge.textContent = signal.label;
+        if (signal.description) sigBadge.title = signal.description;
+        badgeWrap.appendChild(sigBadge);
+    }
     header.appendChild(badgeWrap);
     card.appendChild(header);
 
@@ -997,6 +1279,12 @@ function displayEventRow(eventData, container) {
     if (gameScore) {
         const scoreboard = buildScoreboard(gameScore);
         if (scoreboard) card.appendChild(scoreboard);
+    } else if (kalshiLive) {
+        // No ESPN data but Kalshi says it's live — show simple LIVE indicator
+        const liveBanner = document.createElement('div');
+        liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+        liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">Score unavailable</span>`;
+        card.appendChild(liveBanner);
     }
     
     // Markets grid (compact button layout)
@@ -1128,6 +1416,16 @@ function createMarketRow(market, label) {
         labelDiv.innerHTML = `<span>${label || extractSubtitle(market.title) || market.title}</span> <span style="background:${badgeBg};color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">${stat.value} ${statLabel}</span>`;
     } else {
         labelDiv.textContent = label || extractSubtitle(market.title) || market.title;
+    }
+
+    // Inline spread/edge indicator for quick scanning
+    const liq = getMarketLiquidity(market);
+    if (liq.arbEdge >= 1 && liq.arbEdge <= 20 && liq.avgSpread < 99) {
+        const edgeDot = document.createElement('span');
+        const dotColor = liq.arbEdge <= 8 ? '#00ff88' : (liq.arbEdge <= 12 ? '#60a5fa' : '#ffaa33');
+        edgeDot.style.cssText = `display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};margin-left:6px;vertical-align:middle;`;
+        edgeDot.title = `Edge: ${liq.arbEdge}¢ · Spread: ${liq.avgSpread}¢ · ${liq.tierLabel}`;
+        labelDiv.appendChild(edgeDot);
     }
     
     // YES button — show ASK price only (what it costs to buy YES)
@@ -2285,6 +2583,62 @@ function openBotModal(market, _side, _price) {
         watchOpts.style.display = watchCheck.checked ? 'grid' : 'none';
     };
 
+    // ── Preset recommendation based on game signal ──
+    const liq = getMarketLiquidity(market);
+    const gameId = extractGameId(market.event_ticker || market.ticker || '');
+    const signal = getGameSignal(gameId, sport, [market]);
+    const sigType = signal.type; // anchor, swing, caution, pregame, none
+    const recEl = document.getElementById('preset-recommendation');
+    if (recEl && liq.arbEdge <= 20 && liq.arbEdge >= 1) {
+        const recPresets = getRecommendedPresets(liq.tier, sigType);
+        const recLabel = recPresets.map(p => `${p.w}/${p.sl}`).join(', ');
+        // Signal-aware recommendation text
+        let sigText = '', sigColor = liq.tierColor;
+        if (sigType === 'anchor') {
+            sigText = '🟢 Blowout late — best setup, tight presets OK';
+            sigColor = '#00ff88';
+        } else if (sigType === 'swing') {
+            sigText = '🔵 Close game — risky, for info only';
+            sigColor = '#60a5fa';
+        } else if (sigType === 'caution') {
+            sigText = '⚪ Too early to tell — game just started';
+            sigColor = '#8892a6';
+        } else if (sigType === 'pregame') {
+            sigText = '⏳ Pregame — waiting for tip-off';
+            sigColor = '#8892a6';
+        } else {
+            sigText = `💡 ${liq.tierLabel}`;
+        }
+        recEl.style.display = 'block';
+        recEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">`
+            + `<span style="color:${sigColor};font-weight:700;">${sigText}</span>`
+            + `<span style="color:#8892a6;font-size:10px;">edge ${liq.arbEdge}¢ · spread ${liq.avgSpread}¢</span>`
+            + `</div>`
+            + (signal.description ? `<div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>` : '');
+        // Highlight recommended tier buttons
+        document.querySelectorAll('.arb-preset-btn').forEach(btn => {
+            const bw = parseInt(btn.dataset.width);
+            const bs = parseInt(btn.dataset.sl);
+            const isRec = recPresets.some(p => p.w === bw && p.sl === bs);
+            if (isRec) {
+                btn.style.boxShadow = `0 0 8px ${sigColor}44`;
+                btn.dataset.recommended = 'true';
+            } else {
+                btn.style.boxShadow = 'none';
+                btn.dataset.recommended = '';
+            }
+        });
+        // Auto-apply middle preset from recommended tier
+        const midPreset = recPresets[Math.floor(recPresets.length / 2)];
+        applyPreset(midPreset.w, midPreset.sl);
+    } else if (recEl) {
+        recEl.style.display = 'none';
+        document.querySelectorAll('.arb-preset-btn').forEach(btn => {
+            btn.style.boxShadow = 'none';
+            btn.dataset.recommended = '';
+        });
+    }
+
     document.getElementById('bot-modal').classList.add('show');
 
     // ── Auto-refresh market prices every 3s using ORDERBOOK (real-time) ──
@@ -2543,10 +2897,16 @@ function highlightActivePreset() {
     document.querySelectorAll('.arb-preset-btn').forEach(btn => {
         const bw = parseInt(btn.dataset.width);
         const bs = parseInt(btn.dataset.sl);
+        const isRec = btn.dataset.recommended === 'true';
         if (bw === width && bs === sl) {
             btn.style.borderColor = '#00ff88';
             btn.style.background = 'rgba(0,255,136,0.12)';
             btn.style.color = '#00ff88';
+        } else if (isRec) {
+            // Recommended but not active — subtle highlight
+            btn.style.borderColor = '#00ff8844';
+            btn.style.background = 'rgba(0,255,136,0.05)';
+            btn.style.color = '#8892a6';
         } else {
             btn.style.borderColor = '#333';
             btn.style.background = 'rgba(255,255,255,0.03)';

@@ -143,7 +143,7 @@ def get_markets():
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
             
         status = request.args.get('status', 'open')
-        limit = int(request.args.get('limit', 2000))
+        limit = int(request.args.get('limit', 5000))
         sport_filter = request.args.get('sport')  # Optional: 'nba', 'nhl', 'epl', etc.
         
         # ALL sports series tickers in Kalshi
@@ -183,6 +183,12 @@ def get_markets():
             # Tennis
             'KXATPMATCH': 'winner',
             'KXWTAMATCH': 'winner',
+            # World Baseball Classic
+            'KXWBCGAME': 'winner',
+            # International Basketball
+            'KXVTBGAME': 'winner',   # Russia VTB United League
+            'KXBSLGAME': 'winner',   # Turkey BSL
+            'KXABAGAME': 'winner',   # Adriatic ABA League
         }
         SPORTS_SERIES = {
             'nba': ['KXNBAGAME', 'KXNBASPREAD', 'KXNBATOTAL',
@@ -196,11 +202,14 @@ def get_markets():
                       'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
                       'KXNCAAMBPTS', 'KXNCAAMBREB', 'KXNCAAMBAST',
                       'KXNCAAMB3PT', 'KXNCAAMBSTL', 'KXNCAAMBBLK',
-                      'KXMARMAD', 'KXNCAAWBGAME'],
+                      'KXMARMAD'],
+            'ncaaw': ['KXNCAAWBGAME'],
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
             'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
+            'wbc': ['KXWBCGAME'],
+            'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
         }
         
         # Determine which series to fetch
@@ -282,7 +291,8 @@ def get_markets():
         
         # Sort by event_ticker for grouping
         unique_markets.sort(key=lambda m: m.get('event_ticker', ''))
-        unique_markets = unique_markets[:limit]
+        if limit and limit < len(unique_markets):
+            unique_markets = unique_markets[:limit]
 
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0
@@ -642,6 +652,7 @@ def get_scoreboard(sport):
         'mlb': 'baseball/mlb',
         'nhl': 'hockey/nhl',
         'ncaab': 'basketball/mens-college-basketball',
+        'ncaaw': 'basketball/womens-college-basketball',
         'ncaaf': 'football/college-football',
         'mls': 'soccer/usa.1',
         'epl': 'soccer/eng.1',
@@ -674,6 +685,7 @@ def get_boxscore(sport, game_id):
     sport_map = {
         'nba': 'basketball/nba',
         'ncaab': 'basketball/mens-college-basketball',
+        'ncaaw': 'basketball/womens-college-basketball',
         'nfl': 'football/nfl',
         'mlb': 'baseball/mlb',
         'nhl': 'hockey/nhl',
@@ -1207,6 +1219,7 @@ def _refresh_espn_cache():
         'nfl': 'football/nfl',
         'mlb': 'baseball/mlb',
         'ncaab': 'basketball/mens-college-basketball',
+        'ncaaw': 'basketball/womens-college-basketball',
         'mls': 'soccer/usa.1',
         'epl': 'soccer/eng.1',
         'ucl': 'soccer/uefa.champions',
@@ -2938,7 +2951,17 @@ def _run_monitor():
                                            'trigger': sl_trigger})
                             continue
 
-                        # Bid still dropping/flat or hard cap reached — fire SL now
+                        # CRITICAL: if bid has recovered ABOVE trigger, abort SL entirely
+                        if yes_bid > sl_trigger:
+                            print(f'✅ SL ABORTED: {bot_id} YES bid {yes_bid}¢ recovered above trigger {sl_trigger}¢ — resuming monitoring')
+                            bot['sl_breach_since'] = None
+                            bot['sl_last_bid'] = None
+                            bot_log('ARB_SL_RECOVERED', bot_id, {'leg': 'yes', 'bid': yes_bid, 'trigger': sl_trigger, 'grace_elapsed_min': round(grace_elapsed, 1)})
+                            actions.append({'bot_id': bot_id, 'action': 'sl_recovered_yes',
+                                           'bid': yes_bid, 'trigger': sl_trigger})
+                            continue
+
+                        # Bid still below trigger AND dropping/flat or hard cap reached — fire SL now
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate SL YES for {bot_id} — already {bot["status"]}')
@@ -3074,7 +3097,17 @@ def _run_monitor():
                                            'trigger': sl_trigger_no})
                             continue
 
-                        # Bid still dropping/flat or hard cap reached — fire SL now
+                        # CRITICAL: if bid has recovered ABOVE trigger, abort SL entirely
+                        if no_bid > sl_trigger_no:
+                            print(f'✅ SL ABORTED: {bot_id} NO bid {no_bid}¢ recovered above trigger {sl_trigger_no}¢ — resuming monitoring')
+                            bot['sl_breach_since'] = None
+                            bot['sl_last_bid'] = None
+                            bot_log('ARB_SL_RECOVERED', bot_id, {'leg': 'no', 'bid': no_bid, 'trigger': sl_trigger_no, 'grace_elapsed_min': round(grace_elapsed_no, 1)})
+                            actions.append({'bot_id': bot_id, 'action': 'sl_recovered_no',
+                                           'bid': no_bid, 'trigger': sl_trigger_no})
+                            continue
+
+                        # Bid still below trigger AND dropping/flat or hard cap reached — fire SL now
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate SL NO for {bot_id} — already {bot["status"]}')
@@ -3561,10 +3594,13 @@ def scan_arb_opportunities():
                       'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
                       'KXNCAAMBPTS', 'KXNCAAMBREB', 'KXNCAAMBAST',
                       'KXNCAAMB3PT', 'KXNCAAMBSTL', 'KXNCAAMBBLK',
-                      'KXMARMAD', 'KXNCAAWBGAME'],
+                      'KXMARMAD'],
+            'ncaaw': ['KXNCAAWBGAME'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
             'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
+            'wbc': ['KXWBCGAME'],
+            'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
         }
 
         if sport_filter and sport_filter.lower() not in ('', 'all'):
@@ -3815,7 +3851,8 @@ def scan_middles():
             'nfl': ['KXNFLSPREAD'],
             'nhl': ['KXNHLSPREAD'],
             'mlb': ['KXMLBSPREAD'],
-            'ncaab': ['KXNCAABSPREAD'],
+            'ncaab': ['KXNCAAMBSPREAD'],
+            'ncaaw': ['KXNCAAWBSPREAD'],
         }
         if sport_filter and sport_filter.lower() not in ('', 'all'):
             series_to_fetch = SPREAD_SERIES.get(sport_filter.lower(), [])

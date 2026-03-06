@@ -1768,6 +1768,22 @@ function americanToCents(oddsStr) {
     return impl !== null ? Math.round(impl * 100) : null;
 }
 
+/** Render the green/red fair value boxes used by both input modes */
+function renderFairValueBoxes(fairYes, fairNo, centerText) {
+    return `
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-top:8px;">
+            <div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:6px;padding:6px 8px;text-align:center;">
+                <div style="color:#555;font-size:9px;text-transform:uppercase;margin-bottom:2px;">Fair YES</div>
+                <div style="color:#00ff88;font-weight:800;font-size:16px;">${fairYes}¢</div>
+            </div>
+            <div style="color:#555;font-size:10px;text-align:center;">${centerText}</div>
+            <div style="background:#ff444411;border:1px solid #ff444433;border-radius:6px;padding:6px 8px;text-align:center;">
+                <div style="color:#555;font-size:9px;text-transform:uppercase;margin-bottom:2px;">Fair NO</div>
+                <div style="color:#ff4444;font-weight:800;font-size:16px;">${fairNo}¢</div>
+            </div>
+        </div>`;
+}
+
 /** Handle direct no-vig input — accepts American odds (-130, +150) or cents (1-99) */
 function updateDirectNoVig() {
     const raw = (document.getElementById('novig-direct').value || '').trim();
@@ -1776,7 +1792,7 @@ function updateDirectNoVig() {
     if (!raw) {
         currentFairYesCents = null;
         currentFairNoCents  = null;
-        if (hintEl) hintEl.textContent = '';
+        if (hintEl) hintEl.innerHTML = '';
         updateEdgeDisplay();
         return;
     }
@@ -1792,7 +1808,7 @@ function updateDirectNoVig() {
         }
         currentFairYesCents = cents;
         currentFairNoCents  = 100 - cents;
-        if (hintEl) hintEl.innerHTML = `<span style="color:#ffaa00;">→ Fair YES: ${cents}¢ · Fair NO: ${100 - cents}¢</span>`;
+        if (hintEl) hintEl.innerHTML = renderFairValueBoxes(cents, 100 - cents, `${raw}<br>converted`);
     } else {
         const val = parseInt(raw);
         if (isNaN(val) || val < 1 || val > 99) {
@@ -1801,7 +1817,7 @@ function updateDirectNoVig() {
         }
         currentFairYesCents = val;
         currentFairNoCents  = 100 - val;
-        if (hintEl) hintEl.innerHTML = `<span style="color:#ffaa00;">→ Fair YES: ${val}¢ · Fair NO: ${100 - val}¢</span>`;
+        if (hintEl) hintEl.innerHTML = renderFairValueBoxes(val, 100 - val, `${val}¢<br>entered`);
     }
 
     // Clear the two-sided inputs since direct takes priority
@@ -1856,18 +1872,7 @@ function updateNoVigDisplay() {
     const juice = ((totalImpl - 1) * 100).toFixed(1);
 
     if (resultEl) {
-        resultEl.innerHTML = `
-            <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;">
-                <div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:6px;padding:6px 8px;">
-                    <div style="color:#555;font-size:9px;text-transform:uppercase;margin-bottom:2px;">Fair YES</div>
-                    <div style="color:#00ff88;font-weight:800;font-size:16px;">${currentFairYesCents}¢</div>
-                </div>
-                <div style="color:#555;font-size:10px;text-align:center;">${juice}% vig<br>removed</div>
-                <div style="background:#ff444411;border:1px solid #ff444433;border-radius:6px;padding:6px 8px;">
-                    <div style="color:#555;font-size:9px;text-transform:uppercase;margin-bottom:2px;">Fair NO</div>
-                    <div style="color:#ff4444;font-weight:800;font-size:16px;">${currentFairNoCents}¢</div>
-                </div>
-            </div>`;
+        resultEl.innerHTML = renderFairValueBoxes(currentFairYesCents, currentFairNoCents, `${juice}% vig<br>removed`);
     }
 
     updateEdgeDisplay();

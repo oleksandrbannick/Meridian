@@ -511,6 +511,34 @@
                             ✗ BUY NO
                         </button>
                     </div>
+                    <!-- OddsJam Fair Value Calculator (optional) -->
+                    <div style="margin-bottom:16px;background:#060a14;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
+                        <div onclick="toggleNoVigSection()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:10px 14px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:12px;">📊</span>
+                                <span style="color:#ffaa00;font-size:12px;font-weight:600;">OddsJam Fair Value (optional)</span>
+                            </div>
+                            <span id="novig-chevron" style="color:#8892a6;font-size:10px;">▼</span>
+                        </div>
+                        <div id="novig-section" style="display:none;padding:0 14px 14px;">
+                            <div style="color:#6a7488;font-size:10px;line-height:1.5;margin-bottom:10px;">
+                                Enter the Over/Under American odds from the sharpest book on OddsJam. Strips the vig to find true probability.
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+                                <div>
+                                    <label style="display:block;color:#00ff88;font-size:10px;font-weight:600;margin-bottom:3px;">OVER / YES ODDS</label>
+                                    <input type="text" id="novig-over" placeholder="-110" oninput="updateNoVigDisplay()"
+                                        style="width:100%;padding:8px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                                </div>
+                                <div>
+                                    <label style="display:block;color:#ff4444;font-size:10px;font-weight:600;margin-bottom:3px;">UNDER / NO ODDS</label>
+                                    <input type="text" id="novig-under" placeholder="-110" oninput="updateNoVigDisplay()"
+                                        style="width:100%;padding:8px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                                </div>
+                            </div>
+                            <div id="novig-result" style="text-align:center;font-size:12px;color:#555;">Enter both odds to calculate fair value</div>
+                        </div>
+                    </div>
                     <!-- Price + Qty -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
                         <div>
@@ -531,6 +559,8 @@
                     </div>
                     <!-- Payout preview -->
                     <div id="straight-preview" style="margin-bottom:16px;"></div>
+                    <!-- Edge display (from OddsJam fair value) -->
+                    <div id="straight-edge-display" style="margin-bottom:16px;"></div>
                     <!-- Optional watch (stop-loss) toggle -->
                     <div style="margin-bottom:16px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:12px;">
                         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -587,77 +617,81 @@
                     </div>
                     <!-- Preset Strategy Table -->
                     <div style="margin-bottom:16px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
                             <span style="color:#8892a6;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">⚡ Quick Presets</span>
-                            <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;">Breakeven: 29%</span>
+                            <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;">Breakeven: 33%</span>
                         </div>
+                        <div style="color:#556;font-size:9px;margin-bottom:8px;line-height:1.4;">Tight = fast fills, small profit · Medium = balanced · Wide = patient, max profit · <span style="color:#ffaa33;">★ = best win rate</span></div>
+                        <div style="color:#8892a6;font-size:9px;font-weight:600;margin-bottom:3px;">TIGHT — liquid markets, fast games</div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;" id="preset-grid">
-                            <!-- Row 1: Tight (5¢–6¢) -->
-                            <button onclick="applyPreset(5, 2)" class="arb-preset-btn" data-width="5" data-sl="2"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 2¢ · 29%</div>
-                            </button>
+                            <!-- Row 1: Tight (5¢–8¢) — SL ≥ 50% width -->
                             <button onclick="applyPreset(5, 3)" class="arb-preset-btn" data-width="5" data-sl="3"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
                                 <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 38%</div>
-                            </button>
-                            <button onclick="applyPreset(6, 2)" class="arb-preset-btn" data-width="6" data-sl="2"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 2¢ · 25%</div>
                             </button>
                             <button onclick="applyPreset(6, 3)" class="arb-preset-btn" data-width="6" data-sl="3"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
                                 <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 33%</div>
                             </button>
-                        </div>
-                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-top:6px;">
-                            <!-- Row 2: Medium (8¢–10¢) -->
-                            <button onclick="applyPreset(8, 3)" class="arb-preset-btn" data-width="8" data-sl="3"
+                            <button onclick="applyPreset(6, 4)" class="arb-preset-btn" data-width="6" data-sl="4"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 27%</div>
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 40%</div>
                             </button>
                             <button onclick="applyPreset(8, 4)" class="arb-preset-btn" data-width="8" data-sl="4"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
                                 <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 33%</div>
                             </button>
-                            <button onclick="applyPreset(10, 3)" class="arb-preset-btn" data-width="10" data-sl="3"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #00ff8844;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 3¢ · 23%</div>
-                            </button>
-                            <button onclick="applyPreset(10, 4)" class="arb-preset-btn" data-width="10" data-sl="4"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 29%</div>
-                            </button>
                         </div>
-                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-top:6px;">
-                            <!-- Row 3: Wide (10¢–15¢) -->
+                        <div style="color:#8892a6;font-size:9px;font-weight:600;margin-top:8px;margin-bottom:3px;">MEDIUM — most games, default choice</div>
+                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;">
+                            <!-- Row 2: Medium (8¢–10¢) — balanced risk/reward -->
+                            <button onclick="applyPreset(8, 5)" class="arb-preset-btn" data-width="8" data-sl="5"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 38%</div>
+                            </button>
                             <button onclick="applyPreset(10, 5)" class="arb-preset-btn" data-width="10" data-sl="5"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
                                 <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 33%</div>
                             </button>
-                            <button onclick="applyPreset(12, 4)" class="arb-preset-btn" data-width="12" data-sl="4"
+                            <button onclick="applyPreset(10, 6)" class="arb-preset-btn" data-width="10" data-sl="6"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 6¢ · 38%</div>
+                            </button>
+                            <button onclick="applyPreset(10, 8)" class="arb-preset-btn" data-width="10" data-sl="8"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #00ff8844;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#ffaa33;">10¢ ★</div>
+                                <div style="color:#ffaa33;font-size:9px;margin-top:2px;">SL 8¢ · 44%</div>
+                            </button>
+                        </div>
+                        <div style="color:#8892a6;font-size:9px;font-weight:600;margin-top:8px;margin-bottom:3px;">WIDE — slow markets, big spreads</div>
+                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;">
+                            <!-- Row 3: Wide (12¢–15¢) — patient, max profit -->
+                            <button onclick="applyPreset(12, 6)" class="arb-preset-btn" data-width="12" data-sl="6"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 4¢ · 25%</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 6¢ · 33%</div>
                             </button>
-                            <button onclick="applyPreset(12, 5)" class="arb-preset-btn" data-width="12" data-sl="5"
+                            <button onclick="applyPreset(12, 8)" class="arb-preset-btn" data-width="12" data-sl="8"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 29%</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 8¢ · 40%</div>
                             </button>
-                            <button onclick="applyPreset(15, 5)" class="arb-preset-btn" data-width="15" data-sl="5"
+                            <button onclick="applyPreset(15, 8)" class="arb-preset-btn" data-width="15" data-sl="8"
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
-                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 5¢ · 25%</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 8¢ · 35%</div>
+                            </button>
+                            <button onclick="applyPreset(15, 10)" class="arb-preset-btn" data-width="15" data-sl="10"
+                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
+                                <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
+                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">SL 10¢ · 40%</div>
                             </button>
                         </div>
                     </div>

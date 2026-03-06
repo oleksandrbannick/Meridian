@@ -1738,6 +1738,111 @@ function setStraightSide(side) {
     updateStraightPreview();
 }
 
+// ── No-Vig Fair Value Calculator (OddsJam) ────────────────────────────────────
+let currentFairYesCents = null;
+let currentFairNoCents = null;
+
+function toggleNoVigSection() {
+    const section = document.getElementById('novig-section');
+    const chevron = document.getElementById('novig-chevron');
+    if (section.style.display === 'none') {
+        section.style.display = 'block';
+        chevron.textContent = '▲';
+    } else {
+        section.style.display = 'none';
+        chevron.textContent = '▼';
+    }
+}
+
+/** Convert American odds string to implied probability (0–1). Returns null on bad input. */
+function americanToImplied(oddsStr) {
+    const odds = parseFloat(oddsStr);
+    if (isNaN(odds) || odds === 0) return null;
+    if (odds > 0) return 100 / (odds + 100);
+    return Math.abs(odds) / (Math.abs(odds) + 100);
+}
+
+/** Recalculate no-vig fair values from the OddsJam odds inputs */
+function updateNoVigDisplay() {
+    const overStr  = (document.getElementById('novig-over').value  || '').trim();
+    const underStr = (document.getElementById('novig-under').value || '').trim();
+    const resultEl = document.getElementById('novig-result');
+
+    if (!overStr || !underStr) {
+        currentFairYesCents = null;
+        currentFairNoCents  = null;
+        if (resultEl) resultEl.innerHTML = '<span style="color:#555;">Enter both odds to calculate fair value</span>';
+        updateEdgeDisplay();
+        return;
+    }
+
+    const overImpl  = americanToImplied(overStr);
+    const underImpl = americanToImplied(underStr);
+
+    if (overImpl === null || underImpl === null) {
+        currentFairYesCents = null;
+        currentFairNoCents  = null;
+        if (resultEl) resultEl.innerHTML = '<span style="color:#ff4444;">Invalid odds format (e.g. -110 or +150)</span>';
+        updateEdgeDisplay();
+        return;
+    }
+
+    const totalImpl = overImpl + underImpl;
+    const fairYes   = overImpl  / totalImpl;
+    const fairNo    = underImpl / totalImpl;
+    currentFairYesCents = Math.round(fairYes * 100);
+    currentFairNoCents  = Math.round(fairNo  * 100);
+    const juice = ((totalImpl - 1) * 100).toFixed(1);
+
+    if (resultEl) {
+        resultEl.innerHTML = `
+            <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;">
+                <div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:6px;padding:6px 8px;">
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;margin-bottom:2px;">Fair YES</div>
+                    <div style="color:#00ff88;font-weight:800;font-size:16px;">${currentFairYesCents}¢</div>
+                </div>
+                <div style="color:#555;font-size:10px;text-align:center;">${juice}% vig<br>removed</div>
+                <div style="background:#ff444411;border:1px solid #ff444433;border-radius:6px;padding:6px 8px;">
+                    <div style="color:#555;font-size:9px;text-transform:uppercase;margin-bottom:2px;">Fair NO</div>
+                    <div style="color:#ff4444;font-weight:800;font-size:16px;">${currentFairNoCents}¢</div>
+                </div>
+            </div>`;
+    }
+
+    updateEdgeDisplay();
+}
+
+/** Show edge comparison in the straight-edge-display div */
+function updateEdgeDisplay() {
+    const edgeEl = document.getElementById('straight-edge-display');
+    if (!edgeEl) return;
+
+    const side  = currentStraightSide;
+    const price = parseInt(document.getElementById('straight-price').value) || 0;
+    const fairCents = side === 'yes' ? currentFairYesCents : currentFairNoCents;
+
+    if (fairCents === null || price < 1 || price > 99) {
+        edgeEl.innerHTML = '';
+        return;
+    }
+
+    const edge      = fairCents - price;  // positive = buying below fair = value
+    const edgeColor = edge > 0 ? '#00ff88' : edge < 0 ? '#ff4444' : '#ffaa00';
+    const edgeIcon  = edge > 0 ? '✅' : edge < 0 ? '❌' : '➖';
+    const edgeLabel = edge > 0 ? 'VALUE BET' : edge < 0 ? 'OVERPAY' : 'FAIR PRICE';
+    const sideLabel = side.toUpperCase();
+    const edgePct   = price > 0 ? (edge / price * 100).toFixed(1) : '0.0';
+
+    edgeEl.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 16px;background:${edgeColor}11;border:1px solid ${edgeColor}44;border-radius:8px;">
+            <span style="font-size:18px;">${edgeIcon}</span>
+            <div style="text-align:left;">
+                <div style="color:${edgeColor};font-weight:800;font-size:15px;">${edge > 0 ? '+' : ''}${edge}¢ ${edgeLabel}</div>
+                <div style="color:#8892a6;font-size:10px;">Fair ${sideLabel}: ${fairCents}¢ · Your price: ${price}¢ · Edge: ${edge > 0 ? '+' : ''}${edgePct}%</div>
+            </div>
+        </div>`;
+}
+
 /** Update straight bet preview (payout calculator) */
 function updateStraightPreview() {
     const price = parseInt(document.getElementById('straight-price').value) || 0;
@@ -1813,6 +1918,9 @@ function updateStraightPreview() {
         const bid = side === 'yes' ? getPrice(currentArbMarket, 'yes_bid') : getPrice(currentArbMarket, 'no_bid');
         hintEl.textContent = `current bid: ${bid}¢`;
     }
+
+    // Update edge display if fair values are set
+    updateEdgeDisplay();
 }
 
 /** Place a straight limit order */
@@ -1846,6 +1954,7 @@ async function placeStraightBet() {
                 add_watch: addWatch,
                 stop_loss_cents: sl,
                 take_profit_cents: tp,
+                fair_value_cents: side === 'yes' ? currentFairYesCents : currentFairNoCents,
             }),
         });
         const data = await resp.json();
@@ -1934,6 +2043,19 @@ function openBotModal(market, _side, _price) {
         : (yesAsk || yesBid || 50);
     document.getElementById('straight-price').value = defaultPrice;
     document.getElementById('straight-qty').value = 1;
+    // Clear no-vig calculator
+    currentFairYesCents = null;
+    currentFairNoCents  = null;
+    const novigOverEl = document.getElementById('novig-over');
+    const novigUnderEl = document.getElementById('novig-under');
+    if (novigOverEl) novigOverEl.value = '';
+    if (novigUnderEl) novigUnderEl.value = '';
+    const novigResultEl = document.getElementById('novig-result');
+    if (novigResultEl) novigResultEl.innerHTML = '<span style="color:#555;">Enter both odds to calculate fair value</span>';
+    const novigSectionEl = document.getElementById('novig-section');
+    if (novigSectionEl) novigSectionEl.style.display = 'none';
+    const novigChevronEl = document.getElementById('novig-chevron');
+    if (novigChevronEl) novigChevronEl.textContent = '▼';
     updateStraightPreview();
 
     // Also prepare arb side for if they switch
@@ -2371,7 +2493,8 @@ async function createBot() {
         if (data.success) {
             const profit = 100 - yes_price - no_price;
             const rptNote = repeat_count > 0 ? ` | ${repeat_count + 1} runs total` : '';
-            showNotification(`✅ Orders placed! YES ${yes_price}¢ + NO ${no_price}¢ → ${profit}¢/contract${rptNote}`);
+            const favSide = data.fav_side ? data.fav_side.toUpperCase() : '?';
+            showNotification(`🎯 Fav-first: ${favSide} posted → ${profit}¢/contract${rptNote}`);
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
@@ -2534,6 +2657,16 @@ async function loadBots() {
                         <div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
                         <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>
                     </div>
+                    ${bot.fair_value_cents ? (() => {
+                        const fv = bot.fair_value_cents;
+                        const edgeVal = fv - entry;
+                        const edgeClr = edgeVal > 0 ? '#00ff88' : edgeVal < 0 ? '#ff4444' : '#ffaa00';
+                        const edgeIcn = edgeVal > 0 ? '✅' : edgeVal < 0 ? '❌' : '➖';
+                        return '<div style="display:flex;align-items:center;justify-content:center;gap:10px;padding:4px 8px;background:' + edgeClr + '11;border:1px solid ' + edgeClr + '33;border-radius:4px;font-size:10px;">' +
+                            '<span style="color:#ffaa00;font-weight:700;">📊 Fair: ' + fv + '¢</span>' +
+                            '<span style="color:' + edgeClr + ';font-weight:700;">Edge: ' + (edgeVal > 0 ? '+' : '') + edgeVal + '¢ ' + edgeIcn + '</span>' +
+                            '</div>';
+                    })() : ''}
                     <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:4px;">
                         <span>🎟 ${bot.ticker || '?'}</span>
                         <span>Cost: $${(entry * watchQty / 100).toFixed(2)}</span>
@@ -2564,6 +2697,7 @@ async function loadBots() {
             const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
             const stopLoss    = bot.stop_loss_cents || 5;
             const statusClass = {
+                fav_posted:     'monitoring',
                 pending_fills:  'monitoring',
                 yes_filled:     'leg1_filled',
                 no_filled:      'leg1_filled',
@@ -2618,12 +2752,22 @@ async function loadBots() {
                 timeoutInfo = `<span style="color:#818cf8;font-size:10px;">🔄 Waiting repeat</span>`;
             }
 
-            // Stop-loss info + first leg indicator
+            // Stop-loss info + first leg indicator + fav-first status
             let stopLossInfo = '';
             const firstLeg = bot.first_leg || '';
             const firstFillAt = bot.first_fill_at || 0;
             const fillAgeMin = firstFillAt > 0 ? Math.floor((Date.now()/1000 - firstFillAt) / 60) : 0;
-            if (bot.status === 'yes_filled') {
+            if (bot.status === 'fav_posted') {
+                const favSide = (bot.fav_side || '?').toUpperCase();
+                const dogSide = (bot.dog_side || '?').toUpperCase();
+                const favPrice = bot.fav_price || '?';
+                const dogPrice = bot.dog_price || '?';
+                stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>⭐ <strong>${favSide}</strong> at ${favPrice}¢ posted — waiting for fill</span>
+                    <span style="color:#555;">${dogSide} at ${dogPrice}¢ queued after fill</span>
+                    <span style="color:#8892a6;">${ageMin}m ago</span>
+                </div>`;
+            } else if (bot.status === 'yes_filled') {
                 const triggerAt = (bot.yes_price || 0) - stopLoss;
                 const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
                 const distFromSL = typeof yBid === 'number' ? yBid - triggerAt : '?';
@@ -2708,32 +2852,62 @@ async function loadBots() {
                     </div>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;">
-                    <div>
-                        <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
-                            <span>YES @ <strong style="color:#00ff88;">${bot.yes_price || '?'}¢</strong></span>
-                            <span style="color:${yFill >= qty ? '#00ff88' : '#8892a6'};">${yFill}/${qty} ${yFill >= qty ? '✓' : ''}</span>
+                    ${(() => {
+                        const isFav = bot.status === 'fav_posted';
+                        const yesFav = bot.fav_side === 'yes';
+                        const noFav  = bot.fav_side === 'no';
+                        const yesIsPosted = !isFav || yesFav;
+                        const noIsPosted  = !isFav || noFav;
+                        const yesQueued = isFav && !yesFav;
+                        const noQueued  = isFav && !noFav;
+                        const yStarHtml = (yesFav && (isFav || bot.status === 'yes_filled' || bot.status === 'no_filled' || bot.status === 'pending_fills')) ? '<span title="Favorite" style="margin-left:3px;">⭐</span>' : '';
+                        const nStarHtml = (noFav && (isFav || bot.status === 'yes_filled' || bot.status === 'no_filled' || bot.status === 'pending_fills')) ? '<span title="Favorite" style="margin-left:3px;">⭐</span>' : '';
+                        // YES leg
+                        const yBarH = yesQueued ? 2 : 6;
+                        const yBarBg = yesQueued ? '#0a0e18' : '#1e2740';
+                        const yFillColor = yFill >= qty ? '#00ff88' : (yesQueued ? '#00ff8820' : '#00ff8866');
+                        const yLabelColor = yesQueued ? '#555' : '#8892a6';
+                        const yPriceColor = yesQueued ? '#00ff8844' : '#00ff88';
+                        const yStatusTxt = yesQueued ? 'QUEUED' : (yFill >= qty ? `${yFill}/${qty} ✓ FILLED` : `${yFill}/${qty}`);
+                        const yStatusColor = yesQueued ? '#555' : (yFill >= qty ? '#00ff88' : '#8892a6');
+                        const yBidLabel = yesIsPosted && yFill < qty ? 'Your bid' : 'Mkt bid';
+                        // NO leg
+                        const nBarH = noQueued ? 2 : 6;
+                        const nBarBg = noQueued ? '#0a0e18' : '#1e2740';
+                        const nFillColor = nFill >= qty ? '#ff4444' : (noQueued ? '#ff444420' : '#ff444466');
+                        const nLabelColor = noQueued ? '#555' : '#8892a6';
+                        const nPriceColor = noQueued ? '#ff444444' : '#ff4444';
+                        const nStatusTxt = noQueued ? 'QUEUED' : (nFill >= qty ? `${nFill}/${qty} ✓ FILLED` : `${nFill}/${qty}`);
+                        const nStatusColor = noQueued ? '#555' : (nFill >= qty ? '#ff4444' : '#8892a6');
+                        const nBidLabel = noIsPosted && nFill < qty ? 'Your bid' : 'Mkt bid';
+                        return `
+                    <div style="opacity:${yesQueued ? '0.45' : '1'};transition:opacity .5s;">
+                        <div style="display:flex;justify-content:space-between;color:${yLabelColor};margin-bottom:3px;">
+                            <span>YES @ <strong style="color:${yPriceColor};">${bot.yes_price || '?'}¢</strong>${yStarHtml}</span>
+                            <span style="color:${yStatusColor};font-weight:${yFill >= qty ? '700' : '400'};">${yStatusTxt}</span>
                         </div>
-                        <div style="height:3px;background:#1e2740;border-radius:2px;">
-                            <div style="height:3px;width:${yPct}%;background:${yFill >= qty ? '#00ff88' : '#00ff8866'};border-radius:2px;transition:width .5s;"></div>
+                        <div style="height:${yBarH}px;background:${yBarBg};border-radius:3px;overflow:hidden;transition:height .5s;${yFill >= qty ? 'box-shadow:0 0 8px #00ff8844;' : ''}">
+                            <div style="height:100%;width:${yPct}%;background:${yFillColor};border-radius:3px;transition:width .5s,background .5s;"></div>
                         </div>
-                        ${bot.live_yes_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
-                            <span>Bid: <strong style="color:#00ff8899;">${bot.live_yes_bid}¢</strong></span>
+                        ` + (!yesQueued && bot.live_yes_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
+                            <span>${yBidLabel}: <strong style="color:#00ff8899;">${bot.live_yes_bid}¢</strong></span>
                             <span>Ask: <strong style="color:#00ff8899;">${bot.live_yes_ask || '?'}¢</strong></span>
-                        </div>` : ''}
+                        </div>` : '') + `
                     </div>
-                    <div>
-                        <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
-                            <span>NO @ <strong style="color:#ff4444;">${bot.no_price || '?'}¢</strong></span>
-                            <span style="color:${nFill >= qty ? '#ff4444' : '#8892a6'};">${nFill}/${qty} ${nFill >= qty ? '✓' : ''}</span>
+                    <div style="opacity:${noQueued ? '0.45' : '1'};transition:opacity .5s;">
+                        <div style="display:flex;justify-content:space-between;color:${nLabelColor};margin-bottom:3px;">
+                            <span>NO @ <strong style="color:${nPriceColor};">${bot.no_price || '?'}¢</strong>${nStarHtml}</span>
+                            <span style="color:${nStatusColor};font-weight:${nFill >= qty ? '700' : '400'};">${nStatusTxt}</span>
                         </div>
-                        <div style="height:3px;background:#1e2740;border-radius:2px;">
-                            <div style="height:3px;width:${nPct}%;background:${nFill >= qty ? '#ff4444' : '#ff444466'};border-radius:2px;transition:width .5s;"></div>
+                        <div style="height:${nBarH}px;background:${nBarBg};border-radius:3px;overflow:hidden;transition:height .5s;${nFill >= qty ? 'box-shadow:0 0 8px #ff444444;' : ''}">
+                            <div style="height:100%;width:${nPct}%;background:${nFillColor};border-radius:3px;transition:width .5s,background .5s;"></div>
                         </div>
-                        ${bot.live_no_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
-                            <span>Bid: <strong style="color:#ff444499;">${bot.live_no_bid}¢</strong></span>
+                        ` + (!noQueued && bot.live_no_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
+                            <span>${nBidLabel}: <strong style="color:#ff444499;">${bot.live_no_bid}¢</strong></span>
                             <span>Ask: <strong style="color:#ff444499;">${bot.live_no_ask || '?'}¢</strong></span>
-                        </div>` : ''}
-                    </div>
+                        </div>` : '') + `
+                    </div>`;
+                    })()}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
                     <span>🎟 ${bot.ticker || '?'}</span>
@@ -2868,6 +3042,16 @@ const botBuddyMessages = {
         `<strong>Locked in</strong> — Nothing gets past me 🔍`,
         `<strong>Patrolling</strong> — Order books under surveillance`,
     ],
+    fav_posted: [
+        `<strong>🎯 Favorite posted!</strong> Waiting for the liquid side to fill first`,
+        `<strong>Smart sequencing!</strong> Fav side is in the book — underdog queued after fill`,
+        `<strong>Fav-first active</strong> — Higher-bid side posted, watching for fill...`,
+    ],
+    fav_filled: [
+        `<strong>Fav filled!</strong> Now posting the underdog side — arb almost locked 🔒`,
+        `<strong>Phase 2!</strong> Favorite got eaten — underdog order going in now`,
+        `<strong>Nice fill!</strong> Liquid side done, posting the other leg 🎯`,
+    ],
     filled: [
         `<strong>Nice!</strong> A leg just filled — watching the other side closely`,
         `<strong>Progress!</strong> One side is in, guarding against adverse moves`,
@@ -2971,6 +3155,13 @@ function buddyReactToEvent(action) {
         buddyCelebrationTimeout = setTimeout(() => {
             setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
         }, 6000);
+    } else if (action.action === 'fav_filled_dog_posted') {
+        setBuddyMood('happy');
+        updateBotBuddyMsg('fav_filled');
+    } else if (action.action === 'fav_reposted') {
+        updateBotBuddyMsg('fav_posted');
+    } else if (action.action === 'fav_stale_cancelled') {
+        updateBotBuddyMsg('scanning');
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled');

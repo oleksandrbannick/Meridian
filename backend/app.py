@@ -106,7 +106,7 @@ def auto_login():
             ws_manager.connect(kalshi_client)
             # Subscribe to tickers of any existing active bots
             active_tickers = list({b['ticker'] for b in active_bots.values()
-                                   if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching')})
+                                   if b.get('status') in ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching')})
             if active_tickers:
                 threading.Timer(2.0, lambda: ws_manager.subscribe(active_tickers)).start()
         except Exception as ws_err:
@@ -1336,6 +1336,7 @@ def place_straight_order():
         add_watch = data.get('add_watch', False)    # auto-create watch bot for SL
         stop_loss_cents = int(data.get('stop_loss_cents', 5))
         take_profit_cents = int(data.get('take_profit_cents', 0))
+        fair_value_cents = data.get('fair_value_cents')  # from OddsJam no-vig calc (optional)
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -1378,6 +1379,7 @@ def place_straight_order():
                 'quantity':         quantity,
                 'stop_loss_cents':  stop_loss_cents,
                 'take_profit_cents': take_profit_cents,
+                'fair_value_cents': fair_value_cents,
                 'has_sl_tp':        True,
                 'status':           'watching',
                 'created_at':       time.time(),
@@ -1469,15 +1471,32 @@ def create_bot():
         except Exception as pv_err:
             print(f'⚠ Price validation skipped: {pv_err}')
 
-        # Place both limit orders immediately (market-maker = resting bids)
-        yes_order = kalshi_client.create_order(
-            ticker=ticker, side='yes', action='buy',
-            count=quantity, yes_price=yes_price
-        )
-        no_order = kalshi_client.create_order(
-            ticker=ticker, side='no', action='buy',
-            count=quantity, no_price=no_price
-        )
+        # ── FAVORITE-FIRST ANCHORING ──────────────────────────────
+        # Post ONLY the favorite side (higher bid = more liquidity, fills faster,
+        # less adverse selection). The underdog order is posted by the monitor
+        # AFTER the favorite fills. This prevents the dangerous scenario where
+        # the underdog fills first and the market moves against us (82% loss rate
+        # when NO fills first in historical data).
+        fav_side = 'yes' if live_yes_bid >= live_no_bid else 'no'
+        dog_side = 'no' if fav_side == 'yes' else 'yes'
+        fav_price = yes_price if fav_side == 'yes' else no_price
+        dog_price = no_price if fav_side == 'yes' else yes_price
+
+        if fav_side == 'yes':
+            fav_order = kalshi_client.create_order(
+                ticker=ticker, side='yes', action='buy',
+                count=quantity, yes_price=yes_price
+            )
+        else:
+            fav_order = kalshi_client.create_order(
+                ticker=ticker, side='no', action='buy',
+                count=quantity, no_price=no_price
+            )
+        fav_order_id = fav_order['order']['order_id']
+
+        print(f'🎯 FAV-FIRST: {fav_side.upper()} posted at {fav_price}¢ '
+              f'(bid={live_yes_bid if fav_side=="yes" else live_no_bid}¢) — '
+              f'{dog_side.upper()} at {dog_price}¢ queued for after fill')
 
         # Subscribe WS to this ticker for real-time price updates
         if ws_manager.connected:
@@ -1492,9 +1511,14 @@ def create_bot():
             'stop_loss_cents':  stop_loss_cents,
             'profit_per':       profit_per,
             'game_phase':       game_phase,
-            'status':           'pending_fills',  # pending_fills | yes_filled | no_filled | completed | stopped
-            'yes_order_id':     yes_order['order']['order_id'],
-            'no_order_id':      no_order['order']['order_id'],
+            'status':           'fav_posted',     # fav_posted → (yes_filled|no_filled) → completed | stopped
+            'fav_side':         fav_side,
+            'dog_side':         dog_side,
+            'fav_price':        fav_price,
+            'dog_price':        dog_price,
+            'fav_order_id':     fav_order_id,
+            'yes_order_id':     fav_order_id if fav_side == 'yes' else None,
+            'no_order_id':      fav_order_id if fav_side == 'no' else None,
             'yes_fill_qty':     0,
             'no_fill_qty':      0,
             'created_at':       time.time(),
@@ -1509,12 +1533,13 @@ def create_bot():
         return jsonify({
             'success':      True,
             'bot_id':       bot_id,
-            'yes_order_id': yes_order['order']['order_id'],
-            'no_order_id':  no_order['order']['order_id'],
+            'fav_side':     fav_side,
+            'fav_order_id': fav_order_id,
             'profit_per':   profit_per,
             'game_phase':   game_phase,
             'repeat_count': repeat_count,
-            'message':      f'[{game_phase.upper()}] Limit orders placed — YES at {yes_price}¢, NO at {no_price}¢ → {profit_per}¢ profit/contract'
+            'message':      f'[{game_phase.upper()}] FAV-FIRST: {fav_side.upper()} at {fav_price}¢ posted — '
+                            f'{dog_side.upper()} at {dog_price}¢ queued after fill → {profit_per}¢ profit/contract'
                             + (f' (repeat {repeat_count}x)' if repeat_count > 0 else '')
         })
 
@@ -1774,7 +1799,7 @@ def _run_monitor():
         auto_reset_daily_pnl()
 
         actions = []
-        active_statuses = ('pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat')
+        active_statuses = ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat')
 
         # ── Auto-phase: switch pregame → live when ESPN shows game in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -1810,14 +1835,19 @@ def _run_monitor():
                         if mkt_status in ('closed', 'settled', 'finalized'):
                             # Check if one leg was filled — that's a LOSS, not a completion
                             try:
-                                api_rate_limiter.wait()
-                                yes_resp_s = kalshi_client.get_order(bot['yes_order_id'])
-                                api_rate_limiter.wait()
-                                no_resp_s  = kalshi_client.get_order(bot['no_order_id'])
-                                yes_ord_s = yes_resp_s.get('order', yes_resp_s) if isinstance(yes_resp_s, dict) else {}
-                                no_ord_s  = no_resp_s.get('order', no_resp_s)   if isinstance(no_resp_s, dict) else {}
-                                yes_f = yes_ord_s.get('filled_count', yes_ord_s.get('fill_count', 0))
-                                no_f  = no_ord_s.get('filled_count',  no_ord_s.get('fill_count', 0))
+                                # Handle fav_posted bots where one order ID may be None
+                                yes_f = 0
+                                no_f = 0
+                                if bot.get('yes_order_id'):
+                                    api_rate_limiter.wait()
+                                    yes_resp_s = kalshi_client.get_order(bot['yes_order_id'])
+                                    yes_ord_s = yes_resp_s.get('order', yes_resp_s) if isinstance(yes_resp_s, dict) else {}
+                                    yes_f = yes_ord_s.get('filled_count', yes_ord_s.get('fill_count', 0))
+                                if bot.get('no_order_id'):
+                                    api_rate_limiter.wait()
+                                    no_resp_s = kalshi_client.get_order(bot['no_order_id'])
+                                    no_ord_s = no_resp_s.get('order', no_resp_s) if isinstance(no_resp_s, dict) else {}
+                                    no_f = no_ord_s.get('filled_count', no_ord_s.get('fill_count', 0))
                             except Exception:
                                 yes_f = bot.get('yes_fill_qty', 0)
                                 no_f  = bot.get('no_fill_qty', 0)
@@ -1850,11 +1880,12 @@ def _run_monitor():
                                 #           if NO outcome won, we lose our cost (yes_price * qty)
                                 # We already bought YES at yes_price. Market settled.
                                 # The position auto-settles on Kalshi, so just record it.
-                                try:
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(bot['no_order_id'])
-                                except Exception:
-                                    pass
+                                if bot.get('no_order_id'):
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(bot['no_order_id'])
+                                    except Exception:
+                                        pass
                                 bot['status'] = 'stopped'
                                 bot['repeat_count'] = 0
                                 bot['stopped_at'] = now
@@ -1872,11 +1903,12 @@ def _run_monitor():
                                 print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢) but NO unfilled, market {mkt_status}')
                             elif no_f >= qty and yes_f < qty:
                                 # NO filled, YES never filled — same as above but for NO side
-                                try:
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(bot['yes_order_id'])
-                                except Exception:
-                                    pass
+                                if bot.get('yes_order_id'):
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(bot['yes_order_id'])
+                                    except Exception:
+                                        pass
                                 bot['status'] = 'stopped'
                                 bot['repeat_count'] = 0
                                 bot['stopped_at'] = now
@@ -1903,6 +1935,164 @@ def _run_monitor():
                     except Exception:
                         pass  # If API fails, proceed with normal monitoring
 
+                # ── FAV-FIRST: favorite order posted, waiting for fill ────
+                if bot.get('status') == 'fav_posted':
+                    fav_side = bot.get('fav_side', 'yes')
+                    fav_order_id = bot.get('fav_order_id')
+                    if not fav_order_id:
+                        # Legacy bot without fav_posted data — skip
+                        bot['status'] = 'pending_fills'
+                        continue
+
+                    # Check fill status of favorite order
+                    try:
+                        api_rate_limiter.wait()
+                        fav_resp = kalshi_client.get_order(fav_order_id)
+                        fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
+                        fav_filled = fav_ord.get('filled_count', fav_ord.get('fill_count', 0))
+                    except Exception as fav_err:
+                        print(f'⚠ Fav order check failed for {bot_id}: {fav_err}')
+                        continue
+
+                    if fav_filled >= qty:
+                        # ── Favorite filled! Now post the underdog ──
+                        dog_side = bot.get('dog_side', 'no' if fav_side == 'yes' else 'yes')
+                        dog_price = bot.get('dog_price', bot['no_price'] if dog_side == 'no' else bot['yes_price'])
+
+                        # Fetch fresh orderbook to verify arb is still viable
+                        try:
+                            api_rate_limiter.wait()
+                            ob_data = kalshi_client.get_market_orderbook(ticker)
+                            ob = ob_data.get('orderbook', ob_data)
+                            if dog_side == 'no':
+                                dog_levels = sorted(ob.get('no', []),
+                                    key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                                live_dog_bid = (dog_levels[0][0] if isinstance(dog_levels[0], list) else dog_levels[0].get('price', 0)) if dog_levels else 0
+                            else:
+                                dog_levels = sorted(ob.get('yes', []),
+                                    key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                                live_dog_bid = (dog_levels[0][0] if isinstance(dog_levels[0], list) else dog_levels[0].get('price', 0)) if dog_levels else 0
+
+                            # NEVER post above the current bid
+                            if dog_price > live_dog_bid and live_dog_bid > 0:
+                                dog_price = live_dog_bid
+                                print(f'📉 Adjusted {dog_side.upper()} price to bid {live_dog_bid}¢ (was {bot.get("dog_price")}¢)')
+                        except Exception as ob_err:
+                            print(f'⚠ Orderbook check for underdog failed: {ob_err} — using planned price')
+
+                        # Verify arb width still makes sense
+                        fav_price = bot.get('fav_price', bot['yes_price'] if fav_side == 'yes' else bot['no_price'])
+                        actual_profit = 100 - fav_price - dog_price
+                        min_width = max(1, bot.get('arb_width', bot.get('profit_per', 3)) // 2)  # accept half the target width
+                        if actual_profit < min_width:
+                            print(f'⚠ FAV-FIRST arb no longer viable: {fav_side}@{fav_price} + {dog_side}@{dog_price} = {fav_price+dog_price}¢ '
+                                  f'(profit {actual_profit}¢ < min {min_width}¢) — will SL the favorite')
+                            # Arb collapsed — don't post underdog, let SL handle the filled favorite
+                            if fav_side == 'yes':
+                                bot['status'] = 'yes_filled'
+                                bot['yes_fill_qty'] = fav_filled
+                            else:
+                                bot['status'] = 'no_filled'
+                                bot['no_fill_qty'] = fav_filled
+                            bot['first_fill_at'] = now
+                            bot['first_leg'] = fav_side
+                            bot['posted_at'] = now
+                            continue
+
+                        # Post the underdog order
+                        try:
+                            api_rate_limiter.wait()
+                            if dog_side == 'no':
+                                dog_order = kalshi_client.create_order(
+                                    ticker=ticker, side='no', action='buy',
+                                    count=qty, no_price=dog_price)
+                                bot['no_order_id'] = dog_order['order']['order_id']
+                                bot['no_price'] = dog_price
+                                bot['yes_fill_qty'] = fav_filled
+                                bot['status'] = 'yes_filled'
+                            else:
+                                dog_order = kalshi_client.create_order(
+                                    ticker=ticker, side='yes', action='buy',
+                                    count=qty, yes_price=dog_price)
+                                bot['yes_order_id'] = dog_order['order']['order_id']
+                                bot['yes_price'] = dog_price
+                                bot['no_fill_qty'] = fav_filled
+                                bot['status'] = 'no_filled'
+
+                            bot['first_fill_at'] = now
+                            bot['first_leg'] = fav_side
+                            bot['posted_at'] = now
+                            bot['profit_per'] = 100 - bot['yes_price'] - bot['no_price']
+
+                            print(f'🎯 FAV-FIRST FILL: {bot_id} {fav_side.upper()} filled at {fav_price}¢ → '
+                                  f'posted {dog_side.upper()} at {dog_price}¢ '
+                                  f'(profit target: {bot["profit_per"]}¢)')
+                            actions.append({'bot_id': bot_id, 'action': 'fav_filled_dog_posted',
+                                           'fav_side': fav_side, 'fav_price': fav_price,
+                                           'dog_side': dog_side, 'dog_price': dog_price,
+                                           'profit_per': bot['profit_per']})
+                            save_state()
+                        except Exception as dog_err:
+                            print(f'⚠ Underdog order failed for {bot_id}: {dog_err} — will retry next cycle')
+                    else:
+                        # Favorite not yet filled — check for repost if stale
+                        if phase == 'live' and age_min >= REPOST_AFTER_MINUTES:
+                            # Repost favorite at current bid (never above)
+                            try:
+                                ws_price = ws_manager.get_price(ticker)
+                                if ws_price:
+                                    cur_fav_bid = ws_price.get(f'{fav_side}_bid', 0)
+                                else:
+                                    api_rate_limiter.wait()
+                                    mkt = kalshi_client.get_market(ticker)
+                                    m = mkt.get('market', mkt)
+                                    d = m.get(f'{fav_side}_bid_dollars')
+                                    cur_fav_bid = round(float(d) * 100) if d else m.get(f'{fav_side}_bid', 0)
+
+                                new_fav_price = min(cur_fav_bid, 98) if cur_fav_bid > 0 else bot['fav_price']
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(fav_order_id)
+                                api_rate_limiter.wait()
+                                if fav_side == 'yes':
+                                    new_fav = kalshi_client.create_order(
+                                        ticker=ticker, side='yes', action='buy',
+                                        count=qty, yes_price=new_fav_price)
+                                else:
+                                    new_fav = kalshi_client.create_order(
+                                        ticker=ticker, side='no', action='buy',
+                                        count=qty, no_price=new_fav_price)
+                                new_fav_id = new_fav['order']['order_id']
+                                bot['fav_order_id'] = new_fav_id
+                                if fav_side == 'yes':
+                                    bot['yes_order_id'] = new_fav_id
+                                    bot['yes_price'] = new_fav_price
+                                    bot['fav_price'] = new_fav_price
+                                else:
+                                    bot['no_order_id'] = new_fav_id
+                                    bot['no_price'] = new_fav_price
+                                    bot['fav_price'] = new_fav_price
+                                bot['posted_at'] = now
+                                bot['repost_count'] = bot.get('repost_count', 0) + 1
+                                print(f'🔄 FAV REPOST: {bot_id} {fav_side.upper()} at {new_fav_price}¢ '
+                                      f'(repost #{bot["repost_count"]})')
+                                actions.append({'bot_id': bot_id, 'action': 'fav_reposted',
+                                               'fav_side': fav_side, 'new_price': new_fav_price})
+                            except Exception as rp_err:
+                                print(f'⚠ Fav repost failed for {bot_id}: {rp_err}')
+
+                        # Cancel unfilled favorite after STALE_CANCEL_MINUTES if live
+                        elif phase == 'live' and age_min >= STALE_CANCEL_MINUTES:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(fav_order_id)
+                            except Exception:
+                                pass
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            print(f'⏰ FAV STALE: {bot_id} favorite {fav_side.upper()} unfilled after {age_min:.1f}m — cancelled')
+                            actions.append({'bot_id': bot_id, 'action': 'fav_stale_cancelled'})
+                    continue
+
                 # ── Watch Bots: monitor existing positions ───────────
                 if bot.get('type') == 'watch':
                     watch_side = bot.get('side', 'yes')
@@ -1910,6 +2100,37 @@ def _run_monitor():
                     sl = bot.get('stop_loss_cents', 5)
                     tp = bot.get('take_profit_cents', 0)
                     has_sl_tp = bot.get('has_sl_tp', sl > 0 or tp > 0)
+
+                    # ── Settlement guard for watch bots ──────────────
+                    try:
+                        api_rate_limiter.wait()
+                        mkt_check_w = kalshi_client.get_market(ticker)
+                        mkt_status_w = mkt_check_w.get('market', mkt_check_w).get('status', 'active')
+                        if mkt_status_w in ('closed', 'settled', 'finalized'):
+                            if not bot.get('order_filled', False):
+                                # Order never filled on a settled market — cancel & clean up
+                                if bot.get('order_id'):
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(bot['order_id'])
+                                    except Exception:
+                                        pass
+                                bot['status'] = 'stopped'
+                                bot['stopped_at'] = now
+                                print(f'🏁 WATCH SETTLED (unfilled): {bot_id} — market {mkt_status_w}, order never filled')
+                                actions.append({'bot_id': bot_id, 'action': 'watch_settled_unfilled'})
+                                save_state()
+                                continue
+                            else:
+                                # Position was filled — market settled, Kalshi auto-settles it
+                                bot['status'] = 'completed'
+                                bot['completed_at'] = now
+                                print(f'🏁 WATCH SETTLED (filled): {bot_id} — market {mkt_status_w}, position auto-settles on Kalshi')
+                                actions.append({'bot_id': bot_id, 'action': 'watch_settled_filled'})
+                                save_state()
+                                continue
+                    except Exception as ws_err:
+                        pass  # If API fails, proceed with normal monitoring
 
                     # ── Manual watch bots (no order_id) are pre-filled positions ──
                     if not bot.get('order_id'):
@@ -2010,6 +2231,38 @@ def _run_monitor():
 
                     # Stop-loss: sell at 1¢ (gets price improvement to actual bid)
                     if cur_bid <= entry - sl:
+                        # ── REST VERIFY: double-check bid via REST API before firing ──
+                        # WS can send stale/incorrect bids (e.g. Clowney 15+ showed 21¢
+                        # when real bid was 60¢). One REST call prevents false SL fires.
+                        try:
+                            api_rate_limiter.wait()
+                            mkt_verify = kalshi_client.get_market(ticker)
+                            mkt_v_data = mkt_verify.get('market', mkt_verify)
+                            d_verify = mkt_v_data.get(f'{watch_side}_bid_dollars')
+                            if d_verify:
+                                rest_bid = round(float(d_verify) * 100)
+                            else:
+                                rest_bid = mkt_v_data.get(f'{watch_side}_bid', 0)
+                            if rest_bid > entry - sl:
+                                # REST says bid is actually fine — WS was stale
+                                print(f'🛡 WATCH SL BLOCKED: {bot_id} WS bid {cur_bid}¢ but REST bid {rest_bid}¢ > trigger {entry - sl}¢ — WS was stale')
+                                bot['live_bid'] = rest_bid  # correct the cached bid
+                                cur_bid = rest_bid
+                                actions.append({'bot_id': bot_id, 'action': 'watch_sl_blocked_stale_ws',
+                                               'ws_bid': bot.get('live_bid', 0), 'rest_bid': rest_bid})
+                                # Skip this SL — bid is not actually breached
+                            else:
+                                # REST confirms SL breach — update cur_bid to REST value
+                                print(f'✅ WATCH SL CONFIRMED: {bot_id} REST bid {rest_bid}¢ ≤ trigger {entry - sl}¢ (WS was {cur_bid}¢)')
+                                cur_bid = rest_bid
+                                bot['live_bid'] = rest_bid
+                        except Exception as rest_err:
+                            print(f'⚠ Watch SL REST verify failed for {bot_id}: {rest_err} — proceeding with WS bid')
+
+                        # Re-check after REST verify — bid may have been corrected
+                        if cur_bid > entry - sl:
+                            continue
+
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate watch SL for {bot_id} — already {bot["status"]}')
@@ -2128,23 +2381,36 @@ def _run_monitor():
                             new_profit = 100 - new_yes - new_no
 
                             if new_profit >= target_width:
+                                # Favorite-first: post only the favorite side
+                                rep_fav_side = 'yes' if yes_is_fav else 'no'
+                                rep_dog_side = 'no' if yes_is_fav else 'yes'
+                                rep_fav_price = new_yes if yes_is_fav else new_no
+                                rep_dog_price = new_no if yes_is_fav else new_yes
+
                                 api_rate_limiter.wait()
-                                ny = kalshi_client.create_order(
-                                    ticker=ticker, side='yes', action='buy',
-                                    count=qty, yes_price=new_yes)
-                                api_rate_limiter.wait()
-                                nn = kalshi_client.create_order(
-                                    ticker=ticker, side='no', action='buy',
-                                    count=qty, no_price=new_no)
+                                if rep_fav_side == 'yes':
+                                    fav_ord = kalshi_client.create_order(
+                                        ticker=ticker, side='yes', action='buy',
+                                        count=qty, yes_price=rep_fav_price)
+                                else:
+                                    fav_ord = kalshi_client.create_order(
+                                        ticker=ticker, side='no', action='buy',
+                                        count=qty, no_price=rep_fav_price)
+                                fav_ord_id = fav_ord['order']['order_id']
 
                                 bot['yes_price']    = new_yes
                                 bot['no_price']     = new_no
                                 bot['profit_per']   = new_profit
-                                bot['yes_order_id'] = ny['order']['order_id']
-                                bot['no_order_id']  = nn['order']['order_id']
+                                bot['fav_side']     = rep_fav_side
+                                bot['dog_side']     = rep_dog_side
+                                bot['fav_price']    = rep_fav_price
+                                bot['dog_price']    = rep_dog_price
+                                bot['fav_order_id'] = fav_ord_id
+                                bot['yes_order_id'] = fav_ord_id if rep_fav_side == 'yes' else None
+                                bot['no_order_id']  = fav_ord_id if rep_fav_side == 'no' else None
                                 bot['yes_fill_qty'] = 0
                                 bot['no_fill_qty']  = 0
-                                bot['status']       = 'pending_fills'
+                                bot['status']       = 'fav_posted'
                                 bot['posted_at']    = time.time()
                                 bot['repost_count'] = 0
                                 bot['first_fill_at'] = None
@@ -2155,7 +2421,8 @@ def _run_monitor():
                                 cycle = bot.get('repeats_done', 0)
                                 total = bot.get('repeat_count', 0)
                                 print(f'🔄 REPEAT ARB cycle {cycle + 1}/{total + 1}: '
-                                      f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ → {new_profit}¢ profit '
+                                      f'{bot_id} FAV {rep_fav_side.upper()} {rep_fav_price}¢ posted — '
+                                      f'{rep_dog_side.upper()} {rep_dog_price}¢ queued → {new_profit}¢ profit '
                                       f'(waited {wait_age_min:.1f}m)')
                                 actions.append({
                                     'bot_id': bot_id, 'action': 'repeat_cycle',
@@ -2169,6 +2436,15 @@ def _run_monitor():
                     continue
 
                 # ── Rate-limited fill checks ──────────────────────────────
+                # Guard: fav_posted bots are handled above; this is for
+                # legacy pending_fills bots with both order IDs set.
+                if not bot.get('yes_order_id') or not bot.get('no_order_id'):
+                    # Bot has a missing order ID — likely a fav_posted that
+                    # slipped through. Reset to fav_posted for proper handling.
+                    if bot.get('fav_order_id'):
+                        bot['status'] = 'fav_posted'
+                    continue
+
                 api_rate_limiter.wait()
                 yes_resp = kalshi_client.get_order(bot['yes_order_id'])
                 api_rate_limiter.wait()

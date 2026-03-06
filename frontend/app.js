@@ -515,16 +515,24 @@ function getGameSignal(gameId, sport, markets) {
     const clockMatch = clock.match(/(\d+):(\d+)/);
     if (clockMatch) clockMins = parseInt(clockMatch[1]) + parseInt(clockMatch[2]) / 60;
 
+    // Detect halftime/intermission from ESPN status detail
+    const isHalftimeSignal = (gameData.statusDetail || '').toLowerCase().includes('half');
+    const isEndOfPeriod = (gameData.statusDetail || '').toLowerCase().includes('end of');
+
     // Determine game phase for basketball
     let gamePhase = 'early'; // early, mid, late, final_stretch
     if (sport === 'NBA') {
         if (period >= 4) gamePhase = clockMins <= 5 ? 'final_stretch' : 'late';
         else if (period === 3) gamePhase = 'mid';
+        else if (period === 2 || isHalftimeSignal) gamePhase = 'mid';
     } else if (sport === 'NCAAB' || sport === 'NCAAW') {
-        if (period >= 2) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
+        // NCAAB has 2 halves: period 1 = 1H, period 2 = 2H
+        // At halftime ESPN may report period=1 or 2 with "Halftime" detail
+        if (isHalftimeSignal) gamePhase = 'mid';
+        else if (period >= 2) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
     } else if (sport === 'NHL') {
         if (period >= 3) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
-        else if (period === 2) gamePhase = 'mid';
+        else if (period === 2 || isEndOfPeriod) gamePhase = 'mid';
     } else {
         // Soccer, MLB, etc — use period directly
         if (period >= 2) gamePhase = 'late';
@@ -812,7 +820,8 @@ async function refreshVisiblePrices() {
             // Find YES button for this ticker
             const yesBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="yes"]`);
             if (yesBtn) {
-                const yesPrice = p.yes_ask > 0 ? p.yes_ask : 0;  // ask only
+                // Suppress phantom 100¢ ask when opposite side has no bids
+                const yesPrice = (p.yes_ask >= 99 && (p.no_bid || 0) <= 1) ? (p.yes_bid || 0) : (p.yes_ask > 0 ? p.yes_ask : 0);
                 const yesDisplay = yesPrice > 0 ? `${yesPrice}¢` : '—';
                 const oldText = yesBtn.querySelector('div:first-child')?.textContent || '';
                 if (oldText !== yesDisplay && yesPrice > 0) {
@@ -827,7 +836,8 @@ async function refreshVisiblePrices() {
             // Find NO button for this ticker
             const noBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="no"]`);
             if (noBtn) {
-                const noPrice = p.no_ask > 0 ? p.no_ask : 0;  // ask only
+                // Suppress phantom 100¢ ask when opposite side has no bids
+                const noPrice = (p.no_ask >= 99 && (p.yes_bid || 0) <= 1) ? (p.no_bid || 0) : (p.no_ask > 0 ? p.no_ask : 0);
                 const noDisplay = noPrice > 0 ? `${noPrice}¢` : '—';
                 const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
                 noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
@@ -1500,10 +1510,17 @@ function createMarketRow(market, label) {
         labelDiv.appendChild(edgeDot);
     }
     
-    // YES button — show ASK price only (what it costs to buy YES)
+    // Read all prices first for cross-referencing
     const yesBid = getPrice(market, 'yes_bid');
     const yesAsk = getPrice(market, 'yes_ask');
-    const yesPrice = yesAsk > 0 ? yesAsk : 0; // ask only, no bid fallback
+    const noBid = getPrice(market, 'no_bid');
+    const noAsk = getPrice(market, 'no_ask');
+
+    // Suppress phantom asks: 100¢ ask when opposite side has no bids = no real liquidity
+    // Fall back to same-side bid (what the order book actually shows)
+    const yesPrice = (yesAsk >= 99 && noBid <= 1) ? yesBid : (yesAsk > 0 ? yesAsk : 0);
+    const noPrice = (noAsk >= 99 && yesBid <= 1) ? noBid : (noAsk > 0 ? noAsk : 0);
+
     const yesStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes') : 'background: #1a1f2e; color: #555;';
     
     const yesBtn = document.createElement('button');
@@ -1516,10 +1533,7 @@ function createMarketRow(market, label) {
     yesBtn.onmouseenter = () => yesBtn.style.transform = 'scale(1.05)';
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
     
-    // NO button — show ASK price only (what it costs to buy NO)
-    const noBid = getPrice(market, 'no_bid');
-    const noAsk = getPrice(market, 'no_ask');
-    const noPrice = noAsk > 0 ? noAsk : 0; // ask only, no bid fallback
+    // NO button
     const noStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
     
     const noBtn = document.createElement('button');

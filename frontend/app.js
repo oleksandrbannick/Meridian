@@ -2121,55 +2121,64 @@ let modalRefreshInterval = null;
  * If the resulting NO price < 1¢, push YES down until NO is valid.
  */
 function calculateArbPrices(market, width) {
-    const yesBid = getPrice(market, 'yes_bid') || 50;
-    const noBid  = getPrice(market, 'no_bid')  || 50;
-    const yesAsk = getPrice(market, 'yes_ask') || 50;
-    const noAsk  = getPrice(market, 'no_ask')  || 50;
+    const yesBid = getPrice(market, 'yes_bid');
+    const noBid  = getPrice(market, 'no_bid');
+    const yesAsk = getPrice(market, 'yes_ask');
+    const noAsk  = getPrice(market, 'no_ask');
 
     const targetTotal = 100 - width;          // e.g. width=5 → 95¢ total
+
+    // ── Derive missing bids from opposite side ──
+    // If one side has no bids, derive a target from the known side + width.
+    // E.g. yesBid=2, noBid=0, width=10 → derivedNo = 100 - 2 - 10 = 88.
+    // This shows the REAL price needed to complete the arb, not a fake 50¢.
+    let effectiveYesBid = yesBid;
+    let effectiveNoBid  = noBid;
+
+    if (effectiveYesBid <= 0 && effectiveNoBid <= 0) {
+        // Both sides empty — can't compute, use midpoint as placeholder
+        effectiveYesBid = Math.floor(targetTotal / 2);
+        effectiveNoBid  = targetTotal - effectiveYesBid;
+    } else if (effectiveYesBid <= 0) {
+        // Only NO bids exist — derive YES from NO + width
+        effectiveYesBid = 100 - effectiveNoBid - width;
+    } else if (effectiveNoBid <= 0) {
+        // Only YES bids exist — derive NO from YES + width
+        effectiveNoBid = 100 - effectiveYesBid - width;
+    }
 
     // ── Favorite anchoring logic ──
     // The higher-priced side is the "favorite" (more liquid, fills faster).
     // Shave LESS from favorite, MORE from underdog.
     // NEVER post above the current bid — that overpays.
-    //
-    // Split ratio: favorite gets ~40% of the shave, underdog gets ~60%.
-    // E.g. if bids sum to 90¢ and targetTotal = 95¢, we need to shave 5¢ total
-    // from the bids. If yesBid=55 (fav) and noBid=35 (dog):
-    //   favorite shave = 2¢ → targetYes = 55 - 2 = 53
-    //   underdog shave = 3¢ → targetNo  = 35 - 3 = 32
-    //   total = 53 + 32 = 85¢ → profit = 15¢ (bids were already below 100)
-    //
-    // But we also cap at the bid — NEVER go above it.
-
-    const bidSum = yesBid + noBid;
+    const bidSum = effectiveYesBid + effectiveNoBid;
     const totalShave = bidSum - targetTotal;  // how much to shave off bids combined
 
     let targetYes, targetNo;
 
     if (totalShave <= 0) {
         // Bids already sum below our target — just use the bids directly
-        // (profit is already > requested width)
-        targetYes = yesBid;
-        targetNo  = noBid;
+        // (profit is already >= requested width)
+        targetYes = effectiveYesBid;
+        targetNo  = effectiveNoBid;
     } else {
         // Determine which side is favorite (higher bid = more likely winner)
-        const yesIsFav = yesBid >= noBid;
+        const yesIsFav = effectiveYesBid >= effectiveNoBid;
         const favShave = Math.floor(totalShave * 0.4);   // less shave on favorite
         const dogShave = totalShave - favShave;           // more shave on underdog
 
         if (yesIsFav) {
-            targetYes = yesBid - favShave;
-            targetNo  = noBid - dogShave;
+            targetYes = effectiveYesBid - favShave;
+            targetNo  = effectiveNoBid - dogShave;
         } else {
-            targetYes = yesBid - dogShave;
-            targetNo  = noBid - favShave;
+            targetYes = effectiveYesBid - dogShave;
+            targetNo  = effectiveNoBid - favShave;
         }
     }
 
-    // NEVER exceed the current bid — that's overpaying
-    targetYes = Math.min(targetYes, yesBid);
-    targetNo  = Math.min(targetNo, noBid);
+    // If real bids exist, NEVER exceed them — that's overpaying
+    if (yesBid > 0) targetYes = Math.min(targetYes, yesBid);
+    if (noBid > 0)  targetNo  = Math.min(targetNo, noBid);
 
     // Clamp to valid price range
     targetYes = Math.max(1, Math.min(targetYes, 98));
@@ -2180,7 +2189,10 @@ function calculateArbPrices(market, width) {
         total:   targetYes + targetNo,
         profit:  100 - (targetYes + targetNo),
         yesBid, noBid, yesAsk, noAsk,
-        yesIsFav: yesBid >= noBid,
+        yesIsFav: effectiveYesBid >= effectiveNoBid,
+        // Flag when a side has no real liquidity
+        yesNoLiquidity: yesBid <= 0,
+        noNoLiquidity:  noBid <= 0,
     };
 }
 
@@ -2712,26 +2724,40 @@ function openBotModal(market, _side, _price) {
             + `<span style="color:#8892a6;font-size:10px;">edge ${liq.arbEdge}¢ · spread ${liq.avgSpread}¢</span>`
             + `</div>`
             + (signal.description ? `<div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>` : '');
-        // Highlight recommended tier buttons
+        // Highlight recommended tier buttons + add ★ to recommended
+        const midPreset = recPresets[Math.floor(recPresets.length / 2)];
         document.querySelectorAll('.arb-preset-btn').forEach(btn => {
             const bw = parseInt(btn.dataset.width);
             const isRec = recPresets.includes(bw);
+            const label = btn.querySelector('div');
             if (isRec) {
                 btn.style.boxShadow = `0 0 8px ${sigColor}44`;
                 btn.dataset.recommended = 'true';
+                if (label) {
+                    label.textContent = bw === midPreset ? `${bw}¢ ★` : `${bw}¢`;
+                    label.style.color = bw === midPreset ? '#ffaa33' : sigColor;
+                }
             } else {
                 btn.style.boxShadow = 'none';
                 btn.dataset.recommended = '';
+                if (label) {
+                    label.textContent = `${bw}¢`;
+                    label.style.color = '#00ff88';
+                }
             }
         });
-        // Auto-apply middle preset from recommended tier
-        const midPreset = recPresets[Math.floor(recPresets.length / 2)];
         applyPreset(midPreset);
     } else if (recEl) {
         recEl.style.display = 'none';
+        // Clear all recommendation markers and reset labels
         document.querySelectorAll('.arb-preset-btn').forEach(btn => {
             btn.style.boxShadow = 'none';
             btn.dataset.recommended = '';
+            const label = btn.querySelector('div');
+            if (label) {
+                label.textContent = `${btn.dataset.width}¢`;
+                label.style.color = '#00ff88';
+            }
         });
     }
 
@@ -2860,16 +2886,26 @@ function recalcArbPrices() {
     const noHint  = document.getElementById('no-queue-hint');
     const yesIsFav = arb.yesIsFav;
     if (yesHint) {
-        const diff = arb.yesBid - arb.targetYes;
-        const role = yesIsFav ? '★ fav' : 'underdog';
-        yesHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
-        yesHint.style.color = yesIsFav ? '#00ff88' : '#8892a6';
+        if (arb.yesNoLiquidity) {
+            yesHint.textContent = 'no bids — derived from width';
+            yesHint.style.color = '#ff4444';
+        } else {
+            const diff = arb.yesBid - arb.targetYes;
+            const role = yesIsFav ? '★ fav' : 'underdog';
+            yesHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
+            yesHint.style.color = yesIsFav ? '#00ff88' : '#8892a6';
+        }
     }
     if (noHint) {
-        const diff = arb.noBid - arb.targetNo;
-        const role = !yesIsFav ? '★ fav' : 'underdog';
-        noHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
-        noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
+        if (arb.noNoLiquidity) {
+            noHint.textContent = 'no bids — derived from width';
+            noHint.style.color = '#ff4444';
+        } else {
+            const diff = arb.noBid - arb.targetNo;
+            const role = !yesIsFav ? '★ fav' : 'underdog';
+            noHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
+            noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
+        }
     }
 
     updateProfitPreview();

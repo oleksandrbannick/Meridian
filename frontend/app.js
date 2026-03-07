@@ -4623,19 +4623,39 @@ async function loadPnL() {
         const el   = document.getElementById('pnl-display');
         if (!el) return;
 
+        // Daily
         const net      = pnl.net_dollars ?? 0;
         const netColor = net >= 0 ? '#00ff88' : '#ff4444';
         const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
         const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
-        const sessionH = ((Date.now() / 1000 - (pnl.session_start || Date.now() / 1000)) / 3600).toFixed(1);
         const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
 
+        // Lifetime
+        const ltNet      = pnl.lifetime_net_dollars ?? 0;
+        const ltNetColor = ltNet >= 0 ? '#00ff88' : '#ff4444';
+        const ltGross    = ((pnl.lifetime_gross_profit_cents || 0) / 100).toFixed(2);
+        const ltLoss     = ((pnl.lifetime_gross_loss_cents || 0) / 100).toFixed(2);
+        const ltW        = pnl.lifetime_completed || 0;
+        const ltL        = pnl.lifetime_stopped || 0;
+
         el.innerHTML = `
-            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">Daily P&L <span style="color:#555;font-size:9px;">${dayLabel}</span></span>
-            <span style="color:${netColor};font-weight:800;font-size:1.1rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
-            <span style="color:#8892a6;font-size:11px;">↑ $${gross} wins &nbsp; ↓ $${loss} stops</span>
-            <span style="color:#8892a6;font-size:11px;">${pnl.completed_bots || 0}W / ${pnl.stopped_bots || 0}L &nbsp; ${sessionH}h</span>
-            <button onclick="resetPnL()" style="background:none;border:1px solid #2a3550;color:#8892a6;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;">Reset</button>
+            <div style="display:flex;gap:20px;align-items:stretch;flex-wrap:wrap;width:100%;">
+                <div style="flex:1;min-width:180px;">
+                    <span style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Today <span style="color:#555;font-size:9px;">${dayLabel}</span></span>
+                    <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px;">
+                        <span style="color:${netColor};font-weight:800;font-size:1.2rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
+                    </div>
+                    <span style="color:#8892a6;font-size:10px;">↑$${gross} ↓$${loss} &nbsp; ${pnl.completed_bots || 0}W/${pnl.stopped_bots || 0}L</span>
+                </div>
+                <div style="width:1px;background:#1e2740;align-self:stretch;"></div>
+                <div style="flex:1;min-width:180px;">
+                    <span style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Lifetime</span>
+                    <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px;">
+                        <span style="color:${ltNetColor};font-weight:800;font-size:1.2rem;">${ltNet >= 0 ? '+' : ''}$${ltNet.toFixed(2)}</span>
+                    </div>
+                    <span style="color:#8892a6;font-size:10px;">↑$${ltGross} ↓$${ltLoss} &nbsp; ${ltW}W/${ltL}L</span>
+                </div>
+            </div>
         `;
         // Feed P&L data to bot buddy
         buddyUpdateFromPnl(pnl);
@@ -4693,9 +4713,10 @@ async function loadHistoryStats() {
         const completedN  = rb.completed || 0;
         const flipN       = (rb.flip_yes || 0) + (rb.flip_no || 0);
         const oldSlN      = (rb.stop_loss_yes || 0) + (rb.stop_loss_no || 0);
-        const settledN    = (rb.settled_loss_yes || 0) + (rb.settled_loss_no || 0);
+        const settledWinN = (rb.settled_win_yes || 0) + (rb.settled_win_no || 0);
+        const settledLossN = (rb.settled_loss_yes || 0) + (rb.settled_loss_no || 0);
         const forceExitN  = (rb.force_exit_yes || 0) + (rb.force_exit_no || 0);
-        const totalResults = completedN + flipN + oldSlN + settledN + forceExitN;
+        const totalResults = completedN + flipN + oldSlN + settledWinN + settledLossN + forceExitN;
 
         // ── Flip stats ──
         const fs = s.flip_stats || {};
@@ -4744,9 +4765,13 @@ async function loadHistoryStats() {
                             <span style="color:#ff4444;font-size:11px;">⛔ Old stop-loss (legacy)</span>
                             <span style="color:#ff4444;font-weight:700;font-size:12px;">${oldSlN} <span style="color:#555;font-weight:400;">(${Math.round(oldSlN/totalResults*100)}%)</span></span>
                         </div>` : ''}
-                        ${settledN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#ffaa00;font-size:11px;">🏁 Game settled (1 leg)</span>
-                            <span style="color:#ffaa00;font-weight:700;font-size:12px;">${settledN} <span style="color:#555;font-weight:400;">(${Math.round(settledN/totalResults*100)}%)</span></span>
+                        ${settledWinN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#00ddff;font-size:11px;">🏆 Settled win (1 leg)</span>
+                            <span style="color:#00ddff;font-weight:700;font-size:12px;">${settledWinN} <span style="color:#555;font-weight:400;">(${Math.round(settledWinN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
+                        ${settledLossN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ffaa00;font-size:11px;">🏁 Settled loss (1 leg)</span>
+                            <span style="color:#ffaa00;font-weight:700;font-size:12px;">${settledLossN} <span style="color:#555;font-weight:400;">(${Math.round(settledLossN/totalResults*100)}%)</span></span>
                         </div>` : ''}
                         ${forceExitN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="color:#ff4444;font-size:11px;">🔴 Force exit (sell failed)</span>
@@ -4899,12 +4924,151 @@ function _renderMiniBreakdown(title, stats, labelMap) {
     </div>`;
 }
 
+// ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
+let calendarViewDate = new Date(); // tracks which month is displayed
+
+async function loadPnLCalendar() {
+    const panel = document.getElementById('pnl-calendar-panel');
+    if (!panel) return;
+    try {
+        const resp = await fetch(`${API_BASE}/pnl/calendar`);
+        const data = await resp.json();
+        const days = data.days || [];
+        renderPnLCalendar(panel, days);
+    } catch (e) {
+        panel.innerHTML = '';
+    }
+}
+
+function renderPnLCalendar(panel, days) {
+    // Build lookup: date string → day data
+    const dayMap = {};
+    let lifetimeNet = 0;
+    for (const d of days) {
+        dayMap[d.date] = d;
+        lifetimeNet += d.net_cents || 0;
+    }
+
+    const now = calendarViewDate;
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const monthName = now.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+    // First day of month and total days
+    const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
+    // Month P&L
+    let monthNet = 0;
+    let monthWins = 0;
+    let monthLosses = 0;
+    let monthTrades = 0;
+    for (let d = 1; d <= totalDays; d++) {
+        const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        if (dayMap[key]) {
+            monthNet += dayMap[key].net_cents || 0;
+            monthWins += dayMap[key].wins || 0;
+            monthLosses += dayMap[key].losses || 0;
+            monthTrades += dayMap[key].trades || 0;
+        }
+    }
+    const monthColor = monthNet >= 0 ? '#00ff88' : '#ff4444';
+    const ltColor = lifetimeNet >= 0 ? '#00ff88' : '#ff4444';
+
+    // Day cells
+    let cellsHtml = '';
+    // Weekday headers
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    for (const wd of weekdays) {
+        cellsHtml += `<div style="text-align:center;color:#555;font-size:9px;font-weight:600;padding:4px 0;text-transform:uppercase;">${wd}</div>`;
+    }
+    // Empty cells before first day
+    for (let i = 0; i < firstDay; i++) {
+        cellsHtml += `<div></div>`;
+    }
+    // Day cells
+    for (let d = 1; d <= totalDays; d++) {
+        const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dayData = dayMap[key];
+        const isToday = key === todayStr;
+        const isFuture = new Date(key) > today;
+
+        let bg = '#0a0e1a';
+        let border = '#1e2740';
+        let content = `<span style="color:#333;font-size:10px;">${d}</span>`;
+
+        if (dayData) {
+            const nc = dayData.net_cents;
+            if (nc > 0) {
+                // Green intensity based on profit
+                const intensity = Math.min(1, Math.abs(nc) / 500);
+                bg = `rgba(0, 255, 136, ${0.08 + intensity * 0.2})`;
+                border = `rgba(0, 255, 136, ${0.3 + intensity * 0.3})`;
+            } else if (nc < 0) {
+                const intensity = Math.min(1, Math.abs(nc) / 500);
+                bg = `rgba(255, 68, 68, ${0.08 + intensity * 0.2})`;
+                border = `rgba(255, 68, 68, ${0.3 + intensity * 0.3})`;
+            } else {
+                bg = '#111827';
+                border = '#2a3550';
+            }
+            const color = nc >= 0 ? '#00ff88' : '#ff4444';
+            const dollars = (nc / 100).toFixed(2);
+            content = `
+                <span style="color:#8892a6;font-size:9px;">${d}</span>
+                <span style="color:${color};font-size:11px;font-weight:800;">${nc >= 0 ? '+' : ''}$${dollars}</span>
+                <span style="color:#555;font-size:8px;">${dayData.wins}W/${dayData.losses}L</span>
+            `;
+        } else if (isFuture) {
+            bg = 'transparent';
+            border = '#111';
+            content = `<span style="color:#222;font-size:10px;">${d}</span>`;
+        }
+
+        const todayRing = isToday ? 'box-shadow:0 0 0 2px #00aaff;' : '';
+        cellsHtml += `<div style="background:${bg};border:1px solid ${border};border-radius:6px;padding:4px 2px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:48px;${todayRing}" title="${key}">${content}</div>`;
+    }
+
+    panel.innerHTML = `
+        <div style="background:#0d1120;border:1px solid #1e2740;border-radius:12px;padding:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <button onclick="calendarPrevMonth()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">‹</button>
+                <div style="text-align:center;">
+                    <div style="color:#fff;font-weight:700;font-size:14px;">📅 ${monthName}</div>
+                    <div style="display:flex;gap:16px;justify-content:center;margin-top:4px;">
+                        <span style="color:${monthColor};font-size:12px;font-weight:700;">${monthNet >= 0 ? '+' : ''}$${(monthNet / 100).toFixed(2)}</span>
+                        <span style="color:#555;font-size:11px;">${monthTrades} trades</span>
+                        <span style="color:#555;font-size:11px;">${monthWins}W/${monthLosses}L</span>
+                    </div>
+                </div>
+                <button onclick="calendarNextMonth()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">›</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;">
+                ${cellsHtml}
+            </div>
+        </div>
+    `;
+}
+
+function calendarPrevMonth() {
+    calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1);
+    loadPnLCalendar();
+}
+
+function calendarNextMonth() {
+    calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1);
+    loadPnLCalendar();
+}
+
 async function loadTradeHistory() {
     const el = document.getElementById('trade-history-list');
     if (!el) return;
 
-    // Load stats panel in parallel
+    // Load stats panel + calendar in parallel
     loadHistoryStats();
+    loadPnLCalendar();
 
     try {
         const resp = await fetch(`${API_BASE}/bot/history?limit=50`);

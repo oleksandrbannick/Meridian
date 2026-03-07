@@ -945,7 +945,7 @@ def save_state():
         with open(DATA_FILE, 'w') as f:
             json.dump({
                 'active_bots': active_bots,
-                'trade_history': trade_history[:200],
+                'trade_history': trade_history[:500],
                 'session_pnl': session_pnl,
             }, f, indent=2, default=str)
     except Exception as e:
@@ -4680,45 +4680,101 @@ def scan_arb_opportunities():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/pnl', methods=['GET'])
-def get_pnl():
-    """Upgrade #6: P&L dashboard — computed from actual trade history (always in sync)."""
-    today = datetime.date.today().isoformat()
+PNL_LOSS_RESULTS = (
+    'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
+    'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
+    'stopped_loss', 'flipped', 'manual_stop',
+)
+PNL_WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
 
-    # Compute from real trade_history entries (matches history/stats endpoint)
-    # Use the SAME loss result set as history_stats to stay in sync
-    LOSS_RESULTS = (
-        'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
-        'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
-        'stopped_loss', 'flipped', 'manual_stop',
-    )
-    WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
+def _compute_pnl_bucket(trades):
+    """Compute gross profit/loss/counts from a list of trade_history entries."""
     gross_profit = 0
     gross_loss   = 0
     completed    = 0
     stopped      = 0
-    for t in trade_history:
+    for t in trades:
         result = t.get('result', '')
-        if result in WIN_RESULTS:
+        if result in PNL_WIN_RESULTS:
             gross_profit += t.get('profit_cents', 0)
             completed += 1
-        elif result in LOSS_RESULTS:
+        elif result in PNL_LOSS_RESULTS:
             gross_loss += t.get('loss_cents', 0)
             stopped += 1
-
     net_cents = gross_profit - gross_loss
-    pnl = {
+    return {
         'gross_profit_cents': gross_profit,
         'gross_loss_cents':   gross_loss,
         'net_cents':          net_cents,
         'net_dollars':        net_cents / 100,
         'completed_bots':     completed,
         'stopped_bots':       stopped,
+    }
+
+
+def _trade_day_key(t):
+    """Return ISO date string for a trade's timestamp (local timezone)."""
+    ts = t.get('timestamp')
+    if ts:
+        return datetime.datetime.fromtimestamp(ts).date().isoformat()
+    return datetime.date.today().isoformat()
+
+
+@app.route('/api/pnl', methods=['GET'])
+def get_pnl():
+    """P&L dashboard — daily & lifetime, computed from trade history."""
+    today = datetime.date.today().isoformat()
+
+    # Split into today vs all-time
+    today_trades = [t for t in trade_history if _trade_day_key(t) == today]
+
+    daily    = _compute_pnl_bucket(today_trades)
+    lifetime = _compute_pnl_bucket(trade_history)
+
+    pnl = {
+        # Daily
+        'gross_profit_cents': daily['gross_profit_cents'],
+        'gross_loss_cents':   daily['gross_loss_cents'],
+        'net_cents':          daily['net_cents'],
+        'net_dollars':        daily['net_dollars'],
+        'completed_bots':     daily['completed_bots'],
+        'stopped_bots':       daily['stopped_bots'],
+        # Lifetime
+        'lifetime_gross_profit_cents': lifetime['gross_profit_cents'],
+        'lifetime_gross_loss_cents':   lifetime['gross_loss_cents'],
+        'lifetime_net_cents':          lifetime['net_cents'],
+        'lifetime_net_dollars':        lifetime['net_dollars'],
+        'lifetime_completed':          lifetime['completed_bots'],
+        'lifetime_stopped':            lifetime['stopped_bots'],
+        # Meta
         'active_bots': len([b for b in active_bots.values()
                              if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')]),
         'day_key':            today,
     }
     return jsonify(pnl)
+
+
+@app.route('/api/pnl/calendar', methods=['GET'])
+def get_pnl_calendar():
+    """Return daily P&L for every day that has trades — powers the calendar view."""
+    from collections import defaultdict
+    day_buckets = defaultdict(list)
+    for t in trade_history:
+        day = _trade_day_key(t)
+        day_buckets[day].append(t)
+
+    calendar_data = []
+    for day in sorted(day_buckets.keys()):
+        bucket = _compute_pnl_bucket(day_buckets[day])
+        calendar_data.append({
+            'date':        day,
+            'net_cents':   bucket['net_cents'],
+            'net_dollars': bucket['net_dollars'],
+            'wins':        bucket['completed_bots'],
+            'losses':      bucket['stopped_bots'],
+            'trades':      bucket['completed_bots'] + bucket['stopped_bots'],
+        })
+    return jsonify({'days': calendar_data})
 
 
 @app.route('/api/pnl/reset', methods=['POST'])

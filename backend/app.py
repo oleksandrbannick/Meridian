@@ -3854,6 +3854,12 @@ def get_pnl():
     today = datetime.date.today().isoformat()
 
     # Compute from real trade_history entries (matches history/stats endpoint)
+    # Use the SAME loss result set as history_stats to stay in sync
+    LOSS_RESULTS = (
+        'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
+        'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
+        'stopped_loss', 'flipped', 'manual_stop',
+    )
     gross_profit = 0
     gross_loss   = 0
     completed    = 0
@@ -3863,7 +3869,7 @@ def get_pnl():
         if result == 'completed':
             gross_profit += t.get('profit_cents', 0)
             completed += 1
-        elif result in ('stopped_loss', 'flipped', 'manual_stop'):
+        elif result in LOSS_RESULTS:
             gross_loss += t.get('loss_cents', 0)
             stopped += 1
 
@@ -4198,11 +4204,16 @@ def get_active_positions():
                     if d: return round(float(d) * 100)
                     return mkt.get(field, 0)
 
+                # Compute avg entry price from exposure
+                exposure_cents = pos.get('market_exposure', 0)
+                avg_entry = round(exposure_cents / abs_qty) if abs_qty > 0 else 0
+
                 enriched.append({
                     'ticker':     ticker,
                     'title':      mkt.get('title', ticker),
                     'side':       side,
                     'quantity':   abs_qty,
+                    'avg_price':  avg_entry,
                     'yes_bid':    tc_pos('yes_bid'),
                     'yes_ask':    tc_pos('yes_ask'),
                     'no_bid':     tc_pos('no_bid'),

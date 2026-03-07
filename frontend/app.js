@@ -4890,6 +4890,10 @@ async function loadPositions() {
             const sideColor = pos.side === 'yes' ? '#00ff88' : '#ff4444';
             const bid = pos.side === 'yes' ? pos.yes_bid : pos.no_bid;
             const ask = pos.side === 'yes' ? pos.yes_ask : pos.no_ask;
+            const avgEntry = pos.avg_price || 0;
+            const unrealized = bid - avgEntry;  // per-contract unrealized P&L
+            const unrealizedTotal = unrealized * pos.quantity;
+            const unrealizedColor = unrealized >= 0 ? '#00ff88' : '#ff4444';
             const exposure = (pos.market_exposure / 100).toFixed(2);
             const realizedPnl = (pos.realized_pnl / 100).toFixed(2);
             const pnlColor = pos.realized_pnl >= 0 ? '#00ff88' : '#ff4444';
@@ -4914,10 +4918,12 @@ async function loadPositions() {
                         }
                     </div>
                 </div>
-                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;font-size:12px;color:#8892a6;">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px 12px;font-size:12px;color:#8892a6;">
                     <div>Qty: <strong style="color:#fff;">${pos.quantity}</strong></div>
+                    <div>Entry: <strong style="color:#fff;">${avgEntry}¢</strong></div>
                     <div>Bid: <strong style="color:${sideColor};">${bid}¢</strong></div>
-                    <div>Exposure: <strong style="color:#fff;">$${exposure}</strong></div>
+                    <div>P&L: <strong style="color:${unrealizedColor};">${unrealized >= 0 ? '+' : ''}${unrealized}¢/ea</strong></div>
+                    <div>Total: <strong style="color:${unrealizedColor};">${unrealizedTotal >= 0 ? '+' : ''}${unrealizedTotal}¢</strong></div>
                     <div>Realized: <strong style="color:${pnlColor};">$${realizedPnl}</strong></div>
                 </div>
                 ${pos.resting_orders ? `<div style="margin-top:6px;font-size:10px;color:#555;">${pos.resting_orders} resting order(s)</div>` : ''}

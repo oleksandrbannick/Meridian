@@ -1757,6 +1757,14 @@ def create_bot():
                 return jsonify({'error': f'Market bids now total {live_total}¢ ≥ 100 — no arb exists. Refresh and retry.'}), 400
 
             print(f'✅ Price validation (orderbook): YES {yes_price}¢ ≤ bid {live_yes_bid}¢, NO {no_price}¢ ≤ bid {live_no_bid}¢')
+
+            # Block deployment when either side has NO real bids.
+            # A derived price (e.g. YES=87¢ from 100-1-12) isn't a real order —
+            # nobody is there to fill it. Both sides need real liquidity.
+            if live_yes_bid <= 0:
+                return jsonify({'error': f'No YES bids in the orderbook — the YES price is derived, not real. This arb is phantom.'}), 400
+            if live_no_bid <= 0:
+                return jsonify({'error': f'No NO bids in the orderbook — the NO price is derived, not real. This arb is phantom.'}), 400
         except Exception as pv_err:
             print(f'⚠ Price validation skipped: {pv_err}')
 
@@ -3359,8 +3367,16 @@ def history_stats():
     flip_avg_threshold = round(sum(flip_thresholds_used) / len(flip_thresholds_used)) if flip_thresholds_used else 0
 
     # ── Fill rate by width (with real breakeven %) ─────────────────
+    # Only count flip-threshold trades (current system). Exclude old
+    # stop_loss_yes/stop_loss_no trades which used a different risk system
+    # and would skew the breakeven % with inflated losses.
+    flip_system_results = ('completed', 'flip_yes', 'flip_no',
+                           'force_exit_yes', 'force_exit_no',
+                           'settled_loss_yes', 'settled_loss_no')
     width_stats = {}
     for t in arb_trades:
+        if t.get('result', '') not in flip_system_results:
+            continue
         w = t.get('arb_width', 0)
         if w <= 0:
             continue

@@ -3208,6 +3208,15 @@ async function createBot() {
     }
     if (!quantity || quantity < 1) { alert('Quantity must be at least 1'); return; }
 
+    // ── Guardrail: block phantom arbs with no real bids on one side ──
+    const realYesBid = currentArbMarket?.yes_bid || 0;
+    const realNoBid  = currentArbMarket?.no_bid  || 0;
+    if (realYesBid <= 0 || realNoBid <= 0) {
+        const missingSide = realYesBid <= 0 ? 'YES' : 'NO';
+        alert(`⚠️ No real ${missingSide} bids in the orderbook.\\n\\nThe ${missingSide} price is derived (calculated), not from a real order. Nobody is there to fill it. This arb is phantom.`)
+        return;
+    }
+
     // ── Guardrail: don't deploy fav side below 55¢ (falling knife) ──
     // Only blocks when profit margin is thin (< 25¢) = competitive market.
     // Fat profit (≥ 25¢) = illiquid arb where both sides are cheap — that's fine.

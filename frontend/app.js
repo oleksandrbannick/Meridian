@@ -3575,14 +3575,83 @@ async function loadBots() {
                 netPnlInfo = `<span style="color:${color};font-size:10px;font-weight:700;">${sign}${netPnl}¢ earned</span>`;
             }
 
+            // ── Bot Health Color ──────────────────────────────────
+            // Compute health based on real-time state, not static yellow
+            let healthColor = '#00aaff';  // default: blue (neutral/waiting)
+            let healthAnim = '';
+            let healthLabel = '';
+
+            if (bothFilled) {
+                // Both legs filled = arb locked in, guaranteed profit
+                healthColor = '#00ff88';
+                healthLabel = '✅ LOCKED';
+            } else if (bot.status === 'waiting_repeat') {
+                // Waiting for spread to reopen
+                healthColor = '#818cf8';
+                healthLabel = '🔄 WAITING';
+            } else if (bot.status === 'fav_posted') {
+                // Fav is out there waiting for fill
+                const favSide = (bot.fav_side || '').toLowerCase();
+                const favBid = favSide === 'yes' ? bot.live_yes_bid : bot.live_no_bid;
+                const favEntry = bot.fav_price || (favSide === 'yes' ? bot.yes_price : bot.no_price) || 0;
+                if (favBid != null && favBid > 0) {
+                    if (favBid >= favEntry) {
+                        healthColor = '#00ff88'; healthLabel = '✅ HEALTHY';
+                    } else if (favBid >= favEntry - 5) {
+                        healthColor = '#ffaa00'; healthLabel = '⚠️ DRIFTING';
+                    } else {
+                        healthColor = '#ff8800'; healthLabel = '⚠️ SLIPPING';
+                    }
+                } else {
+                    healthColor = '#00aaff'; healthLabel = '⏳ POSTED';
+                }
+            } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
+                // One leg filled — watch the filled side's bid vs flip threshold
+                const filledSide = bot.status === 'yes_filled' ? 'yes' : 'no';
+                const entryPrice = filledSide === 'yes' ? (bot.yes_price || 0) : (bot.no_price || 0);
+                const liveBid = filledSide === 'yes' ? bot.live_yes_bid : bot.live_no_bid;
+                const isUnderdog = entryPrice < flipThresh;
+
+                if (isUnderdog) {
+                    // Underdog entry — no SL, rides to settlement
+                    healthColor = '#00ff88'; healthLabel = '🛡 SAFE';
+                } else if (liveBid != null && liveBid > 0) {
+                    const distFromFlip = liveBid - flipThresh;
+                    if (distFromFlip <= 3) {
+                        // Within 3¢ of flip — DANGER, pulsing red
+                        healthColor = '#ff4444';
+                        healthAnim = 'animation: dangerPulse 1s ease-in-out infinite;';
+                        healthLabel = '🔴 DANGER';
+                    } else if (distFromFlip <= 8) {
+                        // Within 8¢ of flip — WARNING, pulsing orange
+                        healthColor = '#ff8800';
+                        healthAnim = 'animation: warningPulse 1.5s ease-in-out infinite;';
+                        healthLabel = '🟠 WARNING';
+                    } else if (liveBid < 50) {
+                        // Below 50¢ — caution, fav losing ground
+                        healthColor = '#ffaa00';
+                        healthLabel = '🟡 DROPPING';
+                    } else {
+                        // Healthy — bid well above flip threshold
+                        healthColor = '#00ff88';
+                        healthLabel = '✅ HOLDING';
+                    }
+                } else {
+                    healthColor = '#ffaa00'; healthLabel = '❓ NO BID';
+                }
+            } else if (bot.status === 'pending_fills') {
+                healthColor = '#00aaff'; healthLabel = '⏳ FILLING';
+            }
+
             const item = document.createElement('div');
             item.className = 'bot-item';
-            item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #ffaa00;';
+            item.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${healthColor};${healthAnim}`;
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <strong style="color:#fff;font-size:13px;">${displayName}</strong>
                         <span class="bot-status ${statusClass}">${statusLabel}</span>
+                        ${healthLabel ? `<span style="font-size:10px;font-weight:700;color:${healthColor};">${healthLabel}</span>` : ''}
                         ${cycleInfo}
                         <button onclick="toggleBotPhase('${botId}','${phase === 'live' ? 'pregame' : 'live'}')"
                                 style="background:${phase === 'live' ? '#ff333322' : '#1e2740'};border:1px solid ${phase === 'live' ? '#ff333366' : '#2a3550'};color:${phase === 'live' ? '#ff6666' : '#8892a6'};padding:1px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;"

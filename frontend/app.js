@@ -467,17 +467,18 @@ function getMarketLiquidity(market) {
     return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum };
 }
 
-// ─── GAME SIGNAL — combines score, period, edge into actionable signals ───────
-// Returns a signal object: { type, label, color, glowAnim, description }
-//   type: 'anchor' (blowout, anchor fav), 'swing' (close game, volatility play),
-//         'caution' (risky), 'pregame' (no game context), 'none' (no edge)
+// ─── GAME SIGNAL — arb-focused: score stability + liquidity, NOT phase-gated ──
+// Arbs work the entire game.  The badge tells you HOW STABLE the prices are:
+//   🟢 LOCK   — blowout, prices won't flip, deploy with confidence
+//   🟢 ANCHOR — strong lead, fav is established, safe deploy
+//   🟡 LEAN   — moderate lead, somewhat stable, decent setup
+//   🔵 CLOSE  — tight game, prices will swing, arb still works but volatile
+//   ⚪ EARLY  — game just started, no score context yet (< 3 min played)
 
 function getGameSignal(gameId, sport, markets) {
-    // Get live score data from ESPN
     const gameData = getGameScore(gameId, sport);
-    const liveData = getLiveScoreForGame(gameId, sport);
 
-    // Get liquidity data for display (not for signal gating)
+    // Get liquidity data for display
     const winnerMarkets = markets.filter(m => {
         const t = (m.ticker || '').toUpperCase();
         return t.includes('GAME-') && !t.includes('SPREAD') && !t.includes('TOTAL') && !t.includes('1H');
@@ -503,96 +504,94 @@ function getGameSignal(gameId, sport, markets) {
         return { type: 'none', label: 'Final', color: '#555', glowAnim: '', description: 'Game over', liq };
     }
 
-    // ── Game is LIVE — analyze the situation ──
+    // ── Game is LIVE — score-based stability signal (no phase gating) ──
     const homeScore = parseInt(gameData.homeScore) || 0;
     const awayScore = parseInt(gameData.awayScore) || 0;
     const scoreDiff = Math.abs(homeScore - awayScore);
+    const totalPoints = homeScore + awayScore;
     const period = gameData.period || 0;
     const clock = gameData.clock || '';
 
-    // Parse clock to minutes remaining (approximate)
+    // Parse clock to minutes remaining
     let clockMins = 0;
     const clockMatch = clock.match(/(\d+):(\d+)/);
     if (clockMatch) clockMins = parseInt(clockMatch[1]) + parseInt(clockMatch[2]) / 60;
 
-    // Detect halftime/intermission from ESPN status detail
+    // Detect halftime
     const isHalftimeSignal = (gameData.statusDetail || '').toLowerCase().includes('half');
-    const isEndOfPeriod = (gameData.statusDetail || '').toLowerCase().includes('end of');
 
-    // Determine game phase for basketball
-    let gamePhase = 'early'; // early, mid, late, final_stretch
+    // Determine game phase (used for description text, NOT for gating signals)
+    let gamePhase = 'early';
     if (sport === 'NBA') {
         if (period >= 4) gamePhase = clockMins <= 5 ? 'final_stretch' : 'late';
-        else if (period === 3) gamePhase = 'mid';
+        else if (period >= 3) gamePhase = 'mid';
         else if (period === 2 || isHalftimeSignal) gamePhase = 'mid';
     } else if (sport === 'NCAAB' || sport === 'NCAAW') {
-        // NCAAB has 2 halves: period 1 = 1H, period 2 = 2H
-        // At halftime ESPN may report period=1 or 2 with "Halftime" detail
         if (isHalftimeSignal) gamePhase = 'mid';
         else if (period >= 2) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
+        else if (period === 1 && clockMins <= 10) gamePhase = 'mid';
     } else if (sport === 'NHL') {
         if (period >= 3) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
-        else if (period === 2 || isEndOfPeriod) gamePhase = 'mid';
+        else if (period >= 2) gamePhase = 'mid';
     } else {
-        // Soccer, MLB, etc — use period directly
         if (period >= 2) gamePhase = 'late';
     }
 
-    // Favorite price (higher bid = market thinks they're winning)
+    const phaseLabel = `${gameData.periodLabel} ${clock}`;
     const favPrice = Math.max(liq.yesBid, liq.noBid);
 
-    // ── ANCHOR SIGNAL: clear leader, late game — safe to deploy bot ──
-    if (scoreDiff >= 10 && (gamePhase === 'late' || gamePhase === 'final_stretch') && favPrice >= 75) {
-        return {
-            type: 'anchor', label: '🟢 ANCHOR',
-            color: '#00ff88', glowAnim: 'arbGlow',
-            description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} · Fav at ${favPrice}¢ — Blowout late, safe to deploy`,
-            liq
-        };
-    }
-    // Moderate lead, late game — decent but not a lock
-    if (scoreDiff >= 6 && (gamePhase === 'late' || gamePhase === 'final_stretch') && favPrice >= 65) {
-        return {
-            type: 'anchor', label: '🟡 LEAN',
-            color: '#ffaa33', glowAnim: 'arbGlowGold',
-            description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} · Fav at ${favPrice}¢ — Solid lead late, decent setup`,
-            liq
-        };
-    }
-    // Big lead early — dominating but more game left
-    if (scoreDiff >= 15 && gamePhase === 'mid' && favPrice >= 70) {
-        return {
-            type: 'anchor', label: '🟡 EARLY ANCHOR',
-            color: '#ffaa33', glowAnim: 'arbGlowGold',
-            description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} · Fav at ${favPrice}¢ — Big lead but more game left`,
-            liq
-        };
-    }
-
-    // ── SWING: close game, risky — info only ──
-    if (scoreDiff <= 5 && (gamePhase === 'mid' || gamePhase === 'late')) {
-        return {
-            type: 'swing', label: '🔵 CLOSE',
-            color: '#60a5fa', glowAnim: 'arbGlowBlue',
-            description: `±${scoreDiff} pts · ${gameData.periodLabel} ${clock} — Close game, risky to deploy`,
-            liq
-        };
-    }
-
-    // ── Early game — wait ──
-    if (gamePhase === 'early') {
+    // ── Too early: game just tipped off, barely any score context ──
+    // Only suppress badge if virtually no game has been played yet
+    if (totalPoints <= 4 && gamePhase === 'early') {
         return {
             type: 'caution', label: '⚪ EARLY',
             color: '#8892a6', glowAnim: '',
-            description: `${gameData.periodLabel} ${clock} — Too early to read the game`,
+            description: `${phaseLabel} — Game just started, waiting for score context`,
             liq
         };
     }
-    // Mid game, moderate lead — no clear signal
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SIGNAL LOGIC: Based purely on score differential (arbs work anytime)
+    // Bigger lead = more stable prices = safer deploy
+    // Phase only adds bonus context in description, never blocks signal
+    // ═══════════════════════════════════════════════════════════════════
+
+    // 🟢 LOCK — blowout at any point, game is effectively decided
+    if (scoreDiff >= 20) {
+        return {
+            type: 'anchor', label: '🟢 LOCK',
+            color: '#00ff88', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Blowout, prices locked`,
+            liq
+        };
+    }
+
+    // 🟢 ANCHOR — strong lead, very stable
+    if (scoreDiff >= 10) {
+        return {
+            type: 'anchor', label: '🟢 ANCHOR',
+            color: '#00ff88', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Strong lead, stable prices`,
+            liq
+        };
+    }
+
+    // 🟡 LEAN — moderate lead, favoring one side
+    if (scoreDiff >= 5) {
+        return {
+            type: 'anchor', label: '🟡 LEAN',
+            color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Moderate lead, decent stability`,
+            liq
+        };
+    }
+
+    // 🔵 CLOSE — tight game, volatile prices but arb still works
     return {
-        type: 'caution', label: '',
-        color: '#8892a6', glowAnim: '',
-        description: `+${scoreDiff} pts · ${gameData.periodLabel} ${clock} — No clear setup`,
+        type: 'swing', label: '🔵 CLOSE',
+        color: '#60a5fa', glowAnim: 'arbGlowBlue',
+        description: `±${scoreDiff} pts · ${phaseLabel} — Tight game, prices volatile`,
         liq
     };
 }

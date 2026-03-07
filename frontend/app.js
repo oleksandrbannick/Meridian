@@ -3732,7 +3732,7 @@ async function loadBots() {
                     <span>Cost: <strong style="color:#8892a6;">$${((bot.yes_price + bot.no_price) * qty / 100).toFixed(2)}</strong></span>
                     <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
-                    <span>${!autoMonitorInterval ? '⚠️ OFF' : '🤖 On'}</span>
+                    <span>🤖 On</span>
                 </div>
                 ${stopLossInfo}
                 ${waitRepeatInfo}`;
@@ -3761,18 +3761,18 @@ function updateBotsBadge(count) {
 
 // Always start monitoring after login — bots should never go unmonitored
 async function autoResumeMonitor() {
-    if (!autoMonitorInterval) {
-        console.log('🔄 Starting auto-monitor (always-on)');
-        autoMonitorInterval = setInterval(monitorBots, 2000);
-        const button = document.getElementById('auto-monitor-text');
-        const buddy  = document.getElementById('bot-buddy');
-        if (button) button.textContent = '⏸️ Pause Monitor';
-        if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
-        setBuddyMood('happy');
-        buddyMonitorStart = Date.now();
-        buddyMonitorCycles = 0;
-        monitorBots();
-    }
+    // Kill any stale interval first, then always start fresh
+    if (autoMonitorInterval) clearInterval(autoMonitorInterval);
+    console.log('🔄 Starting auto-monitor (always-on)');
+    autoMonitorInterval = setInterval(monitorBots, 2000);
+    const button = document.getElementById('auto-monitor-text');
+    const buddy  = document.getElementById('bot-buddy');
+    if (button) button.textContent = '🤖 Monitoring';
+    if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
+    setBuddyMood('happy');
+    buddyMonitorStart = Date.now();
+    buddyMonitorCycles = 0;
+    monitorBots();
 }
 
 // Cancel bot
@@ -3812,32 +3812,11 @@ async function clearFinishedBots() {
     }
 }
 
-// Toggle auto-monitor (pause/resume — but monitor auto-restarts on bot creation)
+// Toggle auto-monitor — always stays on, this just restarts if somehow stopped
 function toggleAutoMonitor() {
-    const button = document.getElementById('auto-monitor-text');
-    const buddy  = document.getElementById('bot-buddy');
-    
-    if (autoMonitorInterval) {
-        clearInterval(autoMonitorInterval);
-        autoMonitorInterval = null;
-        if (button) button.textContent = '▶️ Resume Monitor';
-        if (buddy) { buddy.classList.add('idle'); buddy.classList.remove('active'); }
-        updateBotBuddyMsg('idle');
-        setBuddyMood('neutral');
-        buddyMonitorStart = null;
-        buddyMonitorCycles = 0;
-    } else {
-        autoMonitorInterval = setInterval(monitorBots, 2000);
-        if (button) button.textContent = '⏸️ Pause Monitor';
-        if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
-        updateBotBuddyMsg('scanning');
-        setBuddyMood('happy');
-        buddyMonitorStart = Date.now();
-        buddyMonitorCycles = 0;
-        monitorBots();
+    if (!autoMonitorInterval) {
+        autoResumeMonitor();
     }
-    // Re-render bots so the "Monitor OFF/ON" label updates
-    loadBots();
 }
 
 // Bot buddy messages — rotates through fun status messages with personality
@@ -4127,10 +4106,9 @@ function updateBotBuddy(activeCount, filledLegs) {
     if (activeCount > 0 || document.getElementById('bots-section')?.style.display === 'block') {
         buddy.style.display = 'flex';
     }
+    // Auto-restart monitor if it somehow stopped
     if (!autoMonitorInterval) {
-        updateBotBuddyMsg('idle');
-        setBuddyMood('neutral');
-        return;
+        autoResumeMonitor();
     }
     if (filledLegs > 0) {
         updateBotBuddyMsg('filled');

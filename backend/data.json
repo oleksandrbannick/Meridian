@@ -2853,7 +2853,7 @@
       "live_no_bid": 71,
       "live_yes_ask": 29,
       "live_no_ask": 73,
-      "last_price_update": 1772922420.265481,
+      "last_price_update": 1772922435.907422,
       "first_fill_at": 1772865240.444896,
       "first_leg": "no"
     },
@@ -2886,7 +2886,7 @@
       "live_no_bid": 71,
       "live_yes_ask": 29,
       "live_no_ask": 73,
-      "last_price_update": 1772922421.32177,
+      "last_price_update": 1772922437.076214,
       "first_fill_at": 1772862531.174172,
       "first_leg": "no"
     },
@@ -4625,7 +4625,7 @@
       "yes_fill_qty": 5,
       "no_fill_qty": 0,
       "created_at": 1772914488.5462542,
-      "posted_at": 1772922410.533947,
+      "posted_at": 1772922429.407736,
       "repost_count": 1,
       "repeat_count": 5,
       "repeats_done": 3,
@@ -4635,7 +4635,7 @@
       "live_yes_ask": 98,
       "live_no_ask": 3,
       "last_price_update": 1772916506.802621,
-      "first_fill_at": 1772922410.533947,
+      "first_fill_at": 1772922429.407736,
       "first_leg": "yes",
       "net_pnl_cents": 65,
       "waiting_repeat_since": 1772916185.020092
@@ -4914,10 +4914,10 @@
       "repeats_done": 3,
       "arb_width": 7,
       "live_yes_bid": 5,
-      "live_no_bid": 94,
-      "live_yes_ask": 6,
+      "live_no_bid": 93,
+      "live_yes_ask": 7,
       "live_no_ask": 95,
-      "last_price_update": 1772922422.187525,
+      "last_price_update": 1772922437.884639,
       "first_fill_at": 1772921668.055893,
       "first_leg": "no",
       "net_pnl_cents": 70,
@@ -4952,7 +4952,7 @@
       "live_no_bid": 5,
       "live_yes_ask": 95,
       "live_no_ask": 6,
-      "last_price_update": 1772922422.788033,
+      "last_price_update": 1772922438.514466,
       "first_fill_at": 1772922334.051454,
       "first_leg": "yes",
       "net_pnl_cents": 70,
@@ -4987,7 +4987,7 @@
       "live_no_bid": 26,
       "live_yes_ask": 74,
       "live_no_ask": 27,
-      "last_price_update": 1772922423.5530019,
+      "last_price_update": 1772922439.379254,
       "first_fill_at": null,
       "first_leg": null,
       "net_pnl_cents": 65,
@@ -5022,7 +5022,7 @@
       "live_no_bid": 26,
       "live_yes_ask": 74,
       "live_no_ask": 27,
-      "last_price_update": 1772922424.032359,
+      "last_price_update": 1772922439.8908858,
       "first_fill_at": 1772921139.668694,
       "first_leg": "yes",
       "net_pnl_cents": 90,
@@ -5165,7 +5165,7 @@
       "live_no_bid": 28,
       "live_yes_ask": 72,
       "live_no_ask": 29,
-      "last_price_update": 1772922424.975504
+      "last_price_update": 1772922441.14046
     },
     "KXNCAAMBGAME-26MAR07PITTSYR-SYR_1772922373": {
       "ticker": "KXNCAAMBGAME-26MAR07PITTSYR-SYR",
@@ -5196,7 +5196,7 @@
       "live_no_bid": 28,
       "live_yes_ask": 72,
       "live_no_ask": 29,
-      "last_price_update": 1772922425.424212
+      "last_price_update": 1772922441.558178
     },
     "KXNCAAMBGAME-26MAR07PITTSYR-SYR_1772922383": {
       "ticker": "KXNCAAMBGAME-26MAR07PITTSYR-SYR",
@@ -5227,7 +5227,7 @@
       "live_no_bid": 28,
       "live_yes_ask": 72,
       "live_no_ask": 29,
-      "last_price_update": 1772922425.84754
+      "last_price_update": 1772922441.976563
     },
     "KXNCAAMBGAME-26MAR07UTAHBAY-UTAH_1772922395": {
       "ticker": "KXNCAAMBGAME-26MAR07UTAHBAY-UTAH",
@@ -5258,7 +5258,7 @@
       "live_no_bid": 97,
       "live_yes_ask": 3,
       "live_no_ask": 98,
-      "last_price_update": 1772922426.414808
+      "last_price_update": 1772922442.386951
     },
     "KXNCAAMBSPREAD-26MAR07WYOSJSU-WYO3_1772922421": {
       "ticker": "KXNCAAMBSPREAD-26MAR07WYOSJSU-WYO3",
@@ -5287,9 +5287,9 @@
       "arb_width": 10,
       "live_yes_bid": 81,
       "live_no_bid": 16,
-      "live_yes_ask": 0,
-      "live_no_ask": 0,
-      "last_price_update": 1772922421.8229382
+      "live_yes_ask": 84,
+      "live_no_ask": 19,
+      "last_price_update": 1772922442.7627609
     }
   },
   "trade_history": [

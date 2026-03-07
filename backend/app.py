@@ -1282,6 +1282,7 @@ STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 # (underdog side), no SL fires — max loss is small, position rides to settlement.
 # Watch bots (straight bets / props) keep the old instant entry-minus-X SL.
 FLIP_THRESHOLD_CENTS = 40   # Default: sell if bid ≤ 40¢ (favorite flipped to coin-flip/underdog)
+MIN_FAV_ENTRY_CENTS = 55    # Guardrail: never deploy fav side below this price (catching a falling knife)
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}
@@ -1769,6 +1770,20 @@ def create_bot():
         dog_side = 'no' if fav_side == 'yes' else 'yes'
         fav_price = yes_price if fav_side == 'yes' else no_price
         dog_price = no_price if fav_side == 'yes' else yes_price
+
+        # ── Guardrail: don't deploy fav side below MIN_FAV_ENTRY ──
+        # Only applies when profit margin is thin (< 25¢) = competitive market
+        # where a low fav price means the thesis is actually breaking.
+        # When profit is fat (≥ 25¢), both sides are cheap due to illiquidity
+        # — that's a legit arb, not a falling knife.
+        profit_per = 100 - fav_price - dog_price
+        if fav_price < MIN_FAV_ENTRY_CENTS and profit_per < 25:
+            return jsonify({
+                'error': f'Favorite side ({fav_side.upper()}) entry at {fav_price}¢ is below the {MIN_FAV_ENTRY_CENTS}¢ minimum '
+                         f'and profit is only {profit_per}¢. '
+                         f'The favorite has dropped too far — this is a falling knife, not a dip buy. '
+                         f'Wait for it to recover or skip this market.'
+            }), 400
 
         if fav_side == 'yes':
             fav_order = kalshi_client.create_order(

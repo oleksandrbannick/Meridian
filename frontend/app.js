@@ -2981,6 +2981,18 @@ function updateProfitPreview() {
             ${isArb && qty > 1 ? `<div style="padding:2px 16px 10px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
             <!-- Flip threshold protection + Breakeven % -->
             <div style="padding:8px 16px 10px;border-top:1px solid #00aaff22;">
+                ${(() => {
+                    // Falling knife warning: if the favorite price is below 55¢
+                    const favEntry = Math.max(yes, no);
+                    const MIN_FAV_ENTRY = 55;
+                    if (favEntry < MIN_FAV_ENTRY && profit < 25) {
+                        return `<div style="background:rgba(255,68,68,0.08);border:1px solid #ff444444;border-radius:6px;padding:8px 10px;margin-bottom:8px;">
+                            <span style="color:#ff4444;font-size:11px;font-weight:700;">⚠️ FALLING KNIFE — Favorite at ${favEntry}¢ with only ${profit}¢ profit</span>
+                            <div style="color:#ff4444aa;font-size:10px;margin-top:3px;">Thin margin + low fav price = thesis breaking, not a dip. Deploy will be blocked.</div>
+                        </div>`;
+                    }
+                    return '';
+                })()}
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
                     <span style="color:#00aaff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛡 Flip Protection (≤${flipFloor}¢)</span>
                     ${(() => {
@@ -3195,6 +3207,17 @@ async function createBot() {
         return;
     }
     if (!quantity || quantity < 1) { alert('Quantity must be at least 1'); return; }
+
+    // ── Guardrail: don't deploy fav side below 55¢ (falling knife) ──
+    // Only blocks when profit margin is thin (< 25¢) = competitive market.
+    // Fat profit (≥ 25¢) = illiquid arb where both sides are cheap — that's fine.
+    const MIN_FAV_ENTRY = 55;
+    const favPrice = Math.max(yes_price, no_price);
+    const profitPer = 100 - yes_price - no_price;
+    if (favPrice < MIN_FAV_ENTRY && profitPer < 25) {
+        alert(`⚠️ Favorite side is only ${favPrice}¢ — below the ${MIN_FAV_ENTRY}¢ minimum.\nProfit margin is thin at ${profitPer}¢ — this looks like a falling knife, not a dip buy.\n\nWait for recovery or skip this market.`);
+        return;
+    }
 
     const totalCost = (yes_price + no_price) * quantity;
     const profitPer = 100 - yes_price - no_price;

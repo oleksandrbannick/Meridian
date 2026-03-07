@@ -3470,8 +3470,13 @@ async function loadBots() {
             let cycleInfo = '';
             if (repeatCount > 0) {
                 const totalRuns = repeatCount + 1;
-                const currentCycle = repeatsDone + 1;
-                cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
+                if (bot.status === 'waiting_repeat') {
+                    // Show completed run, not next run
+                    cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">✓ ${repeatsDone}/${totalRuns} done</span>`;
+                } else {
+                    const currentCycle = repeatsDone + 1;
+                    cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
+                }
             }
 
             // Timeout / next-action info for LIVE bots
@@ -3581,14 +3586,14 @@ async function loadBots() {
             let healthAnim = '';
             let healthLabel = '';
 
-            if (bothFilled) {
+            if (bot.status === 'waiting_repeat') {
+                // Waiting for spread to reopen — takes priority over old fill data
+                healthColor = '#818cf8';
+                healthLabel = '🔄 WAITING';
+            } else if (bothFilled) {
                 // Both legs filled = arb locked in, guaranteed profit
                 healthColor = '#00ff88';
                 healthLabel = '✅ LOCKED';
-            } else if (bot.status === 'waiting_repeat') {
-                // Waiting for spread to reopen
-                healthColor = '#818cf8';
-                healthLabel = '🔄 WAITING';
             } else if (bot.status === 'fav_posted') {
                 // Fav is out there waiting for fill
                 const favSide = (bot.fav_side || '').toLowerCase();

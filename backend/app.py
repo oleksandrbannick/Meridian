@@ -2691,8 +2691,8 @@ def _run_monitor():
                     target_width = bot.get('arb_width', bot.get('profit_per', 5))
                     wait_age_min = (now - bot.get('waiting_repeat_since', now)) / 60.0
 
-                    # Give up after 15 minutes of waiting
-                    if wait_age_min > 15:
+                    # Give up after 5 minutes of waiting
+                    if wait_age_min > 5:
                         bot['status'] = 'completed'
                         print(f'⏰ REPEAT TIMEOUT: {bot_id} waited {wait_age_min:.1f}m — giving up on repeat')
                         actions.append({'bot_id': bot_id, 'action': 'repeat_timeout'})
@@ -2716,6 +2716,20 @@ def _run_monitor():
                         if ws_price:
                             fresh_yes_bid = ws_price.get('yes_bid', 0)
                             fresh_no_bid  = ws_price.get('no_bid', 0)
+
+                    # Bail immediately if the game is decided (one side 95+¢)
+                    # — spread will never reopen, no point waiting
+                    if fresh_yes_bid >= 95 or fresh_no_bid >= 95:
+                        bot['status'] = 'completed'
+                        print(f'🏁 REPEAT SKIP: {bot_id} game decided (Y={fresh_yes_bid}¢ N={fresh_no_bid}¢) — no spread to exploit')
+                        actions.append({'bot_id': bot_id, 'action': 'repeat_game_over'})
+                        continue
+
+                    # Also bail if either side has no bids at all
+                    if fresh_yes_bid == 0 or fresh_no_bid == 0:
+                        # Don't burn API calls — skip this cycle, will timeout naturally
+                        actions.append({'bot_id': bot_id, 'action': 'repeat_waiting', 'y_bid': fresh_yes_bid, 'n_bid': fresh_no_bid})
+                        continue
 
                     # Check if bids are high enough to place orders below them
                     # that still achieve the target width.

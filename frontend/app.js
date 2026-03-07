@@ -4002,9 +4002,9 @@ function buddyUpdateFromPnl(pnlData) {
     
     // Update mood based on P&L (unless celebrating/reacting)
     if (buddyCurrentMood !== 'celebrating') {
-        if (buddySessionPnl > 1) {
+        if (buddySessionPnl >= 0) {
             setBuddyMood('happy');
-        } else if (buddySessionPnl < -2) {
+        } else if (buddySessionPnl < -10) {
             setBuddyMood('worried');
         } else {
             setBuddyMood('neutral');

@@ -3677,21 +3677,9 @@ async function loadBots() {
                 healthColor = '#00ff88';
                 healthLabel = '✅ LOCKED';
             } else if (bot.status === 'fav_posted') {
-                // Fav is out there waiting for fill
-                const favSide = (bot.fav_side || '').toLowerCase();
-                const favBid = favSide === 'yes' ? bot.live_yes_bid : bot.live_no_bid;
-                const favEntry = bot.fav_price || (favSide === 'yes' ? bot.yes_price : bot.no_price) || 0;
-                if (favBid != null && favBid > 0) {
-                    if (favBid >= favEntry) {
-                        healthColor = '#00ff88'; healthLabel = '✅ HEALTHY';
-                    } else if (favBid >= favEntry - 5) {
-                        healthColor = '#ffaa00'; healthLabel = '⚠️ DRIFTING';
-                    } else {
-                        healthColor = '#ff8800'; healthLabel = '⚠️ SLIPPING';
-                    }
-                } else {
-                    healthColor = '#00aaff'; healthLabel = '⏳ POSTED';
-                }
+                // Fav order posted but not filled yet — always "waiting to fill"
+                healthColor = '#00aaff';
+                healthLabel = '⏳ WAITING TO FILL';
             } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
                 // One leg filled — watch the filled side's bid vs flip threshold
                 const filledSide = bot.status === 'yes_filled' ? 'yes' : 'no';
@@ -3714,14 +3702,18 @@ async function loadBots() {
                         healthColor = '#ff8800';
                         healthAnim = 'animation: warningPulse 1.5s ease-in-out infinite;';
                         healthLabel = '🟠 WARNING';
-                    } else if (liveBid < 50) {
-                        // Below 50¢ — caution, fav losing ground
+                    } else if (liveBid < entryPrice - 5) {
+                        // Bid dropped 5+ cents below entry — losing ground
                         healthColor = '#ffaa00';
                         healthLabel = '🟡 DROPPING';
-                    } else {
-                        // Healthy — bid well above flip threshold
+                    } else if (liveBid > entryPrice) {
+                        // Bid is ABOVE entry — moved in our direction
                         healthColor = '#00ff88';
-                        healthLabel = '✅ HOLDING';
+                        healthLabel = '💚 HEALTHY';
+                    } else {
+                        // Bid near entry, well above flip — normal hold
+                        healthColor = '#00aaff';
+                        healthLabel = '📊 HOLDING';
                     }
                 } else {
                     healthColor = '#ffaa00'; healthLabel = '❓ NO BID';

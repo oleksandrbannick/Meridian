@@ -1593,6 +1593,24 @@ def _execute_ws_dog_post(bot_id):
 
         bot.pop('_ws_fill_handling', None)
 
+        # ── Race-condition guard: dog side may have filled while we held the lock ──
+        # If the WS fill handler already incremented no_fill_qty (or yes_fill_qty)
+        # while _ws_fill_handling was True, it would have skipped completion.
+        # Re-check now and trigger completion if both legs are done.
+        if bot and bot.get('status') not in ('stopped', 'completed', 'waiting_repeat'):
+            yes_f = bot.get('yes_fill_qty', 0)
+            no_f  = bot.get('no_fill_qty', 0)
+            q     = bot.get('quantity', 0)
+            if yes_f >= q and no_f >= q:
+                print(f'⚡ WS RACE FIX: {bot_id} dog already filled during post — completing now!')
+                bot['_ws_fill_handling'] = True
+                # Release lock briefly, then call completion
+                threading.Thread(
+                    target=_execute_ws_completion,
+                    args=(bot_id,),
+                    daemon=True
+                ).start()
+
 
 def _execute_ws_completion(bot_id):
     """
@@ -3363,8 +3381,17 @@ def _run_monitor():
                 # Guard: fav_posted bots are handled above; this is for
                 # legacy pending_fills bots with both order IDs set.
                 if bot.get('_ws_fill_handling'):
-                    print(f'⚡ SKIPPING monitor fill check for {bot_id} — WS real-time already handling')
-                    continue
+                    # Don't blanket-skip — check if this is a stale flag
+                    # (race condition: flag set but completion never triggered)
+                    yes_f = bot.get('yes_fill_qty', 0)
+                    no_f  = bot.get('no_fill_qty', 0)
+                    if yes_f >= qty and no_f >= qty:
+                        print(f'⚡ MONITOR FIX: {bot_id} has _ws_fill_handling stuck but both legs filled — completing!')
+                        bot.pop('_ws_fill_handling', None)
+                        # Fall through to normal completion logic below
+                    else:
+                        print(f'⚡ SKIPPING monitor fill check for {bot_id} — WS real-time already handling')
+                        continue
                 if not bot.get('yes_order_id') or not bot.get('no_order_id'):
                     # Bot has a missing order ID — likely a fav_posted that
                     # slipped through. Reset to fav_posted for proper handling.

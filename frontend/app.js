@@ -4623,39 +4623,16 @@ async function loadPnL() {
         const el   = document.getElementById('pnl-display');
         if (!el) return;
 
-        // Daily
         const net      = pnl.net_dollars ?? 0;
         const netColor = net >= 0 ? '#00ff88' : '#ff4444';
         const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
         const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
         const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
 
-        // Lifetime
-        const ltNet      = pnl.lifetime_net_dollars ?? 0;
-        const ltNetColor = ltNet >= 0 ? '#00ff88' : '#ff4444';
-        const ltGross    = ((pnl.lifetime_gross_profit_cents || 0) / 100).toFixed(2);
-        const ltLoss     = ((pnl.lifetime_gross_loss_cents || 0) / 100).toFixed(2);
-        const ltW        = pnl.lifetime_completed || 0;
-        const ltL        = pnl.lifetime_stopped || 0;
-
         el.innerHTML = `
-            <div style="display:flex;gap:20px;align-items:stretch;flex-wrap:wrap;width:100%;">
-                <div style="flex:1;min-width:180px;">
-                    <span style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Today <span style="color:#555;font-size:9px;">${dayLabel}</span></span>
-                    <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px;">
-                        <span style="color:${netColor};font-weight:800;font-size:1.2rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
-                    </div>
-                    <span style="color:#8892a6;font-size:10px;">↑$${gross} ↓$${loss} &nbsp; ${pnl.completed_bots || 0}W/${pnl.stopped_bots || 0}L</span>
-                </div>
-                <div style="width:1px;background:#1e2740;align-self:stretch;"></div>
-                <div style="flex:1;min-width:180px;">
-                    <span style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Lifetime</span>
-                    <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px;">
-                        <span style="color:${ltNetColor};font-weight:800;font-size:1.2rem;">${ltNet >= 0 ? '+' : ''}$${ltNet.toFixed(2)}</span>
-                    </div>
-                    <span style="color:#8892a6;font-size:10px;">↑$${ltGross} ↓$${ltLoss} &nbsp; ${ltW}W/${ltL}L</span>
-                </div>
-            </div>
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">Today <span style="color:#555;font-size:9px;">${dayLabel}</span></span>
+            <span style="color:${netColor};font-weight:800;font-size:1.2rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
+            <span style="color:#8892a6;font-size:11px;">↑$${gross} ↓$${loss} &nbsp; ${pnl.completed_bots || 0}W/${pnl.stopped_bots || 0}L</span>
         `;
         // Feed P&L data to bot buddy
         buddyUpdateFromPnl(pnl);
@@ -4686,8 +4663,12 @@ async function loadHistoryStats() {
     const widthPanel = document.getElementById('width-breakdown-panel');
     if (!panel) return;
     try {
-        const resp = await fetch(`${API_BASE}/bot/history/stats`);
-        const s = await resp.json();
+        const [statsResp, pnlResp] = await Promise.all([
+            fetch(`${API_BASE}/bot/history/stats`),
+            fetch(`${API_BASE}/pnl`),
+        ]);
+        const s = await statsResp.json();
+        const pnl = await pnlResp.json();
 
         if (s.arb_total === 0 && s.watch_total === 0) {
             panel.innerHTML = '<p style="color:#555;text-align:center;font-size:12px;">No trades yet — analytics will appear after your first trade.</p>';
@@ -4730,7 +4711,7 @@ async function loadHistoryStats() {
                     <div style="color:#555;font-size:10px;margin-top:2px;">${s.arb_wins}W / ${s.arb_losses}L of ${s.arb_total}</div>
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&L</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&L</div>
                     <div style="color:${netColor};font-size:24px;font-weight:800;">${s.arb_net_cents >= 0 ? '+' : ''}$${netDollars}</div>
                     <div style="color:#555;font-size:10px;margin-top:2px;">Win: +${s.arb_avg_profit}¢ / Loss: -${s.arb_avg_loss}¢</div>
                 </div>
@@ -4739,6 +4720,18 @@ async function loadHistoryStats() {
                     <div style="color:#fff;font-size:24px;font-weight:800;">${fmtDur(s.avg_fill_duration_s)}</div>
                     <div style="color:#555;font-size:10px;margin-top:2px;">Win: ${fmtDur(s.avg_win_duration_s)} / Loss: ${fmtDur(s.avg_loss_duration_s)}</div>
                 </div>
+                ${(() => {
+                    const dNet = (pnl.net_cents || 0);
+                    const dColor = dNet >= 0 ? '#00ff88' : '#ff4444';
+                    const dDollars = (dNet / 100).toFixed(2);
+                    const dW = pnl.completed_bots || 0;
+                    const dL = pnl.stopped_bots || 0;
+                    return `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key || ''}</span></div>
+                        <div style="color:${dColor};font-size:24px;font-weight:800;">${dNet >= 0 ? '+' : ''}$${dDollars}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today</div>
+                    </div>`;
+                })()}
                 ${s.watch_total > 0 ? `
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Watch Trades</div>

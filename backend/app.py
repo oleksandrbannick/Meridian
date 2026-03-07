@@ -945,7 +945,7 @@ def save_state():
         with open(DATA_FILE, 'w') as f:
             json.dump({
                 'active_bots': active_bots,
-                'trade_history': trade_history[:500],
+                'trade_history': trade_history[:2000],
                 'session_pnl': session_pnl,
             }, f, indent=2, default=str)
     except Exception as e:

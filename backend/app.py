@@ -3836,14 +3836,35 @@ def scan_arb_opportunities():
 
 @app.route('/api/pnl', methods=['GET'])
 def get_pnl():
-    """Upgrade #6: P&L dashboard — session profit/loss summary."""
-    auto_reset_daily_pnl()
-    pnl = dict(session_pnl)
-    pnl['net_cents']   = pnl['gross_profit_cents'] - pnl['gross_loss_cents']
-    pnl['net_dollars'] = pnl['net_cents'] / 100
-    pnl['active_bots'] = len([b for b in active_bots.values()
-                               if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')])
-    pnl['day_key']     = pnl.get('day_key', datetime.date.today().isoformat())
+    """Upgrade #6: P&L dashboard — computed from actual trade history (always in sync)."""
+    today = datetime.date.today().isoformat()
+
+    # Compute from real trade_history entries (matches history/stats endpoint)
+    gross_profit = 0
+    gross_loss   = 0
+    completed    = 0
+    stopped      = 0
+    for t in trade_history:
+        result = t.get('result', '')
+        if result == 'completed':
+            gross_profit += t.get('profit_cents', 0)
+            completed += 1
+        elif result in ('stopped_loss', 'flipped', 'manual_stop'):
+            gross_loss += t.get('loss_cents', 0)
+            stopped += 1
+
+    net_cents = gross_profit - gross_loss
+    pnl = {
+        'gross_profit_cents': gross_profit,
+        'gross_loss_cents':   gross_loss,
+        'net_cents':          net_cents,
+        'net_dollars':        net_cents / 100,
+        'completed_bots':     completed,
+        'stopped_bots':       stopped,
+        'active_bots': len([b for b in active_bots.values()
+                             if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')]),
+        'day_key':            today,
+    }
     return jsonify(pnl)
 
 

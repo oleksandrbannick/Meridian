@@ -235,6 +235,9 @@
         .empty-state .title { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 6px; }
         .empty-state .desc { font-size: 13px; line-height: 1.6; }
 
+        /* ── Bot Tools Bar ──────────────────────────────────────── */
+        .bot-tools-row { display: flex; align-items: center; gap: 8px; }
+
         /* ── Mobile Responsive ──────────────────────────────────── */
         @media (max-width: 768px) {
             .header { padding: 0.75rem 1rem; flex-direction: column; gap: 8px; align-items: flex-start; }
@@ -261,6 +264,9 @@
             .nav-tab { padding: 8px 10px; font-size: 10px; }
             .main-container { padding: 0.5rem; }
             .controls { flex-direction: column; }
+            .controls.bot-tools { flex-direction: column; gap: 8px; }
+            .bot-tools-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+            .bot-tools-row .btn { padding: 0.5rem 0.7rem; font-size: 11px; white-space: nowrap; }
             .search-box { width: 100%; }
         }
     </style>
@@ -386,20 +392,24 @@
         <!-- ═══════════════════════════════════════════════════════ -->
         <div class="tab-page" id="tab-bots">
             <!-- Bot Tools Bar -->
-            <div class="controls">
-                <button class="btn btn-primary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks active bots every 2s: fills, reposts, stop-losses">
-                    <span id="auto-monitor-text">▶️ Start Auto-Monitor</span>
-                </button>
-                <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Scan all markets for arb opportunities">🔍 Arb Scanner</button>
-                <button class="btn btn-secondary" onclick="scanMiddles()" title="Find middle spread opportunities">📐 Middles</button>
-                <label style="color:#8892a6;font-size:11px;margin-left:8px;">Min Width (¢):</label>
-                <input type="number" id="scan-min-width" min="1" max="20" value="3"
-                       style="width:60px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;">
-                <label style="color:#8892a6;font-size:11px;margin-left:8px;">Qty:</label>
-                <input type="number" id="scan-qty" min="1" value="1"
-                       style="width:50px;padding:0.75rem 0.5rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.9rem;text-align:center;">
-                <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
-                        style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓ Guide</button>
+            <div class="controls bot-tools">
+                <div class="bot-tools-row">
+                    <button class="btn btn-primary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks active bots every 2s: fills, reposts, stop-losses">
+                        <span id="auto-monitor-text">▶️ Monitor</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Scan all markets for arb opportunities">🔍 Scanner</button>
+                    <button class="btn btn-secondary" onclick="scanMiddles()" title="Find middle spread opportunities">📐 Middles</button>
+                    <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
+                            style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓</button>
+                </div>
+                <div class="bot-tools-row">
+                    <label style="color:#8892a6;font-size:11px;">Width¢</label>
+                    <input type="number" id="scan-min-width" min="1" max="20" value="3"
+                           style="width:52px;padding:0.55rem 0.4rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.85rem;text-align:center;">
+                    <label style="color:#8892a6;font-size:11px;">Qty</label>
+                    <input type="number" id="scan-qty" min="1" value="1"
+                           style="width:44px;padding:0.55rem 0.4rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.85rem;text-align:center;">
+                </div>
             </div>
 
             <!-- Active Bots Section -->

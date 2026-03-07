@@ -3229,7 +3229,6 @@ async function createBot() {
     }
 
     const totalCost = (yes_price + no_price) * quantity;
-    const profitPer = 100 - yes_price - no_price;
     const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
     if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: auto-detect${repeatMsg}\n\nConfirm order?`)) return;
 

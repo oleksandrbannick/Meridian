@@ -1,0 +1,13 @@
+✅ Loaded: 49 bots, 49 history
+✅ AUTO-LOGIN at startup: balance=$432.15
+🔍 STARTUP SL SWEEP: checking 2 active bots for overdue stop-losses...
+🔌 Kalshi WS connected
+📊 FILL CHECK KXNBAGAME-26MAR06DALBOS-DAL_1772782785: YES=0/5 NO=5/5 | resp_keys=['order']
+📊 FILL CHECK KXNCAAMBGAME-26MAR06BUFFTOL-TOL_1772824016: YES=2/2 NO=0/2 | resp_keys=['order']
+📋 [INFO] MONITOR_CYCLE  | {'active_bots': 2, 'actions_count': 2, 'actions_summary': ['holding_no', 'holding_yes']}
+🔍 STARTUP SL SWEEP complete
+ * Serving Flask app 'app'
+ * Debug mode: off
+Address already in use
+Port 5001 is in use by another program. Either identify and stop that program, or start the server with a different port.
+📡 WS subscribed to 2 tickers: ['KXNBAGAME-26MAR06DALBOS-DAL', 'KXNCAAMBGAME-26MAR06BUFFTOL-TOL']...

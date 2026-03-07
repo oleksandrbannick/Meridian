@@ -5097,10 +5097,13 @@ async function loadTradeHistory() {
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
             const pnl = isWin ? (t.profit_cents || 0) : -(t.loss_cents || 0);
-            const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
-            const icon = isWin ? '✅' : (isManualExit ? '🔧' : '⛔');
+            const isSettled = isSettledWin || isSettledLoss;
+            const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
+            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isWin ? '✅' : (isManualExit ? '🔧' : '⛔')));
             const isFlip = t.result?.includes('flip_');
             const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))));
+            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : (isWin ? '#00ff8822' : '#ff444422'));
+            const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
             // Display name
             const teamName = formatBotDisplayName(t.ticker || '');
@@ -5173,12 +5176,13 @@ async function loadTradeHistory() {
             }
             
             return `
-                <div style="background:#0f1419;border:1px solid ${isWin ? '#00ff8822' : '#ff444422'};border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
+                <div style="background:#0f1419;border:1px solid ${borderColor};border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
                             <span style="font-size:14px;">${icon}</span>
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
                             <span style="background:${typeColor}22;color:${typeColor};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${tradeType}</span>
+                            ${settleBadge}
                             ${gameCtxHtml}
                             ${histCycleHtml}
                             ${verified}

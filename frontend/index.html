@@ -195,6 +195,20 @@
         .bot-buddy.mood-celebrating .bot-buddy-eye { animation: none; transform:scaleY(0.6) scaleX(1.3); border-radius:50%; }
         .bot-buddy.mood-celebrating .bot-buddy-name { color:#ffdd00; }
         .bot-buddy.mood-celebrating .bot-buddy-msg strong { color:#ffdd00; }
+        .bot-buddy.mood-focused .bot-buddy-body { background:linear-gradient(135deg,#60a5fa,#3b82f6); box-shadow:0 0 14px rgba(96,165,250,0.4); }
+        .bot-buddy.mood-focused .bot-buddy-mouth { border-radius:2px; width:8px; height:2px; }
+        .bot-buddy.mood-focused .bot-buddy-eye { animation: none; transform:scaleY(0.85) scaleX(1.1); }
+        .bot-buddy.mood-focused .bot-buddy-arm, .bot-buddy.mood-focused .bot-buddy-antenna { background:#3b82f6; }
+        .bot-buddy.mood-focused .bot-buddy-antenna::after { background:#60a5fa; box-shadow:0 0 8px #60a5fa; }
+        .bot-buddy.mood-focused .bot-buddy-name { color:#60a5fa; }
+        .bot-buddy.mood-focused .bot-buddy-msg strong { color:#60a5fa; }
+        .bot-buddy.mood-alert .bot-buddy-body { background:linear-gradient(135deg,#ff4444,#cc2222); box-shadow:0 0 18px rgba(255,68,68,0.5); animation: botAlertPulse 0.8s ease-in-out infinite; }
+        .bot-buddy.mood-alert .bot-buddy-mouth { border-radius:50%; width:6px; height:6px; }
+        .bot-buddy.mood-alert .bot-buddy-eye { animation: none; transform:scaleY(1.3) scaleX(0.8); }
+        .bot-buddy.mood-alert .bot-buddy-arm, .bot-buddy.mood-alert .bot-buddy-antenna { background:#cc2222; }
+        .bot-buddy.mood-alert .bot-buddy-antenna::after { background:#ff4444; box-shadow:0 0 10px #ff4444; }
+        .bot-buddy.mood-alert .bot-buddy-name { color:#ff4444; }
+        .bot-buddy.mood-alert .bot-buddy-msg strong { color:#ff4444; }
 
         /* Pet reaction */
         .bot-buddy-avatar.petted .bot-buddy-body { animation: botPetReact 0.5s ease-out !important; }
@@ -219,6 +233,7 @@
         @keyframes botPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
         @keyframes botCelebrate { 0%{transform:translateY(0) rotate(0deg)} 25%{transform:translateY(-5px) rotate(-5deg)} 50%{transform:translateY(-2px) rotate(0deg)} 75%{transform:translateY(-5px) rotate(5deg)} 100%{transform:translateY(0) rotate(0deg)} }
+        @keyframes botAlertPulse { 0%,100%{transform:scale(1);box-shadow:0 0 18px rgba(255,68,68,0.5)} 50%{transform:scale(1.05);box-shadow:0 0 28px rgba(255,68,68,0.7)} }
         @keyframes botPetReact { 0%{transform:scale(1)} 30%{transform:scale(1.15)} 60%{transform:scale(0.95)} 100%{transform:scale(1)} }
         @keyframes heartFloat { 0%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-25px)} }
         .bot-buddy.idle .bot-buddy-body { animation: botIdle 3s ease-in-out infinite; }

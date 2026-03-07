@@ -103,6 +103,26 @@ function switchTab(tab) {
     }
 }
 
+// Navigate from Bots tab to Markets tab and scroll to the relevant market card
+function navigateToMarket(eventTickerPrefix) {
+    switchTab('markets');
+    // Small delay to let the Markets tab render
+    setTimeout(() => {
+        const cards = document.querySelectorAll('[data-event-ticker]');
+        for (const card of cards) {
+            const ticker = (card.getAttribute('data-event-ticker') || '').toUpperCase();
+            if (ticker.startsWith(eventTickerPrefix.toUpperCase())) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Brief highlight flash
+                card.style.transition = 'box-shadow 0.3s';
+                card.style.boxShadow = '0 0 20px rgba(0,170,255,0.5), inset 0 0 12px rgba(0,170,255,0.1)';
+                setTimeout(() => { card.style.boxShadow = ''; }, 2000);
+                return;
+            }
+        }
+    }, 150);
+}
+
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
 
 async function loadLiveScores() {
@@ -1295,14 +1315,19 @@ function displayEventRow(eventData, container) {
         : (isLive && signal.type === 'swing') ? '#60a5fa'
         : isLive ? '#2a6a3a' : '#2a3447';
     card.style.cssText = `background: #1a1f2e; border: 1px solid ${borderColor}; border-radius: 8px; padding: 16px; margin-bottom: 12px; ${glowStyle}`;
+    card.setAttribute('data-event-ticker', eventData.eventTicker || '');
 
     // Event header (title + sport + date)
     const header = document.createElement('div');
     header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom: 8px;';
 
-    const titleSpan = document.createElement('span');
-    titleSpan.style.cssText = 'font-size: 15px; font-weight: 600; color: #ffffff;';
+    const titleSpan = document.createElement('a');
+    const kalshiTitleUrl = `https://kalshi.com/markets/${(eventData.eventTicker || '').split('-')[0]}/${eventData.eventTicker || ''}`;
+    titleSpan.href = kalshiTitleUrl;
+    titleSpan.target = '_blank';
+    titleSpan.style.cssText = 'font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none;';
     titleSpan.textContent = `${emoji} ${eventData.eventTitle}`;
+    titleSpan.title = 'Open on Kalshi';
     header.appendChild(titleSpan);
 
     // Sport + date badges
@@ -1362,17 +1387,15 @@ function displayEventRow(eventData, container) {
     // Categorize markets
     const categorized = categorizeMarkets(eventData.markets);
     
-    // Display winner markets — each team is its own row with clear team label
-    categorized.winners.forEach(m => {
-        let winLabel;
+    // Helper: generate winner row label
+    function getWinnerLabel(m, prefix) {
         const isTennis = (m.event_ticker || m.ticker || '').toUpperCase().match(/KXATP|KXWTA/);
+        let winLabel;
         if (isTennis) {
-            // Extract full player name from title: "Will Mackenzie McDonald win the ..."
             const nameMatch = (m.title || '').match(/^Will\s+(.+?)\s+win\s/i);
             winLabel = nameMatch ? nameMatch[1] : getTeamLabelFromTicker(m.ticker);
         } else {
             const teamLabel = getTeamLabelFromTicker(m.ticker);
-            // Avoid 'Win Win' for teams whose name is 'Win' (e.g. Winthrop code WIN)
             if (!teamLabel || teamLabel === 'Winner') {
                 winLabel = 'Winner';
             } else if (teamLabel.toLowerCase().endsWith('win')) {
@@ -1381,7 +1404,21 @@ function displayEventRow(eventData, container) {
                 winLabel = `${teamLabel} Win`;
             }
         }
-        marketsGrid.appendChild(createMarketRow(m, winLabel));
+        return prefix ? `${prefix} ${winLabel}` : winLabel;
+    }
+
+    // Filter out Draw/TIE markets for sports where draws are impossible
+    const noDrawSports = ['nba', 'ncaab', 'ncaaw', 'ncaaf'];
+    const skipDraws = noDrawSports.includes(sport);
+
+    // Display winner markets — each team is its own row with clear team label
+    categorized.winners.forEach(m => {
+        // Skip Draw/TIE for basketball/football — overtime means no draws
+        if (skipDraws) {
+            const suffix = (m.ticker || '').split('-').pop().toUpperCase();
+            if (suffix === 'TIE' || suffix === 'DRAW') return;
+        }
+        marketsGrid.appendChild(createMarketRow(m, getWinnerLabel(m, '')));
     });
     
     // Display spreads — show primary spread (closest to pick-em), rest in own collapsible
@@ -1418,6 +1455,32 @@ function displayEventRow(eventData, container) {
             marketsGrid.appendChild(totalSection);
         }
     }
+
+    // ── First Half markets — show in collapsible sections ──
+    // 1H Winners
+    if (categorized.firstHalfWinners.length > 0) {
+        const fhWinners = skipDraws
+            ? categorized.firstHalfWinners.filter(m => {
+                const suffix = (m.ticker || '').split('-').pop().toUpperCase();
+                return suffix !== 'TIE' && suffix !== 'DRAW';
+            })
+            : categorized.firstHalfWinners;
+        if (fhWinners.length > 0) {
+            const sportEmoji = sport === 'nba' || sport === 'ncaab' || sport === 'ncaaw' ? '🏀' : sport === 'nfl' || sport === 'ncaaf' ? '🏈' : sport === 'nhl' ? '🏒' : '⏱️';
+            const fhWinSection = createCollapsible(`${sportEmoji} 1st Half Winner`, fhWinners, m => getWinnerLabel(m, '1H'), `${eventData.gameId}_1h_winners`);
+            marketsGrid.appendChild(fhWinSection);
+        }
+    }
+    // 1H Spreads
+    if (categorized.firstHalfSpreads.length > 0) {
+        const fhSpreadSection = createCollapsible('📊 1st Half Spreads', categorized.firstHalfSpreads, m => extractSubtitle(m.title) || '1H Spread', `${eventData.gameId}_1h_spreads`);
+        marketsGrid.appendChild(fhSpreadSection);
+    }
+    // 1H Totals
+    if (categorized.firstHalfTotals.length > 0) {
+        const fhTotalSection = createCollapsible('📊 1st Half Totals', categorized.firstHalfTotals, m => extractTotalLine(m) || '1H Total', `${eventData.gameId}_1h_totals`);
+        marketsGrid.appendChild(fhTotalSection);
+    }
     
     // Player props — group by stat type with readable labels
     if (categorized.props.length > 0) {
@@ -1437,6 +1500,9 @@ function categorizeMarkets(markets) {
         winners: [],
         spreads: [],
         totals: [],
+        firstHalfWinners: [],
+        firstHalfSpreads: [],
+        firstHalfTotals: [],
         props: []
     };
     
@@ -1449,26 +1515,32 @@ function categorizeMarkets(markets) {
         const event = (market.event_ticker || '').toUpperCase();
         const title = (market.title || '').toUpperCase();
         
+        // Detect 1H markets from title/ticker fallback
+        const is1H = title.includes('FIRST HALF') || title.includes('1H') || ticker.includes('1H');
+        
         // Check series-based prefix in ticker (most reliable)
-        if (ticker.includes('GAME') || event.includes('GAME') || title.includes('WINNER')) return 'winner';
-        if (ticker.includes('SPREAD') || event.includes('SPREAD') || title.includes('WINS BY')) return 'spread';
-        if (ticker.includes('TOTAL') || event.includes('TOTAL') || title.includes('TOTAL POINTS') || title.includes('TOTAL GOALS')) return 'total';
+        if (ticker.includes('GAME') || event.includes('GAME') || title.includes('WINNER')) return is1H ? '1h_winner' : 'winner';
+        if (ticker.includes('SPREAD') || event.includes('SPREAD') || title.includes('WINS BY')) return is1H ? '1h_spread' : 'spread';
+        if (ticker.includes('TOTAL') || event.includes('TOTAL') || title.includes('TOTAL POINTS') || title.includes('TOTAL GOALS')) return is1H ? '1h_total' : 'total';
         
         return 'prop';
     }
     
     markets.forEach(market => {
         const type = getMarketType(market);
-        // Map type to category — handle variants like 1h_spread, 1h_total, 1h_winner
+        // Map type to category — separate 1H markets from full game
         let cat;
-        if (type === 'winner' || type.endsWith('_winner')) cat = 'winners';
-        else if (type === 'spread' || type.endsWith('_spread')) cat = 'spreads';
-        else if (type === 'total' || type.endsWith('_total')) cat = 'totals';
+        if (type === '1h_winner') cat = 'firstHalfWinners';
+        else if (type === '1h_spread') cat = 'firstHalfSpreads';
+        else if (type === '1h_total') cat = 'firstHalfTotals';
+        else if (type === 'winner') cat = 'winners';
+        else if (type === 'spread') cat = 'spreads';
+        else if (type === 'total') cat = 'totals';
         else cat = 'props';
         result[cat].push(market);
     });
     
-    console.log(`  Categorized: W=${result.winners.length} S=${result.spreads.length} T=${result.totals.length} Props=${result.props.length}`);
+    console.log(`  Categorized: W=${result.winners.length} S=${result.spreads.length} T=${result.totals.length} 1H-W=${result.firstHalfWinners.length} 1H-S=${result.firstHalfSpreads.length} 1H-T=${result.firstHalfTotals.length} Props=${result.props.length}`);
     return result;
 }
 
@@ -3266,6 +3338,7 @@ async function loadBots() {
         const response = await fetch(`${API_BASE}/bot/list`);
         const data = await response.json();
         const bots = data.bots || {};
+        const gameScores = data.game_scores || {};
         const botIds = Object.keys(bots);
 
         const section = document.getElementById('bots-section');
@@ -3343,11 +3416,20 @@ async function loadBots() {
             const groupHeader = document.createElement('div');
             groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00aaff;border-radius:4px;font-size:12px;';
             const sampleTicker = (sampleBot.ticker || '').toUpperCase();
-            const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : '📊';
+            const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+            const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+            // Live score from backend
+            const gs = gameScores[gameKey] || {};
+            let scoreHtml = '';
+            if (gs.home_score !== undefined) {
+                const sd = gs.status_detail || '';
+                scoreHtml = `<span style="color:#fff;font-weight:700;font-size:11px;margin-left:8px;">${gs.away_score} - ${gs.home_score}</span><span style="color:#8892a6;font-size:9px;margin-left:4px;">${sd}</span>`;
+            }
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:#00aaff;font-weight:700;">${sportIcon} ${groupMatchup}</span>
+                    <a href="#" onclick="navigateToMarket('${sampleTicker.split('-')[0]}');return false;" style="color:#00aaff;font-weight:700;text-decoration:none;" title="View in Markets tab">${sportIcon} ${groupMatchup}</a>
                     <span style="color:#8892a6;font-size:10px;">${groupPhase}</span>
+                    ${scoreHtml}
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;">
                     <span style="color:#8892a6;font-size:10px;">${groupBots.length} bot${groupBots.length > 1 ? 's' : ''}</span>
@@ -3731,10 +3813,10 @@ async function loadBots() {
                     })()}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
-                    <span>🎟 ${bot.ticker || '?'}</span>
+                    <a href="#" onclick="navigateToMarket('${(bot.ticker||'').split('-')[0]}');return false;" style="color:#555;text-decoration:none;" title="View in Markets tab">🎟 ${bot.ticker || '?'}</a>
                     <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
                     <span>🛡 Flip: <strong style="color:#00aaff;">${flipThresh}¢</strong></span>
-                    <span>Cost: <strong style="color:#8892a6;">$${((bot.yes_price + bot.no_price) * qty / 100).toFixed(2)}</strong></span>
+                    <span>Cost: <strong style="color:#8892a6;">$${((100 - profit) * qty / 100).toFixed(2)}</strong></span>
                     <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
                     <span>🤖 On</span>
@@ -3782,19 +3864,66 @@ async function autoResumeMonitor() {
 
 // Cancel bot
 async function cancelBot(botId) {
-    if (!confirm('Cancel this bot?')) return;
+    if (!confirm('Cancel this bot? Filled positions will be sold at market.')) return;
+    
+    // Disable all cancel buttons to prevent double-clicks
+    const allCancelBtns = document.querySelectorAll(`button[onclick*="cancelBot"]`);
+    const clickedBtn = [...allCancelBtns].find(b => b.onclick?.toString().includes(botId) || b.getAttribute('onclick')?.includes(botId));
+    if (clickedBtn) {
+        clickedBtn.disabled = true;
+        clickedBtn.textContent = '⏳';
+        clickedBtn.style.opacity = '0.5';
+    }
     
     try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 35000); // 35s timeout
+        
         const response = await fetch(`${API_BASE}/bot/cancel/${botId}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            signal: controller.signal,
         });
+        clearTimeout(timeout);
         
         const data = await response.json();
         if (data.success) {
+            // Show feedback about what happened
+            const parts = [];
+            if (data.sold_positions?.length) {
+                // Show sell prices for each position
+                const sellPrices = data.sell_prices || {};
+                const sellDetails = data.sold_positions.map(sp => {
+                    const side = sp.startsWith('YES') ? 'yes' : sp.startsWith('NO') ? 'no' : '';
+                    const price = sellPrices[side];
+                    return price ? `${sp} @ ${price}¢` : sp;
+                });
+                parts.push(`Sold: ${sellDetails.join(', ')}`);
+            }
+            if (data.cancelled_orders?.length) parts.push(`Cancelled: ${data.cancelled_orders.join(', ')}`);
+            if (data.warnings?.length) {
+                alert(`⚠️ Bot cancelled with warnings:\n${data.warnings.join('\n')}\n\n${parts.join(' | ')}`);
+            } else if (data.sold_positions?.length) {
+                // Show a brief toast/alert with sell info
+                alert(`✅ Bot cancelled\n${parts.join('\n')}`);
+            }
             loadBots();
+        } else {
+            alert(`Failed to cancel bot: ${data.error || 'Unknown error'}`);
         }
     } catch (error) {
-        alert('Error cancelling bot: ' + error.message);
+        if (error.name === 'AbortError') {
+            alert('Cancel request timed out — the server may still be processing. Check your positions on Kalshi.');
+        } else {
+            alert('Error cancelling bot: ' + error.message);
+        }
+    } finally {
+        // Re-enable buttons
+        if (clickedBtn) {
+            clickedBtn.disabled = false;
+            clickedBtn.textContent = '✕';
+            clickedBtn.style.opacity = '1';
+        }
+        loadBots();
     }
 }
 
@@ -3933,7 +4062,7 @@ function setBuddyMood(mood) {
     const buddy = document.getElementById('bot-buddy');
     if (!buddy) return;
     // Remove all mood classes
-    buddy.classList.remove('mood-happy', 'mood-neutral', 'mood-worried', 'mood-celebrating');
+    buddy.classList.remove('mood-happy', 'mood-neutral', 'mood-worried', 'mood-celebrating', 'mood-focused', 'mood-alert');
     buddy.classList.add(`mood-${mood}`);
     buddyCurrentMood = mood;
 }
@@ -3959,7 +4088,7 @@ function buddyReactToEvent(action) {
             setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
         }, 6000);
     } else if (action.action === 'stop_loss_watch') {
-        setBuddyMood('worried');
+        setBuddyMood('alert');
         updateBotBuddyMsg('stop_loss');
         clearTimeout(buddyCelebrationTimeout);
         buddyCelebrationTimeout = setTimeout(() => {
@@ -3980,7 +4109,12 @@ function buddyReactToEvent(action) {
     } else if (action.action === 'fav_stale_cancelled') {
         updateBotBuddyMsg('scanning');
     } else if (action.action === 'holding_yes' || action.action === 'holding_no') {
+        setBuddyMood('focused');
         updateBotBuddyMsg('holding');
+        clearTimeout(buddyCelebrationTimeout);
+        buddyCelebrationTimeout = setTimeout(() => {
+            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
+        }, 10000);
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled');
@@ -4827,8 +4961,21 @@ async function loadTradeHistory() {
             }
             if (gc.score_diff !== undefined && gc.score_diff >= 0) {
                 const diffColor = gc.score_diff <= 5 ? '#00ff88' : gc.score_diff <= 15 ? '#ffaa00' : '#ff4444';
-                gameCtxHtml += `<span style="background:#1e274022;color:${diffColor};padding:1px 5px;border-radius:3px;font-size:9px;">±${gc.score_diff}</span>`;
+                gameCtxHtml += `<span style="background:#1e274022;color:${diffColor};padding:1px 5px;border-radius:3px;font-size:9px;" title="Score differential at close">Diff: ±${gc.score_diff}</span>`;
             }
+
+            // Cycle info for repeat bots in history
+            const histRepeatsDone = t.repeats_done || 0;
+            const histRepeatCount = t.repeat_count || 0;
+            const histTotalRuns = histRepeatCount + 1;
+            let histCycleHtml = '';
+            if (histTotalRuns > 1) {
+                histCycleHtml = `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">Run ${Math.min(histRepeatsDone + 1, histTotalRuns)}/${histTotalRuns}</span>`;
+            }
+
+            // Kalshi market link
+            const tickerParts = (t.ticker || '').split('-');
+            const kalshiMarketUrl = t.ticker ? `https://kalshi.com/markets/${tickerParts[0]}/${t.ticker}` : '';
 
             // Analytics detail row (arb + watch trades)
             let analyticsRow = '';
@@ -4858,9 +5005,10 @@ async function loadTradeHistory() {
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
                             <span style="background:${typeColor}22;color:${typeColor};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${tradeType}</span>
                             ${gameCtxHtml}
+                            ${histCycleHtml}
                             ${verified}
                         </div>
-                        <div style="color:#555;font-size:10px;margin-bottom:4px;">${t.ticker || ''}</div>
+                        <div style="color:#555;font-size:10px;margin-bottom:4px;">${kalshiMarketUrl ? `<a href="${kalshiMarketUrl}" target="_blank" style="color:#555;text-decoration:none;" title="Open on Kalshi">${t.ticker || ''}</a>` : (t.ticker || '')}</div>
                         <div style="display:flex;gap:12px;font-size:11px;">
                             <span style="color:#8892a6;">Placed: <strong style="color:#aaa;">${placedTime || '—'}</strong></span>
                             <span style="color:#8892a6;">Closed: <strong style="color:#aaa;">${time}</strong></span>

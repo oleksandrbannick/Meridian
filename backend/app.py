@@ -1531,6 +1531,34 @@ def _get_game_context(ticker: str) -> dict:
     return {}
 
 
+def _get_game_score_for_ticker(ticker: str) -> dict:
+    """Get live game score info for a ticker (for bot list UI display).
+    Returns {home_team, away_team, home_score, away_score, period, clock, status_detail, status} or {}."""
+    _refresh_espn_cache()
+    info = _espn_cache['data']
+    if not info:
+        return {}
+    candidates = _get_all_ticker_team_candidates(ticker)
+    if not candidates:
+        t1, t2 = _parse_ticker_teams(ticker)
+        candidates = [c for c in [t1, t2] if c]
+    # Find any candidate that has score data
+    for code in candidates:
+        espn_code = _KALSHI_TO_ESPN.get(code, code)
+        entry = info.get(code) or info.get(espn_code)
+        if entry and (entry.get('status') in ('in', 'post')):
+            return {
+                'home_score': entry.get('home_score', 0),
+                'away_score': entry.get('away_score', 0),
+                'score_diff': entry.get('score_diff', 0),
+                'period': entry.get('period', 0),
+                'clock': entry.get('clock', ''),
+                'status_detail': entry.get('status_detail', ''),
+                'status': entry.get('status', ''),
+            }
+    return {}
+
+
 def _get_game_time(ticker: str) -> str:
     """Get game start time from ESPN cache for a given ticker. Returns e.g. '7:30 PM' or ''."""
     _refresh_espn_cache()
@@ -2182,6 +2210,7 @@ def _run_monitor():
                                 profit_cents = (100 - real_yes - real_no) * qty
                                 bot['status'] = 'completed'
                                 bot['completed_at'] = now
+                                orig_repeat_count = bot.get('repeat_count', 0)
                                 bot['repeat_count'] = 0
                                 session_pnl['gross_profit_cents'] += profit_cents
                                 session_pnl['completed_bots'] += 1
@@ -2192,6 +2221,8 @@ def _run_monitor():
                                     'result': 'completed', 'timestamp': now,
                                     'note': f'market {mkt_status} — both legs filled',
                                     'game_phase': bot.get('game_phase', ''),
+                                    'repeats_done': bot.get('repeats_done', 0),
+                                    'repeat_count': orig_repeat_count,
                                 })
                                 bot_log('SETTLEMENT_COMPLETE', bot_id, {'profit_cents': profit_cents, 'real_yes': real_yes, 'real_no': real_no, 'market_status': mkt_status})
                                 print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
@@ -2203,6 +2234,7 @@ def _run_monitor():
                                         kalshi_client.cancel_order(bot['no_order_id'])
                                     except Exception:
                                         pass
+                                orig_repeat_count = bot.get('repeat_count', 0)
                                 bot['repeat_count'] = 0
                                 if mkt_result == 'yes':
                                     # YES won — our YES position pays out 100¢ each
@@ -2221,6 +2253,8 @@ def _run_monitor():
                                         'arb_width': bot.get('arb_width', 0),
                                         'first_leg': bot.get('first_leg', ''),
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                        'repeats_done': bot.get('repeats_done', 0),
+                                        'repeat_count': orig_repeat_count,
                                     })
                                     bot_log('SETTLEMENT_WIN', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'profit_cents': profit, 'market_result': mkt_result})
                                     print(f'🏆 SETTLED WIN: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢), market settled YES, +{profit}¢')
@@ -2241,6 +2275,8 @@ def _run_monitor():
                                         'arb_width': bot.get('arb_width', 0),
                                         'first_leg': bot.get('first_leg', ''),
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                        'repeats_done': bot.get('repeats_done', 0),
+                                        'repeat_count': orig_repeat_count,
                                     })
                                     bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'loss_cents': loss, 'market_result': mkt_result})
                                     print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢), market settled {mkt_result or "NO"}, -{loss}¢')
@@ -2252,6 +2288,7 @@ def _run_monitor():
                                         kalshi_client.cancel_order(bot['yes_order_id'])
                                     except Exception:
                                         pass
+                                orig_repeat_count = bot.get('repeat_count', 0)
                                 bot['repeat_count'] = 0
                                 if mkt_result == 'no':
                                     # NO won — our NO position pays out 100¢ each
@@ -2270,6 +2307,8 @@ def _run_monitor():
                                         'arb_width': bot.get('arb_width', 0),
                                         'first_leg': bot.get('first_leg', ''),
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                        'repeats_done': bot.get('repeats_done', 0),
+                                        'repeat_count': orig_repeat_count,
                                     })
                                     bot_log('SETTLEMENT_WIN', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'profit_cents': profit, 'market_result': mkt_result})
                                     print(f'🏆 SETTLED WIN: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢), market settled NO, +{profit}¢')
@@ -2290,6 +2329,8 @@ def _run_monitor():
                                         'arb_width': bot.get('arb_width', 0),
                                         'first_leg': bot.get('first_leg', ''),
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                        'repeats_done': bot.get('repeats_done', 0),
+                                        'repeat_count': orig_repeat_count,
                                     })
                                     bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'loss_cents': loss, 'market_result': mkt_result})
                                     print(f'⚠ SETTLED LOSS: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢), market settled {mkt_result or "YES"}, -{loss}¢')
@@ -2929,6 +2970,8 @@ def _run_monitor():
                         'flip_threshold': bot.get('flip_threshold', FLIP_THRESHOLD_CENTS),
                         'stop_loss_cents': bot.get('stop_loss_cents', 0),
                         'game_context': _get_game_context(ticker),
+                        'repeats_done': bot.get('repeats_done', 0),
+                        'repeat_count': bot.get('repeat_count', 0),
                     })
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
                     bot_log('ARB_COMPLETED', bot_id, {'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents, 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None})
@@ -3157,6 +3200,7 @@ def _run_monitor():
                                     kalshi_client.cancel_order(bot['no_order_id'])
                             except Exception:
                                 pass
+                            orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
@@ -3179,6 +3223,8 @@ def _run_monitor():
                                 'game_phase': bot.get('game_phase', 'live'),
                                 'flip_threshold': flip_thresh,
                                 'game_context': _get_game_context(ticker),
+                                'repeats_done': bot.get('repeats_done', 0),
+                                'repeat_count': orig_repeat_count,
                             })
                             actions.append({'bot_id': bot_id, 'action': 'flip_yes',
                                             'entry': entry_yes, 'exit_bid': actual_sell,
@@ -3195,6 +3241,7 @@ def _run_monitor():
                                     kalshi_client.cancel_order(bot['no_order_id'])
                                 except Exception:
                                     pass
+                                orig_repeat_count_fe = bot.get('repeat_count', 0)
                                 bot['status'] = 'stopped'
                                 bot['repeat_count'] = 0
                                 bot['stopped_at'] = now
@@ -3208,6 +3255,8 @@ def _run_monitor():
                                     'result': 'force_exit_yes', 'timestamp': now,
                                     'note': f'sell failed {retries}x — forced exit',
                                     'game_phase': bot.get('game_phase', 'live'),
+                                    'repeats_done': bot.get('repeats_done', 0),
+                                    'repeat_count': orig_repeat_count_fe,
                                 })
                                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
                                 actions.append({'bot_id': bot_id, 'action': 'force_exit_yes', 'retries': retries})
@@ -3256,6 +3305,7 @@ def _run_monitor():
                                     kalshi_client.cancel_order(bot['yes_order_id'])
                             except Exception:
                                 pass
+                            orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
@@ -3278,6 +3328,8 @@ def _run_monitor():
                                 'game_phase': bot.get('game_phase', 'live'),
                                 'flip_threshold': flip_thresh,
                                 'game_context': _get_game_context(ticker),
+                                'repeats_done': bot.get('repeats_done', 0),
+                                'repeat_count': orig_repeat_count,
                             })
                             actions.append({'bot_id': bot_id, 'action': 'flip_no',
                                             'entry': entry_no, 'exit_bid': actual_sell,
@@ -3294,6 +3346,7 @@ def _run_monitor():
                                     kalshi_client.cancel_order(bot['yes_order_id'])
                                 except Exception:
                                     pass
+                                orig_repeat_count_fe = bot.get('repeat_count', 0)
                                 bot['status'] = 'stopped'
                                 bot['repeat_count'] = 0
                                 bot['stopped_at'] = now
@@ -3307,6 +3360,8 @@ def _run_monitor():
                                     'result': 'force_exit_no', 'timestamp': now,
                                     'note': f'sell failed {retries}x — forced exit',
                                     'game_phase': bot.get('game_phase', 'live'),
+                                    'repeats_done': bot.get('repeats_done', 0),
+                                    'repeat_count': orig_repeat_count_fe,
                                 })
                                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
                                 actions.append({'bot_id': bot_id, 'action': 'force_exit_no', 'retries': retries})
@@ -3350,7 +3405,20 @@ def list_bots():
                     bot['live_no_bid']  = ws_p.get('no_bid', 0)
                     bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
                     bot['live_no_ask']  = ws_p.get('no_ask', 0)
-    return jsonify({'bots': active_bots})
+
+    # Gather live scores per game-key for frontend display
+    game_scores = {}
+    for bid, bot in active_bots.items():
+        if bot.get('status') in ('completed', 'stopped'):
+            continue
+        ticker = bot.get('ticker', '')
+        parts = ticker.split('-')
+        gk = parts[1] if len(parts) >= 2 else parts[0]
+        if gk not in game_scores:
+            score_info = _get_game_score_for_ticker(ticker)
+            if score_info:
+                game_scores[gk] = score_info
+    return jsonify({'bots': active_bots, 'game_scores': game_scores})
 
 
 @app.route('/api/bot/history', methods=['GET'])
@@ -3673,146 +3741,245 @@ def set_bot_phase(bot_id):
 def cancel_bot(bot_id):
     """Cancel a bot and its outstanding limit orders.
     SAFETY: If one side has filled contracts, sell them first to avoid orphaned positions.
+    Acquires monitor_lock to prevent races with the monitor loop.
     """
     if bot_id not in active_bots:
         return jsonify({'error': 'Bot not found'}), 404
 
-    bot = active_bots[bot_id]
-    cancelled = []
-    sold_positions = []
-    warnings = []
-    ticker = bot.get('ticker', '')
+    # Acquire monitor lock to prevent race with monitor loop
+    lock_acquired = monitor_lock.acquire(blocking=True, timeout=30)
+    if not lock_acquired:
+        return jsonify({'error': 'Server busy — monitor cycle in progress. Try again in a few seconds.'}), 503
 
-    if kalshi_client:
-        yes_filled = bot.get('yes_fill_qty', 0)
-        no_filled = bot.get('no_fill_qty', 0)
-        qty = bot.get('quantity', 1)
-        bot_type = bot.get('type', 'arb')
+    try:
+        # Re-check after acquiring lock (bot may have been removed by monitor)
+        if bot_id not in active_bots:
+            return jsonify({'error': 'Bot was already removed'}), 404
 
-        # ── Handle watch bots ──
-        if bot_type == 'watch':
-            watch_side = bot.get('side', 'yes')
-            if bot.get('order_filled', False):
-                # Position exists — sell it before deleting
+        bot = active_bots[bot_id]
+        cancelled = []
+        sold_positions = []
+        warnings = []
+        sell_prices = {}  # Track actual sell prices: {'yes': price_cents, 'no': price_cents}
+        ticker = bot.get('ticker', '')
+
+        if kalshi_client:
+            yes_filled = bot.get('yes_fill_qty', 0)
+            no_filled = bot.get('no_fill_qty', 0)
+            qty = bot.get('quantity', 1)
+            bot_type = bot.get('type', 'arb')
+
+            # ── Handle watch bots ──
+            if bot_type == 'watch':
+                watch_side = bot.get('side', 'yes')
+                if bot.get('order_filled', False):
+                    watch_qty = bot.get('fill_qty', bot.get('quantity', 1))
+                    sold, sell_info = execute_sell(ticker, watch_side, watch_qty, reason=f'cancel_watch_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'{watch_side.upper()} {watch_qty}x')
+                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
+                        sell_prices[watch_side] = sp
+                    else:
+                        warnings.append(f'FAILED to sell {watch_side.upper()} {watch_qty}x — position may still be open on Kalshi!')
+                elif bot.get('order_id'):
+                    try:
+                        kalshi_client.cancel_order(bot['order_id'])
+                        cancelled.append(watch_side.upper())
+                    except Exception as e:
+                        print(f'⚠ cancel_bot({bot_id}): cancel watch order failed: {e}')
+                        warnings.append(f'Could not cancel {watch_side.upper()} order: {e}')
+
+            # ── Handle arb bots ──
+            else:
+                # YES side: sell if filled, cancel+sell if partial, cancel if unfilled
+                if yes_filled >= qty:
+                    sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_yes_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'YES {yes_filled}x')
+                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
+                        sell_prices['yes'] = sp
+                    else:
+                        warnings.append(f'FAILED to sell YES {yes_filled}x — position may still be open on Kalshi!')
+                elif yes_filled > 0:
+                    # PARTIAL FILL — cancel resting order AND sell filled contracts
+                    if bot.get('yes_order_id'):
+                        try:
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                            cancelled.append('YES order')
+                        except Exception as e:
+                            print(f'⚠ cancel_bot({bot_id}): cancel partial YES order failed: {e}')
+                    sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_partial_yes_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'YES {yes_filled}x (partial)')
+                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
+                        sell_prices['yes'] = sp
+                    else:
+                        warnings.append(f'FAILED to sell YES {yes_filled}x (partial) — position may still be open on Kalshi!')
+                elif bot.get('yes_order_id'):
+                    try:
+                        kalshi_client.cancel_order(bot['yes_order_id'])
+                        cancelled.append('YES')
+                    except Exception as e:
+                        print(f'⚠ cancel_bot({bot_id}): cancel YES order failed: {e}')
+                        warnings.append(f'Could not cancel YES order: {e}')
+
+                # NO side: sell if filled, cancel+sell if partial, cancel if unfilled
+                if no_filled >= qty:
+                    sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'cancel_sell_no_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'NO {no_filled}x')
+                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
+                        sell_prices['no'] = sp
+                    else:
+                        warnings.append(f'FAILED to sell NO {no_filled}x — position may still be open on Kalshi!')
+                elif no_filled > 0:
+                    # PARTIAL FILL — cancel resting order AND sell filled contracts
+                    if bot.get('no_order_id'):
+                        try:
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                            cancelled.append('NO order')
+                        except Exception as e:
+                            print(f'⚠ cancel_bot({bot_id}): cancel partial NO order failed: {e}')
+                    sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'cancel_sell_partial_no_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'NO {no_filled}x (partial)')
+                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
+                        sell_prices['no'] = sp
+                    else:
+                        warnings.append(f'FAILED to sell NO {no_filled}x (partial) — position may still be open on Kalshi!')
+                elif bot.get('no_order_id'):
+                    try:
+                        kalshi_client.cancel_order(bot['no_order_id'])
+                        cancelled.append('NO')
+                    except Exception as e:
+                        print(f'⚠ cancel_bot({bot_id}): cancel NO order failed: {e}')
+                        warnings.append(f'Could not cancel NO order: {e}')
+
+        # Record in trade history so manual deletes are tracked
+        if sold_positions:
+            # At least one position was sold — record the exit
+            yes_sold_qty = 0
+            no_sold_qty = 0
+            for sp in sold_positions:
+                if sp.startswith('YES'):
+                    yes_sold_qty = bot.get('yes_fill_qty', 0) or bot.get('fill_qty', 0)
+                elif sp.startswith('NO'):
+                    no_sold_qty = bot.get('no_fill_qty', 0) or bot.get('fill_qty', 0)
+
+            entry_yes = bot.get('yes_price', 0) or bot.get('entry_price', 0)
+            entry_no = bot.get('no_price', 0)
+            qty = bot.get('quantity', 1)
+            bot_type = bot.get('type', 'arb')
+
+            if bot_type == 'watch':
+                # Watch bot — single side exit
+                watch_side = bot.get('side', 'yes')
+                watch_entry = bot.get('entry_price', 0) or (entry_yes if watch_side == 'yes' else entry_no)
+                watch_sell = sell_prices.get(watch_side, 0)
                 watch_qty = bot.get('fill_qty', bot.get('quantity', 1))
-                sold, sell_info = execute_sell(ticker, watch_side, watch_qty, reason=f'cancel_watch_{bot_id}')
-                if sold:
-                    sold_positions.append(f'{watch_side.upper()} {watch_qty}x')
-                else:
-                    warnings.append(f'FAILED to sell {watch_side.upper()} {watch_qty}x — position may still be open on Kalshi!')
-            elif bot.get('order_id'):
-                try:
-                    kalshi_client.cancel_order(bot['order_id'])
-                    cancelled.append(watch_side.upper())
-                except Exception:
-                    pass
-
-        # ── Handle arb bots ──
-        else:
-            # SELL any filled positions FIRST (prevents orphaned exposure)
-            if yes_filled >= qty:
-                sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_yes_{bot_id}')
-                if sold:
-                    sold_positions.append(f'YES {yes_filled}x')
-                else:
-                    warnings.append(f'FAILED to sell YES {yes_filled}x — position may still be open on Kalshi!')
-            elif bot.get('yes_order_id'):
-                try:
-                    kalshi_client.cancel_order(bot['yes_order_id'])
-                    cancelled.append('YES')
-                except Exception:
-                    pass
-
-            if no_filled >= qty:
-                sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'cancel_sell_no_{bot_id}')
-                if sold:
-                    sold_positions.append(f'NO {no_filled}x')
-                else:
-                    warnings.append(f'FAILED to sell NO {no_filled}x — position may still be open on Kalshi!')
-            elif bot.get('no_order_id'):
-                try:
-                    kalshi_client.cancel_order(bot['no_order_id'])
-                    cancelled.append('NO')
-                except Exception:
-                    pass
-
-    # Record in trade history so manual deletes are tracked
-    if sold_positions:
-        # At least one position was sold — record the exit
-        yes_sell_price = None
-        no_sell_price = None
-        yes_sold_qty = 0
-        no_sold_qty = 0
-        for sp in sold_positions:
-            if sp.startswith('YES'):
-                yes_sold_qty = bot.get('yes_fill_qty', 0)
-            elif sp.startswith('NO'):
-                no_sold_qty = bot.get('no_fill_qty', 0)
-
-        # Calculate P&L from the sells
-        # If both sides were filled and sold, it's like a completed arb
-        # If only one side was filled and sold, we sold at market bid (a loss)
-        entry_yes = bot.get('yes_price', 0)
-        entry_no = bot.get('no_price', 0)
-        qty = bot.get('quantity', 1)
-        bot_type = bot.get('type', 'arb')
-
-        if bot_type != 'watch':
-            if yes_sold_qty >= qty and no_sold_qty >= qty:
-                # Both sides were filled — this was a locked arb, manually exited
-                profit = (100 - entry_yes - entry_no) * qty
+                profit = (watch_sell - watch_entry) * watch_qty
                 trade_history.insert(0, {
                     'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': entry_yes, 'no_price': entry_no,
-                    'quantity': qty, 'profit_cents': profit,
+                    'yes_price': watch_entry if watch_side == 'yes' else 0,
+                    'no_price': watch_entry if watch_side == 'no' else 0,
+                    'quantity': watch_qty, 'profit_cents': profit,
+                    'sell_price': watch_sell,
                     'result': 'manual_exit_completed',
                     'timestamp': time.time(),
-                    'note': 'Manually deleted — both legs were filled',
+                    'note': f'Manual exit — {watch_side.upper()} {watch_qty}x sold at {watch_sell}¢ (entry {watch_entry}¢)',
                     'game_phase': bot.get('game_phase', ''),
-                    'arb_width': bot.get('arb_width', 0),
-                    'first_leg': bot.get('first_leg', ''),
                     'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                 })
-                session_pnl['gross_profit_cents'] += max(0, profit)
-                if profit < 0:
+                if profit >= 0:
+                    session_pnl['gross_profit_cents'] += profit
+                else:
                     session_pnl['gross_loss_cents'] += abs(profit)
-            elif yes_sold_qty >= qty:
-                # Only YES was filled and sold at market — record the exit
-                trade_history.insert(0, {
-                    'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': entry_yes, 'no_price': entry_no,
-                    'quantity': yes_sold_qty,
-                    'result': 'manual_exit_yes',
-                    'timestamp': time.time(),
-                    'note': f'Manually deleted — YES {yes_sold_qty}x sold at market',
-                    'game_phase': bot.get('game_phase', ''),
-                    'arb_width': bot.get('arb_width', 0),
-                    'first_leg': bot.get('first_leg', ''),
-                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
-                })
-            elif no_sold_qty >= qty:
-                # Only NO was filled and sold at market — record the exit
-                trade_history.insert(0, {
-                    'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': entry_yes, 'no_price': entry_no,
-                    'quantity': no_sold_qty,
-                    'result': 'manual_exit_no',
-                    'timestamp': time.time(),
-                    'note': f'Manually deleted — NO {no_sold_qty}x sold at market',
-                    'game_phase': bot.get('game_phase', ''),
-                    'arb_width': bot.get('arb_width', 0),
-                    'first_leg': bot.get('first_leg', ''),
-                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
-                })
-        bot_log('MANUAL_DELETE', bot_id, {'sold': sold_positions, 'cancelled': cancelled})
+                session_pnl['completed_bots'] += 1
 
-    del active_bots[bot_id]
-    save_state()
+            elif bot_type != 'watch':
+                if yes_sold_qty > 0 and no_sold_qty > 0:
+                    # Both sides were filled — this was a locked arb, manually exited
+                    profit = (100 - entry_yes - entry_no) * min(yes_sold_qty, no_sold_qty)
+                    trade_history.insert(0, {
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': entry_yes, 'no_price': entry_no,
+                        'quantity': min(yes_sold_qty, no_sold_qty), 'profit_cents': profit,
+                        'sell_price_yes': sell_prices.get('yes', 0),
+                        'sell_price_no': sell_prices.get('no', 0),
+                        'result': 'manual_exit_completed',
+                        'timestamp': time.time(),
+                        'note': f'Manual exit — YES sold at {sell_prices.get("yes", "?")}¢, NO sold at {sell_prices.get("no", "?")}¢',
+                        'game_phase': bot.get('game_phase', ''),
+                        'arb_width': bot.get('arb_width', 0),
+                        'first_leg': bot.get('first_leg', ''),
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'repeats_done': bot.get('repeats_done', 0),
+                        'repeat_count': bot.get('repeat_count', 0),
+                    })
+                    if profit >= 0:
+                        session_pnl['gross_profit_cents'] += profit
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(profit)
+                    session_pnl['completed_bots'] += 1
+                elif yes_sold_qty > 0:
+                    # Only YES was filled and sold at market
+                    yes_sell = sell_prices.get('yes', 0)
+                    profit = (yes_sell - entry_yes) * yes_sold_qty
+                    trade_history.insert(0, {
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': entry_yes, 'no_price': entry_no,
+                        'quantity': yes_sold_qty, 'profit_cents': profit,
+                        'sell_price': yes_sell,
+                        'result': 'manual_exit_yes',
+                        'timestamp': time.time(),
+                        'note': f'Manual exit — YES {yes_sold_qty}x sold at {yes_sell}¢ (entry {entry_yes}¢, P&L {profit:+d}¢)',
+                        'game_phase': bot.get('game_phase', ''),
+                        'arb_width': bot.get('arb_width', 0),
+                        'first_leg': bot.get('first_leg', ''),
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'repeats_done': bot.get('repeats_done', 0),
+                        'repeat_count': bot.get('repeat_count', 0),
+                    })
+                    if profit >= 0:
+                        session_pnl['gross_profit_cents'] += profit
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(profit)
+                    session_pnl['completed_bots'] += 1
+                elif no_sold_qty > 0:
+                    # Only NO was filled and sold at market
+                    no_sell = sell_prices.get('no', 0)
+                    profit = (no_sell - entry_no) * no_sold_qty
+                    trade_history.insert(0, {
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': entry_yes, 'no_price': entry_no,
+                        'quantity': no_sold_qty, 'profit_cents': profit,
+                        'sell_price': no_sell,
+                        'result': 'manual_exit_no',
+                        'timestamp': time.time(),
+                        'note': f'Manual exit — NO {no_sold_qty}x sold at {no_sell}¢ (entry {entry_no}¢, P&L {profit:+d}¢)',
+                        'game_phase': bot.get('game_phase', ''),
+                        'arb_width': bot.get('arb_width', 0),
+                        'first_leg': bot.get('first_leg', ''),
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                        'repeats_done': bot.get('repeats_done', 0),
+                        'repeat_count': bot.get('repeat_count', 0),
+                    })
+                    if profit >= 0:
+                        session_pnl['gross_profit_cents'] += profit
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(profit)
+                    session_pnl['completed_bots'] += 1
+                bot_log('MANUAL_DELETE', bot_id, {'sold': sold_positions, 'cancelled': cancelled, 'sell_prices': sell_prices})
 
-    result = {'success': True, 'cancelled_orders': cancelled, 'sold_positions': sold_positions}
-    if warnings:
-        result['warnings'] = warnings
-    return jsonify(result)
+        del active_bots[bot_id]
+        save_state()
+
+        result = {'success': True, 'cancelled_orders': cancelled, 'sold_positions': sold_positions, 'sell_prices': sell_prices}
+        if warnings:
+            result['warnings'] = warnings
+        return jsonify(result)
+    finally:
+        monitor_lock.release()
 
 
 @app.route('/api/bot/scan', methods=['GET'])

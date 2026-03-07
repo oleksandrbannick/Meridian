@@ -2926,7 +2926,7 @@ function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 40;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const total  = yes + no;
     const profit = 100 - total;
     const isArb  = profit > 0;
@@ -3039,7 +3039,7 @@ function applyPreset(width) {
 function updateBreakevenDisplay() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no  = parseInt(document.getElementById('bot-no-price')?.value)  || 0;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 40;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const width = 100 - yes - no;
     const favEntry = Math.max(yes, no);
     const flipLoss = favEntry >= flipFloor ? favEntry - flipFloor : 0;
@@ -3197,7 +3197,7 @@ async function createBot() {
     const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
-    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 40;
+    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
@@ -3449,7 +3449,7 @@ async function loadBots() {
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
             const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
-            const flipThresh  = bot.flip_threshold || 40;
+            const flipThresh  = bot.flip_threshold || 55;
             const statusClass = {
                 fav_posted:     'monitoring',
                 pending_fills:  'monitoring',
@@ -4291,7 +4291,7 @@ function showScanResults(opportunities, minWidth, totalScanned) {
 async function quickBot(ticker, yesPrice, noPrice) {
     // Read qty from scan modal first, fall back to controls bar
     const quantity        = parseInt(document.getElementById('scan-modal-qty')?.value || document.getElementById('scan-qty')?.value || '1');
-    const flip_threshold  = 40;
+    const flip_threshold  = 55;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
@@ -4574,8 +4574,8 @@ async function loadHistoryStats() {
                 </div>` : ''}
             </div>
 
-            <!-- Result breakdown + Flip analysis -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+            <!-- Result breakdown + Completed + Flip analysis -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;">
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">📊 How Trades End</div>
                     ${totalResults > 0 ? `
@@ -4603,7 +4603,41 @@ async function loadHistoryStats() {
                     </div>` : '<div style="color:#555;font-size:11px;">No data yet</div>'}
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">� Completed Arbs</div>
+                    ${(() => {
+                        const cs = s.completed_stats || {};
+                        if (!cs.total) return '<div style="color:#555;font-size:11px;">No completed arbs yet</div>';
+                        return `
+                        <div style="display:flex;flex-direction:column;gap:6px;">
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Total profit</span>
+                                <span style="color:#00ff88;font-weight:700;font-size:12px;">+${cs.total_profit_cents}¢ ($${(cs.total_profit_cents/100).toFixed(2)})</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Avg profit/trade</span>
+                                <span style="color:#00ff88;font-weight:700;font-size:12px;">+${cs.avg_profit_cents}¢</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Avg per contract</span>
+                                <span style="color:#00ddff;font-weight:700;font-size:12px;">${cs.avg_per_contract}¢</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Best / Worst trade</span>
+                                <span style="color:#fff;font-weight:700;font-size:12px;">+${cs.max_profit_cents}¢ / +${cs.min_profit_cents}¢</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Contracts filled</span>
+                                <span style="color:#fff;font-weight:700;font-size:12px;">${cs.total_contracts} (avg ${cs.avg_quantity})</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Best width</span>
+                                <span style="color:#00ff88;font-weight:700;font-size:12px;">W=${cs.best_width} (+${cs.best_width_profit}¢)</span>
+                            </div>
+                        </div>`;
+                    })()}
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">�🛡 Flip Analysis</div>
                     ${fs.total > 0 ? `
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <div style="display:flex;justify-content:space-between;">
@@ -4746,13 +4780,18 @@ async function loadTradeHistory() {
             const placedTime = placedDt ? placedDt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
             
             // Result styling
-            const isWin = t.result === 'completed' || t.result === 'take_profit_watch';
+            const isWin = t.result === 'completed' || t.result === 'take_profit_watch'
+                         || t.result === 'settled_win_yes' || t.result === 'settled_win_no'
+                         || t.result === 'manual_exit_completed';
             const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
+            const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
+            const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
+            const isManualExit = t.result?.startsWith('manual_exit');
             const pnl = isWin ? (t.profit_cents || 0) : -(t.loss_cents || 0);
             const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
-            const icon = isWin ? '✅' : '⛔';
+            const icon = isWin ? '✅' : (isManualExit ? '🔧' : '⛔');
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))));
             
             // Display name
             const teamName = formatBotDisplayName(t.ticker || '');
@@ -5025,7 +5064,7 @@ function generateBotRiskWarnings() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 40;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
     const total = yes + no;
 
     const warnings = [];
@@ -5044,8 +5083,8 @@ function generateBotRiskWarnings() {
     if (flipFloor < 25) {
         warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is very low — only sells if favorite is nearly eliminated.` });
     }
-    if (flipFloor > 45) {
-        warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is above midpoint — you'll sell during close games, not just flips.` });
+    if (flipFloor > 60) {
+        warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is aggressive — you'll sell on minor dips, not just flips.` });
     }
     // Breakeven warning for flip threshold
     const favEntry = Math.max(yes, no);

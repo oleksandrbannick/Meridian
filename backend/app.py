@@ -1281,7 +1281,7 @@ STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 # from normal game volatility. If the filled leg entered BELOW the threshold
 # (underdog side), no SL fires — max loss is small, position rides to settlement.
 # Watch bots (straight bets / props) keep the old instant entry-minus-X SL.
-FLIP_THRESHOLD_CENTS = 40   # Default: sell if bid ≤ 40¢ (favorite flipped to coin-flip/underdog)
+FLIP_THRESHOLD_CENTS = 55   # Default: sell if bid ≤ 55¢ (favorite no longer clearly favored)
 MIN_FAV_ENTRY_CENTS = 55    # Guardrail: never deploy fav side below this price (catching a falling knife)
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
@@ -2150,9 +2150,11 @@ def _run_monitor():
                     try:
                         api_rate_limiter.wait()
                         mkt_check = kalshi_client.get_market(ticker)
-                        mkt_status = mkt_check.get('market', mkt_check).get('status', 'active')
+                        mkt_data = mkt_check.get('market', mkt_check)
+                        mkt_status = mkt_data.get('status', 'active')
+                        mkt_result = mkt_data.get('result', '')  # 'yes' or 'no' when settled
                         if mkt_status in ('closed', 'settled', 'finalized'):
-                            # Check if one leg was filled — that's a LOSS, not a completion
+                            # Check fill status of each leg
                             try:
                                 # Handle fav_posted bots where one order ID may be None
                                 yes_f = 0
@@ -2194,58 +2196,103 @@ def _run_monitor():
                                 bot_log('SETTLEMENT_COMPLETE', bot_id, {'profit_cents': profit_cents, 'real_yes': real_yes, 'real_no': real_no, 'market_status': mkt_status})
                                 print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
                             elif yes_f >= qty and no_f < qty:
-                                # YES filled, NO never filled — market settled as loss
-                                # Can't sell now (market closed) — record the loss
-                                # YES side: if YES outcome won, we get $1 per contract (profit)
-                                #           if NO outcome won, we lose our cost (yes_price * qty)
-                                # We already bought YES at yes_price. Market settled.
-                                # The position auto-settles on Kalshi, so just record it.
+                                # YES filled, NO never filled — check settlement result
                                 if bot.get('no_order_id'):
                                     try:
                                         api_rate_limiter.wait()
                                         kalshi_client.cancel_order(bot['no_order_id'])
                                     except Exception:
                                         pass
-                                bot['status'] = 'stopped'
                                 bot['repeat_count'] = 0
-                                bot['stopped_at'] = now
-                                loss = bot['yes_price'] * yes_f  # worst-case: lost the entire cost
-                                session_pnl['gross_loss_cents'] += loss
-                                session_pnl['stopped_bots'] += 1
-                                trade_history.insert(0, {
-                                    'bot_id': bot_id, 'ticker': ticker,
-                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
-                                    'quantity': yes_f, 'loss_cents': loss,
-                                    'result': 'settled_loss_yes', 'timestamp': now,
-                                    'note': f'market {mkt_status} — YES filled but NO never filled',
-                                    'game_phase': bot.get('game_phase', ''),
-                                })
-                                bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'loss_cents': loss, 'market_status': mkt_status})
-                                print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢) but NO unfilled, market {mkt_status}')
+                                if mkt_result == 'yes':
+                                    # YES won — our YES position pays out 100¢ each
+                                    profit = (100 - bot['yes_price']) * yes_f
+                                    bot['status'] = 'completed'
+                                    bot['completed_at'] = now
+                                    session_pnl['gross_profit_cents'] += profit
+                                    session_pnl['completed_bots'] += 1
+                                    trade_history.insert(0, {
+                                        'bot_id': bot_id, 'ticker': ticker,
+                                        'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                        'quantity': yes_f, 'profit_cents': profit,
+                                        'result': 'settled_win_yes', 'timestamp': now,
+                                        'note': f'market settled YES — YES leg won, +{profit}¢',
+                                        'game_phase': bot.get('game_phase', ''),
+                                        'arb_width': bot.get('arb_width', 0),
+                                        'first_leg': bot.get('first_leg', ''),
+                                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    })
+                                    bot_log('SETTLEMENT_WIN', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'profit_cents': profit, 'market_result': mkt_result})
+                                    print(f'🏆 SETTLED WIN: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢), market settled YES, +{profit}¢')
+                                else:
+                                    # YES lost — we lose the cost
+                                    bot['status'] = 'stopped'
+                                    bot['stopped_at'] = now
+                                    loss = bot['yes_price'] * yes_f
+                                    session_pnl['gross_loss_cents'] += loss
+                                    session_pnl['stopped_bots'] += 1
+                                    trade_history.insert(0, {
+                                        'bot_id': bot_id, 'ticker': ticker,
+                                        'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                        'quantity': yes_f, 'loss_cents': loss,
+                                        'result': 'settled_loss_yes', 'timestamp': now,
+                                        'note': f'market settled {mkt_result or "NO"} — YES leg lost, -{loss}¢',
+                                        'game_phase': bot.get('game_phase', ''),
+                                        'arb_width': bot.get('arb_width', 0),
+                                        'first_leg': bot.get('first_leg', ''),
+                                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    })
+                                    bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'loss_cents': loss, 'market_result': mkt_result})
+                                    print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢), market settled {mkt_result or "NO"}, -{loss}¢')
                             elif no_f >= qty and yes_f < qty:
-                                # NO filled, YES never filled — same as above but for NO side
+                                # NO filled, YES never filled — check settlement result
                                 if bot.get('yes_order_id'):
                                     try:
                                         api_rate_limiter.wait()
                                         kalshi_client.cancel_order(bot['yes_order_id'])
                                     except Exception:
                                         pass
-                                bot['status'] = 'stopped'
                                 bot['repeat_count'] = 0
-                                bot['stopped_at'] = now
-                                loss = bot['no_price'] * no_f
-                                session_pnl['gross_loss_cents'] += loss
-                                session_pnl['stopped_bots'] += 1
-                                trade_history.insert(0, {
-                                    'bot_id': bot_id, 'ticker': ticker,
-                                    'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
-                                    'quantity': no_f, 'loss_cents': loss,
-                                    'result': 'settled_loss_no', 'timestamp': now,
-                                    'note': f'market {mkt_status} — NO filled but YES never filled',
-                                    'game_phase': bot.get('game_phase', ''),
-                                })
-                                bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'loss_cents': loss, 'market_status': mkt_status})
-                                print(f'⚠ SETTLED LOSS: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢) but YES unfilled, market {mkt_status}')
+                                if mkt_result == 'no':
+                                    # NO won — our NO position pays out 100¢ each
+                                    profit = (100 - bot['no_price']) * no_f
+                                    bot['status'] = 'completed'
+                                    bot['completed_at'] = now
+                                    session_pnl['gross_profit_cents'] += profit
+                                    session_pnl['completed_bots'] += 1
+                                    trade_history.insert(0, {
+                                        'bot_id': bot_id, 'ticker': ticker,
+                                        'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                        'quantity': no_f, 'profit_cents': profit,
+                                        'result': 'settled_win_no', 'timestamp': now,
+                                        'note': f'market settled NO — NO leg won, +{profit}¢',
+                                        'game_phase': bot.get('game_phase', ''),
+                                        'arb_width': bot.get('arb_width', 0),
+                                        'first_leg': bot.get('first_leg', ''),
+                                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    })
+                                    bot_log('SETTLEMENT_WIN', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'profit_cents': profit, 'market_result': mkt_result})
+                                    print(f'🏆 SETTLED WIN: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢), market settled NO, +{profit}¢')
+                                else:
+                                    # NO lost — we lose the cost
+                                    bot['status'] = 'stopped'
+                                    bot['stopped_at'] = now
+                                    loss = bot['no_price'] * no_f
+                                    session_pnl['gross_loss_cents'] += loss
+                                    session_pnl['stopped_bots'] += 1
+                                    trade_history.insert(0, {
+                                        'bot_id': bot_id, 'ticker': ticker,
+                                        'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                                        'quantity': no_f, 'loss_cents': loss,
+                                        'result': 'settled_loss_no', 'timestamp': now,
+                                        'note': f'market settled {mkt_result or "YES"} — NO leg lost, -{loss}¢',
+                                        'game_phase': bot.get('game_phase', ''),
+                                        'arb_width': bot.get('arb_width', 0),
+                                        'first_leg': bot.get('first_leg', ''),
+                                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    })
+                                    bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'loss_cents': loss, 'market_result': mkt_result})
+                                    print(f'⚠ SETTLED LOSS: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢), market settled {mkt_result or "YES"}, -{loss}¢')
                             else:
                                 # Neither leg filled — no cost, just clean up
                                 bot['status'] = 'completed'
@@ -2374,6 +2421,20 @@ def _run_monitor():
                                     cur_fav_bid = round(float(d) * 100) if d else m.get(f'{fav_side}_bid', 0)
 
                                 new_fav_price = min(cur_fav_bid, 98) if cur_fav_bid > 0 else bot['fav_price']
+                                # Falling knife guard: don't repost fav below MIN_FAV_ENTRY_CENTS
+                                if new_fav_price < MIN_FAV_ENTRY_CENTS:
+                                    print(f'🔪 FAV REPOST BLOCKED: {bot_id} {fav_side.upper()} bid={new_fav_price}¢ < {MIN_FAV_ENTRY_CENTS}¢ — falling knife, cancelling')
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(fav_order_id)
+                                    except Exception:
+                                        pass
+                                    bot['status'] = 'completed'
+                                    bot['completed_at'] = now
+                                    bot_log('FAV_FALLING_KNIFE', bot_id, {'fav_side': fav_side, 'bid': new_fav_price, 'min': MIN_FAV_ENTRY_CENTS})
+                                    actions.append({'bot_id': bot_id, 'action': 'fav_falling_knife_cancelled'})
+                                    save_state()
+                                    continue
                                 api_rate_limiter.wait()
                                 kalshi_client.cancel_order(fav_order_id)
                                 api_rate_limiter.wait()
@@ -2963,6 +3024,23 @@ def _run_monitor():
                     # Repost at current bids (never above, just refresh position in queue)
                     new_yes = min(yes_bid, 98)
                     new_no  = min(no_bid,  98)
+                    # Falling knife guard: don't repost if fav side has dropped below MIN_FAV_ENTRY_CENTS
+                    fav_price = max(new_yes, new_no)
+                    if fav_price < MIN_FAV_ENTRY_CENTS:
+                        print(f'🔪 REPOST BLOCKED: {bot_id} fav bid={fav_price}¢ < {MIN_FAV_ENTRY_CENTS}¢ — falling knife, cancelling bot')
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                        except Exception:
+                            pass
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        bot_log('REPOST_FALLING_KNIFE', bot_id, {'yes_bid': new_yes, 'no_bid': new_no, 'min': MIN_FAV_ENTRY_CENTS})
+                        actions.append({'bot_id': bot_id, 'action': 'repost_falling_knife_cancelled'})
+                        save_state()
+                        continue
                     new_profit = 100 - new_yes - new_no
                     min_width = bot.get('arb_width', bot.get('profit_per', 3))
                     if new_profit >= min_width:
@@ -3346,13 +3424,59 @@ def clear_history():
     return jsonify({'success': True, 'message': 'History cleared, P&L reset'})
 
 
+def _compute_completed_stats(arb_wins):
+    """Detailed breakdown of completed (profitable) arb trades."""
+    if not arb_wins:
+        return {'total': 0}
+    profits = [t.get('profit_cents', 0) for t in arb_wins]
+    total_profit = sum(profits)
+    avg_profit = round(total_profit / len(profits)) if profits else 0
+    max_profit = max(profits) if profits else 0
+    min_profit = min(profits) if profits else 0
+    quantities = [t.get('quantity', 1) for t in arb_wins]
+    avg_qty = round(sum(quantities) / len(quantities), 1)
+    total_contracts = sum(quantities)
+    # Per-contract profit
+    per_contract_profits = []
+    for t in arb_wins:
+        q = t.get('quantity', 1)
+        p = t.get('profit_cents', 0)
+        if q > 0:
+            per_contract_profits.append(round(p / q))
+    avg_per_contract = round(sum(per_contract_profits) / len(per_contract_profits)) if per_contract_profits else 0
+    # Best/worst width for completed
+    width_profits = {}
+    for t in arb_wins:
+        w = t.get('arb_width', 0)
+        if w > 0:
+            if w not in width_profits:
+                width_profits[w] = {'count': 0, 'total': 0}
+            width_profits[w]['count'] += 1
+            width_profits[w]['total'] += t.get('profit_cents', 0)
+    best_width = max(width_profits.items(), key=lambda x: x[1]['total'])[0] if width_profits else 0
+    best_width_profit = width_profits[best_width]['total'] if best_width else 0
+    return {
+        'total': len(arb_wins),
+        'total_profit_cents': total_profit,
+        'avg_profit_cents': avg_profit,
+        'max_profit_cents': max_profit,
+        'min_profit_cents': min_profit,
+        'avg_quantity': avg_qty,
+        'total_contracts': total_contracts,
+        'avg_per_contract': avg_per_contract,
+        'best_width': best_width,
+        'best_width_profit': best_width_profit,
+    }
+
+
 @app.route('/api/bot/history/stats', methods=['GET'])
 def history_stats():
     """Compute analytics from trade history for the optimization dashboard."""
     arb_trades = [t for t in trade_history if t.get('type') != 'watch']
     watch_trades = [t for t in trade_history if t.get('type') == 'watch']
 
-    arb_wins = [t for t in arb_trades if t.get('result') == 'completed']
+    WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
+    arb_wins = [t for t in arb_trades if t.get('result', '') in WIN_RESULTS]
     arb_losses = [t for t in arb_trades if t.get('result', '') in (
         'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
@@ -3384,7 +3508,7 @@ def history_stats():
     # Only count flip-threshold trades (current system). Exclude old
     # stop_loss_yes/stop_loss_no trades which used a different risk system
     # and would skew the breakeven % with inflated losses.
-    flip_system_results = ('completed', 'flip_yes', 'flip_no',
+    flip_system_results = WIN_RESULTS + ('flip_yes', 'flip_no',
                            'force_exit_yes', 'force_exit_no',
                            'settled_loss_yes', 'settled_loss_no')
     width_stats = {}
@@ -3398,7 +3522,7 @@ def history_stats():
             width_stats[w] = {'wins': 0, 'losses': 0, 'total_profit': 0,
                               'total_loss': 0, 'fill_durations': [],
                               'flips': 0, 'settled_losses': 0}
-        if t['result'] == 'completed':
+        if t['result'] in WIN_RESULTS:
             width_stats[w]['wins'] += 1
             width_stats[w]['total_profit'] += t.get('profit_cents', 0)
         else:
@@ -3439,7 +3563,7 @@ def history_stats():
         p = t.get('game_phase', 'live')
         if p not in phase_stats:
             phase_stats[p] = {'wins': 0, 'losses': 0}
-        if t['result'] == 'completed':
+        if t['result'] in WIN_RESULTS:
             phase_stats[p]['wins'] += 1
         else:
             phase_stats[p]['losses'] += 1
@@ -3454,7 +3578,7 @@ def history_stats():
         q_key = f'Q{period}' if period <= 4 else 'OT'
         if q_key not in quarter_stats:
             quarter_stats[q_key] = {'wins': 0, 'losses': 0}
-        if t['result'] == 'completed':
+        if t['result'] in WIN_RESULTS:
             quarter_stats[q_key]['wins'] += 1
         else:
             quarter_stats[q_key]['losses'] += 1
@@ -3472,7 +3596,7 @@ def history_stats():
             bucket = 'mid_6_15'
         else:
             bucket = 'blowout_16plus'
-        if t['result'] == 'completed':
+        if t['result'] in WIN_RESULTS:
             margin_stats[bucket]['wins'] += 1
         else:
             margin_stats[bucket]['losses'] += 1
@@ -3482,7 +3606,7 @@ def history_stats():
     for t in arb_trades:
         fl = t.get('first_leg', '')
         if fl in first_leg_stats:
-            if t['result'] == 'completed':
+            if t['result'] in WIN_RESULTS:
                 first_leg_stats[fl]['wins'] += 1
             else:
                 first_leg_stats[fl]['losses'] += 1
@@ -3516,6 +3640,7 @@ def history_stats():
             'avg_entry_price': flip_avg_entry,
             'avg_threshold': flip_avg_threshold,
         },
+        'completed_stats': _compute_completed_stats(arb_wins),
         'phase_stats': phase_stats,
         'quarter_stats': quarter_stats,
         'margin_stats': margin_stats,
@@ -3610,6 +3735,76 @@ def cancel_bot(bot_id):
                     cancelled.append('NO')
                 except Exception:
                     pass
+
+    # Record in trade history so manual deletes are tracked
+    if sold_positions:
+        # At least one position was sold — record the exit
+        yes_sell_price = None
+        no_sell_price = None
+        yes_sold_qty = 0
+        no_sold_qty = 0
+        for sp in sold_positions:
+            if sp.startswith('YES'):
+                yes_sold_qty = bot.get('yes_fill_qty', 0)
+            elif sp.startswith('NO'):
+                no_sold_qty = bot.get('no_fill_qty', 0)
+
+        # Calculate P&L from the sells
+        # If both sides were filled and sold, it's like a completed arb
+        # If only one side was filled and sold, we sold at market bid (a loss)
+        entry_yes = bot.get('yes_price', 0)
+        entry_no = bot.get('no_price', 0)
+        qty = bot.get('quantity', 1)
+        bot_type = bot.get('type', 'arb')
+
+        if bot_type != 'watch':
+            if yes_sold_qty >= qty and no_sold_qty >= qty:
+                # Both sides were filled — this was a locked arb, manually exited
+                profit = (100 - entry_yes - entry_no) * qty
+                trade_history.insert(0, {
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': entry_yes, 'no_price': entry_no,
+                    'quantity': qty, 'profit_cents': profit,
+                    'result': 'manual_exit_completed',
+                    'timestamp': time.time(),
+                    'note': 'Manually deleted — both legs were filled',
+                    'game_phase': bot.get('game_phase', ''),
+                    'arb_width': bot.get('arb_width', 0),
+                    'first_leg': bot.get('first_leg', ''),
+                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                })
+                session_pnl['gross_profit_cents'] += max(0, profit)
+                if profit < 0:
+                    session_pnl['gross_loss_cents'] += abs(profit)
+            elif yes_sold_qty >= qty:
+                # Only YES was filled and sold at market — record the exit
+                trade_history.insert(0, {
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': entry_yes, 'no_price': entry_no,
+                    'quantity': yes_sold_qty,
+                    'result': 'manual_exit_yes',
+                    'timestamp': time.time(),
+                    'note': f'Manually deleted — YES {yes_sold_qty}x sold at market',
+                    'game_phase': bot.get('game_phase', ''),
+                    'arb_width': bot.get('arb_width', 0),
+                    'first_leg': bot.get('first_leg', ''),
+                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                })
+            elif no_sold_qty >= qty:
+                # Only NO was filled and sold at market — record the exit
+                trade_history.insert(0, {
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': entry_yes, 'no_price': entry_no,
+                    'quantity': no_sold_qty,
+                    'result': 'manual_exit_no',
+                    'timestamp': time.time(),
+                    'note': f'Manually deleted — NO {no_sold_qty}x sold at market',
+                    'game_phase': bot.get('game_phase', ''),
+                    'arb_width': bot.get('arb_width', 0),
+                    'first_leg': bot.get('first_leg', ''),
+                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                })
+        bot_log('MANUAL_DELETE', bot_id, {'sold': sold_positions, 'cancelled': cancelled})
 
     del active_bots[bot_id]
     save_state()
@@ -3860,13 +4055,14 @@ def get_pnl():
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
         'stopped_loss', 'flipped', 'manual_stop',
     )
+    WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
     gross_profit = 0
     gross_loss   = 0
     completed    = 0
     stopped      = 0
     for t in trade_history:
         result = t.get('result', '')
-        if result == 'completed':
+        if result in WIN_RESULTS:
             gross_profit += t.get('profit_cents', 0)
             completed += 1
         elif result in LOSS_RESULTS:

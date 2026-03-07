@@ -1192,6 +1192,13 @@ class KalshiWSManager:
                     'ts': msg.get('ts', 0),
                     '_local_ts': time.time(),
                 }
+                # ── Real-time flip threshold check on every WS tick ──
+                try:
+                    yes_bid_rt = yb
+                    no_bid_rt  = (100 - ya) if ya > 0 else 0
+                    _ws_realtime_flip_check(ticker, yes_bid_rt, no_bid_rt)
+                except Exception as flip_err:
+                    print(f'⚠ WS real-time flip check error: {flip_err}')
             return
 
         if msg_type == 'fill':
@@ -1203,6 +1210,11 @@ class KalshiWSManager:
             side = msg.get('side', '')
             count = msg.get('count', 0)
             print(f'💰 WS FILL: {side} {count}x {ticker} (order {order_id[:8]}...)')
+            # ── Real-time fill handling: update bot fill counts + trigger actions ──
+            try:
+                _ws_realtime_fill_handler(ticker, order_id, side, count)
+            except Exception as fh_err:
+                print(f'⚠ WS real-time fill handler error: {fh_err}')
             return
 
         if msg_type == 'user_order':
@@ -1241,6 +1253,428 @@ ws_manager = KalshiWSManager()
 
 # ─── Monitor lock: prevent concurrent monitor calls from double-executing ─────
 monitor_lock = threading.Lock()
+
+# ─── WS Flip lock: prevent WS real-time flip and monitor from double-firing ───
+ws_flip_lock = threading.Lock()
+
+
+def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
+    """
+    Real-time flip threshold check triggered directly from the WebSocket
+    ticker handler. Fires the instant a price update arrives — no polling delay.
+
+    Only acts on bots that:
+      - Are on this ticker
+      - Have exactly one leg filled (yes_filled or no_filled status)
+      - Have a favorite entry >= flip_threshold
+      - Current bid has dropped to <= flip_threshold
+
+    The actual sell is dispatched to a background thread so the WS handler
+    doesn't block on API calls.
+    """
+    if not active_bots or not kalshi_client:
+        return
+
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('ticker') != ticker:
+            continue
+        if bot.get('type') == 'watch':
+            continue
+        status = bot.get('status', '')
+        if status not in ('yes_filled', 'no_filled'):
+            continue
+        # Already being handled by a WS flip sell or already stopped
+        if bot.get('_ws_flip_selling') or status in ('stopped', 'completed'):
+            continue
+
+        flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
+        qty = bot['quantity']
+
+        # YES filled, check if yes_bid has flipped
+        if status == 'yes_filled':
+            yes_filled = bot.get('yes_fill_qty', 0)
+            entry_yes = bot['yes_price']
+            # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
+            effective_trigger = min(flip_thresh, entry_yes - FLIP_ENTRY_MARGIN)
+            if yes_filled >= qty and entry_yes >= flip_thresh and yes_bid < effective_trigger:
+                # Mark immediately to prevent monitor double-fire
+                bot['_ws_flip_selling'] = True
+                print(f'⚡ WS REAL-TIME FLIP: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢, thresh {flip_thresh}¢) — selling NOW')
+                threading.Thread(
+                    target=_execute_ws_flip,
+                    args=(bot_id, 'yes', entry_yes, yes_bid, flip_thresh, yes_filled),
+                    daemon=True
+                ).start()
+
+        # NO filled, check if no_bid has flipped
+        elif status == 'no_filled':
+            no_filled = bot.get('no_fill_qty', 0)
+            entry_no = bot['no_price']
+            # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
+            effective_trigger = min(flip_thresh, entry_no - FLIP_ENTRY_MARGIN)
+            if no_filled >= qty and entry_no >= flip_thresh and no_bid < effective_trigger:
+                bot['_ws_flip_selling'] = True
+                print(f'⚡ WS REAL-TIME FLIP: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢, thresh {flip_thresh}¢) — selling NOW')
+                threading.Thread(
+                    target=_execute_ws_flip,
+                    args=(bot_id, 'no', entry_no, no_bid, flip_thresh, no_filled),
+                    daemon=True
+                ).start()
+
+
+def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty):
+    """
+    Execute the flip sell in a background thread (called from WS handler).
+    Uses ws_flip_lock to prevent race with monitor.
+    """
+    with ws_flip_lock:
+        bot = active_bots.get(bot_id)
+        if not bot or bot['status'] in ('stopped', 'completed'):
+            if bot:
+                bot.pop('_ws_flip_selling', None)
+            return
+
+        now = time.time()
+        ticker = bot['ticker']
+        other_side = 'no' if filled_side == 'yes' else 'yes'
+        other_order_key = f'{other_side}_order_id'
+
+        bot_log('ARB_FLIP_FIRED', bot_id, {
+            'leg': filled_side, 'entry': entry_price,
+            'bid': trigger_bid, 'threshold': flip_thresh,
+            'source': 'ws_realtime'
+        })
+
+        sold, sell_info = execute_sell(ticker, filled_side, filled_qty,
+                                       reason=f'ws_flip_{filled_side}_{bot_id}')
+        if sold:
+            # Cancel the unfilled other-side order
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(bot[other_order_key])
+            except Exception:
+                pass
+            try:
+                api_rate_limiter.wait()
+                other_check = kalshi_client.get_order(bot[other_order_key])
+                other_data = other_check.get('order', other_check) if isinstance(other_check, dict) else {}
+                if other_data.get('status', '') not in ('canceled', 'cancelled'):
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(bot[other_order_key])
+            except Exception:
+                pass
+
+            orig_repeat_count = bot.get('repeat_count', 0)
+            bot['status'] = 'stopped'
+            bot['repeat_count'] = 0
+            bot['stopped_at'] = now
+            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', trigger_bid)
+            loss = (entry_price - actual_sell) * filled_qty
+            verified = sell_info.get('verified_cleared', False)
+            session_pnl['gross_loss_cents'] += loss
+            session_pnl['stopped_bots']     += 1
+            trade_history.insert(0, {
+                'bot_id': bot_id, 'ticker': ticker,
+                'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
+                'quantity': filled_qty, 'loss_cents': loss,
+                'result': f'flip_{filled_side}', 'exit_bid': actual_sell,
+                'verified_cleared': verified, 'timestamp': now,
+                'placed_at': bot.get('created_at', now),
+                'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                'first_leg': bot.get('first_leg', filled_side),
+                'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                'game_phase': bot.get('game_phase', 'live'),
+                'flip_threshold': flip_thresh,
+                'game_context': _get_game_context(ticker),
+                'repeats_done': bot.get('repeats_done', 0),
+                'repeat_count': orig_repeat_count,
+                'exit_source': 'ws_realtime',
+            })
+            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+            print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ loss={loss}¢ (real-time)')
+            save_state()
+        else:
+            # Sell failed — clear the flag so monitor can retry
+            bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
+            print(f'⚠ WS FLIP sell FAILED for {bot_id} — monitor will retry')
+
+        bot.pop('_ws_flip_selling', None)
+
+
+# ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
+ws_fill_lock = threading.Lock()
+
+
+def _ws_realtime_fill_handler(ticker, order_id, side, count):
+    """
+    Real-time fill handler triggered directly from the WebSocket fill event.
+    Matches the fill to an active bot and:
+      1. Updates fill counts immediately
+      2. If fav leg just completed → posts dog leg instantly
+      3. If both legs now filled → marks completed instantly
+
+    Actions are dispatched to background threads so the WS handler doesn't block.
+    """
+    if not active_bots or not kalshi_client:
+        return
+
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('ticker') != ticker:
+            continue
+        if bot.get('type') == 'watch':
+            continue
+        status = bot.get('status', '')
+        if status in ('stopped', 'completed'):
+            continue
+
+        # Match fill to this bot's order IDs
+        matched_leg = None  # 'yes' or 'no'
+        if order_id == bot.get('yes_order_id') or (order_id == bot.get('fav_order_id') and bot.get('fav_side') == 'yes'):
+            matched_leg = 'yes'
+        elif order_id == bot.get('no_order_id') or (order_id == bot.get('fav_order_id') and bot.get('fav_side') == 'no'):
+            matched_leg = 'no'
+
+        if not matched_leg:
+            continue
+
+        qty = bot['quantity']
+
+        # Update fill counts — accumulate (WS sends incremental fills)
+        if matched_leg == 'yes':
+            bot['yes_fill_qty'] = bot.get('yes_fill_qty', 0) + count
+            yes_filled = bot['yes_fill_qty']
+            no_filled = bot.get('no_fill_qty', 0)
+        else:
+            bot['no_fill_qty'] = bot.get('no_fill_qty', 0) + count
+            no_filled = bot['no_fill_qty']
+            yes_filled = bot.get('yes_fill_qty', 0)
+
+        print(f'⚡ WS FILL UPDATE: {bot_id} {matched_leg.upper()} +{count} '
+              f'→ YES={yes_filled}/{qty} NO={no_filled}/{qty}')
+
+        # ── Both legs fully filled → instant completion ──
+        if yes_filled >= qty and no_filled >= qty:
+            if bot.get('_ws_fill_handling'):
+                continue
+            bot['_ws_fill_handling'] = True
+            print(f'⚡ WS INSTANT COMPLETE: {bot_id} — both legs filled!')
+            threading.Thread(
+                target=_execute_ws_completion,
+                args=(bot_id,),
+                daemon=True
+            ).start()
+            break
+
+        # ── Fav leg just completed → instant dog-leg posting ──
+        if status == 'fav_posted':
+            fav_side = bot.get('fav_side', 'yes')
+            fav_filled = yes_filled if fav_side == 'yes' else no_filled
+            if fav_filled >= qty:
+                if bot.get('_ws_fill_handling'):
+                    continue
+                bot['_ws_fill_handling'] = True
+                print(f'⚡ WS INSTANT FAV FILL: {bot_id} {fav_side.upper()} filled — posting dog leg NOW')
+                threading.Thread(
+                    target=_execute_ws_dog_post,
+                    args=(bot_id,),
+                    daemon=True
+                ).start()
+                break
+
+        break  # Only one bot can match this order_id
+
+
+def _execute_ws_dog_post(bot_id):
+    """
+    Post the underdog leg immediately after the favorite fills.
+    Called from WS fill handler in a background thread.
+    """
+    with ws_fill_lock:
+        bot = active_bots.get(bot_id)
+        if not bot or bot['status'] in ('stopped', 'completed'):
+            if bot:
+                bot.pop('_ws_fill_handling', None)
+            return
+
+        # Double-check status — another thread may have already handled this
+        if bot['status'] != 'fav_posted':
+            bot.pop('_ws_fill_handling', None)
+            return
+
+        now = time.time()
+        ticker = bot['ticker']
+        qty = bot['quantity']
+        fav_side = bot.get('fav_side', 'yes')
+        dog_side = bot.get('dog_side', 'no' if fav_side == 'yes' else 'yes')
+        dog_price = bot.get('dog_price', bot['no_price'] if dog_side == 'no' else bot['yes_price'])
+        fav_price = bot.get('fav_price', bot['yes_price'] if fav_side == 'yes' else bot['no_price'])
+        fav_filled = bot.get('yes_fill_qty', 0) if fav_side == 'yes' else bot.get('no_fill_qty', 0)
+
+        try:
+            # Fetch fresh orderbook to verify arb is still viable
+            try:
+                api_rate_limiter.wait()
+                ob_data = kalshi_client.get_market_orderbook(ticker)
+                ob = ob_data.get('orderbook', ob_data)
+                if dog_side == 'no':
+                    dog_levels = sorted(ob.get('no', []),
+                        key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                    live_dog_bid = (dog_levels[0][0] if isinstance(dog_levels[0], list) else dog_levels[0].get('price', 0)) if dog_levels else 0
+                else:
+                    dog_levels = sorted(ob.get('yes', []),
+                        key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                    live_dog_bid = (dog_levels[0][0] if isinstance(dog_levels[0], list) else dog_levels[0].get('price', 0)) if dog_levels else 0
+
+                # NEVER post above the current bid
+                if dog_price > live_dog_bid and live_dog_bid > 0:
+                    dog_price = live_dog_bid
+                    print(f'📉 WS DOG: Adjusted {dog_side.upper()} price to bid {live_dog_bid}¢')
+            except Exception as ob_err:
+                print(f'⚠ WS DOG: Orderbook check failed: {ob_err} — using planned price')
+
+            # Verify arb width still makes sense
+            actual_profit = 100 - fav_price - dog_price
+            min_width = max(1, bot.get('arb_width', bot.get('profit_per', 3)) // 2)
+            if actual_profit < min_width:
+                print(f'⚠ WS DOG: Arb no longer viable for {bot_id}: profit={actual_profit}¢ < min={min_width}¢ — letting SL handle')
+                if fav_side == 'yes':
+                    bot['status'] = 'yes_filled'
+                else:
+                    bot['status'] = 'no_filled'
+                bot['first_fill_at'] = now
+                bot['first_leg'] = fav_side
+                bot['posted_at'] = now
+                bot.pop('_ws_fill_handling', None)
+                save_state()
+                return
+
+            # Post the underdog order
+            api_rate_limiter.wait()
+            if dog_side == 'no':
+                dog_order = kalshi_client.create_order(
+                    ticker=ticker, side='no', action='buy',
+                    count=qty, no_price=dog_price)
+                bot['no_order_id'] = dog_order['order']['order_id']
+                bot['no_price'] = dog_price
+                bot['yes_fill_qty'] = fav_filled
+                bot['status'] = 'yes_filled'
+            else:
+                dog_order = kalshi_client.create_order(
+                    ticker=ticker, side='yes', action='buy',
+                    count=qty, yes_price=dog_price)
+                bot['yes_order_id'] = dog_order['order']['order_id']
+                bot['yes_price'] = dog_price
+                bot['no_fill_qty'] = fav_filled
+                bot['status'] = 'no_filled'
+
+            bot['first_fill_at'] = now
+            bot['first_leg'] = fav_side
+            bot['posted_at'] = now
+            bot['profit_per'] = 100 - bot['yes_price'] - bot['no_price']
+
+            # Subscribe to the new order's ticker on WS (already subscribed, but ensure fill tracking)
+            if ws_manager and ws_manager.connected:
+                ws_manager.add_ticker(ticker)
+
+            bot_log('FAV_FILLED_DOG_POSTED', bot_id, {
+                'fav_side': fav_side, 'fav_price': fav_price,
+                'dog_side': dog_side, 'dog_price': dog_price,
+                'profit_per': bot['profit_per'],
+                'source': 'ws_realtime'
+            })
+            print(f'⚡ WS FAV-FILL → DOG POSTED: {bot_id} {fav_side.upper()} filled at {fav_price}¢ → '
+                  f'posted {dog_side.upper()} at {dog_price}¢ '
+                  f'(profit target: {bot["profit_per"]}¢) [INSTANT]')
+            save_state()
+
+        except Exception as err:
+            print(f'⚠ WS DOG post failed for {bot_id}: {err} — monitor will retry')
+
+        bot.pop('_ws_fill_handling', None)
+
+
+def _execute_ws_completion(bot_id):
+    """
+    Handle both-legs-filled completion instantly from WS fill event.
+    Called in a background thread.
+    """
+    with ws_fill_lock:
+        bot = active_bots.get(bot_id)
+        if not bot or bot['status'] in ('stopped', 'completed'):
+            if bot:
+                bot.pop('_ws_fill_handling', None)
+            return
+
+        now = time.time()
+        ticker = bot['ticker']
+        qty = bot['quantity']
+
+        try:
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+
+            # Verify actual fill prices from the order data for accurate P&L
+            actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
+            actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
+            real_yes = actual_yes if actual_yes else bot['yes_price']
+            real_no  = actual_no  if actual_no  else bot['no_price']
+            verified_profit = (100 - real_yes - real_no) * qty
+            profit_cents = verified_profit
+
+            session_pnl['gross_profit_cents'] += profit_cents
+            session_pnl['completed_bots']     += 1
+            trade_history.insert(0, {
+                'bot_id': bot_id, 'ticker': ticker,
+                'yes_price': real_yes, 'no_price': real_no,
+                'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
+                'quantity': qty, 'profit_cents': profit_cents,
+                'result': 'completed', 'timestamp': now,
+                'verified_prices': actual_yes is not None and actual_no is not None,
+                'placed_at': bot.get('created_at', now),
+                'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                'first_leg': bot.get('first_leg', ''),
+                'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                'game_phase': bot.get('game_phase', ''),
+                'flip_threshold': bot.get('flip_threshold', FLIP_THRESHOLD_CENTS),
+                'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                'game_context': _get_game_context(ticker),
+                'repeats_done': bot.get('repeats_done', 0),
+                'repeat_count': bot.get('repeat_count', 0),
+                'fill_source': 'ws_realtime',
+            })
+            bot_log('ARB_COMPLETED', bot_id, {
+                'real_yes': real_yes, 'real_no': real_no,
+                'profit_cents': profit_cents,
+                'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                'source': 'ws_realtime'
+            })
+
+            # Track cumulative P&L on the bot itself
+            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
+
+            print(f'⚡ WS INSTANT COMPLETED: {bot_id} profit={profit_cents}¢ '
+                  f'(YES={real_yes}¢ NO={real_no}¢) [INSTANT]')
+
+            # ── REPEAT ARB: if repeats remain, enter waiting_repeat ──
+            repeats_done_now = bot.get('repeats_done', 0) + 1
+            bot['repeats_done'] = repeats_done_now
+            repeat_total = bot.get('repeat_count', 0)
+
+            if repeats_done_now <= repeat_total:
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = time.time()
+                print(f'🔄 WS REPEAT: {bot_id} entering waiting_repeat — '
+                      f'cycle {repeats_done_now}/{repeat_total}')
+
+            save_state()
+
+        except Exception as err:
+            print(f'⚠ WS completion handling failed for {bot_id}: {err} — monitor will handle')
+
+        bot.pop('_ws_fill_handling', None)
+
 
 # ─── Session P&L (Upgrade #6: P&L dashboard) ──────────────────────────────────
 import datetime
@@ -1281,7 +1715,8 @@ STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 # from normal game volatility. If the filled leg entered BELOW the threshold
 # (underdog side), no SL fires — max loss is small, position rides to settlement.
 # Watch bots (straight bets / props) keep the old instant entry-minus-X SL.
-FLIP_THRESHOLD_CENTS = 55   # Default: sell if bid ≤ 55¢ (favorite no longer clearly favored)
+FLIP_THRESHOLD_CENTS = 55   # Default: sell if bid < 55¢ (favorite no longer clearly favored)
+FLIP_ENTRY_MARGIN   = 5    # Entry must be ≥ threshold + margin (60¢) for flip rule to apply
 MIN_FAV_ENTRY_CENTS = 55    # Guardrail: never deploy fav side below this price (catching a falling knife)
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
@@ -2348,6 +2783,10 @@ def _run_monitor():
 
                 # ── FAV-FIRST: favorite order posted, waiting for fill ────
                 if bot.get('status') == 'fav_posted':
+                    # Skip if WS fill handler is already processing this bot
+                    if bot.get('_ws_fill_handling'):
+                        print(f'⚡ SKIPPING monitor fav check for {bot_id} — WS real-time already handling')
+                        continue
                     fav_side = bot.get('fav_side', 'yes')
                     fav_order_id = bot.get('fav_order_id')
                     if not fav_order_id:
@@ -2846,6 +3285,15 @@ def _run_monitor():
                             yes_is_fav = fresh_yes_bid >= fresh_no_bid
                             fav_shave = total_shave * 4 // 10
                             dog_shave = total_shave - fav_shave
+
+                            # If underdog can't absorb its share, push overflow to favorite
+                            dog_bid = fresh_no_bid if yes_is_fav else fresh_yes_bid
+                            dog_max_shave = max(0, dog_bid - 1)
+                            if dog_shave > dog_max_shave:
+                                overflow = dog_shave - dog_max_shave
+                                dog_shave = dog_max_shave
+                                fav_shave = fav_shave + overflow
+
                             if yes_is_fav:
                                 new_yes = fresh_yes_bid - fav_shave
                                 new_no  = fresh_no_bid - dog_shave
@@ -2914,6 +3362,9 @@ def _run_monitor():
                 # ── Rate-limited fill checks ──────────────────────────────
                 # Guard: fav_posted bots are handled above; this is for
                 # legacy pending_fills bots with both order IDs set.
+                if bot.get('_ws_fill_handling'):
+                    print(f'⚡ SKIPPING monitor fill check for {bot_id} — WS real-time already handling')
+                    continue
                 if not bot.get('yes_order_id') or not bot.get('no_order_id'):
                     # Bot has a missing order ID — likely a fav_posted that
                     # slipped through. Reset to fav_posted for proper handling.
@@ -3175,14 +3626,19 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_yes = bot['yes_price']
 
+                    # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
+                    effective_trigger = min(flip_thresh, entry_yes - FLIP_ENTRY_MARGIN)
                     # Only apply flip SL to favorite entries (entered above threshold).
                     # Underdog entries (below threshold) ride to settlement — max loss is small.
-                    if entry_yes >= flip_thresh and yes_bid <= flip_thresh:
-                        # Favorite has FLIPPED — bid ≤ threshold = no longer favored, sell now
+                    if entry_yes >= flip_thresh and yes_bid < effective_trigger:
+                        # Favorite has FLIPPED — bid < threshold = no longer favored, sell now
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate FLIP SL YES for {bot_id} — already {bot["status"]}')
                             continue
-                        print(f'🔄 FLIP THRESHOLD: {bot_id} YES bid {yes_bid}¢ ≤ {flip_thresh}¢ — favorite flipped, selling')
+                        if bot.get('_ws_flip_selling'):
+                            print(f'⚡ SKIPPING monitor FLIP YES for {bot_id} — WS real-time already handling')
+                            continue
+                        print(f'🔄 FLIP THRESHOLD: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢) — favorite flipped, selling')
                         bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': flip_thresh})
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_flip_yes_{bot_id}')
                         if sold:
@@ -3280,14 +3736,19 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_no = bot['no_price']
 
+                    # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
+                    effective_trigger = min(flip_thresh, entry_no - FLIP_ENTRY_MARGIN)
                     # Only apply flip SL to favorite entries (entered above threshold).
                     # Underdog entries ride to settlement.
-                    if entry_no >= flip_thresh and no_bid <= flip_thresh:
+                    if entry_no >= flip_thresh and no_bid < effective_trigger:
                         # Favorite has FLIPPED — sell now
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate FLIP SL NO for {bot_id} — already {bot["status"]}')
                             continue
-                        print(f'🔄 FLIP THRESHOLD: {bot_id} NO bid {no_bid}¢ ≤ {flip_thresh}¢ — favorite flipped, selling')
+                        if bot.get('_ws_flip_selling'):
+                            print(f'⚡ SKIPPING monitor FLIP NO for {bot_id} — WS real-time already handling')
+                            continue
+                        print(f'🔄 FLIP THRESHOLD: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢) — favorite flipped, selling')
                         bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': flip_thresh})
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_flip_no_{bot_id}')
                         if sold:
@@ -4092,6 +4553,15 @@ def scan_arb_opportunities():
             yes_is_fav = yes_bid >= no_bid
             fav_shave = total_shave * 4 // 10  # 40% to fav
             dog_shave = total_shave - fav_shave  # 60% to underdog
+
+            # If underdog can't absorb its share, push overflow to favorite
+            dog_bid = no_bid if yes_is_fav else yes_bid
+            dog_max_shave = max(0, dog_bid - 1)
+            if dog_shave > dog_max_shave:
+                overflow = dog_shave - dog_max_shave
+                dog_shave = dog_max_shave
+                fav_shave = fav_shave + overflow
+
             if yes_is_fav:
                 sug_yes = yes_bid - fav_shave
                 sug_no  = no_bid - dog_shave

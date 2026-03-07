@@ -2235,8 +2235,19 @@ function calculateArbPrices(market, width) {
     } else {
         // Determine which side is favorite (higher bid = more likely winner)
         const yesIsFav = effectiveYesBid >= effectiveNoBid;
-        const favShave = Math.floor(totalShave * 0.6);   // more shave on favorite — wait for dip, lower flip risk
-        const dogShave = totalShave - favShave;           // less shave on underdog — fills fast after fav catches
+        let favShave = Math.floor(totalShave * 0.6);   // more shave on favorite — wait for dip, lower flip risk
+        let dogShave = totalShave - favShave;           // less shave on underdog — fills fast after fav catches
+
+        // Get the underdog's max shaveable room (can't go below 1¢)
+        const dogBid = yesIsFav ? effectiveNoBid : effectiveYesBid;
+        const dogMaxShave = Math.max(0, dogBid - 1);  // most we can shave off underdog
+
+        // If underdog can't absorb its share, redistribute overflow to favorite
+        if (dogShave > dogMaxShave) {
+            const overflow = dogShave - dogMaxShave;
+            dogShave = dogMaxShave;
+            favShave = favShave + overflow;  // favorite absorbs all remaining shave
+        }
 
         if (yesIsFav) {
             targetYes = effectiveYesBid - favShave;
@@ -2255,6 +2266,12 @@ function calculateArbPrices(market, width) {
     targetYes = Math.max(1, Math.min(targetYes, 98));
     targetNo  = Math.max(1, Math.min(targetNo, 98));
 
+    // Detect when a side's shave was redistributed to the other side
+    const yesShaved = effectiveYesBid - targetYes;  // how much was shaved off YES
+    const noShaved  = effectiveNoBid  - targetNo;   // how much was shaved off NO
+    const yesUnshaved = totalShave > 0 && yesShaved <= 0;  // YES couldn't be shaved at all
+    const noUnshaved  = totalShave > 0 && noShaved  <= 0;  // NO couldn't be shaved at all
+
     return {
         targetYes, targetNo,
         total:   targetYes + targetNo,
@@ -2264,6 +2281,8 @@ function calculateArbPrices(market, width) {
         // Flag when a side has no real liquidity
         yesNoLiquidity: yesBid <= 0,
         noNoLiquidity:  noBid <= 0,
+        // Flag when a side couldn't be shaved below its bid (too low to shave)
+        yesUnshaved, noUnshaved,
     };
 }
 
@@ -2971,12 +2990,19 @@ function recalcArbPrices() {
         if (arb.noNoLiquidity) {
             noHint.textContent = 'no bids — derived from width';
             noHint.style.color = '#ff4444';
+        } else if (arb.noUnshaved) {
+            noHint.textContent = '= bid (width → fav)';
+            noHint.style.color = '#00aaff';
         } else {
             const diff = arb.noBid - arb.targetNo;
             const role = !yesIsFav ? '★ fav' : 'underdog';
             noHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
             noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
         }
+    }
+    if (yesHint && arb.yesUnshaved) {
+        yesHint.textContent = '= bid (width → fav)';
+        yesHint.style.color = '#00aaff';
     }
 
     updateProfitPreview();
@@ -3427,7 +3453,7 @@ async function loadBots() {
             }
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <a href="#" onclick="navigateToMarket('${sampleTicker.split('-')[0]}');return false;" style="color:#00aaff;font-weight:700;text-decoration:none;" title="View in Markets tab">${sportIcon} ${groupMatchup}</a>
+                    <a href="#" onclick="navigateToMarket('${sampleTicker.split('-').slice(0,-1).join('-')}');return false;" style="color:#00aaff;font-weight:700;text-decoration:none;" title="View in Markets tab">${sportIcon} ${groupMatchup}</a>
                     <span style="color:#8892a6;font-size:10px;">${groupPhase}</span>
                     ${scoreHtml}
                 </div>
@@ -3805,7 +3831,7 @@ async function loadBots() {
                     })()}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
-                    <a href="#" onclick="navigateToMarket('${(bot.ticker||'').split('-')[0]}');return false;" style="color:#555;text-decoration:none;" title="View in Markets tab">🎟 ${bot.ticker || '?'}</a>
+                    <a href="#" onclick="navigateToMarket('${(bot.ticker||'').split('-').slice(0,-1).join('-')}');return false;" style="color:#555;text-decoration:none;" title="View in Markets tab">🎟 ${bot.ticker || '?'}</a>
                     <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
                     <span>🛡 Flip: <strong style="color:#00aaff;">${flipThresh}¢</strong></span>
                     <span>Cost: <strong style="color:#8892a6;">$${((100 - profit) * qty / 100).toFixed(2)}</strong></span>
@@ -5220,6 +5246,20 @@ function generateBotRiskWarnings() {
     if (yes < 5 || no < 5) {
         warnings.push({ level: 'warn', msg: `Buying at ${Math.min(yes,no)}¢ is very unlikely to fill — the market may not have liquidity there.` });
     }
+    // Info when all width is shaved from one side (underdog too low to shave)
+    if (currentArbMarket) {
+        const yesBid = getPrice(currentArbMarket, 'yes_bid');
+        const noBid  = getPrice(currentArbMarket, 'no_bid');
+        if (yesBid > 0 && noBid > 0) {
+            const favSide = yesBid >= noBid ? 'YES' : 'NO';
+            const dogSide = yesBid >= noBid ? 'NO' : 'YES';
+            const dogBid  = yesBid >= noBid ? noBid : yesBid;
+            const dogPrice = yesBid >= noBid ? no : yes;
+            if (dogBid <= 1 || dogPrice === dogBid) {
+                warnings.push({ level: 'info', msg: `${dogSide} at ${dogBid}¢ — all width shaved from ${favSide}. Deep dip-buy on the favorite.` });
+            }
+        }
+    }
     if (flipFloor < 25) {
         warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is very low — only sells if favorite is nearly eliminated.` });
     }
@@ -5247,9 +5287,10 @@ function generateBotRiskWarnings() {
         return;
     }
     el.innerHTML = warnings.map(w => {
-        const color = w.level === 'error' ? '#ff4444' : '#ffaa00';
-        const bg = w.level === 'error' ? '#ff444415' : '#ffaa0015';
-        const border = w.level === 'error' ? '#ff444444' : '#ffaa0044';
-        return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:${color};display:flex;align-items:center;gap:8px;"><span style="font-size:14px;">⚠️</span>${w.msg}</div>`;
+        const color = w.level === 'error' ? '#ff4444' : w.level === 'info' ? '#00aaff' : '#ffaa00';
+        const bg = w.level === 'error' ? '#ff444415' : w.level === 'info' ? '#00aaff15' : '#ffaa0015';
+        const border = w.level === 'error' ? '#ff444444' : w.level === 'info' ? '#00aaff44' : '#ffaa0044';
+        const icon = w.level === 'info' ? 'ℹ️' : '⚠️';
+        return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:${color};display:flex;align-items:center;gap:8px;"><span style="font-size:14px;">${icon}</span>${w.msg}</div>`;
     }).join('');
 }

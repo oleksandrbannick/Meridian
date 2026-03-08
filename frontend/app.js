@@ -3238,6 +3238,25 @@ function updateProfitPreview() {
 
 // --- Arb Preset Helpers ---
 
+function setFlipFloor(val) {
+    document.getElementById('bot-stop-loss-cents').value = val;
+    const btn55 = document.getElementById('flip-floor-btn-55');
+    const btn60 = document.getElementById('flip-floor-btn-60');
+    if (!btn55 || !btn60) return;
+    if (val === 55) {
+        btn55.style.background = '#00aaff22'; btn55.style.borderColor = '#00aaff88'; btn55.style.color = '#00aaff';
+        btn55.textContent = '55¢ ★';
+        btn60.style.background = '#0a0e1a';   btn60.style.borderColor = '#1e2740';   btn60.style.color = '#8892a6';
+        btn60.textContent = '60¢';
+    } else {
+        btn60.style.background = '#00aaff22'; btn60.style.borderColor = '#00aaff88'; btn60.style.color = '#00aaff';
+        btn60.textContent = '60¢ ★';
+        btn55.style.background = '#0a0e1a';   btn55.style.borderColor = '#1e2740';   btn55.style.color = '#8892a6';
+        btn55.textContent = '55¢';
+    }
+    updateProfitPreview();
+}
+
 function applyPreset(width) {
     const widthSlider = document.getElementById('bot-arb-width');
     if (widthSlider) { widthSlider.value = width; }

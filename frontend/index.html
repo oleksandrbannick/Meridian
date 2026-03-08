@@ -818,10 +818,20 @@
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
-                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Flip Floor <span style="color:#555;font-weight:400;">(¢)</span></label>
-                            <input type="number" id="bot-stop-loss-cents" min="10" max="65" value="60" oninput="updateProfitPreview()"
-                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
-                                   title="Hard floor: sell if bid drops to this level. Default 60¢. For entries 65-69¢, trigger is entry-10¢ to guarantee 10¢ room.">
+                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Flip Floor <span style="color:#555;font-weight:400;">(hard floor)</span></label>
+                            <input type="hidden" id="bot-stop-loss-cents" value="60">
+                            <div style="display:flex;gap:6px;">
+                                <button type="button" id="flip-floor-btn-55"
+                                    onclick="setFlipFloor(55)"
+                                    style="flex:1;padding:8px 0;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#8892a6;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;">
+                                    55¢
+                                </button>
+                                <button type="button" id="flip-floor-btn-60"
+                                    onclick="setFlipFloor(60)"
+                                    style="flex:1;padding:8px 0;background:#00aaff22;border:1px solid #00aaff88;border-radius:6px;color:#00aaff;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;">
+                                    60¢ ★
+                                </button>
+                            </div>
                         </div>
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Phase</label>

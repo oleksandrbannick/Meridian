@@ -104,19 +104,20 @@ function switchTab(tab) {
 }
 
 // Navigate from Bots tab to Markets tab and scroll to the relevant market card
-function navigateToMarket(eventTickerPrefix) {
+async function navigateToMarket(eventTickerPrefix) {
+    // 1. Reset any active filters so the target card is guaranteed to be in the DOM
+    currentSportFilter = 'all';
+    currentLiveFilter = false;
+    document.querySelectorAll('.sport-pill').forEach(p => {
+        p.classList.toggle('active', p.dataset.sport === 'all');
+    });
+
+    // 2. Switch tab
     switchTab('markets');
+
     // Extract game ID segment (e.g. '26MAR09PHICLE') for broad matching across market types
     const prefixParts = eventTickerPrefix.toUpperCase().split('-');
     const gameIdSegment = prefixParts.length >= 2 ? prefixParts[1] : '';
-
-    const highlightCard = (card) => {
-        // Use instant scroll — 'smooth' can fail on mobile Safari before layout settles
-        card.scrollIntoView({ behavior: 'auto', block: 'center' });
-        card.style.transition = 'box-shadow 0.3s';
-        card.style.boxShadow = '0 0 20px rgba(0,170,255,0.5), inset 0 0 12px rgba(0,170,255,0.1)';
-        setTimeout(() => { card.style.boxShadow = ''; }, 2000);
-    };
 
     const findCard = () => {
         const cards = document.querySelectorAll('[data-event-ticker]');
@@ -130,27 +131,29 @@ function navigateToMarket(eventTickerPrefix) {
         return null;
     };
 
-    const doScroll = async () => {
-        let card = findCard();
-        if (!card) {
-            // Markets not loaded yet — fetch them then retry
-            if (typeof loadMarkets === 'function' && allMarkets.length === 0) {
-                await loadMarkets();
-            }
-            card = findCard();
-        }
-        if (card) {
-            // Wait two animation frames so the tab display:block layout is fully computed
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    highlightCard(card);
-                });
-            });
-        }
+    const highlightCard = (card) => {
+        card.scrollIntoView({ behavior: 'auto', block: 'center' });
+        card.style.transition = 'box-shadow 0.3s';
+        card.style.boxShadow = '0 0 20px rgba(0,170,255,0.5), inset 0 0 12px rgba(0,170,255,0.1)';
+        setTimeout(() => { card.style.boxShadow = ''; }, 2000);
     };
 
-    // Small delay so switchTab()'s class toggle has been applied before we query
-    setTimeout(doScroll, 50);
+    // 3. Load markets if needed (also re-applies filters, which now means show all)
+    if (allMarkets.length === 0) {
+        await loadMarkets();
+    } else {
+        applyFilters(); // re-render with reset filters
+    }
+
+    // 4. Wait for display:block layout to be computed, then scroll
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            const card = findCard();
+            if (card) {
+                highlightCard(card);
+            }
+        });
+    });
 }
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────

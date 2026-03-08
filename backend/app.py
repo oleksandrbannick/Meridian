@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 import time
 import threading
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
@@ -710,9 +710,8 @@ def bot_log(event: str, bot_id: str = '', details: dict = None, level: str = 'IN
       REPEAT_STARTED, REPEAT_TIMEOUT,
       MONITOR_CYCLE, ERROR
     """
-    import datetime
     entry = {
-        'ts': datetime.datetime.now().isoformat(),
+        'ts': datetime.now(timezone.utc).isoformat(),
         'epoch': time.time(),
         'event': event,
         'level': level,
@@ -1514,7 +1513,6 @@ def _execute_ws_completion(bot_id):
 
 
 # ─── Session P&L (Upgrade #6: P&L dashboard) ──────────────────────────────────
-import datetime
 
 session_pnl = {
     'gross_profit_cents': 0,
@@ -1522,13 +1520,13 @@ session_pnl = {
     'completed_bots':     0,
     'stopped_bots':       0,
     'session_start':      time.time(),
-    'day_key':            datetime.date.today().isoformat(),  # for daily auto-reset
+    'day_key':            date.today().isoformat(),  # for daily auto-reset
 }
 
 def auto_reset_daily_pnl():
     """Reset P&L counters if the day has changed since last check."""
     global session_pnl
-    today = datetime.date.today().isoformat()
+    today = date.today().isoformat()
     if session_pnl.get('day_key') != today:
         print(f'📅 New day detected ({session_pnl.get("day_key")} → {today}) — resetting daily P&L')
         session_pnl = {
@@ -4725,14 +4723,14 @@ def _trade_day_key(t):
     """Return ISO date string for a trade's timestamp (local timezone)."""
     ts = t.get('timestamp')
     if ts:
-        return datetime.datetime.fromtimestamp(ts).date().isoformat()
-    return datetime.date.today().isoformat()
+        return datetime.fromtimestamp(ts).date().isoformat()
+    return date.today().isoformat()
 
 
 @app.route('/api/pnl', methods=['GET'])
 def get_pnl():
     """P&L dashboard — daily & lifetime, computed from trade history."""
-    today = datetime.date.today().isoformat()
+    today = date.today().isoformat()
 
     # Split into today vs all-time
     today_trades = [t for t in trade_history if _trade_day_key(t) == today]
@@ -4794,7 +4792,7 @@ def reset_pnl():
         'gross_profit_cents': 0, 'gross_loss_cents': 0,
         'completed_bots': 0,     'stopped_bots': 0,
         'session_start': time.time(),
-        'day_key': datetime.date.today().isoformat(),
+        'day_key': date.today().isoformat(),
     }
     save_state()
     return jsonify({'success': True})

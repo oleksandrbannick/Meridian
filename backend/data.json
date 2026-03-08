@@ -5823,12 +5823,12 @@
       "fav_price": 77,
       "dog_price": 17,
       "fav_order_id": "afa526a0-a01f-443f-b97a-b024db974a31",
-      "yes_order_id": "4ead4f42-6329-42af-950c-49cfe865bbe2",
+      "yes_order_id": "80917642-7f23-41f0-a08c-9b34c8de5e3b",
       "no_order_id": "afa526a0-a01f-443f-b97a-b024db974a31",
       "yes_fill_qty": 0,
       "no_fill_qty": 5,
       "created_at": 1772932975.828703,
-      "posted_at": 1772989710.729586,
+      "posted_at": 1772991511.8757231,
       "repost_count": 0,
       "repeat_count": 5,
       "repeats_done": 1,
@@ -5837,7 +5837,7 @@
       "live_no_bid": 74,
       "live_yes_ask": 26,
       "live_no_ask": 75,
-      "last_price_update": 1772989759.631438,
+      "last_price_update": 1772991969.88698,
       "first_fill_at": 1772981258.214952,
       "first_leg": "no",
       "net_pnl_cents": 30,
@@ -14302,7 +14302,7 @@
     "gross_loss_cents": 0,
     "completed_bots": 7,
     "stopped_bots": 0,
-    "session_start": 1772989707.727325,
+    "session_start": 1772991969.5209951,
     "day_key": "2026-03-08"
   }
 }

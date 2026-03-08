@@ -1889,7 +1889,19 @@ def _is_game_live(ticker: str) -> bool:
     except Exception as e:
         print(f'⚠ Kalshi live check failed for {ticker}: {e} — falling back to ESPN')
     
-    # ── FALLBACK: ESPN ──
+    # ── FALLBACK: ESPN ── (only use if ticker date is today — prevents future markets from matching today's live teams)
+    try:
+        parts_fb = ticker.split('-')
+        if len(parts_fb) >= 2:
+            m_fb = re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts_fb[1])
+            if m_fb:
+                mo_fb = _MONTH_ABBR.get(m_fb.group(2))
+                if mo_fb:
+                    fb_date = date(2000 + int(m_fb.group(1)), mo_fb, int(m_fb.group(3)))
+                    if fb_date != date.today():
+                        return False  # Future (or past) game — never trust ESPN fallback
+    except Exception:
+        pass
     _refresh_espn_cache()
     info = _espn_cache['data']
     if not info:
@@ -2996,6 +3008,14 @@ def _run_monitor():
                                     m = mkt.get('market', mkt)
                                     d = m.get(f'{fav_side}_bid_dollars')
                                     cur_fav_bid = round(float(d) * 100) if d else m.get(f'{fav_side}_bid', 0)
+
+                                # If bid is AT or ABOVE our order price, market is moving toward us —
+                                # the order is about to fill naturally. Don't repost, just wait.
+                                if cur_fav_bid >= bot['fav_price']:
+                                    print(f'⏳ FAV REPOST SKIPPED: {bot_id} bid {cur_fav_bid}¢ >= order {bot["fav_price"]}¢ — filling soon, leaving alone')
+                                    bot['posted_at'] = now  # reset timer so we re-check in another 3 min
+                                    save_state()
+                                    continue
 
                                 # Width-aware cap: dog_price is LOCKED — preserve target width by
                                 # shaving the fav, not the dog.  If dog is at 1¢ and width=5¢,

@@ -448,14 +448,15 @@ function _gameIdDateMatchesESPN(gameId, espnGame) {
     const espnDate = new Date(espnGame.gameDate);
     // ESPN dates are UTC — compare using local date (games are local date)
     // Allow ±1 day tolerance for late-night games that cross midnight
-    const espnDay = espnDate.getDate();
-    const espnMonth = espnDate.getMonth();
-    const espnYear = espnDate.getFullYear();
-
-    if (tickerYear === espnYear && tickerMonth === espnMonth && Math.abs(tickerDay - espnDay) <= 1) {
-        return true;
-    }
-    return false;
+    // Directional tolerance: ESPN date may be up to 1 day BEFORE the ticker date
+    // (handles late-night UTC games that cross midnight vs local ticker date)
+    // but NEVER after the ticker date (a future market cannot show today's live data)
+    const espnDateNorm = new Date(espnDate.getFullYear(), espnDate.getMonth(), espnDate.getDate());
+    const tickerDateNorm = new Date(tickerYear, tickerMonth, tickerDay);
+    const daysDiff = (espnDateNorm.getTime() - tickerDateNorm.getTime()) / (1000 * 60 * 60 * 24);
+    // Allow ESPN date to be same day (daysDiff=0) or up to 1 day before (daysDiff=-1)
+    // Reject if ESPN date is after ticker date (daysDiff>0) or more than 1 day before (daysDiff<-1)
+    return daysDiff >= -1 && daysDiff <= 0;
 }
 
 function _findGameInLookup(lookup, gameId, sport) {

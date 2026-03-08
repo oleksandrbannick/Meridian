@@ -1121,7 +1121,7 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         if status == 'yes_filled':
             yes_filled = bot.get('yes_fill_qty', 0)
             entry_yes = bot['yes_price']
-            # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+            # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
             effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, flip_thresh)
             if yes_filled >= qty and entry_yes >= flip_thresh and yes_bid < effective_trigger:
                 # Mark immediately to prevent monitor double-fire
@@ -1129,7 +1129,7 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
                 print(f'⚡ WS REAL-TIME FLIP: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢, thresh {flip_thresh}¢) — selling NOW')
                 threading.Thread(
                     target=_execute_ws_flip,
-                    args=(bot_id, 'yes', entry_yes, yes_bid, flip_thresh, yes_filled),
+                    args=(bot_id, 'yes', entry_yes, yes_bid, effective_trigger, yes_filled, flip_thresh),
                     daemon=True
                 ).start()
 
@@ -1137,19 +1137,19 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         elif status == 'no_filled':
             no_filled = bot.get('no_fill_qty', 0)
             entry_no = bot['no_price']
-            # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+            # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
             effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, flip_thresh)
             if no_filled >= qty and entry_no >= flip_thresh and no_bid < effective_trigger:
                 bot['_ws_flip_selling'] = True
                 print(f'⚡ WS REAL-TIME FLIP: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢, thresh {flip_thresh}¢) — selling NOW')
                 threading.Thread(
                     target=_execute_ws_flip,
-                    args=(bot_id, 'no', entry_no, no_bid, flip_thresh, no_filled),
+                    args=(bot_id, 'no', entry_no, no_bid, effective_trigger, no_filled, flip_thresh),
                     daemon=True
                 ).start()
 
 
-def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty):
+def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty, floor=None):
     """
     Execute the flip sell in a background thread (called from WS handler).
     Uses ws_flip_lock to prevent race with monitor.
@@ -1169,6 +1169,7 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
         bot_log('ARB_FLIP_FIRED', bot_id, {
             'leg': filled_side, 'entry': entry_price,
             'bid': trigger_bid, 'threshold': flip_thresh,
+            'floor': floor if floor is not None else flip_thresh,
             'source': 'ws_realtime'
         })
 
@@ -3749,7 +3750,7 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_yes = bot['yes_price']
 
-                    # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+                    # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
                     effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, flip_thresh)
                     # Only apply flip SL to favorite entries (entered at ≥ floor).
                     # Underdog entries (below floor) ride to settlement — max loss is small.
@@ -3762,7 +3763,7 @@ def _run_monitor():
                             print(f'⚡ SKIPPING monitor FLIP YES for {bot_id} — WS real-time already handling')
                             continue
                         print(f'🔄 FLIP THRESHOLD: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢) — favorite flipped, selling')
-                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': flip_thresh})
+                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': effective_trigger, 'floor': flip_thresh})
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_flip_yes_{bot_id}')
                         if sold:
                             try:
@@ -3859,7 +3860,7 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_no = bot['no_price']
 
-                    # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+                    # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
                     effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, flip_thresh)
                     # Only apply flip SL to favorite entries (entered at ≥ floor).
                     # Underdog entries ride to settlement.
@@ -3872,7 +3873,7 @@ def _run_monitor():
                             print(f'⚡ SKIPPING monitor FLIP NO for {bot_id} — WS real-time already handling')
                             continue
                         print(f'🔄 FLIP THRESHOLD: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢) — favorite flipped, selling')
-                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': flip_thresh})
+                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': effective_trigger, 'floor': flip_thresh})
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_flip_no_{bot_id}')
                         if sold:
                             try:

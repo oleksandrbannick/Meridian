@@ -3,7 +3,7 @@ Kalshi Arbitrage Bot Backend
 Flask server providing API endpoints for the trading bot
 """
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, make_response
 from flask_cors import CORS
 from kalshi_api import KalshiAPI
 import os
@@ -26,14 +26,23 @@ stop_loss_percentage = 0.05  # 5% stop loss default
 
 @app.route('/')
 def index():
-    """Serve the frontend"""
-    return send_from_directory(app.static_folder, 'index.html')
+    """Serve the frontend — no-cache so Cloudflare/mobile always gets fresh code"""
+    resp = make_response(send_from_directory(app.static_folder, 'index.html'))
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route('/<path:path>')
 def serve_static(path):
-    """Serve static files"""
-    return send_from_directory(app.static_folder, path)
+    """Serve static files — disable cache for JS/HTML/CSS"""
+    resp = make_response(send_from_directory(app.static_folder, path))
+    if path.endswith(('.js', '.html', '.css')):
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route('/api/login', methods=['POST'])

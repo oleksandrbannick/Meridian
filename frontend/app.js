@@ -3206,7 +3206,8 @@ function updateProfitPreview() {
                         const favEntry = Math.max(yes, no);
                         const effectiveTrigger = Math.max(favEntry - 15, flipFloor);
                         const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
-                        if (flipLoss <= 0 || profit <= 0) return `<span style="color:#00ff88;font-size:10px;font-weight:700;">✅ No flip risk</span>`;
+                        if (profit <= 0) return `<span style="color:#8892a6;font-size:10px;font-weight:700;">— No arb</span>`;
+                        if (flipLoss <= 0) return `<span style="color:#ff4444;font-size:10px;font-weight:700;">⛔ Blocked (fav below ${flipFloor}¢)</span>`;
                         const bePct = (flipLoss / (flipLoss + profit) * 100).toFixed(1);
                         const fillsToRecover = Math.ceil(flipLoss / profit);
                         const beColor = parseFloat(bePct) >= 75 ? '#ff4444' : parseFloat(bePct) >= 50 ? '#ffaa00' : '#00ff88';
@@ -3252,9 +3253,14 @@ function updateBreakevenDisplay() {
     const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
     const el = document.getElementById('breakeven-display');
     if (!el) return;
-    if (flipLoss <= 0 || width <= 0) {
-        el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · No flip risk`;
-        el.style.color = '#00ff88';
+    if (width <= 0) {
+        el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · No arb`;
+        el.style.color = '#8892a6';
+        return;
+    }
+    if (flipLoss <= 0) {
+        el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · ⛔ Blocked (fav below ${flipFloor}¢)`;
+        el.style.color = '#ff4444';
         return;
     }
     const bePct = (flipLoss / (flipLoss + width) * 100).toFixed(1);

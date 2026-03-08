@@ -1901,7 +1901,26 @@ def _is_game_live(ticker: str) -> bool:
 
 
 def _get_game_context(ticker: str) -> dict:
-    """Get live game context (quarter, score diff, clock) for trade logging."""
+    """Get live game context (quarter, score diff, clock) for blocking decisions.
+    Always force-refreshes ESPN cache (bypasses TTL) so blocking uses fresh data.
+    Also applies the same date guard as _get_game_score_for_ticker to avoid
+    matching a different same-team game."""
+    # Guard: if ticker is for a future game, no live context exists
+    try:
+        parts_chk = ticker.split('-')
+        if len(parts_chk) >= 2:
+            m_chk = re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts_chk[1])
+            if m_chk:
+                mo = _MONTH_ABBR.get(m_chk.group(2))
+                if mo:
+                    ticker_date = date(2000 + int(m_chk.group(1)), mo, int(m_chk.group(3)))
+                    if ticker_date > date.today():
+                        return {}
+    except Exception:
+        pass
+    # Force-refresh: zero out timestamp so we always get fresh data for blocking
+    global _espn_cache
+    _espn_cache['ts'] = 0
     _refresh_espn_cache()
     info = _espn_cache['data']
     if not info:
@@ -2257,15 +2276,23 @@ def create_bot():
                 # Determine if we're in the dangerous stretch
                 in_danger_zone = False
                 zone_label = ''
-                if sport == 'ncaab':  # Men's college: 2 halves
-                    if period >= 2 and clock_mins <= 10 and sd <= TIGHT_GAME_MAX_DIFF:
+                if sport == 'ncaab':  # Men's college: 2 halves, then OT periods
+                    # period 1 = 1st half, period 2 = 2nd half, period 3+ = OT
+                    if period == 2 and clock_mins <= 10 and sd <= TIGHT_GAME_MAX_DIFF:
                         in_danger_zone = True
                         zone_label = f'2nd half ({clock_str} remaining)'
+                    elif period >= 3 and sd <= TIGHT_GAME_MAX_DIFF:  # OT
+                        in_danger_zone = True
+                        ot_num = period - 2
+                        zone_label = f'OT{ot_num if ot_num > 1 else ""}'
                 else:  # NBA, NCAAW (4 quarters), OT
                     if period >= 4 and sd <= TIGHT_GAME_MAX_DIFF:
                         in_danger_zone = True
-                        q_label = f'Q{period}' if period <= 4 else 'OT'
-                        zone_label = q_label
+                        if period == 4:
+                            zone_label = 'Q4'
+                        else:
+                            ot_num = period - 4
+                            zone_label = f'OT{ot_num if ot_num > 1 else ""}'
 
                 if in_danger_zone:
                     return jsonify({

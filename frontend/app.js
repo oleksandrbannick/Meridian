@@ -3117,7 +3117,7 @@ function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
     const total  = yes + no;
     const profit = 100 - total;
     const isArb  = profit > 0;
@@ -3172,25 +3172,27 @@ function updateProfitPreview() {
             <!-- Flip threshold protection + Breakeven % -->
             <div style="padding:8px 16px 10px;border-top:1px solid #00aaff22;">
                 ${(() => {
-                    // Falling knife warning: if the favorite price is below 55¢
+                    // Falling knife warning: if the favorite price is below 65¢
                     const favEntry = Math.max(yes, no);
-                    const MIN_FAV_ENTRY = 55;
+                    const MIN_FAV_ENTRY = 65;
                     if (favEntry < MIN_FAV_ENTRY && profit < 25) {
                         return `<div style="background:rgba(255,68,68,0.08);border:1px solid #ff444444;border-radius:6px;padding:8px 10px;margin-bottom:8px;">
                             <span style="color:#ff4444;font-size:11px;font-weight:700;">⚠️ FALLING KNIFE — Favorite at ${favEntry}¢ with only ${profit}¢ profit</span>
-                            <div style="color:#ff4444aa;font-size:10px;margin-top:3px;">Thin margin + low fav price = thesis breaking, not a dip. Deploy will be blocked.</div>
+                            <div style="color:#ff4444aa;font-size:10px;margin-top:3px;">Entries below 65¢ don't have enough room (need 10¢+ wiggle). Deploy will be blocked.</div>
                         </div>`;
                     }
                     return '';
                 })()}
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
-                    <span style="color:#00aaff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛡 Flip Protection (≤${flipFloor}¢)</span>
+                    <span style="color:#00aaff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛡 Flip Protection (entry−15¢, floor ${flipFloor}¢)</span>
                     ${(() => {
                         // Breakeven %: how many arbs must complete to offset one flip loss
-                        // Flip loss = favEntry - flipFloor.  Profit per fill = width.
+                        // Effective trigger = max(favEntry - 15, flipFloor)
+                        // Flip loss = favEntry - effectiveTrigger.  Profit per fill = width.
                         // BE% = flipLoss / (flipLoss + width)
                         const favEntry = Math.max(yes, no);
-                        const flipLoss = favEntry >= flipFloor ? favEntry - flipFloor : 0;
+                        const effectiveTrigger = Math.max(favEntry - 15, flipFloor);
+                        const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
                         if (flipLoss <= 0 || profit <= 0) return `<span style="color:#00ff88;font-size:10px;font-weight:700;">✅ No flip risk</span>`;
                         const bePct = (flipLoss / (flipLoss + profit) * 100).toFixed(1);
                         const fillsToRecover = Math.ceil(flipLoss / profit);
@@ -3204,14 +3206,14 @@ function updateProfitPreview() {
                             <span style="color:#00ff88;font-size:10px;font-weight:600;">YES leg</span>
                             ${yesHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${yesLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">${yesHasFlip ? `sells at ${flipFloor}¢ if flipped (entry ${yes}¢)` : `entry ${yes}¢ < ${flipFloor}¢ — rides to settlement`}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${yesHasFlip ? `trigger: max(${yes}-15, ${flipFloor})=${Math.max(yes-15,flipFloor)}¢` : `entry ${yes}¢ < ${flipFloor}¢ — rides to settlement`}</div>
                     </div>
                     <div style="background:#00aaff08;border:1px solid #00aaff22;border-radius:6px;padding:6px 10px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="color:#ff4444;font-size:10px;font-weight:600;">NO leg</span>
                             ${noHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${noLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">${noHasFlip ? `sells at ${flipFloor}¢ if flipped (entry ${no}¢)` : `entry ${no}¢ < ${flipFloor}¢ — rides to settlement`}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${noHasFlip ? `trigger: max(${no}-15, ${flipFloor})=${Math.max(no-15,flipFloor)}¢` : `entry ${no}¢ < ${flipFloor}¢ — rides to settlement`}</div>
                     </div>
                 </div>
             </div>
@@ -3230,20 +3232,21 @@ function applyPreset(width) {
 function updateBreakevenDisplay() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no  = parseInt(document.getElementById('bot-no-price')?.value)  || 0;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
     const width = 100 - yes - no;
     const favEntry = Math.max(yes, no);
-    const flipLoss = favEntry >= flipFloor ? favEntry - flipFloor : 0;
+    const effectiveTrigger = Math.max(favEntry - 15, flipFloor);
+    const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
     const el = document.getElementById('breakeven-display');
     if (!el) return;
     if (flipLoss <= 0 || width <= 0) {
-        el.textContent = `Flip floor: ${flipFloor}¢ · No flip risk`;
+        el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · No flip risk`;
         el.style.color = '#00ff88';
         return;
     }
     const bePct = (flipLoss / (flipLoss + width) * 100).toFixed(1);
     const ratio = Math.ceil(flipLoss / width);
-    el.textContent = `Flip floor: ${flipFloor}¢ · BE: ${bePct}% (${ratio}:1)`;
+    el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · BE: ${bePct}% (${ratio}:1)`;
     el.style.color = parseFloat(bePct) >= 75 ? '#ff4444' : parseFloat(bePct) >= 50 ? '#ffaa00' : '#00aaff';
 }
 
@@ -3388,7 +3391,7 @@ async function createBot() {
     const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
-    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
+    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
@@ -3407,14 +3410,14 @@ async function createBot() {
         return;
     }
 
-    // ── Guardrail: don't deploy fav side below 55¢ (falling knife) ──
+    // ── Guardrail: don't deploy fav side below 65¢ (ensures min 10¢ wiggle room) ──
     // Only blocks when profit margin is thin (< 25¢) = competitive market.
     // Fat profit (≥ 25¢) = illiquid arb where both sides are cheap — that's fine.
-    const MIN_FAV_ENTRY = 55;
+    const MIN_FAV_ENTRY = 65;
     const favPrice = Math.max(yes_price, no_price);
     const profitPer = 100 - yes_price - no_price;
     if (favPrice < MIN_FAV_ENTRY && profitPer < 25) {
-        alert(`⚠️ Favorite side is only ${favPrice}¢ — below the ${MIN_FAV_ENTRY}¢ minimum.\nProfit margin is thin at ${profitPer}¢ — this looks like a falling knife, not a dip buy.\n\nWait for recovery or skip this market.`);
+        alert(`⚠️ Favorite side is only ${favPrice}¢ — below the ${MIN_FAV_ENTRY}¢ minimum.\nEntries below 65¢ leave less than 10¢ of wiggle room before the flip trigger fires.\n\nWait for recovery or skip this market.`);
         return;
     }
 
@@ -3678,7 +3681,7 @@ async function loadBots() {
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
             const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
-            const flipThresh  = bot.flip_threshold || 55;
+            const flipThresh  = bot.flip_threshold || 60;
             const statusClass = {
                 fav_posted:     'monitoring',
                 pending_fills:  'monitoring',
@@ -3783,12 +3786,13 @@ async function loadBots() {
             } else if (bot.status === 'no_filled') {
                 const entryNo = bot.no_price || 0;
                 const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
+                const effectiveTriggerNo = Math.max(entryNo - 15, flipThresh);
                 const hasFlipSL = entryNo >= flipThresh;
                 if (hasFlipSL) {
-                    const distFromFlip = typeof nBid === 'number' ? nBid - flipThresh : '?';
+                    const distFromFlip = typeof nBid === 'number' ? nBid - effectiveTriggerNo : '?';
                     const flipped = typeof distFromFlip === 'number' && distFromFlip <= 0;
                     stopLossInfo = `<div style="background:${flipped ? '#ff444411' : '#00aaff11'};border:1px solid ${flipped ? '#ff444433' : '#00aaff33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${flipped ? '#ff6666' : '#00aaff'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                        <span>🛡 Flip floor: sells NO if bid ≤ <strong>${flipThresh}¢</strong></span>
+                        <span>🛡 Sells NO if bid ≤ <strong>${effectiveTriggerNo}¢</strong> (entry-15¢, floor ${flipThresh}¢)</span>
                         <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromFlip === 'number' && distFromFlip <= 5 ? '#ff4444' : '#00ff88'};">${distFromFlip}¢</strong> from flip</span>
                         <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
                     </div>`;
@@ -4565,7 +4569,7 @@ function showScanResults(opportunities, minWidth, totalScanned) {
 async function quickBot(ticker, yesPrice, noPrice) {
     // Read qty from scan modal first, fall back to controls bar
     const quantity        = parseInt(document.getElementById('scan-modal-qty')?.value || document.getElementById('scan-qty')?.value || '1');
-    const flip_threshold  = 55;
+    const flip_threshold  = 60;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
@@ -5536,7 +5540,7 @@ function generateBotRiskWarnings() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
     const total = yes + no;
 
     const warnings = [];

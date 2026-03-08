@@ -1559,9 +1559,9 @@ STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 # This caps max loss at 15¢ regardless of entry, while giving high entries
 # proportionally more room before cutting. Entries below 60¢ ride to settlement.
 # Watch bots (straight bets / props) keep the old instant entry-minus-X SL.
-FLIP_THRESHOLD_CENTS = 60   # Floor: trigger never goes below 60¢ (favorite no longer clearly favored)
-FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry - 15, 60) — caps max loss at 15¢/contract
-MIN_FAV_ENTRY_CENTS = 60    # Guardrail: never deploy fav side below this price (catching a falling knife)
+FLIP_THRESHOLD_CENTS = 55   # Floor: trigger never goes below 55¢ (absolute minimum)
+FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry - 15, 55) — gives 10¢+ room at any entry ≥65¢
+MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (ensures min 10¢ wiggle room)
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}

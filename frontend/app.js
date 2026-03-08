@@ -3754,18 +3754,15 @@ async function loadBots() {
             // Timeout / next-action info for LIVE bots
             let timeoutInfo = '';
             if (phase === 'live') {
-                const repostAt  = 5;
-                const resizeAt  = 10;
+                const repostAt  = 3;
                 if (yFill === 0 && nFill === 0) {
                     const minsLeft = Math.max(0, repostAt - ageMin);
                     timeoutInfo = minsLeft > 0
                         ? `<span style="color:#ffaa00;font-size:10px;">⏱ Repost in ${minsLeft}m</span>`
                         : `<span style="color:#ff6666;font-size:10px;">⏱ Repost due</span>`;
                 } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
-                    const minsLeft = Math.max(0, resizeAt - ageMin);
-                    timeoutInfo = minsLeft > 0
-                        ? `<span style="color:#ffaa00;font-size:10px;">⏱ Resize in ${minsLeft}m</span>`
-                        : `<span style="color:#ff6666;font-size:10px;">⏱ Resize due</span>`;
+                    // One leg filled — dog order is sitting at fixed price, no resize
+                    timeoutInfo = `<span style="color:#00aaff;font-size:10px;">⏳ Waiting for dog fill</span>`;
                 }
             } else if (phase === 'pregame') {
                 timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;

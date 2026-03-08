@@ -1550,7 +1550,7 @@ def auto_reset_daily_pnl():
         save_state()
 
 # ─── Bot Config (Upgrades #4, #8) ─────────────────────────────────────────────
-REPOST_AFTER_MINUTES = 5    # Re-post orders that haven't filled after this long
+REPOST_AFTER_MINUTES = 3    # Re-post orders that haven't filled after this long
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
 # ── Arb Bot Stop-Loss: Flip Threshold ──────────────────────────────────────────

@@ -2996,7 +2996,15 @@ def _run_monitor():
                                     d = m.get(f'{fav_side}_bid_dollars')
                                     cur_fav_bid = round(float(d) * 100) if d else m.get(f'{fav_side}_bid', 0)
 
-                                new_fav_price = min(cur_fav_bid, 98) if cur_fav_bid > 0 else bot['fav_price']
+                                # Width-aware cap: dog_price is LOCKED — preserve target width by
+                                # shaving the fav, not the dog.  If dog is at 1¢ and width=5¢,
+                                # fav must be ≤ 94¢ — never 98¢ giving only a 1¢ spread.
+                                dog_side_rp  = 'no' if fav_side == 'yes' else 'yes'
+                                dog_price_rp = bot.get(f'{dog_side_rp}_price') or bot.get('dog_price', 1)
+                                min_width_rp = bot.get('arb_width', bot.get('profit_per', 3))
+                                max_fav_for_width = 100 - dog_price_rp - min_width_rp
+                                new_fav_price = min(cur_fav_bid, 98, max_fav_for_width) if cur_fav_bid > 0 else bot['fav_price']
+                                new_fav_price = max(1, new_fav_price)
                                 # Falling knife guard: don't repost fav below MIN_FAV_ENTRY_CENTS
                                 if new_fav_price < MIN_FAV_ENTRY_CENTS:
                                     print(f'🔪 FAV REPOST BLOCKED: {bot_id} {fav_side.upper()} bid={new_fav_price}¢ < {MIN_FAV_ENTRY_CENTS}¢ — falling knife, cancelling')
@@ -3620,9 +3628,19 @@ def _run_monitor():
                 # NEVER go above the current bid. Repost AT the bid to stay competitive
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
-                    # Repost at current bids (never above, just refresh position in queue)
-                    new_yes = min(yes_bid, 98)
-                    new_no  = min(no_bid,  98)
+                    # Width-aware repost: identify fav (higher bid) and dog (lower bid).
+                    # Dog posts at its current bid — fav is capped so that
+                    # fav + dog = 100 - min_width, preserving target spread.
+                    # Example: yes_bid=99, no_bid=1, width=5 → new_no=1, new_yes=94.
+                    min_width = bot.get('arb_width', bot.get('profit_per', 3))
+                    if yes_bid >= no_bid:   # YES is fav, NO is dog
+                        new_no  = max(1, min(no_bid,  98))
+                        new_yes = min(yes_bid, 98, 100 - new_no - min_width)
+                    else:                   # NO is fav, YES is dog
+                        new_yes = max(1, min(yes_bid, 98))
+                        new_no  = min(no_bid,  98, 100 - new_yes - min_width)
+                    new_yes = max(1, new_yes)
+                    new_no  = max(1, new_no)
                     # Falling knife guard: don't repost if fav side has dropped below MIN_FAV_ENTRY_CENTS
                     fav_price = max(new_yes, new_no)
                     if fav_price < MIN_FAV_ENTRY_CENTS:

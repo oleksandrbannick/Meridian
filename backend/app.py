@@ -3802,6 +3802,7 @@ def _run_monitor():
                                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
                                 'game_phase': bot.get('game_phase', 'live'),
                                 'flip_threshold': flip_thresh,
+                                'effective_trigger': effective_trigger,
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
@@ -3912,6 +3913,7 @@ def _run_monitor():
                                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
                                 'game_phase': bot.get('game_phase', 'live'),
                                 'flip_threshold': flip_thresh,
+                                'effective_trigger': effective_trigger,
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
@@ -4154,8 +4156,51 @@ def history_stats():
         elif t['result'] == 'flip_no':
             flip_entries.append(t.get('no_price', 0))
     flip_avg_entry = round(sum(flip_entries) / len(flip_entries)) if flip_entries else 0
-    flip_thresholds_used = [t.get('flip_threshold', 0) for t in flip_trades if t.get('flip_threshold')]
-    flip_avg_threshold = round(sum(flip_thresholds_used) / len(flip_thresholds_used)) if flip_thresholds_used else 0
+    # flip_threshold in trade records is the FLOOR; effective_trigger may be stored too.
+    # For any trade, we can compute effective_trigger = max(entry - 15, floor).
+    flip_effective_triggers = []
+    flip_thresholds_used = []
+    for t, entry in zip(flip_trades, flip_entries):
+        floor = t.get('flip_threshold', FLIP_THRESHOLD_CENTS)
+        eff = t.get('effective_trigger') or max(entry - FLIP_ENTRY_MARGIN, floor)
+        flip_effective_triggers.append(eff)
+        flip_thresholds_used.append(floor)
+    flip_avg_floor = round(sum(flip_thresholds_used) / len(flip_thresholds_used)) if flip_thresholds_used else 0
+    flip_avg_effective_trigger = round(sum(flip_effective_triggers) / len(flip_effective_triggers)) if flip_effective_triggers else 0
+    # Entry bucket breakdown: classify flips by entry price range
+    entry_buckets = {'65-69': {'count': 0, 'loss': 0, 'expected_loss': None},
+                     '70-79': {'count': 0, 'loss': 0, 'expected_loss': 15},
+                     '80-89': {'count': 0, 'loss': 0, 'expected_loss': 15},
+                     '90-99': {'count': 0, 'loss': 0, 'expected_loss': 15}}
+    for entry, eff, t in zip(flip_entries, flip_effective_triggers, flip_trades):
+        loss_c = t.get('loss_cents', 0)
+        if 65 <= entry < 70:
+            bucket = '65-69'
+        elif 70 <= entry < 80:
+            bucket = '70-79'
+        elif 80 <= entry < 90:
+            bucket = '80-89'
+        elif entry >= 90:
+            bucket = '90-99'
+        else:
+            continue
+        entry_buckets[bucket]['count'] += 1
+        entry_buckets[bucket]['loss'] += loss_c
+    entry_bucket_breakdown = []
+    for label, b in entry_buckets.items():
+        if b['count'] == 0:
+            continue
+        lo, hi = [int(x) for x in label.split('-')]
+        # Expected trigger = max(mid - 15, 55); expected loss from entry = entry - trigger
+        mid = (lo + hi) // 2
+        exp_trigger = max(mid - FLIP_ENTRY_MARGIN, FLIP_THRESHOLD_CENTS)
+        exp_loss = mid - exp_trigger
+        entry_bucket_breakdown.append({
+            'range': f'{label}¢',
+            'count': b['count'],
+            'avg_actual_loss': round(b['loss'] / b['count']) if b['count'] else 0,
+            'expected_loss': exp_loss,
+        })
 
     # ── Fill rate by width (with real breakeven %) ─────────────────
     # Only count flip-threshold trades (current system). Exclude old
@@ -4199,12 +4244,15 @@ def history_stats():
         breakeven_pct = round(avg_loss / (avg_loss + avg_profit) * 100, 1) if (avg_loss + avg_profit) > 0 else 0
         edge = round(fill_rate - breakeven_pct, 1)
         ratio = f'{max(1, round(avg_loss / avg_profit))}:1' if avg_profit > 0 and avg_loss > 0 else '-'
+        # System theoretical BE%: assumes avg flip loss = 15¢ (entry-15 formula, width W)
+        system_be_pct = round(15 / (15 + w) * 100, 1) if w > 0 else 0
         width_breakdown.append({
             'width': w, 'wins': s['wins'], 'losses': s['losses'],
             'fill_rate': fill_rate, 'net_cents': s['total_profit'] - s['total_loss'],
             'avg_profit_cents': avg_profit, 'avg_loss_cents': avg_loss,
             'avg_fill_duration_s': avg_fill_dur,
             'breakeven_pct': breakeven_pct,
+            'system_be_pct': system_be_pct,
             'edge': edge,
             'ratio': ratio,
             'flips': s['flips'], 'settled_losses': s['settled_losses'],
@@ -4291,7 +4339,9 @@ def history_stats():
             'total_loss_cents': flip_total_loss,
             'avg_loss_cents': flip_avg_loss,
             'avg_entry_price': flip_avg_entry,
-            'avg_threshold': flip_avg_threshold,
+            'avg_floor': flip_avg_floor,
+            'avg_effective_trigger': flip_avg_effective_trigger,
+            'entry_bucket_breakdown': entry_bucket_breakdown,
         },
         'completed_stats': _compute_completed_stats(arb_wins),
         'phase_stats': phase_stats,

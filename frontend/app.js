@@ -3842,7 +3842,8 @@ async function loadBots() {
                     // Underdog entry — no SL, rides to settlement
                     healthColor = '#00ff88'; healthLabel = '🛡 SAFE';
                 } else if (liveBid != null && liveBid > 0) {
-                    const distFromFlip = liveBid - flipThresh;
+                    const effectiveTriggerHealth = Math.max(entryPrice - 15, flipThresh);
+                    const distFromFlip = liveBid - effectiveTriggerHealth;
                     if (distFromFlip <= 3) {
                         // Within 3¢ of flip — DANGER, pulsing red
                         healthColor = '#ff4444';
@@ -4952,9 +4953,9 @@ async function loadHistoryStats() {
                     })()}
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">�🛡 Flip Analysis</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis (entry-15¢, floor 55¢)</div>
                     ${fs.total > 0 ? `
-                    <div style="display:flex;flex-direction:column;gap:6px;">
+                    <div style="display:flex;flex-direction:column;gap:5px;">
                         <div style="display:flex;justify-content:space-between;">
                             <span style="color:#8892a6;font-size:11px;">Total flips</span>
                             <span style="color:#ff6666;font-weight:700;font-size:12px;">${fs.total}</span>
@@ -4971,13 +4972,24 @@ async function loadHistoryStats() {
                             <span style="color:#8892a6;font-size:11px;">Avg entry at flip</span>
                             <span style="color:#fff;font-weight:700;font-size:12px;">${fs.avg_entry_price}¢</span>
                         </div>
-                        ${fs.avg_threshold > 0 ? `<div style="display:flex;justify-content:space-between;">
-                            <span style="color:#8892a6;font-size:11px;">Avg flip floor</span>
-                            <span style="color:#00aaff;font-weight:700;font-size:12px;">${fs.avg_threshold}¢</span>
+                        ${fs.avg_effective_trigger > 0 ? `<div style="display:flex;justify-content:space-between;">
+                            <span style="color:#8892a6;font-size:11px;">Avg effective trigger</span>
+                            <span style="color:#00aaff;font-weight:700;font-size:12px;">${fs.avg_effective_trigger}¢ <span style="color:#555;font-weight:400;font-size:10px;">(floor ${fs.avg_floor}¢)</span></span>
                         </div>` : ''}
-                        <div style="margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;">
-                            <span style="color:#555;font-size:9px;">Est. fills to recover flip losses: <strong style="color:#ffaa00;">${s.arb_avg_profit > 0 ? '~' + Math.ceil(fs.total_loss_cents / s.arb_avg_profit) : '?'}</strong></span>
-                            ${s.arb_avg_profit > 0 ? `<span style="color:#444;font-size:9px;"> (at ${s.arb_avg_profit}¢ avg profit/fill — varies by width)</span>` : ''}
+                        ${fs.entry_bucket_breakdown && fs.entry_bucket_breakdown.length > 0 ? `
+                        <div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">
+                            <div style="color:#555;font-size:9px;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Loss by Entry Price</div>
+                            <table style="width:100%;font-size:10px;border-collapse:collapse;">
+                                <tr style="color:#555;"><td style="padding:2px 4px;">Entry</td><td style="padding:2px 4px;text-align:center;">Count</td><td style="padding:2px 4px;text-align:right;">Exp.</td><td style="padding:2px 4px;text-align:right;">Actual</td></tr>
+                                ${fs.entry_bucket_breakdown.map(b => {
+                                    const varColor = b.avg_actual_loss > b.expected_loss + 3 ? '#ff4444' : b.avg_actual_loss < b.expected_loss ? '#00ff88' : '#ffaa00';
+                                    return `<tr><td style="padding:2px 4px;color:#8892a6;">${b.range}</td><td style="padding:2px 4px;text-align:center;color:#fff;">${b.count}</td><td style="padding:2px 4px;text-align:right;color:#ffaa33;">${b.expected_loss}¢</td><td style="padding:2px 4px;text-align:right;font-weight:700;color:${varColor};">${b.avg_actual_loss}¢</td></tr>`;
+                                }).join('')}
+                            </table>
+                        </div>` : ''}
+                        <div style="margin-top:6px;padding-top:4px;border-top:1px solid #1e2740;">
+                            <span style="color:#555;font-size:9px;">Est. fills to recover: <strong style="color:#ffaa00;">${s.arb_avg_profit > 0 ? '~' + Math.ceil(fs.total_loss_cents / s.arb_avg_profit) : '?'}</strong></span>
+                            ${s.arb_avg_profit > 0 ? `<span style="color:#444;font-size:9px;"> (at ${s.arb_avg_profit}¢ avg profit/fill)</span>` : ''}
                         </div>
                     </div>` : '<div style="color:#00ff88;font-size:11px;">🎉 No flips yet — no favorites have collapsed</div>'}
                 </div>
@@ -5006,6 +5018,7 @@ async function loadHistoryStats() {
                     <td style="padding:6px 10px;color:#fff;font-weight:700;">${w.width}¢</td>
                     <td style="padding:6px 10px;color:${frColor};font-weight:700;">${w.fill_rate}%</td>
                     <td style="padding:6px 10px;color:#ffaa33;font-weight:600;">${w.breakeven_pct}%</td>
+                    <td style="padding:6px 10px;color:#8892a6;font-size:10px;">${w.system_be_pct != null ? w.system_be_pct + '%' : '—'}</td>
                     <td style="padding:6px 10px;color:${edgeColor};font-weight:700;">${edgeIcon} ${w.edge >= 0 ? '+' : ''}${w.edge}%</td>
                     <td style="padding:6px 10px;color:#8892a6;">${w.wins}W / ${w.losses}L${lossDetail}</td>
                     <td style="padding:6px 10px;color:${nColor};font-weight:700;">${w.net_cents >= 0 ? '+' : ''}${w.net_cents}¢</td>
@@ -5016,13 +5029,14 @@ async function loadHistoryStats() {
             widthPanel.innerHTML = `
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Width Performance — Fill Rate vs Breakeven</div>
-                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit). Fill rate must exceed breakeven to be profitable.</div>
+                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit) from real data. System BE% = 15/(15+W) — theoretical assuming 15\u00a2 flip loss (entry \u226570\u00a2). Fill rate must exceed both to be profitable.</div>
                     <div style="overflow-x:auto;">
                     <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px;">
                         <tr style="border-bottom:1px solid #1e2740;">
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
-                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Breakeven</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Actual BE</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">System BE</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Edge</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Record</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Net</th>

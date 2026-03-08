@@ -5837,7 +5837,7 @@
       "live_no_bid": 74,
       "live_yes_ask": 26,
       "live_no_ask": 79,
-      "last_price_update": 1772954202.966461,
+      "last_price_update": 1772954564.681182,
       "first_fill_at": 1772934834.701099,
       "first_leg": "no"
     },
@@ -6718,11 +6718,11 @@
       "repeat_count": 2,
       "repeats_done": 0,
       "arb_width": 10,
-      "live_yes_bid": 95,
-      "live_no_bid": 4,
-      "live_yes_ask": 96,
-      "live_no_ask": 5,
-      "last_price_update": 1772954204.071877
+      "live_yes_bid": 99,
+      "live_no_bid": 0,
+      "live_yes_ask": 100,
+      "live_no_ask": 1,
+      "last_price_update": 1772954565.36664
     }
   },
   "trade_history": [
@@ -14015,7 +14015,7 @@
     "gross_loss_cents": 0,
     "completed_bots": 0,
     "stopped_bots": 0,
-    "session_start": 1772954093.586536,
+    "session_start": 1772954520.694113,
     "day_key": "2026-03-08"
   }
 }

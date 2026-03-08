@@ -1868,6 +1868,42 @@ def _refresh_espn_cache():
         print(f'🏟 ESPN cache refreshed: {len(live_teams)} live teams: {", ".join(sorted(live_teams))}')
 
 
+def _detect_sport(ticker: str) -> str:
+    """Detect sport from ticker prefix.
+    Returns 'nba', 'ncaab', 'nfl', 'nhl', 'mlb', 'mls', 'epl', 'ucl', 'tennis', etc.
+    Basketball sports: 'nba', 'ncaab', 'ncaaw', 'intl_basketball'
+    """
+    prefix = ticker.split('-')[0].upper() if ticker else ''
+    if prefix.startswith('KXNBA'):
+        return 'nba'
+    if prefix.startswith('KXNCAAMB') or prefix.startswith('KXMARMAD'):
+        return 'ncaab'
+    if prefix.startswith('KXNCAAWB'):
+        return 'ncaaw'
+    if prefix.startswith('KXNFL') or prefix.startswith('KXNCAAF'):
+        return 'nfl'
+    if prefix.startswith('KXNHL'):
+        return 'nhl'
+    if prefix.startswith('KXMLB') or prefix.startswith('KXWBC'):
+        return 'mlb'
+    if prefix.startswith('KXMLS'):
+        return 'mls'
+    if prefix.startswith('KXEPL'):
+        return 'epl'
+    if prefix.startswith('KXUCL'):
+        return 'ucl'
+    if prefix.startswith('KXATP') or prefix.startswith('KXWTA'):
+        return 'tennis'
+    if prefix.startswith(('KXVTB', 'KXBSL', 'KXABA')):
+        return 'intl_basketball'
+    return 'unknown'
+
+
+def _is_basketball(ticker: str) -> bool:
+    """Check if a ticker is for a basketball sport (NBA, NCAAB, NCAAW, intl)."""
+    return _detect_sport(ticker) in ('nba', 'ncaab', 'ncaaw', 'intl_basketball')
+
+
 def _detect_market_type(ticker: str) -> str:
     """Detect market type from ticker prefix: 'spread', 'total', 'moneyline', 'prop', etc."""
     prefix = ticker.split('-')[0].upper() if ticker else ''
@@ -2355,16 +2391,18 @@ def create_bot():
                          f'Wait for it to recover or skip this market.'
             }), 400
 
-        # ── Guardrail: block deployment in tight games (score diff ≤ 5) ──
-        # Tight games in Q4 are the #1 source of catastrophic flip losses.
-        # When the score is within 5 points, the market can swing wildly
-        # and trigger cascading stop losses. Data shows 62% win rate but
-        # -$39 net on tight games — the tail risk wipes out all profits.
+        # ── Guardrail: block deployment in tight basketball games ──
+        # Basketball-specific: tight games in Q4/OT are the #1 source of
+        # catastrophic flip losses. When score is within 5 points in Q4,
+        # markets swing wildly and trigger cascading stop losses.
+        # Data: 62% win rate but -$39 net on tight games — tail risk.
+        # Only applies to basketball (NBA, NCAAB, etc.) — other sports
+        # have different scoring dynamics.
         # Allow override with force_tight=True for manual conviction plays.
         TIGHT_GAME_MAX_DIFF = 5       # block if score diff ≤ this
-        TIGHT_GAME_MIN_PERIOD = 3     # only block in Q3+ (halftime+ for college)
+        TIGHT_GAME_MIN_PERIOD = 4     # only block in Q4+ / OT
         force_tight = data.get('force_tight', False)
-        if game_phase == 'live' and not force_tight:
+        if game_phase == 'live' and not force_tight and _is_basketball(ticker):
             gc = _get_game_context(ticker)
             if gc and gc.get('period', 0) >= TIGHT_GAME_MIN_PERIOD:
                 sd = gc.get('score_diff', 999)
@@ -2373,7 +2411,7 @@ def create_bot():
                     q_label = f'Q{period}' if period <= 4 else 'OT'
                     return jsonify({
                         'error': f'🛑 TIGHT GAME BLOCKED: Score differential is only {sd} points in {q_label}. '
-                                 f'Games this close in late quarters have a 62% win rate but cause catastrophic losses '
+                                 f'Games this close in Q4/OT have a 62% win rate but cause catastrophic losses '
                                  f'when they flip. The BKN-DET lesson: -$35 from one tight game. '
                                  f'Wait for the lead to grow or use the force option to override.',
                         'tight_game_blocked': True,

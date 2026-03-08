@@ -2887,13 +2887,26 @@ function openBotModal(market, _side, _price) {
         // Signal-aware recommendation text
         let sigText = '', sigColor = liq.tierColor;
         if (sigType === 'anchor') {
-            sigText = '🟢 Blowout late — best setup, tight presets OK';
-            sigColor = '#00ff88';
+            const sigLabel = signal.label || '';
+            if (sigLabel.includes('LOCK')) {
+                sigText = '🟢 LOCK — blowout, prices stable, tight presets OK';
+                sigColor = '#00ff88';
+            } else if (sigLabel.includes('ANCHOR')) {
+                sigText = '🟢 ANCHOR — strong lead, safe deploy';
+                sigColor = '#4ade80';
+            } else {
+                // LEAN — moderate lead, uses anchor presets but with caution
+                sigText = '🟡 LEAN — moderate lead, decent setup';
+                sigColor = '#ffaa33';
+            }
+        } else if (sigType === 'danger') {
+            sigText = '🔴 DANGER — tight + late, bot will block deploy';
+            sigColor = '#ff4444';
         } else if (sigType === 'swing') {
-            sigText = '🔵 Close game — risky, for info only';
+            sigText = '🔵 CLOSE — tight game, prices volatile, use wider widths';
             sigColor = '#60a5fa';
         } else if (sigType === 'caution') {
-            sigText = '⚪ Too early to tell — game just started';
+            sigText = '⚪ EARLY — game just started, no score context yet';
             sigColor = '#8892a6';
         } else if (sigType === 'pregame') {
             sigText = '⏳ Pregame — waiting for tip-off';

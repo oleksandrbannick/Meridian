@@ -3437,12 +3437,9 @@ async function createBot() {
 
         if (data.success) {
             const profit = 100 - yes_price - no_price;
-            const rptNote = repeat_count > 0 ? ` | ${repeat_count + 1} runs` : '';
-            const favSide = data.fav_side ? data.fav_side.toUpperCase() : '?';
-            const dogSide = data.fav_side === 'no' ? 'YES' : 'NO';
-            const favPrice = data.fav_side === 'no' ? no_price : yes_price;
-            const dogPrice = data.fav_side === 'no' ? yes_price : no_price;
-            showNotification(`✅ ARB Bot: ${favSide}@${favPrice}¢ (fav) waiting to fill | dog ${dogSide}@${dogPrice}¢ → +${profit}¢/contract${rptNote}`);
+            const cycles = repeat_count > 0 ? repeat_count + 1 : 1;
+            const cycleNote = cycles > 1 ? ` × ${cycles} cycles` : '';
+            showNotification(`✅ ARB deployed: ${quantity} contracts | ${profit}¢ width${cycleNote}`);
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
@@ -3464,7 +3461,9 @@ async function createBot() {
                 const retryData = await retryResp.json();
                 if (retryData.success) {
                     const profit = 100 - yes_price - no_price;
-                    showNotification(`⚠️ Force deployed in tight game → ${profit}¢/contract`);
+                    const cycles = repeat_count > 0 ? repeat_count + 1 : 1;
+                    const cycleNote = cycles > 1 ? ` × ${cycles} cycles` : '';
+                    showNotification(`⚠️ Force deployed (tight game): ${quantity} contracts | ${profit}¢ width${cycleNote}`);
                     closeModal();
                     loadBots();
                     if (!autoMonitorInterval) toggleAutoMonitor();
@@ -4580,7 +4579,8 @@ async function quickBot(ticker, yesPrice, noPrice) {
         });
         const data = await resp.json();
         if (data.success) {
-            showNotification(`✅ Bot placed! ${ticker} YES ${yesPrice}¢ / NO ${noPrice}¢ → +${data.profit_per}¢/contract`);
+            const profitPer = 100 - yesPrice - noPrice;
+            showNotification(`✅ ARB deployed: ${quantity} contracts | ${profitPer}¢ width | YES ${yesPrice}¢ → NO ${noPrice}¢ queued`);
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
         } else if (data.tight_game_blocked) {
@@ -4593,7 +4593,8 @@ async function quickBot(ticker, yesPrice, noPrice) {
                 });
                 const retryData = await retryResp.json();
                 if (retryData.success) {
-                    showNotification(`⚠️ Force deployed in tight game → +${retryData.profit_per}¢/contract`);
+                    const profitPer = 100 - yesPrice - noPrice;
+                    showNotification(`⚠️ Force deployed (tight game): ${quantity} contracts | ${profitPer}¢ width | YES ${yesPrice}¢ → NO ${noPrice}¢`);
                     loadBots();
                     if (!autoMonitorInterval) toggleAutoMonitor();
                 } else {

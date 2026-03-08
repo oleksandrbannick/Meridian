@@ -2296,10 +2296,9 @@ def create_bot():
 
                 if in_danger_zone:
                     return jsonify({
-                        'error': f'🛑 TIGHT GAME BLOCKED: Score differential is only {sd} points in {zone_label}. '
-                                 f'Games this close late have a 62% win rate but cause catastrophic losses '
-                                 f'when they flip. The BKN-DET lesson: -$35 from one tight game. '
-                                 f'Wait for the lead to grow or use the force option to override.',
+                        'error': f'🛑 TIGHT GAME BLOCKED: {sd}-point lead in {zone_label}. '
+                                 f'Late close games swing wildly and can trigger stop-losses on both sides. '
+                                 f'Wait for the lead to grow, or use the force option to override.',
                         'tight_game_blocked': True,
                         'score_diff': sd,
                         'period': period,

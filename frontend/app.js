@@ -110,31 +110,47 @@ function navigateToMarket(eventTickerPrefix) {
     const prefixParts = eventTickerPrefix.toUpperCase().split('-');
     const gameIdSegment = prefixParts.length >= 2 ? prefixParts[1] : '';
 
-    const doScroll = () => {
+    const highlightCard = (card) => {
+        // Use instant scroll — 'smooth' can fail on mobile Safari before layout settles
+        card.scrollIntoView({ behavior: 'auto', block: 'center' });
+        card.style.transition = 'box-shadow 0.3s';
+        card.style.boxShadow = '0 0 20px rgba(0,170,255,0.5), inset 0 0 12px rgba(0,170,255,0.1)';
+        setTimeout(() => { card.style.boxShadow = ''; }, 2000);
+    };
+
+    const findCard = () => {
         const cards = document.querySelectorAll('[data-event-ticker]');
         for (const card of cards) {
             const ticker = (card.getAttribute('data-event-ticker') || '').toUpperCase();
             if (ticker.startsWith(eventTickerPrefix.toUpperCase()) ||
                 (gameIdSegment && ticker.includes(gameIdSegment))) {
-                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                card.style.transition = 'box-shadow 0.3s';
-                card.style.boxShadow = '0 0 20px rgba(0,170,255,0.5), inset 0 0 12px rgba(0,170,255,0.1)';
-                setTimeout(() => { card.style.boxShadow = ''; }, 2000);
-                return true;
+                return card;
             }
         }
-        return false;
+        return null;
     };
 
-    setTimeout(async () => {
-        if (!doScroll()) {
+    const doScroll = async () => {
+        let card = findCard();
+        if (!card) {
             // Markets not loaded yet — fetch them then retry
             if (typeof loadMarkets === 'function' && allMarkets.length === 0) {
                 await loadMarkets();
             }
-            setTimeout(doScroll, 400);
+            card = findCard();
         }
-    }, 200);
+        if (card) {
+            // Wait two animation frames so the tab display:block layout is fully computed
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    highlightCard(card);
+                });
+            });
+        }
+    };
+
+    // Small delay so switchTab()'s class toggle has been applied before we query
+    setTimeout(doScroll, 50);
 }
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
@@ -3605,7 +3621,7 @@ async function loadBots() {
                     <div style="display:flex;justify-content:space-between;align-items:center;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <span style="color:#9966ff;font-size:11px;font-weight:700;">👁 WATCH</span>
-                            <strong style="color:#fff;font-size:13px;">${watchDisplayName}</strong>
+                            <a href="#" onclick="navigateToMarket('${(bot.ticker||'').toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${watchDisplayName}</a>
                             <span class="bot-status watching">${orderFilled ? 'WATCHING' : 'PENDING'}</span>
                             <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
                             ${fillStatusHtml}

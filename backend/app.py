@@ -1121,8 +1121,8 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         if status == 'yes_filled':
             yes_filled = bot.get('yes_fill_qty', 0)
             entry_yes = bot['yes_price']
-            # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
-            effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, flip_thresh)
+            # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
+            effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_yes - 10))
             if yes_filled >= qty and entry_yes >= flip_thresh and yes_bid < effective_trigger:
                 # Mark immediately to prevent monitor double-fire
                 bot['_ws_flip_selling'] = True
@@ -1137,8 +1137,8 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         elif status == 'no_filled':
             no_filled = bot.get('no_fill_qty', 0)
             entry_no = bot['no_price']
-            # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
-            effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, flip_thresh)
+            # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
+            effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_no - 10))
             if no_filled >= qty and entry_no >= flip_thresh and no_bid < effective_trigger:
                 bot['_ws_flip_selling'] = True
                 print(f'⚡ WS REAL-TIME FLIP: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢, thresh {flip_thresh}¢) — selling NOW')
@@ -1560,9 +1560,9 @@ STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 # This caps max loss at 15¢ regardless of entry, while giving high entries
 # proportionally more room before cutting. Entries below 60¢ ride to settlement.
 # Watch bots (straight bets / props) keep the old instant entry-minus-X SL.
-FLIP_THRESHOLD_CENTS = 55   # Floor: trigger never goes below 55¢ (absolute minimum)
-FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry - 15, 55) — gives 10¢+ room at any entry ≥65¢
-MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (ensures min 10¢ wiggle room)
+FLIP_THRESHOLD_CENTS = 60   # Default hard floor: trigger never goes below 60¢
+FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry-15, min(floor, entry-10)) — always gives ≥10¢ room
+MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (65-69¢ entries use entry-10 floor)
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}
@@ -3750,8 +3750,8 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_yes = bot['yes_price']
 
-                    # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
-                    effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, flip_thresh)
+                    # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
+                    effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_yes - 10))
                     # Only apply flip SL to favorite entries (entered at ≥ floor).
                     # Underdog entries (below floor) ride to settlement — max loss is small.
                     if entry_yes >= flip_thresh and yes_bid < effective_trigger:
@@ -3861,8 +3861,8 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_no = bot['no_price']
 
-                    # Dynamic trigger: entry-15 floored at the bot's flip_threshold floor
-                    effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, flip_thresh)
+                    # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
+                    effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_no - 10))
                     # Only apply flip SL to favorite entries (entered at ≥ floor).
                     # Underdog entries ride to settlement.
                     if entry_no >= flip_thresh and no_bid < effective_trigger:

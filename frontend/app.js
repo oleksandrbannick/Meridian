@@ -3139,8 +3139,10 @@ function updateProfitPreview() {
     const roi = total > 0 ? ((profit / total) * 100).toFixed(1) : '0.0';
 
     // Flip threshold risk: worst case is selling at flip floor
-    const yesFlipLoss = yes >= flipFloor ? (yes - flipFloor) * qty : 0;
-    const noFlipLoss  = no >= flipFloor ? (no - flipFloor) * qty : 0;
+    const yesEffTrig = yes >= flipFloor ? Math.max(yes - 15, Math.min(flipFloor, yes - 10)) : 0;
+    const noEffTrig  = no  >= flipFloor ? Math.max(no  - 15, Math.min(flipFloor, no  - 10)) : 0;
+    const yesFlipLoss = yes >= flipFloor ? (yes - yesEffTrig) * qty : 0;
+    const noFlipLoss  = no  >= flipFloor ? (no  - noEffTrig)  * qty : 0;
     const yesLossDollar = (yesFlipLoss / 100).toFixed(2);
     const noLossDollar  = (noFlipLoss / 100).toFixed(2);
     const yesHasFlip = yes >= flipFloor;
@@ -3204,7 +3206,7 @@ function updateProfitPreview() {
                         // Flip loss = favEntry - effectiveTrigger.  Profit per fill = width.
                         // BE% = flipLoss / (flipLoss + width)
                         const favEntry = Math.max(yes, no);
-                        const effectiveTrigger = Math.max(favEntry - 15, flipFloor);
+                        const effectiveTrigger = Math.max(favEntry - 15, Math.min(flipFloor, favEntry - 10));
                         const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
                         if (profit <= 0) return `<span style="color:#8892a6;font-size:10px;font-weight:700;">— No arb</span>`;
                         if (flipLoss <= 0) return `<span style="color:#ff4444;font-size:10px;font-weight:700;">⛔ Blocked (fav below ${flipFloor}¢)</span>`;
@@ -3220,14 +3222,14 @@ function updateProfitPreview() {
                             <span style="color:#00ff88;font-size:10px;font-weight:600;">YES leg</span>
                             ${yesHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${yesLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">${yesHasFlip ? `trigger: max(${yes}-15, ${flipFloor})=${Math.max(yes-15,flipFloor)}¢` : `entry ${yes}¢ < ${flipFloor}¢ — rides to settlement`}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${yesHasFlip ? `trigger: max(${yes}-15, min(${flipFloor},${yes}-10))=${Math.max(yes-15,Math.min(flipFloor,yes-10))}¢` : `entry ${yes}¢ < ${flipFloor}¢ — rides to settlement`}</div>
                     </div>
                     <div style="background:#00aaff08;border:1px solid #00aaff22;border-radius:6px;padding:6px 10px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="color:#ff4444;font-size:10px;font-weight:600;">NO leg</span>
                             ${noHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${noLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">${noHasFlip ? `trigger: max(${no}-15, ${flipFloor})=${Math.max(no-15,flipFloor)}¢` : `entry ${no}¢ < ${flipFloor}¢ — rides to settlement`}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${noHasFlip ? `trigger: max(${no}-15, min(${flipFloor},${no}-10))=${Math.max(no-15,Math.min(flipFloor,no-10))}¢` : `entry ${no}¢ < ${flipFloor}¢ — rides to settlement`}</div>
                     </div>
                 </div>
             </div>
@@ -3249,7 +3251,7 @@ function updateBreakevenDisplay() {
     const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
     const width = 100 - yes - no;
     const favEntry = Math.max(yes, no);
-    const effectiveTrigger = Math.max(favEntry - 15, flipFloor);
+    const effectiveTrigger = Math.max(favEntry - 15, Math.min(flipFloor, favEntry - 10));
     const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
     const el = document.getElementById('breakeven-display');
     if (!el) return;
@@ -3789,10 +3791,11 @@ async function loadBots() {
                 const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
                 const hasFlipSL = entryYes >= flipThresh;
                 if (hasFlipSL) {
-                    const distFromFlip = typeof yBid === 'number' ? yBid - flipThresh : '?';
+                    const effectiveTriggerYes = Math.max(entryYes - 15, Math.min(flipThresh, entryYes - 10));
+                    const distFromFlip = typeof yBid === 'number' ? yBid - effectiveTriggerYes : '?';
                     const flipped = typeof distFromFlip === 'number' && distFromFlip <= 0;
                     stopLossInfo = `<div style="background:${flipped ? '#ff444411' : '#00aaff11'};border:1px solid ${flipped ? '#ff444433' : '#00aaff33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${flipped ? '#ff6666' : '#00aaff'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                        <span>🛡 Flip floor: sells YES if bid ≤ <strong>${flipThresh}¢</strong></span>
+                        <span>🛡 Sells YES if bid ≤ <strong>${effectiveTriggerYes}¢</strong> (entry-15¢, floor ${flipThresh}¢)</span>
                         <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromFlip === 'number' && distFromFlip <= 5 ? '#ff4444' : '#00ff88'};">${distFromFlip}¢</strong> from flip</span>
                         <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
                     </div>`;
@@ -3805,7 +3808,7 @@ async function loadBots() {
             } else if (bot.status === 'no_filled') {
                 const entryNo = bot.no_price || 0;
                 const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-                const effectiveTriggerNo = Math.max(entryNo - 15, flipThresh);
+                const effectiveTriggerNo = Math.max(entryNo - 15, Math.min(flipThresh, entryNo - 10));
                 const hasFlipSL = entryNo >= flipThresh;
                 if (hasFlipSL) {
                     const distFromFlip = typeof nBid === 'number' ? nBid - effectiveTriggerNo : '?';
@@ -3861,7 +3864,7 @@ async function loadBots() {
                     // Underdog entry — no SL, rides to settlement
                     healthColor = '#00ff88'; healthLabel = '🛡 SAFE';
                 } else if (liveBid != null && liveBid > 0) {
-                    const effectiveTriggerHealth = Math.max(entryPrice - 15, flipThresh);
+                    const effectiveTriggerHealth = Math.max(entryPrice - 15, Math.min(flipThresh, entryPrice - 10));
                     const distFromFlip = liveBid - effectiveTriggerHealth;
                     if (distFromFlip <= 3) {
                         // Within 3¢ of flip — DANGER, pulsing red
@@ -4972,7 +4975,7 @@ async function loadHistoryStats() {
                     })()}
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis (entry-15¢, floor 55¢)</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis (entry-15¢, floor 60¢)</div>
                     ${fs.total > 0 ? `
                     <div style="display:flex;flex-direction:column;gap:5px;">
                         <div style="display:flex;justify-content:space-between;">

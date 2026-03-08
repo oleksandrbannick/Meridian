@@ -636,7 +636,21 @@ function getGameSignal(gameId, sport, markets) {
         };
     }
 
-    // 🔵 CLOSE — tight game, volatile prices but arb still works
+    // � DANGER — tight game in decisive stretch (guardrail will block deploy)
+    const inDangerZone = scoreDiff <= 5 && (
+        ((sport === 'NBA' || sport === 'NCAAW') && period >= 4) ||
+        (sport === 'NCAAB' && period >= 2 && clockMins <= 10)
+    );
+    if (inDangerZone) {
+        return {
+            type: 'danger', label: '🔴 DANGER',
+            color: '#ff4444', glowAnim: '',
+            description: `±${scoreDiff} pts · ${phaseLabel} — Tight + late game, bot will block deploy`,
+            liq
+        };
+    }
+
+    // �🔵 CLOSE — tight game, volatile prices but arb still works
     return {
         type: 'swing', label: '🔵 CLOSE',
         color: '#60a5fa', glowAnim: 'arbGlowBlue',

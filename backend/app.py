@@ -2207,26 +2207,47 @@ def create_bot():
             }), 400
 
         # ── Guardrail: block deployment in tight basketball games ──
-        # Basketball-specific: tight games in Q4/OT are the #1 source of
-        # catastrophic flip losses. When score is within 5 points in Q4,
-        # markets swing wildly and trigger cascading stop losses.
+        # Basketball-specific: tight late-game situations are the #1 source of
+        # catastrophic flip losses. When score is within 5 points in the
+        # decisive stretch, markets swing wildly and trigger cascading stop losses.
         # Data: 62% win rate but -$39 net on tight games — tail risk.
-        # Only applies to basketball (NBA, NCAAB, etc.) — other sports
-        # have different scoring dynamics.
+        # Rules by sport:
+        #   NBA / NCAAW (4 quarters): block in Q4+ / OT
+        #   NCAAB men's (2 halves):  block if 2nd half AND ≤ 10 min remaining
         # Allow override with force_tight=True for manual conviction plays.
-        TIGHT_GAME_MAX_DIFF = 5       # block if score diff ≤ this
-        TIGHT_GAME_MIN_PERIOD = 4     # only block in Q4+ / OT
+        TIGHT_GAME_MAX_DIFF = 5
         force_tight = data.get('force_tight', False)
         if game_phase == 'live' and not force_tight and _is_basketball(ticker):
             gc = _get_game_context(ticker)
-            if gc and gc.get('period', 0) >= TIGHT_GAME_MIN_PERIOD:
+            if gc:
                 sd = gc.get('score_diff', 999)
-                if sd <= TIGHT_GAME_MAX_DIFF:
-                    period = gc.get('period', 0)
-                    q_label = f'Q{period}' if period <= 4 else 'OT'
+                period = gc.get('period', 0)
+                clock_str = gc.get('clock', '')
+                sport = _detect_sport(ticker)
+
+                # Parse clock to minutes remaining (format: "MM:SS" or "M:SS")
+                clock_mins = 999
+                clock_match = re.match(r'(\d+):(\d+)', clock_str)
+                if clock_match:
+                    clock_mins = int(clock_match.group(1)) + int(clock_match.group(2)) / 60
+
+                # Determine if we're in the dangerous stretch
+                in_danger_zone = False
+                zone_label = ''
+                if sport == 'ncaab':  # Men's college: 2 halves
+                    if period >= 2 and clock_mins <= 10 and sd <= TIGHT_GAME_MAX_DIFF:
+                        in_danger_zone = True
+                        zone_label = f'2nd half ({clock_str} remaining)'
+                else:  # NBA, NCAAW (4 quarters), OT
+                    if period >= 4 and sd <= TIGHT_GAME_MAX_DIFF:
+                        in_danger_zone = True
+                        q_label = f'Q{period}' if period <= 4 else 'OT'
+                        zone_label = q_label
+
+                if in_danger_zone:
                     return jsonify({
-                        'error': f'🛑 TIGHT GAME BLOCKED: Score differential is only {sd} points in {q_label}. '
-                                 f'Games this close in Q4/OT have a 62% win rate but cause catastrophic losses '
+                        'error': f'🛑 TIGHT GAME BLOCKED: Score differential is only {sd} points in {zone_label}. '
+                                 f'Games this close late have a 62% win rate but cause catastrophic losses '
                                  f'when they flip. The BKN-DET lesson: -$35 from one tight game. '
                                  f'Wait for the lead to grow or use the force option to override.',
                         'tight_game_blocked': True,

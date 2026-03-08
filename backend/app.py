@@ -1373,7 +1373,7 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
             verified = sell_info.get('verified_cleared', False)
             session_pnl['gross_loss_cents'] += loss
             session_pnl['stopped_bots']     += 1
-            trade_history.insert(0, {
+            _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                 'quantity': filled_qty, 'loss_cents': loss,
@@ -1390,7 +1390,7 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
                 'repeats_done': bot.get('repeats_done', 0),
                 'repeat_count': orig_repeat_count,
                 'exit_source': 'ws_realtime',
-            })
+            }, bot)
             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
             print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ loss={loss}¢ (real-time)')
             save_state()
@@ -1642,7 +1642,7 @@ def _execute_ws_completion(bot_id):
 
             session_pnl['gross_profit_cents'] += profit_cents
             session_pnl['completed_bots']     += 1
-            trade_history.insert(0, {
+            _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': real_yes, 'no_price': real_no,
                 'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
@@ -1661,7 +1661,7 @@ def _execute_ws_completion(bot_id):
                 'repeats_done': bot.get('repeats_done', 0),
                 'repeat_count': bot.get('repeat_count', 0),
                 'fill_source': 'ws_realtime',
-            })
+            }, bot)
             bot_log('ARB_COMPLETED', bot_id, {
                 'real_yes': real_yes, 'real_no': real_no,
                 'profit_cents': profit_cents,
@@ -1866,6 +1866,87 @@ def _refresh_espn_cache():
     live_teams = [k for k, v in team_info.items() if v.get('live')]
     if live_teams:
         print(f'🏟 ESPN cache refreshed: {len(live_teams)} live teams: {", ".join(sorted(live_teams))}')
+
+
+def _detect_market_type(ticker: str) -> str:
+    """Detect market type from ticker prefix: 'spread', 'total', 'moneyline', 'prop', etc."""
+    prefix = ticker.split('-')[0].upper() if ticker else ''
+    if 'SPREAD' in prefix:
+        return 'spread'
+    if 'TOTAL' in prefix:
+        return 'total'
+    if 'GAME' in prefix or 'WINNER' in prefix or 'MATCH' in prefix:
+        return 'moneyline'
+    if any(k in prefix for k in ('PTS', 'REB', 'AST', '3PT', 'STL', 'BLK', 'GOAL', 'BTTS', 'MVP')):
+        return 'prop'
+    return 'moneyline'
+
+
+def _extract_spread_line(ticker: str) -> str:
+    """Extract spread line label from a spread ticker.
+
+    For spread tickers like KXNBASPREAD-26MAR07UTAMIL-UTA1:
+      - suffix = 'UTA1', team_code = 'UTA', tier_digit = '1'
+      - Fetches Kalshi market title (e.g. 'Utah wins by over 3.5 Points?')
+      - Returns 'UTA -3.5' (team favored if YES = team wins by that many)
+
+    For non-spread tickers, returns ''.
+    """
+    if _detect_market_type(ticker) != 'spread':
+        return ''
+    parts = ticker.split('-')
+    if len(parts) < 3:
+        return ''
+    suffix = parts[-1]  # e.g. 'UTA1', 'ORL3', 'BEL8'
+    # Extract team code (alphabetic prefix) and tier digit
+    import re as _re
+    code_match = _re.match(r'^([A-Z]+)', suffix)
+    team_code = code_match.group(1) if code_match else suffix
+
+    # Try to get spread number from Kalshi market title
+    try:
+        if kalshi_client:
+            api_rate_limiter.wait()
+            mkt = kalshi_client.get_market(ticker)
+            market_data = mkt.get('market', mkt)
+            title = market_data.get('title', '')
+            # "Utah wins by over 3.5 Points?" → spread = 3.5
+            sp_match = _re.search(r'wins?\s+by\s+over\s+([\d.]+)', title, _re.IGNORECASE)
+            if sp_match:
+                return f'{team_code} -{sp_match.group(1)}'
+            # Fallback: "UTA -3.5" style
+            sp_match2 = _re.search(r'([A-Z]{2,5})\s*([+-][\d.]+)', title)
+            if sp_match2:
+                return f'{sp_match2.group(1)} {sp_match2.group(2)}'
+    except Exception as e:
+        print(f'⚠ Could not fetch spread line for {ticker}: {e}')
+
+    # Fallback: just show team code without line number
+    return team_code
+
+
+def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
+    """Add market_type and spread_line to a trade history record.
+    Uses bot data if available, falls back to ticker parsing."""
+    ticker = record.get('ticker', '')
+    if bot:
+        record['market_type'] = bot.get('market_type') or _detect_market_type(ticker)
+        record['spread_line'] = bot.get('spread_line', '')
+    else:
+        record['market_type'] = _detect_market_type(ticker)
+        record['spread_line'] = ''
+    # Clean team_label for spread tickers — strip trailing digits
+    tl = record.get('team_label', '')
+    if record['market_type'] == 'spread' and tl:
+        import re as _re
+        record['team_label'] = _re.sub(r'\d+$', '', tl)
+    return record
+
+
+def _record_trade(record: dict, bot: dict = None):
+    """Insert an enriched trade record into trade_history."""
+    _enrich_trade_record(record, bot)
+    trade_history.insert(0, record)
 
 
 def _parse_ticker_teams(ticker: str):
@@ -2274,6 +2355,32 @@ def create_bot():
                          f'Wait for it to recover or skip this market.'
             }), 400
 
+        # ── Guardrail: block deployment in tight games (score diff ≤ 5) ──
+        # Tight games in Q4 are the #1 source of catastrophic flip losses.
+        # When the score is within 5 points, the market can swing wildly
+        # and trigger cascading stop losses. Data shows 62% win rate but
+        # -$39 net on tight games — the tail risk wipes out all profits.
+        # Allow override with force_tight=True for manual conviction plays.
+        TIGHT_GAME_MAX_DIFF = 5       # block if score diff ≤ this
+        TIGHT_GAME_MIN_PERIOD = 3     # only block in Q3+ (halftime+ for college)
+        force_tight = data.get('force_tight', False)
+        if game_phase == 'live' and not force_tight:
+            gc = _get_game_context(ticker)
+            if gc and gc.get('period', 0) >= TIGHT_GAME_MIN_PERIOD:
+                sd = gc.get('score_diff', 999)
+                if sd <= TIGHT_GAME_MAX_DIFF:
+                    period = gc.get('period', 0)
+                    q_label = f'Q{period}' if period <= 4 else 'OT'
+                    return jsonify({
+                        'error': f'🛑 TIGHT GAME BLOCKED: Score differential is only {sd} points in {q_label}. '
+                                 f'Games this close in late quarters have a 62% win rate but cause catastrophic losses '
+                                 f'when they flip. The BKN-DET lesson: -$35 from one tight game. '
+                                 f'Wait for the lead to grow or use the force option to override.',
+                        'tight_game_blocked': True,
+                        'score_diff': sd,
+                        'period': period,
+                    }), 400
+
         if fav_side == 'yes':
             fav_order = kalshi_client.create_order(
                 ticker=ticker, side='yes', action='buy',
@@ -2325,6 +2432,8 @@ def create_bot():
             'live_yes_ask':     0,
             'live_no_ask':      0,
             'last_price_update': time.time(),
+            'market_type':      _detect_market_type(ticker),
+            'spread_line':      _extract_spread_line(ticker),
         }
         save_state()
         bot_log('BOT_CREATED', bot_id, {'fav_side': fav_side, 'fav_price': fav_price, 'dog_side': dog_side, 'dog_price': dog_price, 'profit_per': profit_per, 'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count})
@@ -2667,7 +2776,7 @@ def _run_monitor():
                                 bot['repeat_count'] = 0
                                 session_pnl['gross_profit_cents'] += profit_cents
                                 session_pnl['completed_bots'] += 1
-                                trade_history.insert(0, {
+                                _record_trade({
                                     'bot_id': bot_id, 'ticker': ticker,
                                     'yes_price': real_yes, 'no_price': real_no,
                                     'quantity': qty, 'profit_cents': profit_cents,
@@ -2676,7 +2785,7 @@ def _run_monitor():
                                     'game_phase': bot.get('game_phase', ''),
                                     'repeats_done': bot.get('repeats_done', 0),
                                     'repeat_count': orig_repeat_count,
-                                })
+                                }, bot)
                                 bot_log('SETTLEMENT_COMPLETE', bot_id, {'profit_cents': profit_cents, 'real_yes': real_yes, 'real_no': real_no, 'market_status': mkt_status})
                                 print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
                             elif yes_f >= qty and no_f < qty:
@@ -2696,7 +2805,7 @@ def _run_monitor():
                                     bot['completed_at'] = now
                                     session_pnl['gross_profit_cents'] += profit
                                     session_pnl['completed_bots'] += 1
-                                    trade_history.insert(0, {
+                                    _record_trade({
                                         'bot_id': bot_id, 'ticker': ticker,
                                         'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                         'quantity': yes_f, 'profit_cents': profit,
@@ -2708,7 +2817,7 @@ def _run_monitor():
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                                         'repeats_done': bot.get('repeats_done', 0),
                                         'repeat_count': orig_repeat_count,
-                                    })
+                                    }, bot)
                                     bot_log('SETTLEMENT_WIN', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'profit_cents': profit, 'market_result': mkt_result})
                                     print(f'🏆 SETTLED WIN: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢), market settled YES, +{profit}¢')
                                 else:
@@ -2718,7 +2827,7 @@ def _run_monitor():
                                     loss = bot['yes_price'] * yes_f
                                     session_pnl['gross_loss_cents'] += loss
                                     session_pnl['stopped_bots'] += 1
-                                    trade_history.insert(0, {
+                                    _record_trade({
                                         'bot_id': bot_id, 'ticker': ticker,
                                         'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                         'quantity': yes_f, 'loss_cents': loss,
@@ -2730,7 +2839,7 @@ def _run_monitor():
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                                         'repeats_done': bot.get('repeats_done', 0),
                                         'repeat_count': orig_repeat_count,
-                                    })
+                                    }, bot)
                                     bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'yes', 'filled_qty': yes_f, 'price': bot['yes_price'], 'loss_cents': loss, 'market_result': mkt_result})
                                     print(f'⚠ SETTLED LOSS: {bot_id} — YES filled ({yes_f}×{bot["yes_price"]}¢), market settled {mkt_result or "NO"}, -{loss}¢')
                             elif no_f >= qty and yes_f < qty:
@@ -2750,7 +2859,7 @@ def _run_monitor():
                                     bot['completed_at'] = now
                                     session_pnl['gross_profit_cents'] += profit
                                     session_pnl['completed_bots'] += 1
-                                    trade_history.insert(0, {
+                                    _record_trade({
                                         'bot_id': bot_id, 'ticker': ticker,
                                         'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                         'quantity': no_f, 'profit_cents': profit,
@@ -2762,7 +2871,7 @@ def _run_monitor():
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                                         'repeats_done': bot.get('repeats_done', 0),
                                         'repeat_count': orig_repeat_count,
-                                    })
+                                    }, bot)
                                     bot_log('SETTLEMENT_WIN', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'profit_cents': profit, 'market_result': mkt_result})
                                     print(f'🏆 SETTLED WIN: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢), market settled NO, +{profit}¢')
                                 else:
@@ -2772,7 +2881,7 @@ def _run_monitor():
                                     loss = bot['no_price'] * no_f
                                     session_pnl['gross_loss_cents'] += loss
                                     session_pnl['stopped_bots'] += 1
-                                    trade_history.insert(0, {
+                                    _record_trade({
                                         'bot_id': bot_id, 'ticker': ticker,
                                         'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                         'quantity': no_f, 'loss_cents': loss,
@@ -2784,7 +2893,7 @@ def _run_monitor():
                                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                                         'repeats_done': bot.get('repeats_done', 0),
                                         'repeat_count': orig_repeat_count,
-                                    })
+                                    }, bot)
                                     bot_log('SETTLEMENT_LOSS', bot_id, {'leg': 'no', 'filled_qty': no_f, 'price': bot['no_price'], 'loss_cents': loss, 'market_result': mkt_result})
                                     print(f'⚠ SETTLED LOSS: {bot_id} — NO filled ({no_f}×{bot["no_price"]}¢), market settled {mkt_result or "YES"}, -{loss}¢')
                             else:
@@ -3190,7 +3299,7 @@ def _run_monitor():
                             bot['stopped_at'] = now
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots'] += 1
-                            trade_history.insert(0, {
+                            _record_trade({
                         'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
                         'side': watch_side, 'entry_price': entry,
                         'exit_bid': actual_sell, 'quantity': qty,
@@ -3200,7 +3309,7 @@ def _run_monitor():
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                         'stop_loss_cents': sl,
                         'game_context': _get_game_context(ticker),
-                    })
+                    }, bot)
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
                                            'loss_cents': loss})
                             bot_log('WATCH_SL_FIRED', bot_id, {'entry': entry, 'exit': actual_sell, 'loss_cents': loss, 'sl_trigger': entry - sl, 'live_bid': cur_bid})
@@ -3223,7 +3332,7 @@ def _run_monitor():
                             bot['completed_at'] = now
                             session_pnl['gross_profit_cents'] += profit
                             session_pnl['completed_bots'] += 1
-                            trade_history.insert(0, {
+                            _record_trade({
                         'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
                         'side': watch_side, 'entry_price': entry,
                         'exit_bid': actual_sell, 'quantity': qty,
@@ -3234,7 +3343,7 @@ def _run_monitor():
                         'stop_loss_cents': sl,
                         'take_profit_cents': tp,
                         'game_context': _get_game_context(ticker),
-                    })
+                    }, bot)
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
                                            'profit_cents': profit})
                             bot_log('WATCH_TP_FIRED', bot_id, {'entry': entry, 'exit': actual_sell, 'profit_cents': profit, 'tp_trigger': entry + tp, 'live_bid': cur_bid})
@@ -3432,7 +3541,7 @@ def _run_monitor():
 
                     session_pnl['gross_profit_cents'] += profit_cents
                     session_pnl['completed_bots']     += 1
-                    trade_history.insert(0, {
+                    _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': real_yes, 'no_price': real_no,
                         'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
@@ -3450,7 +3559,7 @@ def _run_monitor():
                         'game_context': _get_game_context(ticker),
                         'repeats_done': bot.get('repeats_done', 0),
                         'repeat_count': bot.get('repeat_count', 0),
-                    })
+                    }, bot)
                     actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
                     bot_log('ARB_COMPLETED', bot_id, {'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents, 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None})
 
@@ -3692,7 +3801,7 @@ def _run_monitor():
                             verified = sell_info.get('verified_cleared', False)
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots']     += 1
-                            trade_history.insert(0, {
+                            _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': entry_yes, 'no_price': bot['no_price'],
                                 'quantity': yes_filled, 'loss_cents': loss,
@@ -3708,7 +3817,7 @@ def _run_monitor():
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
-                            })
+                            }, bot)
                             actions.append({'bot_id': bot_id, 'action': 'flip_yes',
                                             'entry': entry_yes, 'exit_bid': actual_sell,
                                             'loss_cents': loss, 'verified': verified})
@@ -3731,7 +3840,7 @@ def _run_monitor():
                                 loss = entry_yes * yes_filled
                                 session_pnl['gross_loss_cents'] += loss
                                 session_pnl['stopped_bots'] += 1
-                                trade_history.insert(0, {
+                                _record_trade({
                                     'bot_id': bot_id, 'ticker': ticker,
                                     'yes_price': entry_yes, 'no_price': bot['no_price'],
                                     'quantity': yes_filled, 'loss_cents': loss,
@@ -3740,7 +3849,7 @@ def _run_monitor():
                                     'game_phase': bot.get('game_phase', 'live'),
                                     'repeats_done': bot.get('repeats_done', 0),
                                     'repeat_count': orig_repeat_count_fe,
-                                })
+                                }, bot)
                                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
                                 actions.append({'bot_id': bot_id, 'action': 'force_exit_yes', 'retries': retries})
                             else:
@@ -3802,7 +3911,7 @@ def _run_monitor():
                             verified = sell_info.get('verified_cleared', False)
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots']     += 1
-                            trade_history.insert(0, {
+                            _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': bot['yes_price'], 'no_price': entry_no,
                                 'quantity': no_filled, 'loss_cents': loss,
@@ -3818,7 +3927,7 @@ def _run_monitor():
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
-                            })
+                            }, bot)
                             actions.append({'bot_id': bot_id, 'action': 'flip_no',
                                             'entry': entry_no, 'exit_bid': actual_sell,
                                             'loss_cents': loss, 'verified': verified})
@@ -3841,7 +3950,7 @@ def _run_monitor():
                                 loss = entry_no * no_filled
                                 session_pnl['gross_loss_cents'] += loss
                                 session_pnl['stopped_bots'] += 1
-                                trade_history.insert(0, {
+                                _record_trade({
                                     'bot_id': bot_id, 'ticker': ticker,
                                     'yes_price': bot['yes_price'], 'no_price': entry_no,
                                     'quantity': no_filled, 'loss_cents': loss,
@@ -3850,7 +3959,7 @@ def _run_monitor():
                                     'game_phase': bot.get('game_phase', 'live'),
                                     'repeats_done': bot.get('repeats_done', 0),
                                     'repeat_count': orig_repeat_count_fe,
-                                })
+                                }, bot)
                                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
                                 actions.append({'bot_id': bot_id, 'action': 'force_exit_no', 'retries': retries})
                             else:
@@ -4366,7 +4475,7 @@ def cancel_bot(bot_id):
                 watch_sell = sell_prices.get(watch_side, 0)
                 watch_qty = bot.get('fill_qty', bot.get('quantity', 1))
                 profit = (watch_sell - watch_entry) * watch_qty
-                trade_history.insert(0, {
+                _record_trade({
                     'bot_id': bot_id, 'ticker': ticker,
                     'yes_price': watch_entry if watch_side == 'yes' else 0,
                     'no_price': watch_entry if watch_side == 'no' else 0,
@@ -4377,7 +4486,7 @@ def cancel_bot(bot_id):
                     'note': f'Manual exit — {watch_side.upper()} {watch_qty}x sold at {watch_sell}¢ (entry {watch_entry}¢)',
                     'game_phase': bot.get('game_phase', ''),
                     'team_label': ticker.split('-')[-1] if '-' in ticker else '',
-                })
+                }, bot)
                 if profit >= 0:
                     session_pnl['gross_profit_cents'] += profit
                 else:
@@ -4388,7 +4497,7 @@ def cancel_bot(bot_id):
                 if yes_sold_qty > 0 and no_sold_qty > 0:
                     # Both sides were filled — this was a locked arb, manually exited
                     profit = (100 - entry_yes - entry_no) * min(yes_sold_qty, no_sold_qty)
-                    trade_history.insert(0, {
+                    _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': entry_yes, 'no_price': entry_no,
                         'quantity': min(yes_sold_qty, no_sold_qty), 'profit_cents': profit,
@@ -4403,7 +4512,7 @@ def cancel_bot(bot_id):
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                         'repeats_done': bot.get('repeats_done', 0),
                         'repeat_count': bot.get('repeat_count', 0),
-                    })
+                    }, bot)
                     if profit >= 0:
                         session_pnl['gross_profit_cents'] += profit
                     else:
@@ -4413,7 +4522,7 @@ def cancel_bot(bot_id):
                     # Only YES was filled and sold at market
                     yes_sell = sell_prices.get('yes', 0)
                     profit = (yes_sell - entry_yes) * yes_sold_qty
-                    trade_history.insert(0, {
+                    _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': entry_yes, 'no_price': entry_no,
                         'quantity': yes_sold_qty, 'profit_cents': profit,
@@ -4427,7 +4536,7 @@ def cancel_bot(bot_id):
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                         'repeats_done': bot.get('repeats_done', 0),
                         'repeat_count': bot.get('repeat_count', 0),
-                    })
+                    }, bot)
                     if profit >= 0:
                         session_pnl['gross_profit_cents'] += profit
                     else:
@@ -4437,7 +4546,7 @@ def cancel_bot(bot_id):
                     # Only NO was filled and sold at market
                     no_sell = sell_prices.get('no', 0)
                     profit = (no_sell - entry_no) * no_sold_qty
-                    trade_history.insert(0, {
+                    _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': entry_yes, 'no_price': entry_no,
                         'quantity': no_sold_qty, 'profit_cents': profit,
@@ -4451,7 +4560,7 @@ def cancel_bot(bot_id):
                         'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                         'repeats_done': bot.get('repeats_done', 0),
                         'repeat_count': bot.get('repeat_count', 0),
-                    })
+                    }, bot)
                     if profit >= 0:
                         session_pnl['gross_profit_cents'] += profit
                     else:

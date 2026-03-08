@@ -274,6 +274,8 @@ function parseESPNGame(event, sport) {
         periodLabel,
         startTime,
         statusDetail,
+        // Game date for matching against ticker dates (prevents future games showing as live)
+        gameDate: event.date || comp.date || '',
         // Tennis: set-by-set scores (e.g. "7-5 6-4 3-2")
         homeSetScores: home.setScores || '',
         awaySetScores: away.setScores || '',
@@ -397,6 +399,32 @@ function _extractTeamCodes(gameId) {
     return [...new Set(codes)];
 }
 
+// Check if a Kalshi ticker gameId date matches an ESPN game date
+// gameId: "26MAR07BOSMIL" → date = Mar 7, 2026
+// espnDate: "2026-03-07T00:00:00Z" or similar ISO string
+function _gameIdDateMatchesESPN(gameId, espnGame) {
+    if (!gameId || !espnGame || !espnGame.gameDate) return true; // no date info = don't filter
+    const dateMatch = gameId.match(/^(\d{2})([A-Z]{3})(\d{2})/);
+    if (!dateMatch) return true;
+    const monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+    const tickerYear = 2000 + parseInt(dateMatch[1]);
+    const tickerMonth = monthMap[dateMatch[2]];
+    const tickerDay = parseInt(dateMatch[3]);
+    if (tickerMonth === undefined) return true;
+
+    const espnDate = new Date(espnGame.gameDate);
+    // ESPN dates are UTC — compare using local date (games are local date)
+    // Allow ±1 day tolerance for late-night games that cross midnight
+    const espnDay = espnDate.getDate();
+    const espnMonth = espnDate.getMonth();
+    const espnYear = espnDate.getFullYear();
+
+    if (tickerYear === espnYear && tickerMonth === espnMonth && Math.abs(tickerDay - espnDay) <= 1) {
+        return true;
+    }
+    return false;
+}
+
 function _findGameInLookup(lookup, gameId, sport) {
     if (!gameId) return null;
     const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
@@ -408,7 +436,7 @@ function _findGameInLookup(lookup, gameId, sport) {
     // 1. Try combined pair key first — most reliable, avoids 3-letter code collisions
     //    (e.g. tennis: SHE = Shelton AND Sherif, but SHEOPE is unique)
     const pairMatch = lookup[`${sport}:${cleaned}`];
-    if (pairMatch) return pairMatch;
+    if (pairMatch && _gameIdDateMatchesESPN(gameId, pairMatch)) return pairMatch;
     
     // 2. Try all valid split points — only match when BOTH halves
     // correspond to teams in the lookup AND they reference the SAME game
@@ -419,7 +447,7 @@ function _findGameInLookup(lookup, gameId, sport) {
         const g1 = lookup[`${sport}:${t1}`];
         const g2 = lookup[`${sport}:${t2}`];
         // Both found AND same game (same ESPN ID) — prevents cross-match collisions
-        if (g1 && g2 && g1.espnGameId === g2.espnGameId) {
+        if (g1 && g2 && g1.espnGameId === g2.espnGameId && _gameIdDateMatchesESPN(gameId, g1)) {
             return g1;
         }
     }
@@ -427,8 +455,9 @@ function _findGameInLookup(lookup, gameId, sport) {
     for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
         const t1 = cleaned.substring(0, i);
         const t2 = cleaned.substring(i);
-        if (lookup[`${sport}:${t1}`] && lookup[`${sport}:${t2}`]) {
-            return lookup[`${sport}:${t1}`];
+        const g1 = lookup[`${sport}:${t1}`];
+        if (g1 && lookup[`${sport}:${t2}`] && _gameIdDateMatchesESPN(gameId, g1)) {
+            return g1;
         }
     }
     // 4. Last resort: find either team individually (longest first)
@@ -436,7 +465,7 @@ function _findGameInLookup(lookup, gameId, sport) {
         const t1 = cleaned.substring(0, i);
         const t2 = cleaned.substring(i);
         const g = lookup[`${sport}:${t1}`] || lookup[`${sport}:${t2}`];
-        if (g) return g;
+        if (g && _gameIdDateMatchesESPN(gameId, g)) return g;
     }
     
     return null;
@@ -1680,7 +1709,13 @@ function getTeamLabelFromTicker(ticker) {
     // Ticker format: PREFIX-DATEXXXXXX-SUFFIX
     // e.g., KXNBAGAME-26FEB28HOUMIA-MIA, KXEPLGAME-26MAR01ARSCFC-TIE
     const parts = ticker.split('-');
-    const suffix = parts[parts.length - 1] || '';
+    const rawSuffix = parts[parts.length - 1] || '';
+    if (!rawSuffix) return 'Winner';
+
+    // For spread tickers, strip trailing digits (e.g. ORL3 → ORL, ATL1 → ATL)
+    const prefix = (parts[0] || '').toUpperCase();
+    const isSpread = prefix.includes('SPREAD');
+    const suffix = isSpread ? rawSuffix.replace(/\d+$/, '') : rawSuffix;
     if (!suffix) return 'Winner';
     
     // Use the same team map as parseTeamNames
@@ -1817,7 +1852,7 @@ function extractTotalLine(market) {
 // KXNBAGAME-26MAR02BOSMIL-BOS   → "BOS vs MIL · Moneyline · Boston"
 // KXNBASPREAD-26MAR02BOSMIL-BOS35 → "BOS vs MIL · Spread · BOS -3.5"
 // KXNBATOTAL-26MAR02BOSMIL-O2255  → "BOS vs MIL · Total · O 225.5"
-function formatBotDisplayName(ticker) {
+function formatBotDisplayName(ticker, spreadLine) {
     if (!ticker) return 'Unknown';
     const parts = ticker.split('-');
     if (parts.length < 2) return ticker;
@@ -1860,15 +1895,26 @@ function formatBotDisplayName(ticker) {
     }
 
     // Side label from suffix (team or spread/total detail)
-    const sideTeam = getTeamLabelFromTicker(ticker);
     let sideLabel = '';
-    if (marketType === 'Moneyline' && sideTeam && sideTeam !== 'Winner') {
-        sideLabel = sideTeam + ' Win';
+    if (marketType === 'Spread') {
+        // Use stored spread_line if available (e.g. "UTA -3.5")
+        if (spreadLine) {
+            sideLabel = spreadLine;
+        } else {
+            // Fallback: strip trailing digits from suffix to get team code
+            const teamCode = suffix.replace(/\d+$/, '');
+            sideLabel = teamCode || suffix;
+        }
+    } else if (marketType === 'Moneyline') {
+        const sideTeam = getTeamLabelFromTicker(ticker);
+        if (sideTeam && sideTeam !== 'Winner') {
+            sideLabel = sideTeam + ' Win';
+        }
     } else if (suffix) {
         sideLabel = suffix;
     }
 
-    // Compose: "BOS vs MIL · Moneyline · Boston Win"
+    // Compose: "BOS vs MIL · Spread · UTA -3.5"
     const segments = [matchup, marketType, sideLabel].filter(Boolean);
     return segments.join(' · ') || ticker;
 }
@@ -3350,6 +3396,32 @@ async function createBot() {
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
+        } else if (data.tight_game_blocked) {
+            // Tight game guardrail — offer force override
+            const forceIt = confirm(`${data.error}\n\n⚠️ Click OK to FORCE deploy anyway (not recommended).`);
+            if (forceIt) {
+                // Retry with force_tight flag
+                const retryResp = await fetch(`${API_BASE}/bot/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ticker: currentArbMarket.ticker,
+                        yes_price, no_price, quantity, flip_threshold,
+                        stop_loss_cents: 5, repeat_count, arb_width,
+                        force_tight: true,
+                    }),
+                });
+                const retryData = await retryResp.json();
+                if (retryData.success) {
+                    const profit = 100 - yes_price - no_price;
+                    showNotification(`⚠️ Force deployed in tight game → ${profit}¢/contract`);
+                    closeModal();
+                    loadBots();
+                    if (!autoMonitorInterval) toggleAutoMonitor();
+                } else {
+                    alert('Error: ' + retryData.error);
+                }
+            }
         } else {
             alert('Error: ' + data.error);
         }
@@ -3480,7 +3552,7 @@ async function loadBots() {
                 const orderFilled = bot.order_filled || false;
                 const nowSec = Date.now() / 1000;
                 const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
-                const watchDisplayName = formatBotDisplayName(bot.ticker);
+                const watchDisplayName = formatBotDisplayName(bot.ticker, bot.spread_line);
 
                 // Unrealized P&L for watch
                 const curBidNum = typeof liveBid === 'number' ? liveBid : 0;
@@ -3570,7 +3642,7 @@ async function loadBots() {
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
 
-            const displayName = formatBotDisplayName(bot.ticker);
+            const displayName = formatBotDisplayName(bot.ticker, bot.spread_line);
 
             // Cycle info for repeat bots
             const repeatCount = bot.repeat_count || 0;
@@ -4460,6 +4532,23 @@ async function quickBot(ticker, yesPrice, noPrice) {
             showNotification(`✅ Bot placed! ${ticker} YES ${yesPrice}¢ / NO ${noPrice}¢ → +${data.profit_per}¢/contract`);
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
+        } else if (data.tight_game_blocked) {
+            const forceIt = confirm(`${data.error}\n\n⚠️ Click OK to FORCE deploy anyway (not recommended).`);
+            if (forceIt) {
+                const retryResp = await fetch(`${API_BASE}/bot/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, stop_loss_cents: 5, flip_threshold, force_tight: true }),
+                });
+                const retryData = await retryResp.json();
+                if (retryData.success) {
+                    showNotification(`⚠️ Force deployed in tight game → +${retryData.profit_per}¢/contract`);
+                    loadBots();
+                    if (!autoMonitorInterval) toggleAutoMonitor();
+                } else {
+                    showNotification(`❌ Error: ${retryData.error}`);
+                }
+            }
         } else {
             showNotification(`❌ Error: ${data.error}`);
         }
@@ -5106,7 +5195,7 @@ async function loadTradeHistory() {
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
             // Display name
-            const teamName = formatBotDisplayName(t.ticker || '');
+            const teamName = formatBotDisplayName(t.ticker || '', t.spread_line || '');
             
             // Verified badge
             const verified = t.verified_prices || t.verified_cleared ? '<span style="color:#00ff88;font-size:9px;margin-left:4px;">✓ verified</span>' : '';

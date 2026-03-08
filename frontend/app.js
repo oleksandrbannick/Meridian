@@ -3390,9 +3390,12 @@ async function createBot() {
 
         if (data.success) {
             const profit = 100 - yes_price - no_price;
-            const rptNote = repeat_count > 0 ? ` | ${repeat_count + 1} runs total` : '';
+            const rptNote = repeat_count > 0 ? ` | ${repeat_count + 1} runs` : '';
             const favSide = data.fav_side ? data.fav_side.toUpperCase() : '?';
-            showNotification(`🎯 Fav-first: ${favSide} posted → ${profit}¢/contract${rptNote}`);
+            const dogSide = data.fav_side === 'no' ? 'YES' : 'NO';
+            const favPrice = data.fav_side === 'no' ? no_price : yes_price;
+            const dogPrice = data.fav_side === 'no' ? yes_price : no_price;
+            showNotification(`✅ ARB Bot: ${favSide}@${favPrice}¢ (fav) waiting to fill | dog ${dogSide}@${dogPrice}¢ → +${profit}¢/contract${rptNote}`);
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
@@ -4920,7 +4923,8 @@ async function loadHistoryStats() {
                             <span style="color:#00aaff;font-weight:700;font-size:12px;">${fs.avg_threshold}¢</span>
                         </div>` : ''}
                         <div style="margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;">
-                            <span style="color:#555;font-size:9px;">Fills needed to recover all flips: <strong style="color:#ffaa00;">${s.arb_avg_profit > 0 ? Math.ceil(fs.total_loss_cents / s.arb_avg_profit) : '?'}</strong></span>
+                            <span style="color:#555;font-size:9px;">Est. fills to recover flip losses: <strong style="color:#ffaa00;">${s.arb_avg_profit > 0 ? '~' + Math.ceil(fs.total_loss_cents / s.arb_avg_profit) : '?'}</strong></span>
+                            ${s.arb_avg_profit > 0 ? `<span style="color:#444;font-size:9px;"> (at ${s.arb_avg_profit}¢ avg profit/fill — varies by width)</span>` : ''}
                         </div>
                     </div>` : '<div style="color:#00ff88;font-size:11px;">🎉 No flips yet — no favorites have collapsed</div>'}
                 </div>
@@ -4930,7 +4934,7 @@ async function loadHistoryStats() {
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;">
                 ${_renderMiniBreakdown('By Phase', s.phase_stats, {'pregame': 'Pregame', 'live': 'Live'})}
                 ${_renderMiniBreakdown('By Quarter', s.quarter_stats, null)}
-                ${_renderMiniBreakdown('By Score Margin', s.margin_stats, {'close_0_5': '0-5 pts', 'mid_6_15': '6-15 pts', 'blowout_16plus': '16+ pts'})}
+                ${_renderMiniBreakdown('By Score Margin', s.margin_stats, [['close_0_5','0-5 pts'],['mid_6_15','6-15 pts'],['blowout_16plus','16+ pts']])}
                 ${_renderMiniBreakdown('First Leg', s.first_leg_stats, {'yes': 'YES first', 'no': 'NO first'})}
             </div>
         `;
@@ -4987,12 +4991,15 @@ async function loadHistoryStats() {
 
 function _renderMiniBreakdown(title, stats, labelMap) {
     if (!stats || Object.keys(stats).length === 0) return '';
-    const items = Object.entries(stats)
-        .filter(([_, v]) => v.wins + v.losses > 0)
+    // labelMap can be an object {key: label} or an array [[key, label], ...] for guaranteed ordering
+    const orderedEntries = Array.isArray(labelMap)
+        ? labelMap.map(([k, label]) => [k, stats[k]]).filter(([_, v]) => v && v.wins + v.losses > 0)
+        : Object.entries(stats).filter(([_, v]) => v.wins + v.losses > 0);
+    const items = orderedEntries
         .map(([k, v]) => {
             const total = v.wins + v.losses;
             const rate = total > 0 ? Math.round(v.wins / total * 100) : 0;
-            const label = labelMap ? (labelMap[k] || k) : k;
+            const label = Array.isArray(labelMap) ? (labelMap.find(([key]) => key === k)?.[1] || k) : (labelMap ? (labelMap[k] || k) : k);
             const color = rate >= 50 ? '#00ff88' : rate >= 25 ? '#ffaa00' : '#ff4444';
             return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;">
                 <span style="color:#8892a6;font-size:11px;">${label}</span>

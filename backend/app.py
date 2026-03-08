@@ -1976,6 +1976,10 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
     if record['market_type'] == 'spread' and tl:
         import re as _re
         record['team_label'] = _re.sub(r'\d+$', '', tl)
+    # Correct stale pregame phase: if bot was deployed pregame but game is
+    # actually live at trade completion time, record it as live.
+    if record.get('game_phase') == 'pregame' and ticker and _is_game_live(ticker):
+        record['game_phase'] = 'live'
     return record
 
 

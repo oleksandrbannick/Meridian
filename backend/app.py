@@ -1121,8 +1121,8 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         if status == 'yes_filled':
             yes_filled = bot.get('yes_fill_qty', 0)
             entry_yes = bot['yes_price']
-            # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
-            effective_trigger = min(flip_thresh, entry_yes - FLIP_ENTRY_MARGIN)
+            # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+            effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, flip_thresh)
             if yes_filled >= qty and entry_yes >= flip_thresh and yes_bid < effective_trigger:
                 # Mark immediately to prevent monitor double-fire
                 bot['_ws_flip_selling'] = True
@@ -1137,8 +1137,8 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         elif status == 'no_filled':
             no_filled = bot.get('no_fill_qty', 0)
             entry_no = bot['no_price']
-            # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
-            effective_trigger = min(flip_thresh, entry_no - FLIP_ENTRY_MARGIN)
+            # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+            effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, flip_thresh)
             if no_filled >= qty and entry_no >= flip_thresh and no_bid < effective_trigger:
                 bot['_ws_flip_selling'] = True
                 print(f'⚡ WS REAL-TIME FLIP: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢, thresh {flip_thresh}¢) — selling NOW')
@@ -1554,14 +1554,14 @@ STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
 # ── Arb Bot Stop-Loss: Flip Threshold ──────────────────────────────────────────
 # Game markets use a FLIP THRESHOLD instead of cent-based stop-loss.
-# A favorite entered at 65-85¢ only sells if the bid drops to ≤ FLIP_THRESHOLD
-# (= the team is no longer favored, thesis broken). This prevents premature SL
-# from normal game volatility. If the filled leg entered BELOW the threshold
-# (underdog side), no SL fires — max loss is small, position rides to settlement.
+# A favorite entered at ≥60¢ triggers: sell when bid drops to max(entry-15, 60).
+# e.g. entry=80¢ → trigger=65¢ (15¢ room); entry=70¢ → trigger=60¢ (floor).
+# This caps max loss at 15¢ regardless of entry, while giving high entries
+# proportionally more room before cutting. Entries below 60¢ ride to settlement.
 # Watch bots (straight bets / props) keep the old instant entry-minus-X SL.
-FLIP_THRESHOLD_CENTS = 55   # Default: sell if bid < 55¢ (favorite no longer clearly favored)
-FLIP_ENTRY_MARGIN   = 5    # Entry must be ≥ threshold + margin (60¢) for flip rule to apply
-MIN_FAV_ENTRY_CENTS = 55    # Guardrail: never deploy fav side below this price (catching a falling knife)
+FLIP_THRESHOLD_CENTS = 60   # Floor: trigger never goes below 60¢ (favorite no longer clearly favored)
+FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry - 15, 60) — caps max loss at 15¢/contract
+MIN_FAV_ENTRY_CENTS = 60    # Guardrail: never deploy fav side below this price (catching a falling knife)
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}
@@ -3731,10 +3731,10 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_yes = bot['yes_price']
 
-                    # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
-                    effective_trigger = min(flip_thresh, entry_yes - FLIP_ENTRY_MARGIN)
-                    # Only apply flip SL to favorite entries (entered above threshold).
-                    # Underdog entries (below threshold) ride to settlement — max loss is small.
+                    # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+                    effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, flip_thresh)
+                    # Only apply flip SL to favorite entries (entered at ≥ floor).
+                    # Underdog entries (below floor) ride to settlement — max loss is small.
                     if entry_yes >= flip_thresh and yes_bid < effective_trigger:
                         # Favorite has FLIPPED — bid < threshold = no longer favored, sell now
                         if bot['status'] in ('stopped', 'completed'):
@@ -3841,9 +3841,9 @@ def _run_monitor():
                     flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
                     entry_no = bot['no_price']
 
-                    # Dynamic trigger: high entries use flip_thresh, entries near threshold get more room
-                    effective_trigger = min(flip_thresh, entry_no - FLIP_ENTRY_MARGIN)
-                    # Only apply flip SL to favorite entries (entered above threshold).
+                    # Dynamic trigger: entry-15 floored at 60¢ — caps max loss at 15¢/contract
+                    effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, flip_thresh)
+                    # Only apply flip SL to favorite entries (entered at ≥ floor).
                     # Underdog entries ride to settlement.
                     if entry_no >= flip_thresh and no_bid < effective_trigger:
                         # Favorite has FLIPPED — sell now

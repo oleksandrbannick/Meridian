@@ -3009,10 +3009,12 @@ def _run_monitor():
                                     d = m.get(f'{fav_side}_bid_dollars')
                                     cur_fav_bid = round(float(d) * 100) if d else m.get(f'{fav_side}_bid', 0)
 
-                                # If bid is AT or ABOVE our order price, market is moving toward us —
-                                # the order is about to fill naturally. Don't repost, just wait.
-                                if cur_fav_bid >= bot['fav_price']:
-                                    print(f'⏳ FAV REPOST SKIPPED: {bot_id} bid {cur_fav_bid}¢ >= order {bot["fav_price"]}¢ — filling soon, leaving alone')
+                                # If bid is AT or BELOW our order price, market is moving toward us
+                                # (or already there) — the order will fill naturally. Don't repost.
+                                # If bid is ABOVE our order price, the market has moved on and our
+                                # order is stale/buried — repost at the new level to stay competitive.
+                                if cur_fav_bid <= bot['fav_price']:
+                                    print(f'⏳ FAV REPOST SKIPPED: {bot_id} bid {cur_fav_bid}¢ <= order {bot["fav_price"]}¢ — market closing toward us, leaving alone')
                                     bot['posted_at'] = now  # reset timer so we re-check in another 3 min
                                     save_state()
                                     continue

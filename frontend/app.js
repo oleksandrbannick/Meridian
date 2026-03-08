@@ -620,7 +620,7 @@ function getGameSignal(gameId, sport, markets) {
     if (scoreDiff >= 10) {
         return {
             type: 'anchor', label: '🟢 ANCHOR',
-            color: '#00ff88', glowAnim: 'arbGlow',
+            color: '#4ade80', glowAnim: 'arbGlow',
             description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Strong lead, stable prices`,
             liq
         };
@@ -2933,7 +2933,7 @@ function openBotModal(market, _side, _price) {
             // Update price cards
             refreshModalPriceCards();
             // Recalc arb prices if in arb mode
-            if (document.getElementById('arb-mode-btn')?.classList.contains('active')) {
+            if (currentTradeMode === 'arb') {
                 recalcArbPrices();
             }
         } catch (e) { /* silent — modal still usable with stale data */ }
@@ -3356,7 +3356,7 @@ async function createBot() {
     const realNoBid  = currentArbMarket?.no_bid  || 0;
     if (realYesBid <= 0 || realNoBid <= 0) {
         const missingSide = realYesBid <= 0 ? 'YES' : 'NO';
-        alert(`⚠️ No real ${missingSide} bids in the orderbook.\\n\\nThe ${missingSide} price is derived (calculated), not from a real order. Nobody is there to fill it. This arb is phantom.`)
+        alert(`⚠️ No real ${missingSide} bids in the orderbook.\n\nThe ${missingSide} price is derived (calculated), not from a real order. Nobody is there to fill it. This arb is phantom.`)
         return;
     }
 

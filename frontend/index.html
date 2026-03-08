@@ -335,57 +335,53 @@
 
             <!-- Signal Legend (collapsible) -->
             <div id="signal-legend" style="margin-bottom:12px;">
-                <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px 8px 0 0;user-select:none;">
+                <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px;user-select:none;">
                     <span style="font-size:11px;color:#8892a6;font-weight:600;">📘 What do the colors mean?</span>
-                    <span class="arrow" style="font-size:10px;color:#556;">▾</span>
+                    <span class="arrow" style="font-size:10px;color:#556;">▸</span>
                 </div>
-                <div id="legend-body" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
+                <div id="legend-body" class="hidden" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
 
-                    <div style="color:#8892a6;margin-bottom:10px;">These signals tell you <strong style="color:#ccc;">when to deploy the bot</strong> based on the live game situation. The bot catches the favorite during a temporary dip, then grabs the other side when the price recovers. These badges read the score + clock + market price to tell you if conditions are right.</div>
-
-                    <div style="color:#8892a6;margin-bottom:8px;">
-                        <strong style="color:#ccc;">1. The border/glow around the card</strong> — colored outline around the game card. Glowing = game conditions look good for deploying.<br>
-                        <strong style="color:#ccc;">2. The small tag in the top-right</strong> — colored tag like <span style="background:#00ff8822;color:#00ff88;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 ANCHOR</span> showing the game situation at a glance.
-                    </div>
+                    <div style="color:#8892a6;margin-bottom:10px;">These signals tell you <strong style="color:#ccc;">when to deploy the bot</strong> based on the live game situation. They read the score, clock, and market price to tell you if conditions are right — ordered from strongest to riskiest below.</div>
 
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px 24px;margin-top:8px;">
                         <div>
                             <div style="border-left:3px solid #00ff88;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#00ff8822;color:#00ff88;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 ANCHOR</span><br>
-                                <span style="color:#ccc;font-weight:600;">Blowout, late game — safest to deploy</span><br>
-                                <span style="color:#8892a6;">One team is up 10+ in the 4th quarter or 2nd half and priced at 75¢+. The game is decided — a temporary dip will recover. Best time to deploy the bot. Green glow.</span>
+                                <span style="background:#00ff8822;color:#00ff88;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 LOCK</span><br>
+                                <span style="color:#ccc;font-weight:600;">Blowout (20+ pts) — deploy with full confidence</span><br>
+                                <span style="color:#8892a6;">The game is effectively over. Prices are stable and anchored. Dips will recover quickly. Best possible setup. Bright green glow.</span>
+                            </div>
+                            <div style="border-left:3px solid #4ade80;padding-left:10px;margin-bottom:8px;">
+                                <span style="background:#4ade8022;color:#4ade80;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 ANCHOR</span><br>
+                                <span style="color:#ccc;font-weight:600;">Strong lead (10–19 pts) — safe to deploy</span><br>
+                                <span style="color:#8892a6;">One team has a clear lead. The favorite is well-established — dips are likely to recover. Green glow.</span>
                             </div>
                             <div style="border-left:3px solid #ffaa33;padding-left:10px;margin-bottom:8px;">
                                 <span style="background:#ffaa3322;color:#ffaa33;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟡 LEAN</span><br>
-                                <span style="color:#ccc;font-weight:600;">Solid lead, late game — decent setup</span><br>
-                                <span style="color:#8892a6;">A team is up 6+ late. Not a full blowout — the lead could shrink. Dips are more likely to stick, so slightly riskier. Gold glow.</span>
-                            </div>
-                            <div style="border-left:3px solid #ffaa33;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#ffaa3322;color:#ffaa33;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟡 EARLY ANCHOR</span><br>
-                                <span style="color:#ccc;font-weight:600;">Big lead, but earlier in the game</span><br>
-                                <span style="color:#8892a6;">Up 15+ around halftime or Q3. Looks dominant but there's a lot of game left — comebacks happen, dips might not recover as fast. Gold glow.</span>
+                                <span style="color:#ccc;font-weight:600;">Moderate lead (5–9 pts) — decent setup, some risk</span><br>
+                                <span style="color:#8892a6;">A lead exists but it's not insurmountable. Dips are more likely to stick. Deploy if the price is right. Gold glow.</span>
                             </div>
                         </div>
                         <div>
                             <div style="border-left:3px solid #60a5fa;padding-left:10px;margin-bottom:8px;">
                                 <span style="background:#60a5fa22;color:#60a5fa;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🔵 CLOSE</span><br>
-                                <span style="color:#ccc;font-weight:600;">Close game — risky to deploy</span><br>
-                                <span style="color:#8892a6;">Score within 5 mid/late game. Either side could win, dips may not recover. <strong style="color:#ccc;">Not a recommendation</strong> — just showing you the game is tight. Blue glow.</span>
+                                <span style="color:#ccc;font-weight:600;">Tight game (0–4 pts, early/mid) — volatile but workable</span><br>
+                                <span style="color:#8892a6;">Score is close but there's still plenty of game. Arbs can still work but prices will swing more. Use wider presets. Blue glow.</span>
+                            </div>
+                            <div style="border-left:3px solid #ff4444;padding-left:10px;margin-bottom:8px;">
+                                <span style="background:#ff444422;color:#ff4444;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🔴 DANGER</span><br>
+                                <span style="color:#ccc;font-weight:600;">Tight + late game — bot will block deployment</span><br>
+                                <span style="color:#8892a6;">Score within 5 pts in Q4 (NBA) or last 10 min of 2nd half (college). This is where catastrophic flip losses happen. The bot blocks new deploys. Red — do not override unless you have strong conviction.</span>
                             </div>
                             <div style="border-left:3px solid #8892a6;padding-left:10px;margin-bottom:8px;">
                                 <span style="background:#8892a622;color:#8892a6;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">⚪ EARLY</span><br>
-                                <span style="color:#ccc;font-weight:600;">Game just started — wait</span><br>
-                                <span style="color:#8892a6;">First quarter or first half, too early to read the game. Wait for a lead to develop. No glow.</span>
-                            </div>
-                            <div style="border-left:3px solid #2a3447;padding-left:10px;margin-bottom:8px;">
-                                <span style="color:#6a7488;font-weight:600;">No tag / gray border</span><br>
-                                <span style="color:#8892a6;">Pregame, game over, or no clear setup. Nothing to act on.</span>
+                                <span style="color:#ccc;font-weight:600;">Game just started — wait for a lead to form</span><br>
+                                <span style="color:#8892a6;">Too early to read the game. No score context yet. Check back after a quarter or half.</span>
                             </div>
                         </div>
                     </div>
 
                     <div style="border-top:1px solid #1e2740;margin-top:6px;padding-top:8px;color:#8892a6;">
-                        <strong style="color:#ccc;">How the bot works:</strong> The bot places a limit order <strong style="color:#ccc;">below the favorite's bid</strong> and waits for a temporary dip to fill it. Once filled, the favorite's price recovers and the underdog drops — the bot catches the other side. The signal tells you whether the game state makes it safe to deploy (i.e., the favorite is likely to recover from any dip).
+                        <strong style="color:#ccc;">How the bot works:</strong> Posts a limit order below the favorite's bid and waits for a dip to fill it. Once filled, the favorite recovers and the underdog drops — the bot catches the other side for a locked profit at settlement. The signal tells you how stable conditions are before you deploy.
                     </div>
                 </div>
             </div>

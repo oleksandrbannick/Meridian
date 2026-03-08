@@ -12,13 +12,15 @@ import requests
 from typing import Dict, List, Optional
 import time
 import threading
+import re
+from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
 
 # Global variables
 kalshi_client: Optional[KalshiAPI] = None
-active_arb_orders: Dict = {}  # Track active arbitrage positions
 stop_loss_percentage = 0.05  # 5% stop loss default
 
 
@@ -82,9 +84,8 @@ def auto_login():
         if not os.path.exists(config_path):
             return jsonify({'error': 'config.json not found. Create backend/config.json with api_key_id and private_key_path.'}), 400
 
-        import json as _json
         with open(config_path) as f:
-            config = _json.load(f)
+            config = json.load(f)
 
         api_key_id = config.get('api_key_id')
         key_file = config.get('private_key_path', 'kalshi_private_key.pem')
@@ -220,36 +221,38 @@ def get_markets():
             for sport_series in SPORTS_SERIES.values():
                 series_to_fetch.extend(sport_series)
         
-        # Fetch markets from each series (with pagination for large series)
+        # Fetch markets from each series in parallel (capped at 10 workers to respect rate limits)
         all_markets = []
         series_counts = {}
-        
-        for series in series_to_fetch:
+
+        def _fetch_series(series):
             try:
                 series_markets = []
                 cursor = None
+                mtype = SERIES_TYPE_MAP.get(series, 'prop')
                 while True:
                     result = kalshi_client.get_markets_by_series(series, status=status, limit=200, cursor=cursor)
                     markets = result.get('markets', [])
                     if not markets:
                         break
-                    markets = [m for m in markets if 'mve_selected_legs' not in m 
-                             and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
-                    # Enrich each market with the type based on series prefix
-                    mtype = SERIES_TYPE_MAP.get(series, 'prop')
+                    markets = [m for m in markets if 'mve_selected_legs' not in m
+                               and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
                     for m in markets:
                         m['market_type'] = mtype
                         m['series_ticker'] = series  # API returns None, fill it
                     series_markets.extend(markets)
-                    # Check for next page
                     cursor = result.get('cursor')
                     if not cursor or len(result.get('markets', [])) < 200:
                         break
+                return series, series_markets
+            except Exception:
+                return series, []
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for series, series_markets in executor.map(_fetch_series, series_to_fetch):
                 if series_markets:
                     series_counts[series] = len(series_markets)
                     all_markets.extend(series_markets)
-            except Exception as e:
-                continue
         
         print(f"✅ Sports markets: {len(all_markets)} total from {len(series_counts)} active series")
         for s, c in sorted(series_counts.items(), key=lambda x: -x[1]):
@@ -266,7 +269,6 @@ def get_markets():
         
         # Filter out stale/postponed markets (e.g. postponed games still technically 'open'
         # but with expected_expiration_time far in the past and zero recent activity)
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         before_filter = len(unique_markets)
         filtered_markets = []
@@ -458,189 +460,6 @@ def get_orders():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-@app.route('/api/arb/create', methods=['POST'])
-def create_arb_trade():
-    """
-    Create an arbitrage trade
-    Buys YES at one price and NO at another for guaranteed profit
-    """
-    try:
-        if not kalshi_client:
-            return jsonify({'error': 'Not authenticated'}), 401
-        
-        data = request.json
-        ticker = data.get('ticker')
-        yes_price = data.get('yes_price')  # Price in cents (e.g., 60)
-        no_price = data.get('no_price')    # Price in cents (e.g., 35)
-        count = data.get('count', 1)
-        
-        if not ticker or yes_price is None or no_price is None:
-            return jsonify({'error': 'Missing required parameters'}), 400
-        
-        # Validate arbitrage opportunity
-        total_cost = yes_price + no_price
-        if total_cost >= 100:
-            return jsonify({'error': 'No arbitrage opportunity - total cost >= 100 cents'}), 400
-        
-        profit_per_contract = 100 - total_cost
-        total_profit = profit_per_contract * count
-        
-        # Place both orders
-        yes_order = kalshi_client.create_order(
-            ticker=ticker,
-            side='yes',
-            action='buy',
-            count=count,
-            yes_price=yes_price
-        )
-        
-        no_order = kalshi_client.create_order(
-            ticker=ticker,
-            side='no',
-            action='buy',
-            count=count,
-            no_price=no_price
-        )
-        
-        # Track this arbitrage position
-        arb_id = f"{ticker}_{int(time.time())}"
-        active_arb_orders[arb_id] = {
-            'ticker': ticker,
-            'yes_order': yes_order,
-            'no_order': no_order,
-            'yes_price': yes_price,
-            'no_price': no_price,
-            'count': count,
-            'profit_per_contract': profit_per_contract,
-            'total_profit': total_profit,
-            'created_at': time.time()
-        }
-        
-        return jsonify({
-            'success': True,
-            'arb_id': arb_id,
-            'yes_order': yes_order,
-            'no_order': no_order,
-            'profit_per_contract': profit_per_contract,
-            'total_profit': total_profit
-        })
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/arb/positions', methods=['GET'])
-def get_arb_positions():
-    """Get active arbitrage positions"""
-    return jsonify({
-        'positions': list(active_arb_orders.values())
-    })
-
-
-@app.route('/api/arb/monitor', methods=['POST'])
-def monitor_arb_positions():
-    """
-    Monitor arbitrage positions and execute stop-loss if needed
-    Checks if one leg filled and price is dropping
-    """
-    try:
-        if not kalshi_client:
-            return jsonify({'error': 'Not authenticated'}), 401
-        
-        data = request.json
-        stop_loss_pct = data.get('stop_loss_percentage', 0.05)
-        
-        actions_taken = []
-        
-        for arb_id, position in list(active_arb_orders.items()):
-            ticker = position['ticker']
-            yes_order = position['yes_order']
-            no_order = position['no_order']
-            
-            # Get current order status
-            try:
-                yes_status = kalshi_client._make_request('GET', 
-                    f'/portfolio/orders/{yes_order["order"]["order_id"]}', authenticated=True)
-                no_status = kalshi_client._make_request('GET', 
-                    f'/portfolio/orders/{no_order["order"]["order_id"]}', authenticated=True)
-                
-                yes_data = (yes_status.get('order', yes_status) if isinstance(yes_status, dict) else {}) if yes_status else {}
-                no_data  = (no_status.get('order', no_status) if isinstance(no_status, dict) else {}) if no_status else {}
-                yes_filled = yes_data.get('fill_count', 0)
-                no_filled = no_data.get('fill_count', 0)
-                
-                # Get current market price
-                market = kalshi_client.get_market(ticker)
-                current_yes_price = market['market']['yes_bid']
-                current_no_price = market['market']['no_bid']
-                
-                # Check if one leg filled and price is unfavorable
-                if yes_filled > 0 and no_filled == 0:
-                    # YES filled, check if YES price dropped
-                    price_drop = (position['yes_price'] - current_yes_price) / position['yes_price']
-                    if price_drop > stop_loss_pct:
-                        # Sell YES position to cut losses
-                        sell_order = kalshi_client.create_order(
-                            ticker=ticker,
-                            side='yes',
-                            action='sell',
-                            count=yes_filled,
-                            yes_price=current_yes_price - 1  # Market order-ish
-                        )
-                        actions_taken.append({
-                            'arb_id': arb_id,
-                            'action': 'stop_loss_yes',
-                            'reason': f'YES price dropped {price_drop*100:.1f}%',
-                            'sell_order': sell_order
-                        })
-                        # Cancel NO order
-                        kalshi_client.cancel_order(no_order['order']['order_id'])
-                        del active_arb_orders[arb_id]
-                
-                elif no_filled > 0 and yes_filled == 0:
-                    # NO filled, check if NO price dropped
-                    price_drop = (position['no_price'] - current_no_price) / position['no_price']
-                    if price_drop > stop_loss_pct:
-                        # Sell NO position to cut losses
-                        sell_order = kalshi_client.create_order(
-                            ticker=ticker,
-                            side='no',
-                            action='sell',
-                            count=no_filled,
-                            no_price=current_no_price - 1
-                        )
-                        actions_taken.append({
-                            'arb_id': arb_id,
-                            'action': 'stop_loss_no',
-                            'reason': f'NO price dropped {price_drop*100:.1f}%',
-                            'sell_order': sell_order
-                        })
-                        # Cancel YES order
-                        kalshi_client.cancel_order(yes_order['order']['order_id'])
-                        del active_arb_orders[arb_id]
-                
-                elif yes_filled > 0 and no_filled > 0:
-                    # Both filled - arbitrage complete!
-                    actions_taken.append({
-                        'arb_id': arb_id,
-                        'action': 'completed',
-                        'profit': position['total_profit']
-                    })
-                    del active_arb_orders[arb_id]
-            
-            except Exception as e:
-                print(f"Error monitoring position {arb_id}: {e}")
-                continue
-        
-        return jsonify({
-            'success': True,
-            'actions_taken': actions_taken,
-            'active_positions': len(active_arb_orders)
-        })
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/scoreboard/<sport>', methods=['GET'])
@@ -1754,11 +1573,10 @@ _ESPN_TO_KALSHI = {v: k for k, v in _KALSHI_TO_ESPN.items()}
 def _parse_game_date(event_ticker: str) -> str:
     """Parse game date from event ticker like KXNBAGAME-26MAR05LALDEN → 'Mar 5'.
     Returns empty string if unable to parse."""
-    import re as _re
     parts = event_ticker.split('-')
     if len(parts) < 2:
         return ''
-    date_match = _re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts[1])
+    date_match = re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts[1])
     if not date_match:
         return ''
     year_2d = date_match.group(1)
@@ -1815,10 +1633,9 @@ def _refresh_espn_cache():
                 game_time = ''
                 if game_dt_str:
                     try:
-                        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-                        dt_utc = _dt.fromisoformat(game_dt_str.replace('Z', '+00:00'))
+                        dt_utc = datetime.fromisoformat(game_dt_str.replace('Z', '+00:00'))
                         # Convert to ET (UTC-5, approximate — good enough for display)
-                        dt_et = dt_utc - _td(hours=5)
+                        dt_et = dt_utc - timedelta(hours=5)
                         game_time = dt_et.strftime('%-I:%M %p')
                     except Exception:
                         pass
@@ -1935,8 +1752,7 @@ def _extract_spread_line(ticker: str) -> str:
         return ''
     suffix = parts[-1]  # e.g. 'UTA1', 'ORL3', 'BEL8'
     # Extract team code (alphabetic prefix) and tier digit
-    import re as _re
-    code_match = _re.match(r'^([A-Z]+)', suffix)
+    code_match = re.match(r'^([A-Z]+)', suffix)
     team_code = code_match.group(1) if code_match else suffix
 
     # Try to get spread number from Kalshi market title
@@ -1947,11 +1763,11 @@ def _extract_spread_line(ticker: str) -> str:
             market_data = mkt.get('market', mkt)
             title = market_data.get('title', '')
             # "Utah wins by over 3.5 Points?" → spread = 3.5
-            sp_match = _re.search(r'wins?\s+by\s+over\s+([\d.]+)', title, _re.IGNORECASE)
+            sp_match = re.search(r'wins?\s+by\s+over\s+([\d.]+)', title, re.IGNORECASE)
             if sp_match:
                 return f'{team_code} -{sp_match.group(1)}'
             # Fallback: "UTA -3.5" style
-            sp_match2 = _re.search(r'([A-Z]{2,5})\s*([+-][\d.]+)', title)
+            sp_match2 = re.search(r'([A-Z]{2,5})\s*([+-][\d.]+)', title)
             if sp_match2:
                 return f'{sp_match2.group(1)} {sp_match2.group(2)}'
     except Exception as e:
@@ -1974,8 +1790,7 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
     # Clean team_label for spread tickers — strip trailing digits
     tl = record.get('team_label', '')
     if record['market_type'] == 'spread' and tl:
-        import re as _re
-        record['team_label'] = _re.sub(r'\d+$', '', tl)
+        record['team_label'] = re.sub(r'\d+$', '', tl)
     # Correct stale pregame phase: if bot was deployed pregame but game is
     # actually live at trade completion time, record it as live.
     if record.get('game_phase') == 'pregame' and ticker and _is_game_live(ticker):
@@ -1997,8 +1812,7 @@ def _parse_ticker_teams(ticker: str):
     parts = ticker.split('-')
     if len(parts) < 2:
         return None, None
-    import re as _re
-    stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
+    stripped = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
     if len(stripped) < 4:
         return None, None
     # Try classic 3+3 first
@@ -2015,8 +1829,7 @@ def _get_all_ticker_team_candidates(ticker: str):
     parts = ticker.split('-')
     if len(parts) < 2:
         return []
-    import re as _re
-    stripped = _re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
+    stripped = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
     if not stripped or len(stripped) < 4:
         return []
     candidates = []
@@ -2036,8 +1849,6 @@ def _is_game_live(ticker: str) -> bool:
     
     Fallback: ESPN (only for games where Kalshi data isn't available).
     """
-    from datetime import datetime, timezone
-    
     # ── PRIMARY: Check Kalshi market data ──
     try:
         if kalshi_client:
@@ -4690,7 +4501,6 @@ def scan_arb_opportunities():
                 continue
 
         # Filter stale/postponed markets
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         def _is_stale(m):
             exp_str = m.get('expected_expiration_time', '')
@@ -5035,8 +4845,6 @@ def scan_middles():
             d = m.get(field + '_dollars')
             if d: return round(float(d) * 100)
             return m.get(field, 0)
-
-        import re
 
         # ── Parse each market to extract team + spread number ─────────
         # Title format: "Orlando wins by over 7.5 Points?"

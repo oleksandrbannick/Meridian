@@ -106,21 +106,35 @@ function switchTab(tab) {
 // Navigate from Bots tab to Markets tab and scroll to the relevant market card
 function navigateToMarket(eventTickerPrefix) {
     switchTab('markets');
-    // Small delay to let the Markets tab render
-    setTimeout(() => {
+    // Extract game ID segment (e.g. '26MAR09PHICLE') for broad matching across market types
+    const prefixParts = eventTickerPrefix.toUpperCase().split('-');
+    const gameIdSegment = prefixParts.length >= 2 ? prefixParts[1] : '';
+
+    const doScroll = () => {
         const cards = document.querySelectorAll('[data-event-ticker]');
         for (const card of cards) {
             const ticker = (card.getAttribute('data-event-ticker') || '').toUpperCase();
-            if (ticker.startsWith(eventTickerPrefix.toUpperCase())) {
+            if (ticker.startsWith(eventTickerPrefix.toUpperCase()) ||
+                (gameIdSegment && ticker.includes(gameIdSegment))) {
                 card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                // Brief highlight flash
                 card.style.transition = 'box-shadow 0.3s';
                 card.style.boxShadow = '0 0 20px rgba(0,170,255,0.5), inset 0 0 12px rgba(0,170,255,0.1)';
                 setTimeout(() => { card.style.boxShadow = ''; }, 2000);
-                return;
+                return true;
             }
         }
-    }, 150);
+        return false;
+    };
+
+    setTimeout(async () => {
+        if (!doScroll()) {
+            // Markets not loaded yet — fetch them then retry
+            if (typeof loadMarkets === 'function' && allMarkets.length === 0) {
+                await loadMarkets();
+            }
+            setTimeout(doScroll, 400);
+        }
+    }, 200);
 }
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
@@ -3840,10 +3854,11 @@ async function loadBots() {
             const item = document.createElement('div');
             item.className = 'bot-item';
             item.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${healthColor};${healthAnim}`;
+            const botEventPrefix = (bot.ticker || '').toUpperCase().split('-').slice(0, 2).join('-');
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <strong style="color:#fff;font-size:13px;">${displayName}</strong>
+                        <a href="#" onclick="navigateToMarket('${botEventPrefix}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${displayName}</a>
                         <span class="bot-status ${statusClass}">${statusLabel}</span>
                         ${healthLabel ? `<span style="font-size:10px;font-weight:700;color:${healthColor};">${healthLabel}</span>` : ''}
                         ${cycleInfo}

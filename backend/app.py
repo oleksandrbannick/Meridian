@@ -1914,9 +1914,25 @@ def _get_game_context(ticker: str) -> dict:
     return {}
 
 
+_MONTH_ABBR = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
+
 def _get_game_score_for_ticker(ticker: str) -> dict:
     """Get live game score info for a ticker (for bot list UI display).
     Returns {home_team, away_team, home_score, away_score, period, clock, status_detail, status} or {}."""
+    # Guard: skip if ticker date is in the future (avoids showing today's PHI game
+    # on a bot whose ticker is for tomorrow's PHI vs CLE game)
+    try:
+        parts_chk = ticker.split('-')
+        if len(parts_chk) >= 2:
+            m_chk = re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts_chk[1])
+            if m_chk:
+                mo = _MONTH_ABBR.get(m_chk.group(2))
+                if mo:
+                    ticker_date = date(2000 + int(m_chk.group(1)), mo, int(m_chk.group(3)))
+                    if ticker_date > date.today():
+                        return {}  # Future game — don't match today's team scores
+    except Exception:
+        pass
     _refresh_espn_cache()
     info = _espn_cache['data']
     if not info:

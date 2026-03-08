@@ -1668,6 +1668,9 @@ def _refresh_espn_cache():
                         period = ev_status.get('period', 0)
                         clock = ev_status.get('displayClock', '')
                         status_detail = (ev_status.get('type', {}).get('shortDetail', ''))
+                        is_home = team.get('homeAway') == 'home'
+                        team_own_score = home_score if is_home else away_score
+                        team_opp_score = away_score if is_home else home_score
 
                         team_info[abbr_upper] = {
                             'live': is_live,
@@ -1679,6 +1682,8 @@ def _refresh_espn_cache():
                             'home_score': home_score,
                             'away_score': away_score,
                             'score_diff': abs(home_score - away_score),
+                            'team_score': team_own_score,   # THIS team's score
+                            'opp_score': team_opp_score,    # opponent's score
                         }
                         # Also store under Kalshi code if different
                         kalshi_code = _ESPN_TO_KALSHI.get(abbr_upper)
@@ -1898,6 +1903,40 @@ def _is_game_live(ticker: str) -> bool:
         if entry and entry.get('live'):
             return True
     return False
+
+
+def _get_spread_effective_tightness(ticker: str):
+    """For spread tickers, return how close the actual lead is to the spread line.
+    e.g. BOS -7.5, BOS leads by 9 → abs(9 - 7.5) = 1.5  (barely covering)
+    e.g. BOS -7.5, BOS leads by 5 → abs(5 - 7.5) = 2.5  (not covering by 2.5)
+    e.g. BOS -7.5, BOS leads by 15 → abs(15 - 7.5) = 7.5 (comfortable)
+    Returns None if unable to compute (falls back to raw score_diff)."""
+    if _detect_market_type(ticker) != 'spread':
+        return None
+    # Parse spread team from suffix (e.g. 'KXNBASPREAD-26MAR07UTAMIL-UTA1' → 'UTA')
+    parts = ticker.split('-')
+    if len(parts) < 3:
+        return None
+    code_match = re.match(r'^([A-Z]+)', parts[-1])
+    if not code_match:
+        return None
+    spread_team = code_match.group(1)
+    # Get spread value from Kalshi market title
+    spread_line = _extract_spread_line(ticker)  # e.g. 'UTA -3.5'
+    if not spread_line:
+        return None
+    sp_match = re.search(r'([\d.]+)$', spread_line.strip())
+    if not sp_match:
+        return None
+    spread_pts = float(sp_match.group(1))
+    # Look up spread team in fresh ESPN cache
+    info = _espn_cache.get('data', {})
+    espn_code = _KALSHI_TO_ESPN.get(spread_team, spread_team)
+    entry = info.get(spread_team) or info.get(espn_code)
+    if not entry or entry.get('status') != 'in':
+        return None
+    actual_lead = entry.get('team_score', 0) - entry.get('opp_score', 0)
+    return abs(actual_lead - spread_pts)
 
 
 def _get_game_context(ticker: str) -> dict:
@@ -2262,7 +2301,14 @@ def create_bot():
         if game_phase == 'live' and not force_tight and _is_basketball(ticker):
             gc = _get_game_context(ticker)
             if gc:
-                sd = gc.get('score_diff', 999)
+                # For spread tickers compare lead vs spread line; for moneyline use raw diff
+                if _detect_market_type(ticker) == 'spread':
+                    spread_tight = _get_spread_effective_tightness(ticker)
+                    sd = spread_tight if spread_tight is not None else gc.get('score_diff', 999)
+                    diff_label = f'{sd:.1f}-pt spread margin'
+                else:
+                    sd = gc.get('score_diff', 999)
+                    diff_label = f'{sd}-pt lead'
                 period = gc.get('period', 0)
                 clock_str = gc.get('clock', '')
                 sport = _detect_sport(ticker)
@@ -2296,7 +2342,7 @@ def create_bot():
 
                 if in_danger_zone:
                     return jsonify({
-                        'error': f'🛑 TIGHT GAME BLOCKED: {sd}-point lead in {zone_label}. '
+                        'error': f'🛑 TIGHT GAME BLOCKED: {diff_label} in {zone_label}. '
                                  f'Late close games swing wildly and can trigger stop-losses on both sides. '
                                  f'Wait for the lead to grow, or use the force option to override.',
                         'tight_game_blocked': True,

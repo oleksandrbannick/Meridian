@@ -3037,9 +3037,21 @@ def _run_monitor():
                                         cur_dog_bid = round(float(_d2) * 100) if _d2 else _mk2.get(f'{dog_side_rp}_bid', 0)
                                     except Exception:
                                         pass
-                                # Fall back to stored price only if live fetch returned 0
-                                if not cur_dog_bid:
-                                    cur_dog_bid = bot.get(f'{dog_side_rp}_price') or bot.get('dog_price', 1)
+                                # If dog bid is 0, the game is over — no hedge possible.
+                                # Cancel the fav and exit instead of reposting into a dead market.
+                                if cur_dog_bid == 0:
+                                    print(f'🏁 FAV REPOST ABORTED: {bot_id} {dog_side_rp.upper()} bid=0¢ — game likely over, cancelling')
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(fav_order_id)
+                                    except Exception:
+                                        pass
+                                    bot['status'] = 'completed'
+                                    bot['completed_at'] = now
+                                    bot_log('FAV_NO_HEDGE_MARKET', bot_id, {'fav_side': fav_side, 'dog_side': dog_side_rp, 'fav_bid': cur_fav_bid})
+                                    actions.append({'bot_id': bot_id, 'action': 'fav_no_hedge_cancelled'})
+                                    save_state()
+                                    continue
                                 max_fav_for_width = 100 - cur_dog_bid - min_width_rp
                                 new_fav_price = min(cur_fav_bid, 98, max_fav_for_width) if cur_fav_bid > 0 else bot['fav_price']
                                 new_fav_price = max(1, new_fav_price)

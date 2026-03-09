@@ -2360,6 +2360,19 @@ function calculateArbPrices(market, width) {
     targetYes = Math.max(1, Math.min(targetYes, 98));
     targetNo  = Math.max(1, Math.min(targetNo, 98));
 
+    // Enforce target width: if dog hit the 1¢ floor, push fav down to maintain width.
+    // e.g. YES bid=99, NO no-bids, width=14 → derived NO=-13 → clamped 1 → fav pushed to 85.
+    let dogAtFloor = false;
+    const actualProfit = 100 - targetYes - targetNo;
+    if (actualProfit < width) {
+        dogAtFloor = true;
+        if (yesIsFav) {
+            targetYes = Math.max(1, 100 - targetNo - width);
+        } else {
+            targetNo  = Math.max(1, 100 - targetYes - width);
+        }
+    }
+
     // Detect when a side's shave was redistributed to the other side
     const yesShaved = effectiveYesBid - targetYes;  // how much was shaved off YES
     const noShaved  = effectiveNoBid  - targetNo;   // how much was shaved off NO
@@ -2377,6 +2390,8 @@ function calculateArbPrices(market, width) {
         noNoLiquidity:  noBid <= 0,
         // Flag when a side couldn't be shaved below its bid (too low to shave)
         yesUnshaved, noUnshaved,
+        // Flag when dog hit 1¢ floor and the excess shave rolled onto the fav
+        dogAtFloor,
     };
 }
 
@@ -3084,8 +3099,19 @@ function recalcArbPrices() {
     const yesIsFav = arb.yesIsFav;
     if (yesHint) {
         if (arb.yesNoLiquidity) {
-            yesHint.textContent = 'no bids — derived from width';
-            yesHint.style.color = '#ff4444';
+            if (arb.dogAtFloor && !yesIsFav) {
+                // YES is dog, hit 1¢ floor — fav (NO) absorbed the overflow
+                yesHint.textContent = 'at floor — extra → fav';
+                yesHint.style.color = '#ffaa00';
+            } else {
+                yesHint.textContent = 'no bids — derived from width';
+                yesHint.style.color = '#ff4444';
+            }
+        } else if (arb.dogAtFloor && yesIsFav) {
+            // YES is fav, pushed down to absorb dog's overflow
+            const diff = arb.yesBid - arb.targetYes;
+            yesHint.textContent = `bid−${diff} (★ fav, dog at floor)`;
+            yesHint.style.color = '#ffaa00';
         } else {
             const diff = arb.yesBid - arb.targetYes;
             const role = yesIsFav ? '★ fav' : 'underdog';
@@ -3095,8 +3121,19 @@ function recalcArbPrices() {
     }
     if (noHint) {
         if (arb.noNoLiquidity) {
-            noHint.textContent = 'no bids — derived from width';
-            noHint.style.color = '#ff4444';
+            if (arb.dogAtFloor && yesIsFav) {
+                // NO is dog (no bids), hit 1¢ floor — fav (YES) absorbed the overflow
+                noHint.textContent = 'at floor — extra → fav';
+                noHint.style.color = '#ffaa00';
+            } else {
+                noHint.textContent = 'no bids — derived from width';
+                noHint.style.color = '#ff4444';
+            }
+        } else if (arb.dogAtFloor && !yesIsFav) {
+            // NO is fav, pushed down to absorb dog's overflow
+            const diff = arb.noBid - arb.targetNo;
+            noHint.textContent = `bid−${diff} (★ fav, dog at floor)`;
+            noHint.style.color = '#ffaa00';
         } else if (arb.noUnshaved) {
             noHint.textContent = '= bid (width → fav)';
             noHint.style.color = '#00aaff';
@@ -3107,7 +3144,7 @@ function recalcArbPrices() {
             noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
         }
     }
-    if (yesHint && arb.yesUnshaved) {
+    if (yesHint && arb.yesUnshaved && !arb.dogAtFloor) {
         yesHint.textContent = '= bid (width → fav)';
         yesHint.style.color = '#00aaff';
     }

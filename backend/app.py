@@ -3019,13 +3019,28 @@ def _run_monitor():
                                     save_state()
                                     continue
 
-                                # Width-aware cap: dog_price is LOCKED — preserve target width by
-                                # shaving the fav, not the dog.  If dog is at 1¢ and width=5¢,
-                                # fav must be ≤ 94¢ — never 98¢ giving only a 1¢ spread.
+                                # Width-aware cap: use the CURRENT live dog-side bid, not the
+                                # stale stored price from deployment. Market may have moved
+                                # (e.g. YES 79→99, NO 12→1) so we must re-check live.
+                                # fav_cap = 100 - live_dog_bid - min_width
                                 dog_side_rp  = 'no' if fav_side == 'yes' else 'yes'
-                                dog_price_rp = bot.get(f'{dog_side_rp}_price') or bot.get('dog_price', 1)
                                 min_width_rp = bot.get('arb_width', bot.get('profit_per', 3))
-                                max_fav_for_width = 100 - dog_price_rp - min_width_rp
+                                # Get current dog bid from ws_price (already fetched above) or market
+                                if ws_price:
+                                    cur_dog_bid = ws_price.get(f'{dog_side_rp}_bid', 0)
+                                else:
+                                    cur_dog_bid = 0
+                                    try:
+                                        _m2 = kalshi_client.get_market(ticker)
+                                        _mk2 = _m2.get('market', _m2)
+                                        _d2 = _mk2.get(f'{dog_side_rp}_bid_dollars')
+                                        cur_dog_bid = round(float(_d2) * 100) if _d2 else _mk2.get(f'{dog_side_rp}_bid', 0)
+                                    except Exception:
+                                        pass
+                                # Fall back to stored price only if live fetch returned 0
+                                if not cur_dog_bid:
+                                    cur_dog_bid = bot.get(f'{dog_side_rp}_price') or bot.get('dog_price', 1)
+                                max_fav_for_width = 100 - cur_dog_bid - min_width_rp
                                 new_fav_price = min(cur_fav_bid, 98, max_fav_for_width) if cur_fav_bid > 0 else bot['fav_price']
                                 new_fav_price = max(1, new_fav_price)
                                 # Falling knife guard: don't repost fav below MIN_FAV_ENTRY_CENTS

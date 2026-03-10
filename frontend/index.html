@@ -87,7 +87,7 @@
         .mid-sport-pill.active   { background: #ffaa00; color: #000; border-color: #ffaa00; }
         .anchor-signal-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
         .middle-arb-pill.active  { background: #aa66ff; color: #fff; border-color: #aa66ff; }
-        .scan-mode-pill { padding:6px 16px; font-size:12px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; flex:1; }
+        .scan-mode-pill { padding:10px 16px; font-size:12px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; flex:1; min-height:44px; touch-action:manipulation; -webkit-tap-highlight-color:transparent; user-select:none; }
         .scan-mode-pill.active { color:#fff; background:#1a3a5a; border-radius:6px; }
 
         /* ── Bots Section ──────────────────────────────────────────── */
@@ -1090,8 +1090,8 @@
             </div>
             <!-- Row 2: mode toggle (full-width) -->
             <div style="display:flex;background:#0a0e1a;border:1px solid #2a3550;border-radius:8px;overflow:hidden;margin-bottom:8px;">
-                <button class="scan-mode-pill active" data-mode="instarb" onclick="setScanMode('instarb')">⚡ Instant Arb</button>
-                <button class="scan-mode-pill"        data-mode="anchor"  onclick="setScanMode('anchor')">🔒 Anchor Hunt</button>
+                <button type="button" class="scan-mode-pill active" data-mode="instarb" onclick="setScanMode('instarb')">⚡ Instant Arb</button>
+                <button type="button" class="scan-mode-pill"        data-mode="anchor"  onclick="setScanMode('anchor')">🔒 Anchor Hunt</button>
             </div>
             <!-- Row 3: mode-specific controls -->
             <div id="scan-instarb-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">

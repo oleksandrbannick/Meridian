@@ -580,11 +580,21 @@
                 <p style="color:#555;text-align:center;font-size:12px;">Loading analytics...</p>
             </div>
 
+            <!-- Sport Breakdown -->
+            <div id="sport-breakdown-panel" style="margin-bottom:20px;"></div>
+
             <!-- Width Breakdown Table -->
             <div id="width-breakdown-panel" style="margin-bottom:20px;"></div>
 
-            <!-- Trade Log -->
-            <h3 style="color:#8892a6;font-size:13px;margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em;">Trade Log</h3>
+            <!-- Trade Log with view toggle -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin:0;">Trade Log</h3>
+                <div style="display:flex;gap:6px;">
+                    <button id="history-view-arb" onclick="setHistoryView('arb')" style="background:#1a2540;border:1px solid #3a4a6a;color:#8892a6;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">ARB</button>
+                    <button id="history-view-bets" onclick="setHistoryView('bets')" style="background:#1a2540;border:1px solid #3a4a6a;color:#8892a6;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">BETS</button>
+                    <button id="history-view-all" onclick="setHistoryView('all')" style="background:#253555;border:1px solid #5a7aaa;color:#ccc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">ALL</button>
+                </div>
+            </div>
             <div id="trade-history-list">
                 <div class="empty-state">
                     <div class="icon">📜</div>
@@ -630,6 +640,7 @@
                 <div id="bot-market-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
                     <div id="bot-market-title" style="color:#fff;font-weight:600;font-size:14px;margin-bottom:10px;"></div>
                     <div id="bot-market-prices" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
+                    <div id="modal-underdog-warning" style="display:none;margin-top:10px;background:rgba(255,170,0,0.12);border:1px solid #ffaa0066;border-radius:6px;padding:8px 10px;font-size:11px;color:#ffaa00;line-height:1.4;"></div>
                 </div>
 
                 <!-- ═══════ STRAIGHT BET SECTION ═══════ -->
@@ -859,7 +870,7 @@
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
-                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview()"
+                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); if(document.getElementById('all-widths-toggle')?.checked) updateAllWidthsPreview();"
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
@@ -896,9 +907,31 @@
                         <strong style="color:#8892a6;">🛡 Flip Protection:</strong> Sells only if bid drops to ≤ flip floor (favorite flipped). No stop-loss on normal dips.<br>
                         <strong style="color:#8892a6;">🔴 Live:</strong> Active — reposts stale orders. <strong style="color:#8892a6;">⏳ Pregame:</strong> Patient — orders wait for game start.
                     </div>
+
+                    <!-- ── All Widths Toggle ── -->
+                    <div style="margin-bottom:16px;border:1px solid #2a2a4a;border-radius:8px;overflow:hidden;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0a0a1a;cursor:pointer;" onclick="toggleAllWidths()">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <span style="font-size:13px;font-weight:700;color:#818cf8;">⚡ Place All Widths</span>
+                                <span style="background:#818cf822;color:#818cf8;border-radius:4px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.05em;">EXPERIMENTAL</span>
+                            </div>
+                            <label style="position:relative;display:inline-block;width:36px;height:20px;pointer-events:none;">
+                                <input type="checkbox" id="all-widths-toggle" style="opacity:0;width:0;height:0;" onchange="toggleAllWidths()">
+                                <span id="all-widths-slider" style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#1e2740;border-radius:20px;transition:.2s;"></span>
+                                <span id="all-widths-knob" style="position:absolute;content:'';height:14px;width:14px;left:3px;bottom:3px;background:#555;border-radius:50%;transition:.2s;"></span>
+                            </label>
+                        </div>
+                        <div id="all-widths-panel" style="display:none;padding:12px 14px;background:#07071a;border-top:1px solid #2a2a4a;">
+                            <div style="background:rgba(255,170,0,0.08);border:1px solid #ffaa0044;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:10px;color:#ffaa00;line-height:1.5;">
+                                ⚠ <strong>Dev/testing mode</strong> — places one bot per width simultaneously using the quantity below. Widths blocked by the falling knife rule are skipped automatically. Use small quantities.
+                            </div>
+                            <div id="all-widths-preview" style="font-size:11px;"></div>
+                        </div>
+                    </div>
+
                     <!-- Action buttons -->
                     <div style="display:flex;gap:10px;">
-                        <button onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Deploy Arb Bot</button>
+                        <button id="deploy-btn" onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Deploy Arb Bot</button>
                         <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
@@ -990,6 +1023,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260309k"></script>
+    <script src="app.js?v=20260309u"></script>
 </body>
 </html>

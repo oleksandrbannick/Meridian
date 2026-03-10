@@ -145,6 +145,44 @@ def ws_status():
     })
 
 
+_GAME_SERIES = {'KXNBAGAME','KXNHLGAME','KXNFLGAME','KXMLBGAME','KXMLSGAME',
+                'KXNCAAMBGAME','KXNCAAWBGAME','KXNCAAFGAME','KXEPLGAME',
+                'KXUCLGAME','KXATPMATCH','KXWTAMATCH','KXWBCGAME','KXVTBGAME',
+                'KXBSLGAME','KXABAGAME','KXMLBSTGAME'}
+
+def _capture_opening_lines(markets):
+    """Record first-seen YES price for each GAME market — never overwrite once stored."""
+    global _opening_lines
+    new_captures = 0
+    for m in markets:
+        ticker = m.get('ticker', '')
+        if not ticker or ticker in _opening_lines:
+            continue
+        series = (m.get('series_ticker') or ticker.split('-')[0]).upper()
+        if series not in _GAME_SERIES:
+            continue
+        yes_bid = m.get('yes_bid') or m.get('yes_bid_dollars', 0)
+        try:
+            yes_bid = float(yes_bid or 0)
+        except (TypeError, ValueError):
+            continue
+        if yes_bid < 2:  # dollar value — convert to cents
+            yes_bid = yes_bid * 100
+        yes_bid = int(round(yes_bid))
+        if yes_bid <= 0:
+            continue
+        _opening_lines[ticker] = {'yes_price': yes_bid, 'captured_at': time.time()}
+        new_captures += 1
+    if new_captures:
+        print(f'📌 Captured {new_captures} opening lines')
+        save_state()
+
+
+@app.route('/api/opening-lines', methods=['GET'])
+def get_opening_lines():
+    return jsonify(_opening_lines)
+
+
 @app.route('/api/markets', methods=['GET'])
 def get_markets():
     """Get sports markets by querying Kalshi series tickers directly"""
@@ -304,6 +342,10 @@ def get_markets():
         unique_markets.sort(key=lambda m: m.get('event_ticker', ''))
         if limit and limit < len(unique_markets):
             unique_markets = unique_markets[:limit]
+
+        # Capture opening lines for GAME markets not yet stored
+        # Only capture once — first observation is the closest to true pre-game line
+        _capture_opening_lines(unique_markets)
 
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0
@@ -701,6 +743,7 @@ def get_fills():
 
 active_bots = {}  # bot_id -> bot_config
 trade_history = []  # completed/stopped bots log (newest first)
+_opening_lines = {}  # ticker -> {'yes_price': int, 'captured_at': float} — pre-game closing line
 
 # ─── Activity Log ─────────────────────────────────────────────────────────────
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'activity_log.jsonl')
@@ -774,25 +817,27 @@ def save_state():
                 'active_bots': active_bots,
                 'trade_history': trade_history[:2000],
                 'session_pnl': session_pnl,
+                'opening_lines': _opening_lines,
             }, f, indent=2, default=str)
     except Exception as e:
         print(f'⚠ save_state: {e}')
 
 def load_state():
     """Load persisted bots and history from disk."""
-    global active_bots, trade_history, session_pnl
+    global active_bots, trade_history, session_pnl, _opening_lines
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
             active_bots = data.get('active_bots', {})
             trade_history = data.get('trade_history', [])
+            _opening_lines = data.get('opening_lines', {})
             saved = data.get('session_pnl')
             if saved:
                 for k in ('gross_profit_cents','gross_loss_cents','completed_bots','stopped_bots'):
                     if k in saved:
                         session_pnl[k] = saved[k]
-            print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history')
+            print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history, {len(_opening_lines)} opening lines')
     except Exception as e:
         print(f'⚠ load_state: {e}')
 
@@ -1197,14 +1242,20 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
             bot['repeat_count'] = 0
             bot['stopped_at'] = now
             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', trigger_bid)
-            loss = (entry_price - actual_sell) * filled_qty
+            pnl_cents = (actual_sell - entry_price) * filled_qty  # positive=profit, negative=loss
             verified = sell_info.get('verified_cleared', False)
-            session_pnl['gross_loss_cents'] += loss
-            session_pnl['stopped_bots']     += 1
+            if pnl_cents >= 0:
+                session_pnl['gross_profit_cents'] += pnl_cents
+                session_pnl['completed_bots']     += 1
+            else:
+                session_pnl['gross_loss_cents'] += abs(pnl_cents)
+                session_pnl['stopped_bots']     += 1
             _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
-                'quantity': filled_qty, 'loss_cents': loss,
+                'quantity': filled_qty,
+                'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
+                'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
                 'result': f'flip_{filled_side}', 'exit_bid': actual_sell,
                 'verified_cleared': verified, 'timestamp': now,
                 'placed_at': bot.get('created_at', now),
@@ -1219,8 +1270,8 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
                 'repeat_count': orig_repeat_count,
                 'exit_source': 'ws_realtime',
             }, bot)
-            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
-            print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ loss={loss}¢ (real-time)')
+            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+            print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ pnl={pnl_cents:+}¢ (real-time)')
             save_state()
         else:
             # Sell failed — clear the flag so monitor can retry
@@ -1634,7 +1685,12 @@ def _refresh_espn_cache():
             events = raw_data.get('events', [])
             for ev in events:
                 comp = (ev.get('competitions') or [{}])[0]
-                status = (ev.get('status') or {}).get('type', {}).get('state', 'pre')
+                ev_status_obj = (ev.get('status') or {}).get('type', {})
+                status = ev_status_obj.get('state', 'pre')
+                short_detail = ev_status_obj.get('shortDetail', '').lower()
+                # ESPN briefly marks halftime as 'post' — treat it as 'in'
+                if status == 'post' and 'half' in short_detail:
+                    status = 'in'
                 is_live = status == 'in'
                 # Game start time (ISO 8601) → local time string
                 game_dt_str = ev.get('date', '')  # e.g. "2026-03-05T00:00Z"
@@ -1808,6 +1864,36 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
     # actually live at trade completion time, record it as live.
     if record.get('game_phase') == 'pregame' and ticker and _is_game_live(ticker):
         record['game_phase'] = 'live'
+    # Bot category for split P&L tracking
+    bot_type = record.get('type') or (bot.get('type') if bot else None) or 'arb'
+    if bot_type == 'watch':
+        record['bot_category'] = 'bet'
+    elif bot_type == 'middle':
+        record['bot_category'] = 'middle'
+    else:
+        record['bot_category'] = 'arb'
+    # Sport from series ticker prefix
+    series = ticker.split('-')[0].upper() if ticker else ''
+    _SPORT_MAP = {
+        'KXNBAGAME':'NBA','KXNBASPREAD':'NBA','KXNBATOTAL':'NBA',
+        'KXNBAPTS':'NBA','KXNBAREB':'NBA','KXNBAAST':'NBA','KXNBA3PT':'NBA',
+        'KXNBASTL':'NBA','KXNBABLK':'NBA','KXNBAMVP':'NBA',
+        'KXNFLGAME':'NFL','KXNFLSPREAD':'NFL','KXNFLTOTAL':'NFL',
+        'KXNHLGAME':'NHL','KXNHLSPREAD':'NHL','KXNHLTOTAL':'NHL','KXNHLGOAL':'NHL',
+        'KXMLBGAME':'MLB','KXMLBSPREAD':'MLB','KXMLBTOTAL':'MLB','KXMLBSTGAME':'MLB',
+        'KXMLSGAME':'MLS','KXMLSSPREAD':'MLS','KXMLSTOTAL':'MLS',
+        'KXNCAAMBGAME':'NCAAB','KXNCAAMBSPREAD':'NCAAB','KXNCAAMBTOTAL':'NCAAB',
+        'KXNCAAMBPTS':'NCAAB','KXNCAAMBREB':'NCAAB','KXNCAAMBAST':'NCAAB',
+        'KXNCAAMB3PT':'NCAAB','KXNCAAMBSTL':'NCAAB','KXNCAAMBBLK':'NCAAB',
+        'KXNCAAMB1HWINNER':'NCAAB','KXNCAAMB1HSPREAD':'NCAAB','KXNCAAMB1HTOTAL':'NCAAB',
+        'KXMARMAD':'NCAAB','KXNCAAWBGAME':'NCAAW',
+        'KXNCAAFGAME':'NCAAF','KXNCAAFSPREAD':'NCAAF','KXNCAAFTOTAL':'NCAAF',
+        'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL',
+        'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL',
+        'KXATPMATCH':'Tennis','KXWTAMATCH':'Tennis',
+        'KXWBCGAME':'WBC','KXVTBGAME':'Volleyball','KXBSLGAME':'Basketball','KXABAGAME':'ABA',
+    }
+    record['sport'] = _SPORT_MAP.get(series, 'Other')
     return record
 
 
@@ -1880,10 +1966,12 @@ def _is_game_live(ticker: str) -> bool:
                 now_utc = datetime.now(timezone.utc)
                 hours_until_exp = (exp_time - now_utc).total_seconds() / 3600.0
                 
-                # Game is "live" if expected to end within 3.5 hours and hasn't ended yet
-                # Basketball games last ~2-2.5h, so a game that just started has exp ~2.5-3h away
-                # Using 3.5h (slightly wider than frontend's 3h) to catch early tip-offs
-                if -0.5 < hours_until_exp < 3.5:
+                # Game is "live" if expected to end within N hours and hasn't ended yet.
+                # Tennis/tournament markets settle end-of-day → use 20h window.
+                # Basketball/hockey/etc → 3.5h window.
+                is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+                max_hours = 20.0 if is_tennis else 3.5
+                if -0.5 < hours_until_exp < max_hours:
                     return True
                 return False
     except Exception as e:
@@ -3169,10 +3257,44 @@ def _run_monitor():
                                 continue
                             else:
                                 # Position was filled — market settled, Kalshi auto-settles it
+                                mkt_data_w  = mkt_check_w.get('market', mkt_check_w)
+                                mkt_result_w = mkt_data_w.get('result', '').lower()  # 'yes' or 'no'
+                                watch_side  = bot.get('side', 'yes')
+                                entry       = bot.get('entry_price', 50)
+                                qty         = bot.get('quantity', 1)
+                                won = (mkt_result_w == watch_side) if mkt_result_w else None
+                                if won is True:
+                                    profit_cents = (100 - entry) * qty
+                                    loss_cents   = 0
+                                    res_label    = 'take_profit_watch'
+                                    session_pnl['gross_profit_cents'] += profit_cents
+                                    session_pnl['completed_bots']     += 1
+                                elif won is False:
+                                    profit_cents = 0
+                                    loss_cents   = entry * qty
+                                    res_label    = 'stop_loss_watch'
+                                    session_pnl['gross_loss_cents'] += loss_cents
+                                    session_pnl['stopped_bots']     += 1
+                                else:
+                                    # Result unknown yet; skip recording until we know
+                                    profit_cents = loss_cents = 0
+                                    res_label    = 'settled_unknown'
+                                if mkt_result_w:  # only record if we have a result
+                                    _record_trade({
+                                        'bot_id': bot_id, 'ticker': ticker,
+                                        'side': watch_side, 'entry_price': entry,
+                                        'quantity': qty,
+                                        'profit_cents': profit_cents,
+                                        'loss_cents': loss_cents,
+                                        'result': res_label,
+                                        'timestamp': now,
+                                        'placed_at': bot.get('created_at', now),
+                                        'type': 'watch',
+                                    }, bot)
                                 bot['status'] = 'completed'
                                 bot['completed_at'] = now
-                                bot_log('WATCH_SETTLED_FILLED', bot_id, {'market_status': mkt_status_w})
-                                print(f'🏁 WATCH SETTLED (filled): {bot_id} — market {mkt_status_w}, position auto-settles on Kalshi')
+                                bot_log('WATCH_SETTLED_FILLED', bot_id, {'market_status': mkt_status_w, 'result': mkt_result_w, 'won': won})
+                                print(f'🏁 WATCH SETTLED (filled): {bot_id} — {mkt_result_w} won, {"profit" if won else "loss"} recorded')
                                 actions.append({'bot_id': bot_id, 'action': 'watch_settled_filled'})
                                 save_state()
                                 continue
@@ -4026,7 +4148,7 @@ def _run_monitor():
 def list_bots():
     """Get all bots with live market data"""
     # Enrich bots with WS prices if they don't have fresh data
-    for bid, bot in active_bots.items():
+    for bid, bot in list(active_bots.items()):
         if bot.get('status') in ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching'):
             if not bot.get('live_yes_bid') and bot.get('ticker'):
                 ws_p = ws_manager.get_price(bot['ticker']) if ws_manager else None
@@ -4038,7 +4160,7 @@ def list_bots():
 
     # Gather live scores per game-key for frontend display
     game_scores = {}
-    for bid, bot in active_bots.items():
+    for bid, bot in list(active_bots.items()):
         if bot.get('status') in ('completed', 'stopped'):
             continue
         ticker = bot.get('ticker', '')
@@ -4766,37 +4888,21 @@ def scan_arb_opportunities():
             if not yes_bid or not no_bid:
                 continue
 
-            # Width = profit room for dual-arb limit orders
+            # Width = raw profit room (at bid prices)
             width = 100 - yes_bid - no_bid
             if width < min_width:
                 continue
 
-            # Suggested prices: AT the bid, never above it.
-            # Use favorite-anchoring: shave less from fav, more from underdog.
-            bid_sum = yes_bid + no_bid
-            target_total = 100 - min_width  # target combined cost
-            total_shave = max(0, bid_sum - target_total)
-            yes_is_fav = yes_bid >= no_bid
-            fav_shave = total_shave * 4 // 10  # 40% to fav
-            dog_shave = total_shave - fav_shave  # 60% to underdog
+            # Default: queue-jump prices (bid+1) to be first in line.
+            # This is the only price that makes sense — posting at or below
+            # the bid puts you behind everyone already there.
+            sug_yes = yes_bid + 1
+            sug_no  = no_bid + 1
+            posted_profit = 100 - sug_yes - sug_no  # width - 2
 
-            # If underdog can't absorb its share, push overflow to favorite
-            dog_bid = no_bid if yes_is_fav else yes_bid
-            dog_max_shave = max(0, dog_bid - 1)
-            if dog_shave > dog_max_shave:
-                overflow = dog_shave - dog_max_shave
-                dog_shave = dog_max_shave
-                fav_shave = fav_shave + overflow
-
-            if yes_is_fav:
-                sug_yes = yes_bid - fav_shave
-                sug_no  = no_bid - dog_shave
-            else:
-                sug_yes = yes_bid - dog_shave
-                sug_no  = no_bid - fav_shave
-            sug_yes = max(1, min(sug_yes, yes_bid))  # never above bid
-            sug_no  = max(1, min(sug_no, no_bid))    # never above bid
-            posted_profit = 100 - sug_yes - sug_no
+            # Skip if queue-jump eats all profit
+            if posted_profit <= 0:
+                continue
 
             # ── Spread & Liquidity ─────────────────────────────────
             yes_spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 99
@@ -4859,11 +4965,6 @@ def scan_arb_opportunities():
             else:
                 catch_speed = 'slow'     # wide spread or unbalanced
 
-            # ── Queue-jump prices: bid + 1 to be first in line ──
-            qj_yes = yes_bid + 1
-            qj_no  = no_bid + 1
-            qj_profit = 100 - qj_yes - qj_no  # can be negative if bids already tight
-
             opportunities.append({
                 'ticker':        ticker_str,
                 'title':         m.get('title', ''),
@@ -4879,9 +4980,6 @@ def scan_arb_opportunities():
                 'suggested_yes': sug_yes,
                 'suggested_no':  sug_no,
                 'profit_posted': posted_profit,
-                'qj_yes':        qj_yes,
-                'qj_no':         qj_no,
-                'qj_profit':     qj_profit,
                 'catch_score':   catch_score,
                 'catch_speed':   catch_speed,
                 'liquidity':     liquidity,
@@ -4913,20 +5011,31 @@ PNL_LOSS_RESULTS = (
 )
 PNL_WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
 
-def _compute_pnl_bucket(trades):
-    """Compute gross profit/loss/counts from a list of trade_history entries."""
+def _compute_pnl_bucket(trades, category=None):
+    """Compute gross profit/loss/counts from a list of trade_history entries.
+    If category given ('arb','bet','middle'), filters to that category only."""
+    if category:
+        trades = [t for t in trades if t.get('bot_category', 'arb') == category]
     gross_profit = 0
     gross_loss   = 0
     completed    = 0
     stopped      = 0
+    sport_pnl    = {}
     for t in trades:
         result = t.get('result', '')
+        pnl = 0
         if result in PNL_WIN_RESULTS:
-            gross_profit += t.get('profit_cents', 0)
+            p = t.get('profit_cents', 0)
+            gross_profit += p
             completed += 1
+            pnl = p
         elif result in PNL_LOSS_RESULTS:
-            gross_loss += t.get('loss_cents', 0)
+            l = t.get('loss_cents', 0)
+            gross_loss += l
             stopped += 1
+            pnl = -l
+        sport = t.get('sport', 'Other')
+        sport_pnl[sport] = sport_pnl.get(sport, 0) + pnl
     net_cents = gross_profit - gross_loss
     return {
         'gross_profit_cents': gross_profit,
@@ -4935,6 +5044,7 @@ def _compute_pnl_bucket(trades):
         'net_dollars':        net_cents / 100,
         'completed_bots':     completed,
         'stopped_bots':       stopped,
+        'sport_pnl':          sport_pnl,
     }
 
 
@@ -4956,9 +5066,12 @@ def get_pnl():
 
     daily    = _compute_pnl_bucket(today_trades)
     lifetime = _compute_pnl_bucket(trade_history)
+    arb_d    = _compute_pnl_bucket(today_trades, 'arb')
+    bet_d    = _compute_pnl_bucket(today_trades, 'bet')
+    mid_d    = _compute_pnl_bucket(today_trades, 'middle')
 
     pnl = {
-        # Daily
+        # Daily (combined — unchanged)
         'gross_profit_cents': daily['gross_profit_cents'],
         'gross_loss_cents':   daily['gross_loss_cents'],
         'net_cents':          daily['net_cents'],
@@ -4972,10 +5085,28 @@ def get_pnl():
         'lifetime_net_dollars':        lifetime['net_dollars'],
         'lifetime_completed':          lifetime['completed_bots'],
         'lifetime_stopped':            lifetime['stopped_bots'],
+        # Category breakdown (today)
+        'arb_net_cents':    arb_d['net_cents'],
+        'arb_profit_cents': arb_d['gross_profit_cents'],
+        'arb_loss_cents':   arb_d['gross_loss_cents'],
+        'arb_wins':         arb_d['completed_bots'],
+        'arb_losses':       arb_d['stopped_bots'],
+        'bet_net_cents':    bet_d['net_cents'],
+        'bet_profit_cents': bet_d['gross_profit_cents'],
+        'bet_loss_cents':   bet_d['gross_loss_cents'],
+        'bet_wins':         bet_d['completed_bots'],
+        'bet_losses':       bet_d['stopped_bots'],
+        'mid_net_cents':    mid_d['net_cents'],
+        'mid_profit_cents': mid_d['gross_profit_cents'],
+        'mid_loss_cents':   mid_d['gross_loss_cents'],
+        'mid_wins':         mid_d['completed_bots'],
+        'mid_losses':       mid_d['stopped_bots'],
+        # Sport breakdown (today)
+        'sport_pnl': {s: round(v/100, 2) for s, v in daily['sport_pnl'].items() if v != 0},
         # Meta
         'active_bots': len([b for b in active_bots.values()
                              if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')]),
-        'day_key':            today,
+        'day_key': today,
     }
     return jsonify(pnl)
 

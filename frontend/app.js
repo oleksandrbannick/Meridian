@@ -9,6 +9,7 @@ let currentSportFilter = 'all';
 let currentLiveFilter = false;  // true = show only live games within sport
 let liveGames = {}; // keyed by team abbreviation pairs for quick lookup
 let allGameData = {}; // ALL games (pre/in/post) for score display on every card
+let openingLines = {}; // ticker -> {yes_price, captured_at} — pre-game closing lines
 let boxScoreCache = {}; // {espnGameId: {players: {...}, ts: Date.now()}}
 let expandedSections = new Set(); // Track which collapsibles are open across re-renders
 let priceRefreshInterval = null; // Interval for live price updates on main screen
@@ -328,10 +329,7 @@ function filterBySport(sport) {
     // Toggle live sub-filter
     if (sport === 'live') {
         currentLiveFilter = !currentLiveFilter;
-        // When enabling live filter, always reset sport to 'all' so all live games show
-        if (currentLiveFilter) {
-            currentSportFilter = 'all';
-        }
+        // Keep current sport filter — live is client-side only, no reload needed
     } else {
         currentSportFilter = sport;
     }
@@ -345,20 +343,14 @@ function filterBySport(sport) {
         }
     });
 
-    // If we picked a sport (not toggling live) and have no markets, fetch
+    // If we picked a sport (not toggling live), fetch fresh data
     if (sport !== 'live') {
         loadMarkets();
         return;
     }
 
-    // Live toggle is client-side only
-    if (!currentLiveFilter) {
-        // Turning OFF live filter: just re-apply with existing data
-        applyFilters();
-    } else {
-        // Turning ON: always reload so we have all-sport data (sport was reset to 'all')
-        loadMarkets();
-    }
+    // Live toggle is always client-side — just re-filter existing data
+    applyFilters();
 }
 
 function applyFilters() {
@@ -763,10 +755,11 @@ function isKalshiLive(market) {
         const now = Date.now();
         const hoursUntilExp = (expTime.getTime() - now) / (1000 * 60 * 60);
         
-        // Window: game must be expected to end within 5 hours AND not ended > 30min ago
-        // GAME (moneyline) markets have longer settlement buffers than SPREAD/TOTAL.
-        // A game that just started may have exp 4-5h away; 5h window catches all types.
-        if (hoursUntilExp < -0.5 || hoursUntilExp > 5.0) return false;
+        // Window: game must be expected to end within N hours AND not ended > 30min ago
+        // Tennis/tournament markets settle end-of-day so use 20h window; others use 5h.
+        const isTennis = /KXATP|KXWTA/i.test(market.ticker || market.event_ticker || '');
+        const maxHours = isTennis ? 20.0 : 5.0;
+        if (hoursUntilExp < -0.5 || hoursUntilExp > maxHours) return false;
         
         // Check game date — must be today (or yesterday for late-night games)
         const ticker = market.event_ticker || '';
@@ -821,6 +814,7 @@ async function autoLogin() {
             await loadBalance();
             await loadBots();
             await loadPnL();
+            loadOpeningLines(); // fire-and-forget, non-blocking
             await loadMarkets();
 
             // Auto-resume monitoring if bots exist
@@ -835,6 +829,15 @@ async function autoLogin() {
         const grid = document.getElementById('markets-grid');
         grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Could not connect to server. Make sure backend is running on port 5001.</p>';
     }
+}
+
+// Load pre-game opening lines (closing line values) from backend
+async function loadOpeningLines() {
+    try {
+        const resp = await fetch(`${API_BASE}/opening-lines`);
+        const data = await resp.json();
+        openingLines = data || {};
+    } catch (e) { /* non-critical */ }
 }
 
 // Load markets
@@ -1692,6 +1695,27 @@ function createMarketRow(market, label) {
         labelDiv.innerHTML = `<span>${label || extractSubtitle(market.title) || market.title}</span> <span style="background:${badgeBg};color:${badgeColor};padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">${stat.value} ${statLabel}</span>`;
     } else {
         labelDiv.textContent = label || extractSubtitle(market.title) || market.title;
+    }
+
+    // ── Opening line / favorite star (GAME markets only) ──
+    const isGameMarket = /GAME|MATCH/i.test(market.series_ticker || market.ticker || '');
+    if (isGameMarket) {
+        const ol = openingLines[market.ticker];
+        if (ol && ol.yes_price > 0) {
+            const isFav = ol.yes_price > 50;
+            const starSpan = document.createElement('span');
+            const pct = ol.yes_price;
+            if (isFav) {
+                starSpan.style.cssText = 'color:#ffd700;font-size:10px;font-weight:700;margin-left:5px;white-space:nowrap;';
+                starSpan.textContent = `★ ${pct}%`;
+                starSpan.title = `Pre-game favorite — opened at ${pct}¢`;
+            } else {
+                starSpan.style.cssText = 'color:#8892a6;font-size:10px;font-weight:600;margin-left:5px;white-space:nowrap;';
+                starSpan.textContent = `${pct}%`;
+                starSpan.title = `Pre-game underdog — opened at ${pct}¢`;
+            }
+            labelDiv.appendChild(starSpan);
+        }
     }
 
     // Inline spread/edge indicator for quick scanning
@@ -2887,10 +2911,21 @@ function openBotModal(market, _side, _price) {
         : title;
     const sport = detectSport(market.event_ticker || market.ticker || '');
     const emoji = getSportEmoji(sport);
+    // Opening line badge for modal title
+    const isGameMkt = /GAME|MATCH/i.test(market.series_ticker || market.ticker || '');
+    const ol = isGameMkt ? (openingLines[market.ticker] || null) : null;
+    const olBadge = ol ? (() => {
+        const isFav = ol.yes_price > 50;
+        const color = isFav ? '#ffd700' : '#8892a6';
+        const label = isFav ? `★ Pre-game fav ${ol.yes_price}%` : `Pre-game dog ${ol.yes_price}%`;
+        return `<span style="background:${color}22;color:${color};border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;" title="Opening line captured before game started">${label}</span>`;
+    })() : '';
+
     titleEl.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <span>${emoji}</span>
         <span>${displayTitle}</span>
         <span style="background:#1e2740;color:#8892a6;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">${sport}</span>
+        ${olBadge}
     </div>`;
 
     // ── Market prices (visual cards, not raw text) ──
@@ -3060,6 +3095,22 @@ function openBotModal(market, _side, _price) {
                 label.style.color = '#00ff88';
             }
         });
+    }
+
+    // ── Underdog warning banner ──
+    const warnEl = document.getElementById('modal-underdog-warning');
+    if (warnEl && ol) {
+        const bettingYes = (_side === 'yes');
+        const isUnderdogBet = bettingYes ? (ol.yes_price < 50) : (ol.yes_price > 50);
+        if (isUnderdogBet) {
+            const favPct = bettingYes ? (100 - ol.yes_price) : ol.yes_price;
+            warnEl.style.display = 'block';
+            warnEl.innerHTML = `⚠ <strong>Pre-game underdog</strong> — this team opened at ${bettingYes ? ol.yes_price : 100 - ol.yes_price}¢. The pre-game favorite was projected at ${favPct}¢. Make sure they're actually winning convincingly.`;
+        } else {
+            warnEl.style.display = 'none';
+        }
+    } else if (warnEl) {
+        warnEl.style.display = 'none';
     }
 
     document.getElementById('bot-modal').classList.add('show');
@@ -3447,6 +3498,17 @@ function closeModal() {
         modalRefreshInterval = null;
     }
     document.getElementById('bot-modal').classList.remove('show');
+    // Reset all-widths toggle
+    const cb = document.getElementById('all-widths-toggle');
+    if (cb && cb.checked) {
+        cb.checked = false;
+        document.getElementById('all-widths-panel').style.display = 'none';
+        document.getElementById('all-widths-slider').style.background = '#1e2740';
+        document.getElementById('all-widths-knob').style.transform = 'translateX(0)';
+        document.getElementById('all-widths-knob').style.background = '#555';
+        const deployBtn = document.getElementById('deploy-btn');
+        if (deployBtn) { deployBtn.textContent = '⚡ Deploy Arb Bot'; deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)'; deployBtn.style.color = '#000'; }
+    }
 }
 
 // View orderbook for a market
@@ -3528,8 +3590,90 @@ function closeOrderbookModal() {
 }
 
 // Place both limit orders and register the bot
+const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18];
+const MIN_FAV_ENTRY_FOR_BOT = 65;
+
+function toggleAllWidths() {
+    const cb = document.getElementById('all-widths-toggle');
+    const panel = document.getElementById('all-widths-panel');
+    const slider = document.getElementById('all-widths-slider');
+    const knob = document.getElementById('all-widths-knob');
+    const deployBtn = document.getElementById('deploy-btn');
+    // Toggle (clicking the row also fires this — prevent double-toggle from the checkbox's own change)
+    const nowOn = !cb.checked;
+    cb.checked = nowOn;
+    panel.style.display = nowOn ? 'block' : 'none';
+    slider.style.background = nowOn ? '#818cf8' : '#1e2740';
+    knob.style.background = nowOn ? '#fff' : '#555';
+    knob.style.transform = nowOn ? 'translateX(16px)' : 'translateX(0)';
+    if (deployBtn) {
+        deployBtn.textContent = nowOn ? '⚡ Deploy All Widths' : '⚡ Deploy Arb Bot';
+        deployBtn.style.background = nowOn
+            ? 'linear-gradient(135deg,#818cf8 0%,#6366f1 100%)'
+            : 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
+        deployBtn.style.color = nowOn ? '#fff' : '#000';
+    }
+    if (nowOn) updateAllWidthsPreview();
+}
+
+function updateAllWidthsPreview() {
+    const preview = document.getElementById('all-widths-preview');
+    if (!preview || !currentArbMarket) return;
+    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
+
+    let rows = '';
+    let totalCost = 0;
+    let validCount = 0;
+
+    ALL_PRESET_WIDTHS.forEach(w => {
+        const arb = calculateArbPrices(currentArbMarket, w);
+        const favPrice = Math.max(arb.targetYes, arb.targetNo);
+        const dogPrice = Math.min(arb.targetYes, arb.targetNo);
+        const profit = 100 - favPrice - dogPrice;
+        const isKnife = favPrice < MIN_FAV_ENTRY_FOR_BOT && profit < 25;
+        const isBelowFloor = favPrice < flipFloor;
+        const blocked = isKnife || isBelowFloor || profit <= 0;
+        const cost = blocked ? 0 : favPrice * qty;
+        if (!blocked) { totalCost += cost; validCount++; }
+
+        const statusColor = blocked ? '#ff4444' : '#00ff88';
+        const statusText  = blocked
+            ? (isKnife ? '⚠ knife' : isBelowFloor ? '⛔ floor' : '⛔ no arb')
+            : `✓ fav ${favPrice}¢`;
+        const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
+        rows += `<div style="display:grid;grid-template-columns:30px 1fr 60px 60px 60px;gap:4px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
+            <span style="color:#8892a6;font-weight:700;">${w}¢</span>
+            <span style="color:${statusColor};font-size:10px;">${statusText}</span>
+            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : arb.targetYes + '¢'}</span>
+            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : arb.targetNo + '¢'}</span>
+            <span style="color:${blocked ? '#555' : '#fff'};font-size:10px;text-align:right;font-weight:600;">${blocked ? '—' : '$' + (cost / 100).toFixed(2)}</span>
+        </div>`;
+    });
+
+    const totalDollars = (totalCost / 100).toFixed(2);
+    preview.innerHTML = `
+        <div style="display:grid;grid-template-columns:30px 1fr 60px 60px 60px;gap:4px;padding:2px 6px;margin-bottom:4px;">
+            <span style="color:#555;font-size:9px;">W</span>
+            <span style="color:#555;font-size:9px;">STATUS</span>
+            <span style="color:#555;font-size:9px;text-align:center;">YES</span>
+            <span style="color:#555;font-size:9px;text-align:center;">NO</span>
+            <span style="color:#555;font-size:9px;text-align:right;">COST</span>
+        </div>
+        ${rows}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;">
+            <span style="color:#8892a6;font-size:11px;">${validCount} of ${ALL_PRESET_WIDTHS.length} widths valid · ${qty} contract${qty !== 1 ? 's' : ''} each</span>
+            <span style="color:#fff;font-weight:800;font-size:13px;">Max $${totalDollars}</span>
+        </div>`;
+}
+
 async function createBot() {
     if (!currentArbMarket) { alert('No market selected'); return; }
+
+    // If "place all widths" is on, delegate to the multi-bot handler
+    if (document.getElementById('all-widths-toggle')?.checked) {
+        return placeAllWidthsBots();
+    }
 
     // ── Fetch fresh prices from ORDERBOOK right before submitting ──
     try {
@@ -3672,6 +3816,62 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
         const color   = isLive ? '#ff6666' : '#8892a6';
         return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${color};">${dotHtml}<span>${away}-${home}</span>${detail ? `<span style="font-size:9px;color:#8892a6;font-weight:400;">${detail}</span>` : ''}</span>`;
     }
+}
+
+async function placeAllWidthsBots() {
+    if (!currentArbMarket) return;
+    const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const flipFloor   = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
+    const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
+    const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
+
+    const deployBtn = document.getElementById('deploy-btn');
+    if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '⏳ Placing...'; }
+
+    const results = { placed: 0, skipped: 0, errors: 0 };
+
+    for (const w of ALL_PRESET_WIDTHS) {
+        const arb = calculateArbPrices(currentArbMarket, w);
+        const favPrice = Math.max(arb.targetYes, arb.targetNo);
+        const dogPrice = Math.min(arb.targetYes, arb.targetNo);
+        const profit   = 100 - favPrice - dogPrice;
+        const isKnife  = favPrice < MIN_FAV_ENTRY_FOR_BOT && profit < 25;
+        if (isKnife || favPrice < flipFloor || profit <= 0) { results.skipped++; continue; }
+
+        const yesIsFav  = arb.targetYes >= arb.targetNo;
+        const favSide   = yesIsFav ? 'yes' : 'no';
+        const favPriceV = yesIsFav ? arb.targetYes : arb.targetNo;
+        const dogPriceV = yesIsFav ? arb.targetNo  : arb.targetYes;
+
+        try {
+            const resp = await fetch(`${API_BASE}/bot/create`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ticker: currentArbMarket.ticker,
+                    yes_price: arb.targetYes,
+                    no_price:  arb.targetNo,
+                    quantity: qty,
+                    arb_width: w,
+                    flip_threshold: flipFloor,
+                    repeat_count: repeatCount,
+                    game_phase: gamePhase,
+                }),
+            });
+            const data = await resp.json();
+            if (data.bot_id || data.success !== false) { results.placed++; }
+            else { results.errors++; }
+        } catch (e) { results.errors++; }
+
+        // Small delay between requests to avoid rate limiting
+        await new Promise(r => setTimeout(r, 150));
+    }
+
+    if (deployBtn) { deployBtn.disabled = false; deployBtn.textContent = '⚡ Deploy All Widths'; }
+
+    showNotification(`⚡ All widths: ${results.placed} placed · ${results.skipped} skipped (knife/floor) · ${results.errors} errors`);
+    closeModal();
+    await loadBots();
 }
 
 async function loadBots() {
@@ -3890,8 +4090,9 @@ async function loadBots() {
             activeBotCount++;
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
-            // Anchored = exactly one leg filled (fav in, dog still pending)
-            if ((yFill >= qty) !== (nFill >= qty)) anchoredCount++;
+            // Anchored = status explicitly transitioned to yes_filled or no_filled
+            // (avoids double-counting fav_posted bots whose fill qty updated before status transition)
+            if (bot.status === 'yes_filled' || bot.status === 'no_filled') anchoredCount++;
 
             const displayName = formatBotDisplayName(bot.ticker, bot.spread_line);
             const botScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
@@ -4074,10 +4275,15 @@ async function loadBots() {
                         anchoredHealthKey = 'holding';
                     }
                 } else {
-                    healthColor = '#ffaa00'; healthLabel = '❓ NO BID';
+                    healthColor = '#8892a6'; healthLabel = '⬜ NO BID';
+                    anchoredHealthKey = 'holding';
                 }
             } else if (bot.status === 'pending_fills') {
                 healthColor = '#00aaff'; healthLabel = '⏳ FILLING';
+            }
+            // Safety net: if bot is anchored (one leg filled) but no key was assigned, count as holding
+            if (!anchoredHealthKey && (yFill >= qty) !== (nFill >= qty)) {
+                anchoredHealthKey = 'holding';
             }
             if (anchoredHealthKey) anchoredHealthBuckets[anchoredHealthKey]++;
 
@@ -4807,20 +5013,6 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
             const speedColor = speedColors[opp.catch_speed] || '#555';
             const speedLabel = (opp.catch_speed || 'slow').toUpperCase();
-            // Queue jump info
-            const qjProfit = opp.qj_profit || 0;
-            const qjColor = qjProfit >= 3 ? '#00ccff' : qjProfit >= 1 ? '#8892a6' : '#ff4444';
-            const qjLine = qjProfit >= 1
-                ? `<div style="color:${qjColor};font-size:10px;margin-top:1px;">
-                    ⚡ Queue Jump: YES ${opp.qj_yes}¢ + NO ${opp.qj_no}¢ → +${qjProfit}¢  <span style="color:#6a7488;">(bid+1, fills first)</span>
-                   </div>`
-                : '';
-            const qjButton = qjProfit >= 1
-                ? `<button onclick="quickBot('${opp.ticker}', ${opp.qj_yes}, ${opp.qj_no})"
-                        style="background:#00ccff;color:#000;border:none;padding:4px 10px;border-radius:5px;cursor:pointer;font-weight:700;font-size:10px;margin-top:4px;">
-                    ⚡ +${qjProfit}¢
-                   </button>`
-                : '';
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -4828,26 +5020,23 @@ function showScanResults(opportunities, minWidth, totalScanned) {
                         <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${speedLabel}</span>
                     </div>
                     <div style="color:#8892a6;font-size:11px;margin-top:3px;">
-                        Bids: YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp; 
-                        Spreads: YES ${opp.yes_spread}¢ / NO ${opp.no_spread}¢ &nbsp;·&nbsp;
-                        Liq: ${Math.round((opp.liquidity || 0) * 100)}%
+                        Bids: YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp;
+                        Raw gap: ${opp.width}¢ &nbsp;·&nbsp; Liq: ${Math.round((opp.liquidity || 0) * 100)}%
                     </div>
                     <div style="color:#6a7488;font-size:10px;margin-top:2px;">
-                        Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ → lock +${opp.profit_posted}¢/contract
+                        Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ (bid+1, front of queue) → +${opp.profit_posted}¢/contract
                         &nbsp;·&nbsp; Catch: ${opp.catch_score || 0}
                     </div>
-                    ${qjLine}
                 </div>
                 <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;">
                     <div style="text-align:right;">
                         <div style="color:${profitColor};font-weight:800;font-size:1.3rem;">+${opp.profit_posted}¢</div>
-                        <div style="color:#6a7488;font-size:10px;">gap ${opp.width}¢</div>
+                        <div style="color:#6a7488;font-size:10px;">after queue jump</div>
                     </div>
                     <button onclick="quickBot('${opp.ticker}', ${opp.suggested_yes}, ${opp.suggested_no})"
                             style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
                         🤖 Bot
                     </button>
-                    ${qjButton}
                 </div>
             </div>`;
         }).join('');
@@ -5385,6 +5574,28 @@ async function loadHistoryStats() {
         } else if (widthPanel) {
             widthPanel.innerHTML = '';
         }
+
+        // ── Sport breakdown panel ──
+        const sportPanel = document.getElementById('sport-breakdown-panel');
+        if (sportPanel) {
+            const sportPnl = pnl.sport_pnl || {};
+            const entries = Object.entries(sportPnl).sort((a, b) => b[1] - a[1]);
+            if (entries.length > 0) {
+                const cells = entries.map(([sport, val]) => {
+                    const col = val >= 0 ? '#00ff88' : '#ff4444';
+                    return `<div style="background:#0f1419;border-radius:8px;padding:12px 16px;border:1px solid #1e2740;text-align:center;min-width:90px;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
+                        <div style="color:${col};font-size:18px;font-weight:800;">${val >= 0 ? '+' : ''}$${val.toFixed(2)}</div>
+                    </div>`;
+                }).join('');
+                sportPanel.innerHTML = `
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:8px;">By Sport (Today)</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;">${cells}</div>`;
+            } else {
+                sportPanel.innerHTML = '';
+            }
+        }
+
     } catch (err) {
         panel.innerHTML = `<p style="color:#ff4444;font-size:11px;">Stats unavailable: ${err.message}</p>`;
     }
@@ -5417,6 +5628,20 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 // ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
 let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDay = null;     // YYYY-MM-DD string, null = full history
+let historyViewMode   = 'arb';    // 'arb' | 'bets' | 'all'
+
+function setHistoryView(mode) {
+    historyViewMode = mode;
+    ['arb','bets','all'].forEach(m => {
+        const btn = document.getElementById(`history-view-${m}`);
+        if (btn) {
+            btn.style.background  = m === mode ? '#253555' : '#1a2540';
+            btn.style.borderColor = m === mode ? '#5a7aaa' : '#3a4a6a';
+            btn.style.color       = m === mode ? '#ccc'    : '#8892a6';
+        }
+    });
+    loadTradeHistoryList();
+}
 
 async function loadPnLCalendar() {
     const panel = document.getElementById('pnl-calendar-panel');
@@ -5579,10 +5804,18 @@ async function loadTradeHistoryList() {
     if (!el) return;
     try {
         const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=50${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
         const data = await resp.json();
-        const trades = data.trades || [];
-        
+        let trades = data.trades || [];
+
+        // Filter by view mode
+        if (historyViewMode === 'arb') {
+            trades = trades.filter(t => t.type !== 'watch' && t.type !== 'middle');
+        } else if (historyViewMode === 'bets') {
+            trades = trades.filter(t => t.type === 'watch' || t.type === 'middle');
+        }
+        trades = trades.slice(0, 50);
+
         // Clear button at top
         let clearBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
             <button onclick="clearTradeHistory()" style="background:#2a1a1a;border:1px solid #ff4444;color:#ff4444;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">Clear History</button>

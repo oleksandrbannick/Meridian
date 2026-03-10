@@ -2376,21 +2376,6 @@ def create_bot():
         if profit_per <= 0:
             return jsonify({'error': f'Not an arb: yes({yes_price}¢) + no({no_price}¢) = {yes_price+no_price}¢ ≥ 100¢'}), 400
 
-        # ── PER-TICKER ACTIVE BOT LIMIT ──────────────────────────────────────────
-        # Prevent dangerous pile-ups: block > 5 active bots on the same ticker.
-        # Pass force_ticker=true in the request to override.
-        if not data.get('force_ticker'):
-            active_count = sum(1 for b in active_bots.values()
-                               if b.get('ticker') == ticker
-                               and b.get('status') not in ('stopped', 'completed'))
-            if active_count >= 5:
-                return jsonify({
-                    'error': f'Already {active_count} active bots on {ticker} (limit 5). '
-                             f'Wait for existing bots to complete or pass force_ticker=true to override.',
-                    'ticker_limit_hit': True,
-                    'active_count': active_count,
-                }), 400
-
         # ── PRICE VALIDATION: fetch ORDERBOOK for real-time best bids ──────────
         # The market endpoint returns stale prices; orderbook is real-time
         try:

@@ -647,7 +647,55 @@ function getGameSignal(gameId, sport, markets) {
     // SIGNAL LOGIC: Based purely on score differential (arbs work anytime)
     // Bigger lead = more stable prices = safer deploy
     // Phase only adds bonus context in description, never blocks signal
-    // ═══════════════════════════════════════════════════════════════════
+    // ─── Football (NFL / NCAAF) uses its own scoring thresholds ────────
+    //   7-pt increments mean: 7=1 score, 14=2 scores, 17=blowout start
+    //   DANGER: Q4 + within 1 possession (≤8 pts)
+    //   LEAN:   7-9 pts (1 score game)
+    //   ANCHOR: 10-16 pts (2-score lead, safe)
+    //   LOCK:   17+ pts (3 possessions, effectively decided)
+    //   CLOSE:  ≤6 pts (field goal game, extremely volatile)
+    if (sport === 'NFL' || sport === 'NCAAF') {
+        const isFootballDanger = scoreDiff <= 8 && period >= 4 && clockMins <= 8;
+        if (isFootballDanger) {
+            return {
+                type: 'danger', label: '🔴 DANGER',
+                color: '#ff4444', glowAnim: '',
+                description: `±${scoreDiff} pts · ${phaseLabel} — One-possession game late, very volatile`,
+                liq
+            };
+        }
+        if (scoreDiff >= 17) {
+            return {
+                type: 'anchor', label: '🟢 LOCK',
+                color: '#00ff88', glowAnim: 'arbGlow',
+                description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 3-possession lead, locked`,
+                liq
+            };
+        }
+        if (scoreDiff >= 10) {
+            return {
+                type: 'anchor', label: '🟢 ANCHOR',
+                color: '#4ade80', glowAnim: 'arbGlow',
+                description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 2-score lead, stable`,
+                liq
+            };
+        }
+        if (scoreDiff >= 7) {
+            return {
+                type: 'anchor', label: '🟡 LEAN',
+                color: '#ffaa33', glowAnim: 'arbGlowGold',
+                description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 1-score lead, some risk`,
+                liq
+            };
+        }
+        return {
+            type: 'swing', label: '🔵 CLOSE',
+            color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `±${scoreDiff} pts · ${phaseLabel} — Field goal game, volatile`,
+            liq
+        };
+    }
+    // ─── End football block ─────────────────────────────────────────────
 
     // ── Spread-aware effective margin ──────────────────────────────────
     // For spread markets, use how far the lead is from covering the spread,

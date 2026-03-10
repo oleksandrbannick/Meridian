@@ -2013,6 +2013,20 @@ function extractTotalLine(market) {
 // KXNBAGAME-26MAR02BOSMIL-BOS   → "BOS vs MIL · Moneyline · Boston"
 // KXNBASPREAD-26MAR02BOSMIL-BOS35 → "BOS vs MIL · Spread · BOS -3.5"
 // KXNBATOTAL-26MAR02BOSMIL-O2255  → "BOS vs MIL · Total · O 225.5"
+function parseSportFromTicker(ticker) {
+    if (!ticker) return 'OTHER';
+    const t = ticker.toUpperCase();
+    if (t.startsWith('NFL') || t.includes('NFL')) return 'NFL';
+    if (t.startsWith('NBA') || t.includes('NBA')) return 'NBA';
+    if (t.startsWith('MLB') || t.includes('MLB')) return 'MLB';
+    if (t.startsWith('NHL') || t.includes('NHL')) return 'NHL';
+    if (t.startsWith('NCAAB') || t.includes('CBB')) return 'NCAAB';
+    if (t.startsWith('NCAAF') || t.includes('CFB')) return 'NCAAF';
+    if (t.startsWith('MMA') || t.includes('UFC')) return 'MMA';
+    if (t.startsWith('SOC') || t.includes('SOC')) return 'Soccer';
+    return 'OTHER';
+}
+
 function formatBotDisplayName(ticker, spreadLine) {
     if (!ticker) return 'Unknown';
     const parts = ticker.split('-');
@@ -5400,12 +5414,6 @@ async function loadHistoryStats() {
                         <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today</div>
                     </div>`;
                 })()}
-                ${s.watch_total > 0 ? `
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Watch Trades</div>
-                    <div style="color:#ffaa00;font-size:24px;font-weight:800;">${s.watch_wins}W / ${s.watch_losses}L</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">of ${s.watch_total} total</div>
-                </div>` : ''}
             </div>
 
             <!-- Result breakdown + Completed + Flip analysis -->
@@ -5641,28 +5649,28 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 // ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
 let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDay = null;     // YYYY-MM-DD string, null = full history
-let historyViewMode   = 'arb';    // 'arb' | 'bets'
+let historyViewMode = 'arb';  // 'arb' | 'bets' | 'instarb' | 'middle'
+
+const HIST_MODES = {
+    arb:     { btn: 'histmode-arb',     sec: 'hist-arb-section',     color: '#00ff88' },
+    bets:    { btn: 'histmode-bets',    sec: 'hist-bets-section',    color: '#ffaa00' },
+    instarb: { btn: 'histmode-instarb', sec: 'hist-instarb-section', color: '#00ff88' },
+    middle:  { btn: 'histmode-middle',  sec: 'hist-middle-section',  color: '#aa66ff' },
+};
 
 function setHistoryMode(mode) {
     historyViewMode = mode;
-    const arbBtn  = document.getElementById('histmode-arb');
-    const betsBtn = document.getElementById('histmode-bets');
-    const arbSec  = document.getElementById('hist-arb-section');
-    const betsSec = document.getElementById('hist-bets-section');
-    if (mode === 'arb') {
-        if (arbBtn)  { arbBtn.style.background = '#253555'; arbBtn.style.color = '#00ff88'; }
-        if (betsBtn) { betsBtn.style.background = '#1a2540'; betsBtn.style.color = '#8892a6'; }
-        if (arbSec)  arbSec.style.display = '';
-        if (betsSec) betsSec.style.display = 'none';
-        loadHistoryStats();
-        loadTradeHistoryList();
-    } else {
-        if (betsBtn) { betsBtn.style.background = '#253555'; betsBtn.style.color = '#ffaa00'; }
-        if (arbBtn)  { arbBtn.style.background = '#1a2540'; arbBtn.style.color = '#8892a6'; }
-        if (betsSec) betsSec.style.display = '';
-        if (arbSec)  arbSec.style.display = 'none';
-        loadBetsHistory();
+    for (const [m, cfg] of Object.entries(HIST_MODES)) {
+        const btn = document.getElementById(cfg.btn);
+        const sec = document.getElementById(cfg.sec);
+        const active = (m === mode);
+        if (btn) { btn.style.background = active ? '#253555' : '#1a2540'; btn.style.color = active ? cfg.color : '#8892a6'; }
+        if (sec) sec.style.display = active ? '' : 'none';
     }
+    if (mode === 'arb')     { loadHistoryStats(); loadPnLCalendar(); loadTradeHistoryList(); }
+    if (mode === 'bets')    { loadBetsHistory(); }
+    if (mode === 'instarb') { loadInstaArbHistory(); }
+    if (mode === 'middle')  { loadMiddleHistory(); }
 }
 
 async function loadPnLCalendar() {
@@ -5981,73 +5989,469 @@ async function loadTradeHistoryList() {
 }
 
 async function loadTradeHistory() {
-    if (historyViewMode === 'bets') {
-        loadBetsHistory();
-    } else {
-        loadHistoryStats();
-        loadPnLCalendar();
-        loadTradeHistoryList();
-    }
+    if (historyViewMode === 'bets')    { loadBetsHistory();     return; }
+    if (historyViewMode === 'instarb') { loadInstaArbHistory(); return; }
+    if (historyViewMode === 'middle')  { loadMiddleHistory();   return; }
+    loadHistoryStats();
+    loadPnLCalendar();
+    loadTradeHistoryList();
 }
 
+// ── Straight Bets history ───────────────────────────────────────────────────
 async function loadBetsHistory() {
     const statsEl = document.getElementById('bets-stats-panel');
+    const sportEl = document.getElementById('bets-sport-panel');
     const listEl  = document.getElementById('bets-history-list');
     if (!listEl) return;
     try {
-        const resp = await fetch(`${API_BASE}/bot/history?limit=200`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500`);
         const data = await resp.json();
-        const trades = (data.trades || []).filter(t => t.type === 'watch' || t.type === 'middle');
+        const trades = (data.trades || []).filter(t => t.type === 'watch');
+
+        // ── Stats ──
+        const WIN_R = ['take_profit_watch', 'settled_win_yes', 'settled_win_no'];
+        const LOSS_R = ['stop_loss_watch', 'settled_loss_yes', 'settled_loss_no'];
+        const wins   = trades.filter(t => WIN_R.includes(t.result));
+        const losses = trades.filter(t => LOSS_R.includes(t.result));
+        const pending = trades.filter(t => !WIN_R.includes(t.result) && !LOSS_R.includes(t.result));
+        const net = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
+        const netCol = net >= 0 ? '#00ff88' : '#ff4444';
+        const total = wins.length + losses.length;
+        const winRate = total > 0 ? (wins.length / total * 100).toFixed(1) : '—';
+        const winRateCol = total === 0 ? '#555' : parseFloat(winRate) >= 50 ? '#00ff88' : '#ff4444';
+        const avgProfit = wins.length > 0 ? Math.round(wins.reduce((s,t) => s+(t.profit_cents||0),0) / wins.length) : 0;
+        const avgLoss   = losses.length > 0 ? Math.round(losses.reduce((s,t) => s+(t.loss_cents||0),0) / losses.length) : 0;
+
+        // Streak
+        let streak = 0, streakType = '';
+        const settled = trades.filter(t => WIN_R.includes(t.result) || LOSS_R.includes(t.result))
+                               .sort((a,b) => b.timestamp - a.timestamp);
+        if (settled.length > 0) {
+            const first = WIN_R.includes(settled[0].result) ? 'W' : 'L';
+            streak = 1;
+            for (let i = 1; i < settled.length; i++) {
+                const r = WIN_R.includes(settled[i].result) ? 'W' : 'L';
+                if (r === first) streak++; else break;
+            }
+            streakType = first;
+        }
+        const streakCol = streakType === 'W' ? '#00ff88' : streakType === 'L' ? '#ff4444' : '#555';
 
         if (statsEl) {
-            const wins   = trades.filter(t => t.result === 'take_profit_watch' || t.result === 'settled_win_yes' || t.result === 'settled_win_no').length;
-            const losses = trades.filter(t => t.result === 'stop_loss_watch' || t.result === 'settled_loss_yes' || t.result === 'settled_loss_no').length;
-            const net    = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
-            const netCol = net >= 0 ? '#00ff88' : '#ff4444';
-            statsEl.innerHTML = trades.length === 0 ? '' : `
-                <div style="display:flex;gap:10px;flex-wrap:wrap;">
-                    <div style="background:#0f1419;border-radius:8px;padding:12px 16px;border:1px solid #1e2740;text-align:center;min-width:100px;">
+            statsEl.innerHTML = trades.length === 0
+                ? '<p style="color:#555;text-align:center;font-size:12px;">No straight bets recorded yet.</p>'
+                : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:8px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&amp;L</div>
-                        <div style="color:${netCol};font-size:22px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
+                        <div style="color:${netCol};font-size:24px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${trades.length} bets total</div>
                     </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:12px 16px;border:1px solid #1e2740;text-align:center;min-width:100px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Record</div>
-                        <div style="font-size:18px;font-weight:800;"><span style="color:#00ff88;">${wins}W</span> / <span style="color:#ff4444;">${losses}L</span></div>
-                        <div style="color:#555;font-size:10px;">${trades.length} total bets</div>
+                        <div style="font-size:22px;font-weight:800;"><span style="color:#00ff88;">${wins.length}W</span> <span style="color:#555;font-size:16px;">/</span> <span style="color:#ff4444;">${losses.length}L</span></div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${pending.length} pending</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Win Rate</div>
+                        <div style="color:${winRateCol};font-size:24px;font-weight:800;">${winRate}${winRate !== '—' ? '%' : ''}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${total} settled</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Win / Loss</div>
+                        <div style="font-size:15px;font-weight:800;margin-top:4px;"><span style="color:#00ff88;">+${avgProfit}¢</span> <span style="color:#555;">/</span> <span style="color:#ff4444;">-${avgLoss}¢</span></div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${avgProfit > 0 && avgLoss > 0 ? 'BE: ' + (avgLoss/(avgLoss+avgProfit)*100).toFixed(1) + '%' : ''}</div>
+                    </div>
+                    ${streak > 0 ? `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Current Streak</div>
+                        <div style="color:${streakCol};font-size:24px;font-weight:800;">${streak}${streakType}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">in a row</div>
+                    </div>` : ''}
+                </div>`;
+        }
+
+        // ── Sport breakdown ──
+        if (sportEl) {
+            const sportMap = {};
+            for (const t of trades) {
+                const sp = (t.sport || parseSportFromTicker(t.ticker||'')).toUpperCase() || 'OTHER';
+                if (!sportMap[sp]) sportMap[sp] = {wins:0, losses:0, net:0};
+                const isW = WIN_R.includes(t.result);
+                const isL = LOSS_R.includes(t.result);
+                if (isW) sportMap[sp].wins++;
+                if (isL) sportMap[sp].losses++;
+                sportMap[sp].net += (t.profit_cents||0) - (t.loss_cents||0);
+            }
+            const sportEntries = Object.entries(sportMap).sort((a,b) => Math.abs(b[1].net) - Math.abs(a[1].net));
+            if (sportEntries.length > 0) {
+                sportEl.innerHTML = `<div style="margin-bottom:8px;color:#8892a6;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">By Sport</div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">${sportEntries.map(([sp, s]) => {
+                        const c = s.net >= 0 ? '#00ff88' : '#ff4444';
+                        return `<div style="background:#0f1419;border-radius:8px;padding:10px 14px;border:1px solid #1e2740;min-width:90px;text-align:center;">
+                            <div style="color:#8892a6;font-size:10px;font-weight:700;text-transform:uppercase;">${sp}</div>
+                            <div style="color:${c};font-size:16px;font-weight:800;margin-top:4px;">${s.net>=0?'+':''}$${(s.net/100).toFixed(2)}</div>
+                            <div style="color:#555;font-size:10px;">${s.wins}W-${s.losses}L</div>
+                        </div>`;
+                    }).join('')}</div>`;
+            } else {
+                sportEl.innerHTML = '';
+            }
+        }
+
+        if (trades.length === 0) {
+            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No straight bets recorded yet. Place a bet with the Watch checkbox enabled to track it here.</p>';
+            return;
+        }
+
+        listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px;">${trades.slice(0,100).map(t => {
+            const dt = new Date(t.timestamp * 1000);
+            const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+            const isWin  = WIN_R.includes(t.result);
+            const isLoss = LOSS_R.includes(t.result);
+            const isPend = !isWin && !isLoss;
+            const pnl = (t.profit_cents||0) - (t.loss_cents||0);
+            const pnlCol = isPend ? '#8892a6' : pnl >= 0 ? '#00ff88' : '#ff4444';
+            const icon = isPend ? '⏳' : isWin ? '✅' : '⛔';
+            const resLabel = isPend ? 'PENDING' : isWin ? 'WIN' : 'LOSS';
+            const borderCol = isPend ? '#2a355044' : pnl >= 0 ? '#00ff8822' : '#ff444422';
+            const teamName = formatBotDisplayName(t.ticker||'', t.spread_line||'');
+            const sideCol = (t.side||'yes') === 'yes' ? '#00ff88' : '#ff4444';
+            const phaseBadge = t.game_phase ? `<span style="background:${t.game_phase==='live'?'#00ff8822':'#8892a622'};color:${t.game_phase==='live'?'#00ff88':'#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${t.game_phase.toUpperCase()}</span>` : '';
+            return `<div style="background:#0f1419;border:1px solid ${borderCol};border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
+                <div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+                        <span style="font-size:13px;">${icon}</span>
+                        <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
+                        ${phaseBadge}
+                    </div>
+                    <div style="color:#555;font-size:10px;margin-bottom:4px;">${t.ticker||''}</div>
+                    <div style="display:flex;gap:10px;font-size:11px;flex-wrap:wrap;">
+                        <span style="color:${sideCol};font-weight:700;">${(t.side||'YES').toUpperCase()} @ ${t.entry_price||'?'}¢</span>
+                        <span style="color:#8892a6;">×${t.quantity||1}</span>
+                        ${t.stop_loss_cents ? `<span style="color:#ff4444;font-size:10px;">SL: ${t.stop_loss_cents}¢</span>` : ''}
+                        ${t.take_profit_cents ? `<span style="color:#00ff88;font-size:10px;">TP: ${t.take_profit_cents}¢</span>` : ''}
+                    </div>
+                    <div style="color:#555;font-size:10px;margin-top:4px;">${dateStr}</div>
+                </div>
+                <div style="text-align:right;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:3px;">
+                    <div style="color:${pnlCol};font-weight:800;font-size:16px;">${isPend ? '—' : (pnl>=0?'+':'') + pnl + '¢'}</div>
+                    <div style="color:${pnlCol};font-size:10px;font-weight:600;">${resLabel}</div>
+                </div>
+            </div>`;
+        }).join('')}</div>`;
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
+    }
+}
+
+// ── Insta Arb history ───────────────────────────────────────────────────────
+async function loadInstaArbHistory() {
+    const statsEl = document.getElementById('instarb-stats-panel');
+    const listEl  = document.getElementById('instarb-history-list');
+    if (!listEl) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500`);
+        const data = await resp.json();
+        const trades = (data.trades || []).filter(t => t.type === 'insta_arb');
+
+        const totalProfit = trades.reduce((s,t) => s + (t.profit_cents||0), 0);
+        const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s+(t.arb_width||0),0) / trades.length).toFixed(1) : 0;
+        const netCol = totalProfit >= 0 ? '#00ff88' : '#ff4444';
+
+        if (statsEl) {
+            statsEl.innerHTML = trades.length === 0
+                ? '<p style="color:#555;text-align:center;font-size:12px;">No insta arbs recorded yet. Use "+ Log Insta Arb" to record one.</p>'
+                : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Total Profit</div>
+                        <div style="color:${netCol};font-size:24px;font-weight:800;">${totalProfit>=0?'+':''}$${(totalProfit/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${trades.length} arbs</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Width</div>
+                        <div style="color:#00aaff;font-size:24px;font-weight:800;">${avgWidth}¢</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">per arb</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Per Arb</div>
+                        <div style="color:#00ff88;font-size:24px;font-weight:800;">${trades.length > 0 ? '+' + Math.round(totalProfit/trades.length) + '¢' : '—'}</div>
                     </div>
                 </div>`;
         }
 
         if (trades.length === 0) {
-            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No straight bets or middles recorded yet.</p>';
+            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No insta arbs yet.</p>';
             return;
         }
-        listEl.innerHTML = trades.slice(0, 50).map(t => {
+        listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px;">${trades.slice(0,100).map(t => {
             const dt = new Date(t.timestamp * 1000);
-            const dateStr = dt.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-            const isWin = t.result === 'take_profit_watch' || t.result?.includes('settled_win');
-            const pnl = (t.profit_cents||0) - (t.loss_cents||0);
-            const pnlCol = pnl >= 0 ? '#00ff88' : '#ff4444';
-            const icon = isWin ? '✅' : '⛔';
-            const typeLabel = t.type === 'middle' ? 'MIDDLE' : 'BET';
-            const typeColor = t.type === 'middle' ? '#ffaa00' : '#9966ff';
-            const team = formatBotDisplayName ? formatBotDisplayName(t.ticker||'', t.spread_line||'') : t.ticker;
-            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;border-left:3px solid ${pnlCol}44;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-                <div style="flex:1;min-width:0;">
-                    <span style="color:#aaa;font-size:10px;">${icon} ${dateStr}</span>
-                    <span style="background:${typeColor}22;color:${typeColor};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${typeLabel}</span>
-                    <div style="color:#fff;font-size:13px;font-weight:600;margin-top:2px;">${team}</div>
-                    <div style="color:#8892a6;font-size:11px;">${t.side?.toUpperCase()||''} @ ${t.entry_price||t.yes_price||'?'}¢ × ${t.quantity||1}</div>
+            const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+            const profit = t.profit_cents || 0;
+            const profitCol = profit >= 0 ? '#00ff88' : '#ff4444';
+            const title = t.market_title || formatBotDisplayName(t.ticker||t.yes_ticker||'', '');
+            return `<div style="background:#0f1419;border:1px solid #00ff8822;border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
+                <div>
+                    <div style="color:#fff;font-weight:700;font-size:13px;margin-bottom:4px;">${title}</div>
+                    <div style="display:flex;gap:10px;font-size:11px;flex-wrap:wrap;margin-bottom:4px;">
+                        <span style="color:#00ff88;">YES ${t.yes_price||'?'}¢</span>
+                        <span style="color:#ff4444;">NO ${t.no_price||'?'}¢</span>
+                        <span style="color:#00aaff;font-weight:700;">Width: ${t.arb_width||'?'}¢</span>
+                        <span style="color:#8892a6;">×${t.quantity||1}</span>
+                    </div>
+                    <div style="color:#555;font-size:10px;">${dateStr}</div>
                 </div>
-                <div style="text-align:right;">
-                    <div style="color:${pnlCol};font-weight:800;font-size:15px;">${pnl>=0?'+':''}${pnl}¢</div>
-                    <div style="color:#555;font-size:10px;">$${(pnl/100).toFixed(2)}</div>
+                <div style="text-align:right;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:3px;">
+                    <div style="color:${profitCol};font-weight:800;font-size:16px;">+${profit}¢</div>
+                    <div style="color:${profitCol};font-size:10px;">$${(profit/100).toFixed(2)}</div>
                 </div>
             </div>`;
-        }).join('');
+        }).join('')}</div>`;
     } catch (e) {
         if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
     }
+}
+
+// ── Middles history ─────────────────────────────────────────────────────────
+async function loadMiddleHistory() {
+    const statsEl = document.getElementById('middle-stats-panel');
+    const listEl  = document.getElementById('middle-history-list');
+    if (!listEl) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500`);
+        const data = await resp.json();
+        const trades = (data.trades || []).filter(t => t.type === 'middle');
+
+        const settled = trades.filter(t => t.status === 'settled');
+        const midHits = settled.filter(t => t.middle_hit === true);
+        const arbWins = settled.filter(t => t.result === 'arb_win');
+        const losses  = settled.filter(t => t.result === 'loss');
+        const pending = trades.filter(t => t.status === 'pending');
+        const net = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
+        const netCol = net >= 0 ? '#00ff88' : '#ff4444';
+        const hitRate = settled.length > 0 ? (midHits.length / settled.length * 100).toFixed(0) : 0;
+        const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s+(t.arb_width||0),0)/trades.length).toFixed(1) : 0;
+
+        if (statsEl) {
+            statsEl.innerHTML = trades.length === 0
+                ? '<p style="color:#555;text-align:center;font-size:12px;">No middles logged yet. Use "+ Log Middle" to record a middle opportunity.</p>'
+                : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&amp;L</div>
+                        <div style="color:${netCol};font-size:24px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${trades.length} middles</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Middle Hit Rate</div>
+                        <div style="color:#aa66ff;font-size:24px;font-weight:800;">${settled.length > 0 ? hitRate + '%' : '—'}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${midHits.length} hits / ${settled.length} settled</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Results</div>
+                        <div style="font-size:13px;font-weight:800;margin-top:2px;">
+                            <span style="color:#aa66ff;">🎯 ${midHits.length}</span>
+                            <span style="color:#00ff88;margin-left:6px;">✅ ${arbWins.length}</span>
+                            <span style="color:#ff4444;margin-left:6px;">⛔ ${losses.length}</span>
+                        </div>
+                        <div style="color:#555;font-size:10px;margin-top:4px;">Hit / Arb / Loss</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Window</div>
+                        <div style="color:#00aaff;font-size:24px;font-weight:800;">${avgWidth}¢</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">arb width captured</div>
+                    </div>
+                    ${pending.length > 0 ? `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Pending</div>
+                        <div style="color:#ffaa00;font-size:24px;font-weight:800;">${pending.length}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">awaiting settlement</div>
+                    </div>` : ''}
+                </div>`;
+        }
+
+        if (trades.length === 0) {
+            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No middles logged yet.</p>';
+            return;
+        }
+
+        listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;">${trades.slice(0,50).map(t => {
+            const dt = new Date(t.timestamp * 1000);
+            const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+            const isPend  = t.status === 'pending';
+            const isHit   = t.middle_hit === true;
+            const isArbW  = t.result === 'arb_win';
+            const isLoss  = t.result === 'loss';
+            const net = (t.profit_cents||0) - (t.loss_cents||0);
+            const netCol = isPend ? '#ffaa00' : net >= 0 ? '#00ff88' : '#ff4444';
+            const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : isArbW ? '✅' : '⛔';
+            const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : isArbW ? 'ARB WIN' : 'LOSS';
+            const borderCol   = isPend ? '#ffaa0033' : net >= 0 ? '#00ff8822' : '#ff444422';
+            const l1 = t.leg1 || {};
+            const l2 = t.leg2 || {};
+            const l1Res = l1.result;
+            const l2Res = l2.result;
+            const l1Col = l1Res === 'win' ? '#00ff88' : l1Res === 'loss' ? '#ff4444' : '#8892a6';
+            const l2Col = l2Res === 'win' ? '#00ff88' : l2Res === 'loss' ? '#ff4444' : '#8892a6';
+            const arbW = t.arb_width || 0;
+            const arbInfo = arbW >= 0
+                ? `<span style="color:#aa66ff;font-weight:700;">Window: +${arbW}¢</span>`
+                : `<span style="color:#ffaa00;font-weight:700;">Cost: ${arbW}¢</span>`;
+            const settleBtn = isPend
+                ? `<button onclick="openMiddleSettle('${t.id}')" style="margin-top:8px;width:100%;padding:6px;background:#1a1a2f;border:1px solid #aa66ff;color:#aa66ff;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">Settle</button>`
+                : '';
+            return `<div style="background:#0f1419;border:1px solid ${borderCol};border-radius:10px;padding:14px;">
+                <!-- Header -->
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:15px;">${statusIcon}</span>
+                        <span style="color:#aa66ff;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Middle Opportunity</span>
+                        <span style="color:#555;font-size:10px;">${dateStr}</span>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="color:${netCol};font-weight:800;font-size:15px;">${isPend ? '—' : (net>=0?'+':'') + net + '¢'}</div>
+                        <div style="color:${netCol};font-size:10px;font-weight:600;">${statusLabel}</div>
+                    </div>
+                </div>
+                <!-- Side by side legs -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+                    <div style="background:#0a0e1a;border:1px solid ${l1Col}44;border-radius:8px;padding:10px;">
+                        <div style="color:#00ff88;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">LEG 1</div>
+                        <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l1.title || l1.ticker || '—'}</div>
+                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
+                            <span style="color:${(l1.side||'yes')==='yes'?'#00ff88':'#ff4444'};font-weight:700;">${(l1.side||'yes').toUpperCase()}</span>
+                            <span style="color:#fff;font-weight:700;">@ ${l1.price||'?'}¢</span>
+                            <span style="color:#8892a6;">×${l1.qty||'?'}</span>
+                        </div>
+                        ${l1Res ? `<div style="margin-top:6px;color:${l1Col};font-size:10px;font-weight:700;text-transform:uppercase;">${l1Res === 'win' ? '✅ WON' : '⛔ LOST'}</div>` : ''}
+                    </div>
+                    <div style="background:#0a0e1a;border:1px solid ${l2Col}44;border-radius:8px;padding:10px;">
+                        <div style="color:#ff6688;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">LEG 2</div>
+                        <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l2.title || l2.ticker || '—'}</div>
+                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
+                            <span style="color:${(l2.side||'yes')==='yes'?'#00ff88':'#ff4444'};font-weight:700;">${(l2.side||'yes').toUpperCase()}</span>
+                            <span style="color:#fff;font-weight:700;">@ ${l2.price||'?'}¢</span>
+                            <span style="color:#8892a6;">×${l2.qty||'?'}</span>
+                        </div>
+                        ${l2Res ? `<div style="margin-top:6px;color:${l2Col};font-size:10px;font-weight:700;text-transform:uppercase;">${l2Res === 'win' ? '✅ WON' : '⛔ LOST'}</div>` : ''}
+                    </div>
+                </div>
+                <!-- Opportunity details -->
+                <div style="display:flex;gap:14px;font-size:11px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1e2740;">
+                    ${arbInfo}
+                    ${t.max_profit ? `<span style="color:#00ff88;">Max: +${t.max_profit}¢</span>` : ''}
+                    ${t.combined_cost > 0 ? `<span style="color:#ffaa00;">Pays to play: ${t.combined_cost}¢</span>` : t.combined_cost < 0 ? `<span style="color:#00ff88;">Free arb: +${Math.abs(t.combined_cost)}¢ guaranteed</span>` : ''}
+                    ${t.notes ? `<span style="color:#555;">${t.notes}</span>` : ''}
+                </div>
+                ${settleBtn}
+            </div>`;
+        }).join('')}</div>`;
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
+    }
+}
+
+// ── Middle log modal ─────────────────────────────────────────────────────────
+const _midSides = {1: 'yes', 2: 'yes'};
+
+function openMiddleLogModal() {
+    _midSides[1] = 'yes'; _midSides[2] = 'yes';
+    const m = document.getElementById('middle-log-modal');
+    if (m) { m.style.display = 'flex'; updateMiddleCalc(); }
+}
+function closeMiddleLogModal() {
+    const m = document.getElementById('middle-log-modal');
+    if (m) m.style.display = 'none';
+}
+function setMiddleSide(leg, side) {
+    _midSides[leg] = side;
+    const yes = document.getElementById(`mid-leg${leg}-yes`);
+    const no  = document.getElementById(`mid-leg${leg}-no`);
+    if (yes) { yes.style.background = side === 'yes' ? '#1a3520' : '#1a1a1a'; yes.style.borderColor = side === 'yes' ? '#00ff88' : '#333'; yes.style.color = side === 'yes' ? '#00ff88' : '#8892a6'; yes.style.borderWidth = side === 'yes' ? '2px' : '1px'; }
+    if (no)  { no.style.background  = side === 'no'  ? '#3a1a1a' : '#1a1a1a'; no.style.borderColor  = side === 'no'  ? '#ff4444' : '#333'; no.style.color  = side === 'no'  ? '#ff4444' : '#8892a6'; no.style.borderWidth  = side === 'no'  ? '2px' : '1px'; }
+    updateMiddleCalc();
+}
+function updateMiddleCalc() {
+    const p1  = parseFloat(document.getElementById('mid-leg1-price')?.value) || 0;
+    const p2  = parseFloat(document.getElementById('mid-leg2-price')?.value) || 0;
+    const qty = parseInt(document.getElementById('mid-qty')?.value) || 1;
+    const panel = document.getElementById('middle-calc-panel');
+    if (!panel) return;
+    if (!p1 || !p2) { panel.innerHTML = '<div style="color:#555;font-size:12px;text-align:center;">Enter both prices to see analysis</div>'; return; }
+    const arbW   = +(100 - p1 - p2).toFixed(2);
+    const cost   = +((p1 + p2 - 100) * qty).toFixed(2);
+    const maxP   = +((100 - p1 + 100 - p2) * qty).toFixed(2);
+    const arbWCol = arbW >= 0 ? '#00ff88' : '#ffaa00';
+    const costLabel = cost > 0 ? `<span style="color:#ffaa00;">You pay: <strong>${cost}¢</strong> if neither wins</span>` : `<span style="color:#00ff88;">Free arb: <strong>+${Math.abs(cost)}¢ guaranteed</strong> regardless</span>`;
+    panel.innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
+        <div><div style="color:#8892a6;font-size:10px;text-transform:uppercase;">Window</div><div style="color:${arbWCol};font-size:20px;font-weight:800;">${arbW >= 0 ? '+' : ''}${arbW}¢</div></div>
+        <div><div style="color:#8892a6;font-size:10px;text-transform:uppercase;">Middle Profit</div><div style="color:#aa66ff;font-size:20px;font-weight:800;">+${maxP}¢</div><div style="color:#555;font-size:10px;">$${(maxP/100).toFixed(2)}</div></div>
+        <div><div style="color:#8892a6;font-size:10px;text-transform:uppercase;">Combined</div><div style="color:#fff;font-size:14px;font-weight:700;">${p1}¢ + ${p2}¢ = ${p1+p2}¢</div></div>
+    </div>
+    <div style="margin-top:10px;text-align:center;font-size:12px;">${costLabel}</div>`;
+}
+async function saveMiddleLog() {
+    const leg1 = { title: document.getElementById('mid-leg1-title')?.value.trim(), ticker: document.getElementById('mid-leg1-ticker')?.value.trim(), side: _midSides[1], price: parseFloat(document.getElementById('mid-leg1-price')?.value)||0, qty: parseInt(document.getElementById('mid-qty')?.value)||1 };
+    const leg2 = { title: document.getElementById('mid-leg2-title')?.value.trim(), ticker: document.getElementById('mid-leg2-ticker')?.value.trim(), side: _midSides[2], price: parseFloat(document.getElementById('mid-leg2-price')?.value)||0, qty: parseInt(document.getElementById('mid-qty')?.value)||1 };
+    if (!leg1.price || !leg2.price) { showNotification('Enter prices for both legs', 'error'); return; }
+    const notes = document.getElementById('mid-notes')?.value.trim();
+    try {
+        const r = await fetch(`${API_BASE}/middle/log`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({leg1, leg2, qty: leg1.qty, notes}) });
+        const d = await r.json();
+        if (d.ok) { closeMiddleLogModal(); showNotification('Middle logged!'); loadMiddleHistory(); }
+        else showNotification(d.error || 'Failed', 'error');
+    } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+}
+
+// Settle middle by ID
+let _settlingMiddleId = null;
+function openMiddleSettle(id) {
+    _settlingMiddleId = id;
+    const r = prompt(`Settle middle ${id.slice(0,8)}...\nEnter result: WW (both win), WL (leg1 win), LW (leg2 win), LL (both loss)`);
+    if (!r) return;
+    const map = { WW:['win','win'], WL:['win','loss'], LW:['loss','win'], LL:['loss','loss'] };
+    const [r1,r2] = map[r.toUpperCase()] || [];
+    if (!r1) { showNotification('Enter WW, WL, LW, or LL', 'error'); return; }
+    fetch(`${API_BASE}/middle/${id}/settle`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({leg1_result: r1, leg2_result: r2}) })
+        .then(x => x.json()).then(d => { if (d.ok) { showNotification('Middle settled!'); loadMiddleHistory(); } else showNotification(d.error||'Failed','error'); });
+}
+
+// ── Insta Arb log modal ──────────────────────────────────────────────────────
+function openInstaArbLogModal() {
+    const m = document.getElementById('instarb-log-modal');
+    if (m) { m.style.display = 'flex'; updateInstaArbCalc(); }
+}
+function closeInstaArbLogModal() {
+    const m = document.getElementById('instarb-log-modal');
+    if (m) m.style.display = 'none';
+}
+function updateInstaArbCalc() {
+    const yp  = parseFloat(document.getElementById('ia-yes-price')?.value)||0;
+    const np  = parseFloat(document.getElementById('ia-no-price')?.value)||0;
+    const qty = parseInt(document.getElementById('ia-qty')?.value)||1;
+    const panel = document.getElementById('instarb-calc-panel');
+    if (!panel) return;
+    if (!yp || !np) { panel.innerHTML = '<div style="color:#555;font-size:12px;text-align:center;">Enter prices</div>'; return; }
+    const w = +(100 - yp - np).toFixed(2);
+    const p = +(w * qty).toFixed(2);
+    const wCol = w > 0 ? '#00ff88' : '#ff4444';
+    panel.innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
+        <div><div style="color:#8892a6;font-size:10px;text-transform:uppercase;">Arb Width</div><div style="color:${wCol};font-size:20px;font-weight:800;">${w}¢</div></div>
+        <div><div style="color:#8892a6;font-size:10px;text-transform:uppercase;">Profit</div><div style="color:#00ff88;font-size:20px;font-weight:800;">${p > 0 ? '+' : ''}${p}¢</div><div style="color:#555;font-size:10px;">$${(p/100).toFixed(2)}</div></div>
+        <div><div style="color:#8892a6;font-size:10px;text-transform:uppercase;">Combined</div><div style="color:#fff;font-size:14px;font-weight:700;">${yp}+${np}=${yp+np}¢</div></div>
+    </div>`;
+}
+async function saveInstaArbLog() {
+    const yes_price = parseFloat(document.getElementById('ia-yes-price')?.value)||0;
+    const no_price  = parseFloat(document.getElementById('ia-no-price')?.value)||0;
+    const qty       = parseInt(document.getElementById('ia-qty')?.value)||1;
+    const yes_ticker = document.getElementById('ia-yes-ticker')?.value.trim();
+    const no_ticker  = document.getElementById('ia-no-ticker')?.value.trim();
+    const market_title = document.getElementById('ia-market-title')?.value.trim();
+    if (!yes_price || !no_price) { showNotification('Enter both prices', 'error'); return; }
+    if (100 - yes_price - no_price <= 0) { showNotification('No arb — prices must sum to < 100', 'error'); return; }
+    try {
+        const r = await fetch(`${API_BASE}/instarb/log`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({yes_price, no_price, qty, yes_ticker, no_ticker, market_title}) });
+        const d = await r.json();
+        if (d.ok) { closeInstaArbLogModal(); showNotification('Insta arb logged!'); loadInstaArbHistory(); }
+        else showNotification(d.error||'Failed', 'error');
+    } catch (e) { showNotification('Error: ' + e.message, 'error'); }
 }
 
 async function clearTradeHistory() {

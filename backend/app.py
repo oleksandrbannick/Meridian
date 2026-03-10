@@ -4539,6 +4539,148 @@ def history_stats():
     })
 
 
+# ── Middle tracking ──────────────────────────────────────────────────────────
+
+@app.route('/api/middle/log', methods=['POST'])
+def log_middle():
+    """Record a middle opportunity (two legs, side by side)."""
+    data = request.json or {}
+    leg1 = data.get('leg1', {})
+    leg2 = data.get('leg2', {})
+    qty  = int(data.get('qty', leg1.get('qty', 1)))
+    p1   = float(leg1.get('price', 0))
+    p2   = float(leg2.get('price', 0))
+    arb_width    = round(100 - p1 - p2, 2)   # positive = free arb window
+    combined_cost = round((p1 + p2 - 100) * qty, 2)  # positive = costs this, negative = guaranteed profit
+    max_profit    = round((100 - p1 + 100 - p2) * qty, 2)
+
+    trade = {
+        'id': f"mid_{int(time.time() * 1000)}",
+        'type': 'middle',
+        'timestamp': time.time(),
+        'status': 'pending',
+        'leg1': {
+            'ticker': leg1.get('ticker', ''),
+            'title':  leg1.get('title', ''),
+            'side':   leg1.get('side', 'yes'),
+            'price':  p1,
+            'qty':    qty,
+            'result': None,
+        },
+        'leg2': {
+            'ticker': leg2.get('ticker', ''),
+            'title':  leg2.get('title', ''),
+            'side':   leg2.get('side', 'yes'),
+            'price':  p2,
+            'qty':    qty,
+            'result': None,
+        },
+        'arb_width':     arb_width,
+        'combined_cost': combined_cost,
+        'max_profit':    max_profit,
+        'middle_hit':    None,
+        'profit_cents':  0,
+        'loss_cents':    0,
+        'result':        'pending',
+        'notes':         data.get('notes', ''),
+        'placed_at':     time.time(),
+    }
+    trade_history.append(trade)
+    save_state()
+    bot_log('MIDDLE_LOGGED', trade['id'], {'leg1': trade['leg1'], 'leg2': trade['leg2'],
+                                           'arb_width': arb_width, 'combined_cost': combined_cost})
+    return jsonify({'ok': True, 'trade': trade})
+
+
+@app.route('/api/middle/<trade_id>/settle', methods=['POST'])
+def settle_middle(trade_id):
+    """Settle both legs of a middle — leg1_result and leg2_result: 'win' or 'loss'."""
+    data = request.json or {}
+    r1 = data.get('leg1_result', '').lower()
+    r2 = data.get('leg2_result', '').lower()
+    if r1 not in ('win', 'loss') or r2 not in ('win', 'loss'):
+        return jsonify({'error': 'leg1_result and leg2_result must be win or loss'}), 400
+
+    for trade in trade_history:
+        if trade.get('id') == trade_id and trade.get('type') == 'middle':
+            trade['leg1']['result'] = r1
+            trade['leg2']['result'] = r2
+            p1  = trade['leg1']['price']
+            p2  = trade['leg2']['price']
+            qty = trade['leg1']['qty']
+            middle_hit = (r1 == 'win' and r2 == 'win')
+            trade['middle_hit'] = middle_hit
+            trade['status'] = 'settled'
+
+            if middle_hit:
+                profit = round(((100 - p1) + (100 - p2)) * qty)
+                trade['profit_cents'] = profit
+                trade['loss_cents']   = 0
+                trade['result']       = 'middle_hit'
+            elif r1 == 'win':
+                net = round((100 - p1) * qty - p2 * qty)
+                trade['profit_cents'] = max(0, net)
+                trade['loss_cents']   = max(0, -net)
+                trade['result']       = 'arb_win' if net >= 0 else 'loss'
+            elif r2 == 'win':
+                net = round((100 - p2) * qty - p1 * qty)
+                trade['profit_cents'] = max(0, net)
+                trade['loss_cents']   = max(0, -net)
+                trade['result']       = 'arb_win' if net >= 0 else 'loss'
+            else:
+                trade['profit_cents'] = 0
+                trade['loss_cents']   = round((p1 + p2) * qty)
+                trade['result']       = 'loss'
+
+            save_state()
+            bot_log('MIDDLE_SETTLED', trade_id, {'result': trade['result'],
+                                                 'middle_hit': middle_hit,
+                                                 'profit_cents': trade['profit_cents'],
+                                                 'loss_cents': trade['loss_cents']})
+            return jsonify({'ok': True, 'trade': trade})
+
+    return jsonify({'error': 'Middle trade not found'}), 404
+
+
+# ── Insta Arb log (scanner-placed immediate both-sides arb) ─────────────────
+
+@app.route('/api/instarb/log', methods=['POST'])
+def log_instarb():
+    """Record an insta-arb (scanner opportunity placed immediately, no bot)."""
+    data = request.json or {}
+    yes_price = float(data.get('yes_price', 0))
+    no_price  = float(data.get('no_price', 0))
+    qty       = int(data.get('qty', 1))
+    arb_width = round(100 - yes_price - no_price, 2)
+    profit    = round(arb_width * qty)
+
+    trade = {
+        'id':          f"ia_{int(time.time() * 1000)}",
+        'type':        'insta_arb',
+        'timestamp':   time.time(),
+        'placed_at':   time.time(),
+        'status':      'completed',
+        'yes_ticker':  data.get('yes_ticker', ''),
+        'no_ticker':   data.get('no_ticker', ''),
+        'ticker':      data.get('yes_ticker', ''),
+        'market_title': data.get('market_title', ''),
+        'yes_price':   yes_price,
+        'no_price':    no_price,
+        'quantity':    qty,
+        'arb_width':   arb_width,
+        'profit_cents': profit,
+        'loss_cents':  0,
+        'result':      'completed',
+        'sport':       data.get('sport', ''),
+        'notes':       data.get('notes', ''),
+    }
+    trade_history.append(trade)
+    save_state()
+    bot_log('INSTA_ARB_PLACED', trade['id'], {'yes_price': yes_price, 'no_price': no_price,
+                                              'arb_width': arb_width, 'profit_cents': profit})
+    return jsonify({'ok': True, 'trade': trade})
+
+
 @app.route('/api/bot/set_phase/<bot_id>', methods=['POST'])
 def set_bot_phase(bot_id):
     """Switch a bot between 'pregame' and 'live' phases.

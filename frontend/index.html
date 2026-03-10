@@ -557,14 +557,18 @@
         <!-- ═══════════════════════════════════════════════════════ -->
         <div class="tab-page" id="tab-history">
             <!-- Top-level mode toggle -->
-            <div style="display:flex;align-items:center;gap:0;margin-bottom:20px;border:1px solid #2a3550;border-radius:10px;overflow:hidden;width:fit-content;">
+            <div style="display:flex;align-items:center;gap:0;margin-bottom:20px;border:1px solid #2a3550;border-radius:10px;overflow:hidden;width:fit-content;flex-wrap:wrap;">
                 <button id="histmode-arb" onclick="setHistoryMode('arb')"
-                    style="background:#253555;border:none;color:#00ff88;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🤖 ARB BOTS</button>
+                    style="background:#253555;border:none;color:#00ff88;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🤖 ARB BOTS</button>
                 <button id="histmode-bets" onclick="setHistoryMode('bets')"
-                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🎯 STRAIGHT BETS</button>
+                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🎯 STRAIGHT BETS</button>
+                <button id="histmode-instarb" onclick="setHistoryMode('instarb')"
+                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">⚡ INSTA ARBS</button>
+                <button id="histmode-middle" onclick="setHistoryMode('middle')"
+                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">↔️ MIDDLES</button>
             </div>
 
-            <!-- ARB BOT SECTION (shown when mode=arb) -->
+            <!-- ARB BOT SECTION -->
             <div id="hist-arb-section">
                 <div id="pnl-calendar-panel" style="margin-bottom:20px;"></div>
                 <div id="history-stats-panel" style="margin-bottom:20px;">
@@ -582,11 +586,36 @@
                 </div>
             </div>
 
-            <!-- BETS & MIDDLES SECTION (shown when mode=bets) -->
+            <!-- STRAIGHT BETS SECTION -->
             <div id="hist-bets-section" style="display:none;">
                 <div id="bets-stats-panel" style="margin-bottom:20px;"></div>
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Bets &amp; Middles Log</h3>
+                <div id="bets-sport-panel" style="margin-bottom:20px;"></div>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Straight Bets Log</h3>
                 <div id="bets-history-list">
+                    <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
+                </div>
+            </div>
+
+            <!-- INSTA ARBS SECTION -->
+            <div id="hist-instarb-section" style="display:none;">
+                <div id="instarb-stats-panel" style="margin-bottom:20px;"></div>
+                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                    <button onclick="openInstaArbLogModal()" style="background:#1a2f1a;border:1px solid #00ff88;color:#00ff88;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">+ Log Insta Arb</button>
+                </div>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Insta Arb Log</h3>
+                <div id="instarb-history-list">
+                    <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
+                </div>
+            </div>
+
+            <!-- MIDDLES SECTION -->
+            <div id="hist-middle-section" style="display:none;">
+                <div id="middle-stats-panel" style="margin-bottom:20px;"></div>
+                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                    <button onclick="openMiddleLogModal()" style="background:#1a1a2f;border:1px solid #aa66ff;color:#aa66ff;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">+ Log Middle</button>
+                </div>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Middles Log</h3>
+                <div id="middle-history-list">
                     <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
                 </div>
             </div>
@@ -1014,7 +1043,112 @@
         </div>
     </div>
 
+    <!-- ─── MIDDLE LOG MODAL ───────────────────────────────────────────────── -->
+    <div class="modal" id="middle-log-modal">
+        <div class="modal-content" style="max-width:620px;border:1px solid #2a3550;border-top:3px solid #aa66ff;padding:0;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #1e2740;">
+                <span style="color:#aa66ff;font-weight:800;font-size:15px;">↔️ Log Middle Opportunity</span>
+                <button onclick="closeMiddleLogModal()" style="background:none;border:none;color:#8892a6;font-size:20px;cursor:pointer;">×</button>
+            </div>
+            <div style="padding:20px;">
+                <!-- Side by side legs -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                    <!-- Leg 1 -->
+                    <div style="background:#0a0e1a;border:1px solid #2a3550;border-radius:10px;padding:14px;">
+                        <div style="color:#00ff88;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">LEG 1</div>
+                        <input id="mid-leg1-title" type="text" placeholder="Market title / team / event"
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:12px;margin-bottom:8px;box-sizing:border-box;">
+                        <input id="mid-leg1-ticker" type="text" placeholder="Ticker (optional)"
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#aaa;font-size:11px;margin-bottom:8px;box-sizing:border-box;">
+                        <div style="display:flex;gap:6px;margin-bottom:8px;">
+                            <button id="mid-leg1-yes" onclick="setMiddleSide(1,'yes')" style="flex:1;padding:7px;background:#1a3520;border:2px solid #00ff88;color:#00ff88;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">YES</button>
+                            <button id="mid-leg1-no" onclick="setMiddleSide(1,'no')" style="flex:1;padding:7px;background:#1a1a1a;border:1px solid #333;color:#8892a6;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">NO</button>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="color:#8892a6;font-size:11px;white-space:nowrap;">Price ¢</span>
+                            <input id="mid-leg1-price" type="number" min="1" max="99" placeholder="45"
+                                oninput="updateMiddleCalc()"
+                                style="flex:1;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#fff;font-size:14px;font-weight:700;text-align:center;box-sizing:border-box;">
+                        </div>
+                    </div>
+                    <!-- Leg 2 -->
+                    <div style="background:#0a0e1a;border:1px solid #2a3550;border-radius:10px;padding:14px;">
+                        <div style="color:#ff6688;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">LEG 2</div>
+                        <input id="mid-leg2-title" type="text" placeholder="Market title / team / event"
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:12px;margin-bottom:8px;box-sizing:border-box;">
+                        <input id="mid-leg2-ticker" type="text" placeholder="Ticker (optional)"
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#aaa;font-size:11px;margin-bottom:8px;box-sizing:border-box;">
+                        <div style="display:flex;gap:6px;margin-bottom:8px;">
+                            <button id="mid-leg2-yes" onclick="setMiddleSide(2,'yes')" style="flex:1;padding:7px;background:#1a3520;border:2px solid #00ff88;color:#00ff88;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">YES</button>
+                            <button id="mid-leg2-no" onclick="setMiddleSide(2,'no')" style="flex:1;padding:7px;background:#1a1a1a;border:1px solid #333;color:#8892a6;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">NO</button>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="color:#8892a6;font-size:11px;white-space:nowrap;">Price ¢</span>
+                            <input id="mid-leg2-price" type="number" min="1" max="99" placeholder="40"
+                                oninput="updateMiddleCalc()"
+                                style="flex:1;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#fff;font-size:14px;font-weight:700;text-align:center;box-sizing:border-box;">
+                        </div>
+                    </div>
+                </div>
+                <!-- Quantity -->
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                    <span style="color:#8892a6;font-size:12px;white-space:nowrap;">Contracts per leg</span>
+                    <input id="mid-qty" type="number" min="1" value="10" oninput="updateMiddleCalc()"
+                        style="width:80px;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#fff;font-size:14px;font-weight:700;text-align:center;">
+                    <input id="mid-notes" type="text" placeholder="Notes (e.g. Lakers -3.5 vs -6.5 spread)"
+                        style="flex:1;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#aaa;font-size:12px;">
+                </div>
+                <!-- Live calc panel -->
+                <div id="middle-calc-panel" style="background:#0a0e1a;border:1px solid #2a3550;border-radius:10px;padding:14px;margin-bottom:16px;">
+                    <div style="color:#555;font-size:12px;text-align:center;">Enter prices to see opportunity analysis</div>
+                </div>
+                <button onclick="saveMiddleLog()" style="width:100%;padding:12px;background:linear-gradient(135deg,#9933ff,#6600cc);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">💾 Save Middle</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── INSTA ARB LOG MODAL ──────────────────────────────────────────────── -->
+    <div class="modal" id="instarb-log-modal">
+        <div class="modal-content" style="max-width:480px;border:1px solid #2a3550;border-top:3px solid #00ff88;padding:0;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #1e2740;">
+                <span style="color:#00ff88;font-weight:800;font-size:15px;">⚡ Log Insta Arb</span>
+                <button onclick="closeInstaArbLogModal()" style="background:none;border:none;color:#8892a6;font-size:20px;cursor:pointer;">×</button>
+            </div>
+            <div style="padding:20px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                    <div>
+                        <div style="color:#00ff88;font-size:10px;font-weight:700;margin-bottom:6px;">YES TICKER</div>
+                        <input id="ia-yes-ticker" type="text" placeholder="NFLSPRD-24..."
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:12px;box-sizing:border-box;">
+                        <div style="color:#00ff88;font-size:10px;font-weight:700;margin:8px 0 6px;">YES PRICE ¢</div>
+                        <input id="ia-yes-price" type="number" min="1" max="99" placeholder="45" oninput="updateInstaArbCalc()"
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <div style="color:#ff4444;font-size:10px;font-weight:700;margin-bottom:6px;">NO TICKER</div>
+                        <input id="ia-no-ticker" type="text" placeholder="NFLSPRD-24..."
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:12px;box-sizing:border-box;">
+                        <div style="color:#ff4444;font-size:10px;font-weight:700;margin:8px 0 6px;">NO PRICE ¢</div>
+                        <input id="ia-no-price" type="number" min="1" max="99" placeholder="50" oninput="updateInstaArbCalc()"
+                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;">
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                    <span style="color:#8892a6;font-size:12px;">Contracts</span>
+                    <input id="ia-qty" type="number" min="1" value="10" oninput="updateInstaArbCalc()"
+                        style="width:70px;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#fff;font-size:14px;font-weight:700;text-align:center;">
+                    <input id="ia-market-title" type="text" placeholder="Market / event description"
+                        style="flex:1;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#aaa;font-size:12px;">
+                </div>
+                <div id="instarb-calc-panel" style="background:#0a0e1a;border:1px solid #2a3550;border-radius:8px;padding:12px;margin-bottom:14px;">
+                    <div style="color:#555;font-size:12px;text-align:center;">Enter prices to see arb analysis</div>
+                </div>
+                <button onclick="saveInstaArbLog()" style="width:100%;padding:12px;background:linear-gradient(135deg,#00cc66,#009944);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Save Insta Arb</button>
+            </div>
+        </div>
+    </div>
+
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260309w"></script>
+    <script src="app.js?v=20260310a"></script>
 </body>
 </html>

@@ -3940,29 +3940,63 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
 async function placeAllWidthsBots() {
     if (!currentArbMarket) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    if (!confirm(`⚡ Place ALL widths for ${currentArbMarket.ticker}?\n\nThis will deploy multiple bots across all valid spread widths (${qty} contract${qty !== 1 ? 's' : ''} each).\n\nContinue?`)) return;
     const flipFloor   = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
-    const deployBtn = document.getElementById('deploy-btn');
-    if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '⏳ Placing...'; }
-
-    const results = { placed: 0, skipped: 0, errors: 0 };
+    // ── Pre-scan: build detailed confirmation ──────────────────────────────────
+    const validWidths = [];
+    const skipReasons = [];
+    let totalCostCents = 0;
 
     for (const w of ALL_PRESET_WIDTHS) {
-        const arb = calculateArbPrices(currentArbMarket, w);
+        const arb      = calculateArbPrices(currentArbMarket, w);
         const favPrice = Math.max(arb.targetYes, arb.targetNo);
         const dogPrice = Math.min(arb.targetYes, arb.targetNo);
         const profit   = 100 - favPrice - dogPrice;
         const isKnife  = favPrice < MIN_FAV_ENTRY_FOR_BOT && profit < 25;
-        if (isKnife || favPrice < flipFloor || profit <= 0) { results.skipped++; continue; }
+        if (isKnife || favPrice < flipFloor || profit <= 0) {
+            const reason = isKnife ? 'knife' : favPrice < flipFloor ? 'below floor' : 'no profit';
+            skipReasons.push(`  ⛔  ${w}¢ width — ${reason}`);
+        } else {
+            validWidths.push({ w, arb, favPrice, dogPrice, profit });
+            totalCostCents += (favPrice + dogPrice) * qty;
+        }
+    }
 
-        const yesIsFav  = arb.targetYes >= arb.targetNo;
-        const favSide   = yesIsFav ? 'yes' : 'no';
-        const favPriceV = yesIsFav ? arb.targetYes : arb.targetNo;
-        const dogPriceV = yesIsFav ? arb.targetNo  : arb.targetYes;
+    if (validWidths.length === 0) {
+        alert(`⚡ Deploy ALL Widths — ${currentArbMarket.ticker}\n\nNo valid widths to deploy (all skipped).\n\n${skipReasons.join('\n')}`);
+        return;
+    }
 
+    // Build order table string
+    const pad = (s, n) => String(s).padStart(n);
+    let orderLines = [`⚡ Deploy ALL Widths — ${currentArbMarket.ticker}`, ''];
+    orderLines.push('  WIDTH   YES    NO   PROFIT   COST');
+    orderLines.push('  ─────────────────────────────────');
+    for (const { w, arb, favPrice, dogPrice, profit } of validWidths) {
+        const costDollars = ((favPrice + dogPrice) * qty / 100).toFixed(2);
+        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
+    }
+    if (skipReasons.length > 0) {
+        orderLines.push('');
+        orderLines.push(...skipReasons);
+    }
+    orderLines.push('');
+    orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
+    orderLines.push(`  Total cost: ~$${(totalCostCents / 100).toFixed(2)}`);
+    orderLines.push('');
+    orderLines.push('Place these orders?');
+
+    if (!confirm(orderLines.join('\n'))) return;
+
+    // ── Placement loop ─────────────────────────────────────────────────────────
+    const deployBtn = document.getElementById('deploy-btn');
+    if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '⏳ Placing...'; }
+
+    const results = { placed: 0, skipped: skipReasons.length, errors: 0 };
+
+    for (const { w, arb } of validWidths) {
         try {
             const resp = await fetch(`${API_BASE}/bot/create`, {
                 method: 'POST',
@@ -3989,9 +4023,10 @@ async function placeAllWidthsBots() {
 
     if (deployBtn) { deployBtn.disabled = false; deployBtn.textContent = '⚡ Deploy All Widths'; }
 
-    showNotification(`⚡ All widths: ${results.placed} placed · ${results.skipped} skipped (knife/floor) · ${results.errors} errors`);
+    // ── Close modal + reload first, then show notification ────────────────────
     closeModal();
     await loadBots();
+    showNotification(`⚡ All widths: ${results.placed} placed · ${results.skipped} skipped · ${results.errors} errors`);
 }
 
 let botsTabMode = 'arb';  // 'arb' | 'middle'

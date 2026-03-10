@@ -5526,9 +5526,24 @@ def scan_arb_opportunities():
         if sport_filter and sport_filter.lower() not in ('', 'all'):
             series_to_fetch = SPORTS_SERIES.get(sport_filter.lower(), [])
         else:
-            series_to_fetch = []
-            for s in SPORTS_SERIES.values():
-                series_to_fetch.extend(s)
+            # For "All" scans: only fetch game-winner, spread, total, and 1H series.
+            # Skip player props (PTS/REB/AST/3PT/STL/BLK) — they rarely have 2-sided
+            # arb liquidity and massively inflate fetch time.
+            ALL_SCAN_SERIES = [
+                'KXNBAGAME','KXNBASPREAD','KXNBATOTAL',
+                'KXNFLGAME','KXNFLSPREAD','KXNFLTOTAL',
+                'KXNHLGAME','KXNHLSPREAD','KXNHLTOTAL','KXNHLGOAL',
+                'KXMLBGAME','KXMLBSPREAD','KXMLBTOTAL',
+                'KXMLSGAME','KXMLSSPREAD','KXMLSTOTAL',
+                'KXNCAAMBGAME','KXNCAAMBSPREAD','KXNCAAMBTOTAL',
+                'KXNCAAMB1HWINNER','KXNCAAMB1HSPREAD','KXNCAAMB1HTOTAL',
+                'KXNCAAWBGAME',
+                'KXEPLGAME','KXEPLSPREAD','KXEPLTOTAL','KXEPLGOAL',
+                'KXUCLGAME','KXUCLSPREAD','KXUCLTOTAL','KXUCLGOAL',
+                'KXATPMATCH','KXWTAMATCH',
+                'KXWBCGAME','KXVTBGAME','KXBSLGAME','KXABAGAME',
+            ]
+            series_to_fetch = ALL_SCAN_SERIES
 
         # Fetch all open markets from each series (parallel, same pattern as /api/markets)
         def _fetch_arb_series(series):
@@ -5551,7 +5566,7 @@ def scan_arb_opportunities():
             return series, series_markets
 
         all_markets = []
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=20) as executor:
             for _, series_markets in executor.map(_fetch_arb_series, series_to_fetch):
                 all_markets.extend(series_markets)
         print(f'🔍 scan_arb: {len(all_markets)} markets fetched', flush=True)

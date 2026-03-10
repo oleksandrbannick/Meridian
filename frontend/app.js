@@ -5435,14 +5435,25 @@ async function autoScanMarkets() {
     const modal = document.getElementById('scan-modal');
     if (modal) modal.classList.add('show');
     const countEl = document.getElementById('scan-count');
-    if (countEl) countEl.textContent = 'Scanning…';
+    if (countEl) countEl.textContent = _scanModalSport === 'all' ? 'Scanning all sports (15-20s)…' : 'Scanning…';
+    const results = document.getElementById('scan-results');
+    if (results) results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">⏳ ${_scanModalSport === 'all' ? 'Scanning all sports — this takes ~15 seconds…' : 'Scanning NCAAB markets…'}</p>`;
+    const controller = new AbortController();
+    const scanTimeout = setTimeout(() => controller.abort(), 45000);
     try {
-        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}${sportParam}`);
+        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}${sportParam}`, { signal: controller.signal });
+        clearTimeout(scanTimeout);
         const data = await resp.json();
         if (data.error) { showNotification(`❌ Scan failed: ${data.error}`); return; }
         showScanResults(data.opportunities || [], minWidth, data.total_scanned || 0);
     } catch (err) {
-        showNotification(`❌ Scan error: ${err.message}`);
+        clearTimeout(scanTimeout);
+        if (err.name === 'AbortError') {
+            if (results) results.innerHTML = `<p style="color:#ff6666;text-align:center;padding:24px;">⏱ Scan timed out — too many markets.<br><span style="font-size:12px;">Select a specific sport (NBA, NCAAB, etc.) instead of All.</span></p>`;
+            if (countEl) countEl.textContent = 'Timed out';
+        } else {
+            showNotification(`❌ Scan error: ${err.message}`);
+        }
     }
 }
 

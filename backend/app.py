@@ -3814,14 +3814,20 @@ def _run_monitor():
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', yes_bid)
-                            loss = (entry_yes - actual_sell) * yes_filled
+                            pnl_cents = (actual_sell - entry_yes) * yes_filled  # positive = profit, negative = loss
                             verified = sell_info.get('verified_cleared', False)
-                            session_pnl['gross_loss_cents'] += loss
-                            session_pnl['stopped_bots']     += 1
+                            if pnl_cents >= 0:
+                                session_pnl['gross_profit_cents'] += pnl_cents
+                                session_pnl['completed_bots']     += 1
+                            else:
+                                session_pnl['gross_loss_cents'] += abs(pnl_cents)
+                                session_pnl['stopped_bots']     += 1
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': entry_yes, 'no_price': bot['no_price'],
-                                'quantity': yes_filled, 'loss_cents': loss,
+                                'quantity': yes_filled,
+                                'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
+                                'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
                                 'result': 'flip_yes', 'exit_bid': actual_sell,
                                 'verified_cleared': verified, 'timestamp': now,
                                 'placed_at': bot.get('created_at', now),
@@ -3838,8 +3844,8 @@ def _run_monitor():
                             }, bot)
                             actions.append({'bot_id': bot_id, 'action': 'flip_yes',
                                             'entry': entry_yes, 'exit_bid': actual_sell,
-                                            'loss_cents': loss, 'verified': verified})
-                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+                                            'pnl_cents': pnl_cents, 'verified': verified})
+                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
                         else:
                             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
                             retries = bot['sl_retry_count']
@@ -3927,14 +3933,20 @@ def _run_monitor():
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', no_bid)
-                            loss = (entry_no - actual_sell) * no_filled
+                            pnl_cents = (actual_sell - entry_no) * no_filled  # positive = profit, negative = loss
                             verified = sell_info.get('verified_cleared', False)
-                            session_pnl['gross_loss_cents'] += loss
-                            session_pnl['stopped_bots']     += 1
+                            if pnl_cents >= 0:
+                                session_pnl['gross_profit_cents'] += pnl_cents
+                                session_pnl['completed_bots']     += 1
+                            else:
+                                session_pnl['gross_loss_cents'] += abs(pnl_cents)
+                                session_pnl['stopped_bots']     += 1
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': bot['yes_price'], 'no_price': entry_no,
-                                'quantity': no_filled, 'loss_cents': loss,
+                                'quantity': no_filled,
+                                'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
+                                'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
                                 'result': 'flip_no', 'exit_bid': actual_sell,
                                 'verified_cleared': verified, 'timestamp': now,
                                 'placed_at': bot.get('created_at', now),
@@ -3951,8 +3963,8 @@ def _run_monitor():
                             }, bot)
                             actions.append({'bot_id': bot_id, 'action': 'flip_no',
                                             'entry': entry_no, 'exit_bid': actual_sell,
-                                            'loss_cents': loss, 'verified': verified})
-                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
+                                            'pnl_cents': pnl_cents, 'verified': verified})
+                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
                         else:
                             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
                             retries = bot['sl_retry_count']

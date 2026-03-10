@@ -1320,6 +1320,32 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
             })
             print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ pnl={pnl_cents:+}¢ (real-time)')
             save_state()
+            # ── Post-flip position verification ─────────────────────────────
+            # The cancel/fill race can leave NO contracts open even when
+            # bot.no_fill_qty was 0 at flip time. Check actual Kalshi position
+            # and sell any stranded contracts.
+            def _post_flip_position_check(tid, bid):
+                try:
+                    time.sleep(2)   # allow in-flight WS fill events to land
+                    api_rate_limiter.wait()
+                    pos_resp = kalshi_client.get_positions(ticker=tid)
+                    positions = pos_resp.get('market_positions', [])
+                    for p in positions:
+                        if p.get('ticker') == tid:
+                            pos = p.get('position', 0)
+                            # negative = NO contracts held; sell them
+                            if pos < 0:
+                                stranded_qty = abs(pos)
+                                print(f'⚡ POST-FLIP CLEANUP: {tid} has {stranded_qty} stranded NO contracts — selling', flush=True)
+                                bot_log('FLIP_STRANDED_NO_DETECTED', bid, {
+                                    'ticker': tid, 'stranded_no_qty': stranded_qty,
+                                })
+                                execute_sell(tid, 'no', stranded_qty,
+                                             reason=f'post_flip_cleanup_{bid}')
+                            break
+                except Exception as e:
+                    print(f'⚠ Post-flip position check failed for {tid}: {e}', flush=True)
+            threading.Thread(target=_post_flip_position_check, args=(ticker, bot_id), daemon=True).start()
         else:
             # Sell failed — clear the flag so monitor can retry
             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1

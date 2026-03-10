@@ -5496,14 +5496,17 @@ function showScanResults(opportunities, minWidth, totalScanned) {
 // ─── Anchor Hunt Scanner ─────────────────────────────────────────────────────
 // Client-side scanner that uses already-loaded allMarkets + live score data
 // to find games with LOCK / ANCHOR / LEAN signals and suggest Bot placements.
-function anchorScan() {
+async function anchorScan() {
     const results = document.getElementById('scan-results');
     const countEl = document.getElementById('scan-count');
     if (!results) return;
 
-    if (!allMarkets.length) {
-        results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Load markets first (open the Markets tab), then scan.</p>';
-        return;
+    // Auto-load markets and/or live scores if not yet populated
+    if (!allMarkets.length || Object.keys(allGameData).length === 0) {
+        if (countEl) countEl.textContent = 'Loading data…';
+        results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">⏳ Loading markets + live scores…</p>';
+        if (!allMarkets.length) await loadMarkets();
+        await loadLiveScores();
     }
 
     if (countEl) countEl.textContent = 'Scanning signals…';

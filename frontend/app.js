@@ -4057,29 +4057,37 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || targetB}¢` : null;
     const floorPrice = bot.stop_loss_cents || 0;
 
-    // ── Live middle range indicator (both legs filled) ──
+    // ── Live middle range indicator (all statuses show live score) ──
     let legAInRange = false, legBInRange = false, hasLiveScore = false;
-    if (status === 'both_filled' && gameScores) {
+    let liveScoreDiff = null, liveScoreHtml = '';
+    if (gameScores) {
         const ticker = bot.ticker_a || bot.ticker || '';
         const parts = ticker.split('-');
         const gameKey = parts.length >= 2 ? parts[1] : parts[0];
         const gs = gameScores[gameKey] || gameScores[ticker] || null;
         if (gs && (gs.home_score != null || gs.away_score != null)) {
             hasLiveScore = true;
-            const diff = Math.abs((gs.home_score || 0) - (gs.away_score || 0));
-            // NO wins if the spread is NOT covered — i.e. margin < spread
-            // Middle hit when BOTH NOs win: diff < spread_a AND diff < spread_b
-            legAInRange = diff < (bot.spread_a || 99);
-            legBInRange = diff < (bot.spread_b || 99);
+            const h = gs.home_score || 0, aw = gs.away_score || 0;
+            liveScoreDiff = Math.abs(h - aw);
+            // NO wins if spread NOT covered → diff < spread
+            // Middle hit when BOTH NOs win
+            legAInRange = liveScoreDiff < (bot.spread_a || 99);
+            legBInRange = liveScoreDiff < (bot.spread_b || 99);
+            const bothIn = legAInRange && legBInRange;
+            const scoreColor = bothIn ? '#00ff88' : '#ffaa33';
+            const rangeLabel = bothIn ? '🎯 IN MIDDLE' : '↔ outside';
+            const periodStr = gs.period ? (gs.clock ? `${gs.clock} ` : '') + (gs.period >= 2 ? '2H' : '1H') : '';
+            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${h}–${aw}${periodStr ? ' · ' + periodStr : ''} · gap ${liveScoreDiff} · ${rangeLabel}</span>`;
         }
     }
 
-    // Leg card styles based on range
+    // Leg card styles based on range (show range glow whenever live score is available)
     function legStyle(inRange, filled) {
-        if (!filled) return 'background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;opacity:0.7;';
-        if (status !== 'both_filled' || !hasLiveScore) return 'background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;';
+        if (!hasLiveScore) return filled
+            ? 'background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;'
+            : 'background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;opacity:0.7;';
         if (inRange) return 'background:#00ff8808;border:1px solid #00ff8866;border-radius:6px;padding:8px;box-shadow:0 0 8px #00ff8822;';
-        return 'background:#060a14;border:1px solid #aa66ff22;border-radius:6px;padding:8px;opacity:0.5;';
+        return 'background:#060a14;border:1px solid #aa66ff22;border-radius:6px;padding:8px;' + (filled ? '' : 'opacity:0.7;');
     }
 
     let legStatusHtml = '';
@@ -4115,6 +4123,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 <span style="color:#aa66ff;font-size:11px;font-weight:700;">↔️ MIDDLE</span>
                 <span style="color:#fff;font-weight:700;font-size:13px;">${bot.team_a_name||'A'} vs ${bot.team_b_name||'B'}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
+                ${liveScoreHtml}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <span style="color:#555;font-size:10px;">${ageMin}m</span>
@@ -4123,7 +4132,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="${legStyle(legAInRange, bot.leg_a_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO${hasLiveScore && status==='both_filled' ? (legAInRange?' ✓':' ✗') : ''}</div>
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO${hasLiveScore ? (legAInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Team A'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
@@ -4132,7 +4141,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 </div>
             </div>
             <div style="${legStyle(legBInRange, bot.leg_b_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO${hasLiveScore && status==='both_filled' ? (legBInRange?' ✓':' ✗') : ''}</div>
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO${hasLiveScore ? (legBInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Team B'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
@@ -4285,12 +4294,11 @@ async function loadBots() {
             return parts[0];
         }
 
-        // Group bots by game
+        // Group bots by game — ARB BOTS ONLY (middle bots are in their own tab)
         const gameGroups = {};
-        activeBots.forEach(botId => {
+        arbBotIds.forEach(botId => {
             const bot = bots[botId];
-            // Middle bots use ticker_a (ticker is also set to ticker_a as fallback)
-            const effectiveTicker = bot.type === 'middle' ? (bot.ticker_a || bot.ticker || '') : (bot.ticker || '');
+            const effectiveTicker = bot.ticker || '';
             const gk = getGameKey(effectiveTicker);
             if (!gameGroups[gk]) gameGroups[gk] = [];
             gameGroups[gk].push(botId);

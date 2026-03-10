@@ -4418,7 +4418,7 @@ def _run_monitor():
                     unfilled_order_key = f'order_{unfilled_leg}_id'
                     filled_ticker_key = f'ticker_{filled_leg}'
                     filled_price_key = f'leg_{filled_leg}_fill_price'
-                    stop_loss = bot.get('stop_loss_cents', 15)
+                    stop_loss = bot.get('stop_loss_cents', 0)  # default OFF — middle markets are too volatile for a floor
                     fill_price = bot.get(filled_price_key) or bot['target_price']
 
                     # Check if unfilled leg has filled
@@ -4467,7 +4467,7 @@ def _run_monitor():
                             # Trigger stop-loss: raw price floor (not relative to entry)
                             # stop_loss_cents here is the absolute floor price, default 15
                             sl_trigger = stop_loss  # e.g. 15 = exit if bid drops below 15¢
-                            if live_bid > 0 and live_bid < sl_trigger:
+                            if sl_trigger > 0 and live_bid > 0 and live_bid < sl_trigger:
                                 bot_log('MIDDLE_SL_TRIGGERED', bot_id, {
                                     'filled_leg': filled_leg, 'fill_price': fill_price,
                                     'live_bid': live_bid, 'sl_trigger': sl_trigger,

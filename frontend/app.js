@@ -4047,12 +4047,14 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const status = bot.status || 'waiting';
     const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped:'#ff4444', completed:'#00ff88' }[status] || '#aa66ff';
     const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped:'🛑 STOPPED', completed:'✓ COMPLETE' }[status] || status;
-    const target = bot.target_price || 49;
+    const targetA = bot.target_price_a || bot.target_price || 49;
+    const targetB = bot.target_price_b || bot.target_price || 49;
     const qty    = bot.qty || 1;
-    const floor  = (100 - 2 * target) * qty;
-    const midP   = (200 - 2 * target) * qty;
-    const legAFill = bot.leg_a_filled ? `${bot.leg_a_fill_price || target}¢` : null;
-    const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || target}¢` : null;
+    const floor  = (100 - targetA - targetB) * qty;   // guaranteed profit (both NOs win but margin outside middle)
+    const midP   = (200 - targetA - targetB) * qty;   // middle profit (both legs settle, margin inside middle)
+    const cost   = (targetA + targetB) * qty;
+    const legAFill = bot.leg_a_filled ? `${bot.leg_a_fill_price || targetA}¢` : null;
+    const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || targetB}¢` : null;
     const floorPrice = bot.stop_loss_cents || 0;
 
     // ── Live middle range indicator (both legs filled) ──
@@ -4124,8 +4126,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO${hasLiveScore && status==='both_filled' ? (legAInRange?' ✓':' ✗') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Team A'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
-                <div style="display:flex;justify-content:space-between;font-size:11px;">
-                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target}¢</strong></span>
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
+                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${targetA}¢</strong>${bot.no_a_bid ? `<span style="color:#555;font-size:9px;margin-left:4px;">bid ${bot.no_a_bid}¢</span>` : ''}</span>
                     <span style="color:${bot.leg_a_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_a_filled?`✓ ${legAFill}`:'PENDING'}</span>
                 </div>
             </div>
@@ -4133,15 +4135,16 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO${hasLiveScore && status==='both_filled' ? (legBInRange?' ✓':' ✗') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Team B'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
-                <div style="display:flex;justify-content:space-between;font-size:11px;">
-                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target}¢</strong></span>
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
+                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${targetB}¢</strong>${bot.no_b_bid ? `<span style="color:#555;font-size:9px;margin-left:4px;">bid ${bot.no_b_bid}¢</span>` : ''}</span>
                     <span style="color:${bot.leg_b_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_b_filled?`✓ ${legBFill}`:'PENDING'}</span>
                 </div>
             </div>
         </div>
-        <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;">
-            <span>Floor: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
+        <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;flex-wrap:wrap;">
+            <span>Guaranteed: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
             <span>Middle: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
+            <span style="color:#8892a6;">Cost: <strong style="color:#fff;">${cost}¢</strong></span>
             <span>×${qty}</span>
             ${floorPrice > 0 ? `<span style="color:#ff6666;">Exit floor: ${floorPrice}¢</span>` : ''}
         </div>
@@ -6134,8 +6137,9 @@ function updateMiddleArbPreset(width) {
         const targetSum  = 100 - w;
         const totalShave = (md.no_a_bid + md.no_b_bid) - targetSum;
         const shaveEach  = totalShave / 2;
-        const pA = Math.max(1, Math.min(90, Math.round(md.no_a_bid - shaveEach)));
-        const pB = Math.max(1, Math.min(90, Math.round(md.no_b_bid - shaveEach)));
+        // Never recommend above market bid — cap each price to its bid (shave can't be negative per leg)
+        const pA = Math.max(1, Math.min(md.no_a_bid, Math.min(90, Math.round(md.no_a_bid - shaveEach))));
+        const pB = Math.max(1, Math.min(md.no_b_bid, Math.min(90, Math.round(md.no_b_bid - shaveEach))));
         if (elA) elA.value = pA;
         if (elB) elB.value = pB;
         const shaveADisp = (md.no_a_bid - pA);

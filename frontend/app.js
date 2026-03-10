@@ -5367,6 +5367,7 @@ let _scanModalSport    = 'all';
 let _middlesModalSport = 'all';
 let _scanMode          = 'instarb';  // 'instarb' | 'anchor'
 let _anchorSignalFilter = 'all';     // 'all' | 'lock' | 'anchor' | 'lean'
+let _middlesScanResults = [];        // cached last scan so card callbacks can look up full data
 
 function setScanSport(sport) {
     _scanModalSport = sport;
@@ -5728,6 +5729,7 @@ function showMiddlesResults(data) {
     if (!modal || !results) return;
 
     const middles = data.middles || [];
+    _middlesScanResults = middles;  // cache for card callbacks
     if (middles.length === 0) {
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
             No middle opportunities found across ${data.games_with_spreads || 0} games with spread markets.<br>
@@ -5827,13 +5829,9 @@ function showMiddlesResults(data) {
                     <span style="color:#8892a6;font-size:11px;">Qty:</span>
                     <input id="mid-qty-${idx}" type="number" min="1" value="1"
                         style="width:44px;padding:4px 6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:5px;color:#fff;font-size:12px;font-weight:600;text-align:center;">
-                    <button onclick="placeMiddleFromCard(${idx},'${m.ticker_a}','${m.ticker_b}')"
-                            style="background:${isGuaranteed ? '#00ff88' : '#ffaa00'};color:#000;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
-                        📐 Place Middle
-                    </button>
-                    <button onclick="openMiddleBotFromScanner(${JSON.stringify(m).replace(/"/g,'&quot;')})"
-                            style="background:#aa66ff22;color:#aa66ff;border:1px solid #aa66ff66;padding:5px 12px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
-                        🤖 Open Bot
+                    <button onclick="deployMiddleBotFromCard(${idx})"
+                            style="background:${isGuaranteed ? '#00ff88' : '#aa66ff'};color:${isGuaranteed ? '#000' : '#fff'};border:none;padding:5px 16px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
+                        📐 Deploy Middle Bot
                     </button>
                 </div>
             </div>`;
@@ -5859,59 +5857,52 @@ function updateMiddleProfit(idx, bidA, bidB) {
     if (bothEl) bothEl.textContent = `+${both}¢`;
 }
 
-async function placeMiddleFromCard(idx, tickerA, tickerB) {
-    const pa = parseInt(document.getElementById(`mid-pa-${idx}`)?.value || 0);
-    const pb = parseInt(document.getElementById(`mid-pb-${idx}`)?.value || 0);
-    const qty = parseInt(document.getElementById(`mid-qty-${idx}`)?.value || 1);
+async function deployMiddleBotFromCard(idx) {
+    const m   = _middlesScanResults[idx];
+    if (!m) { showNotification('❌ Scan result not found — re-scan and try again.'); return; }
+
+    const pa  = parseInt(document.getElementById(`mid-pa-${idx}`)?.value) || 0;
+    const pb  = parseInt(document.getElementById(`mid-pb-${idx}`)?.value) || 0;
+    const qty = parseInt(document.getElementById(`mid-qty-${idx}`)?.value) || 1;
+
     if (!pa || !pb) { showNotification('❌ Invalid prices'); return; }
-    const cost = (pa + pb) * qty;
-    const guaranteed = (100 - pa - pb) * qty;
-    const middle = (200 - pa - pb) * qty;
-    if (!confirm(`📐 Place Middle — ${qty} contract(s)\n\nLeg A: NO ${tickerA} at ${pa}¢\nLeg B: NO ${tickerB} at ${pb}¢\n\nTotal cost: ${cost}¢ ($${(cost / 100).toFixed(2)})\nOne side wins: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nMiddle hits: +${middle}¢\n\nConfirm?`)) return;
-    try {
-        const order1 = await fetch(`${API_BASE}/order/single`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker: tickerA, side: 'no', price: pa, quantity: qty }),
-        }).then(r => r.json());
-        const order2 = await fetch(`${API_BASE}/order/single`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker: tickerB, side: 'no', price: pb, quantity: qty }),
-        }).then(r => r.json());
-        if (order1.success && order2.success) {
-            showNotification(`📐 Middle placed! NO on both spreads deployed.`);
-            loadBots(); if (!autoMonitorInterval) toggleAutoMonitor();
-        } else {
-            showNotification(`❌ Middle error: ${order1.error || order2.error}`);
-        }
-    } catch (err) {
-        showNotification(`❌ Network error: ${err.message}`);
-    }
-}
 
-async function placeMiddle(tickerA, tickerB, priceA, priceB) {
-    const qty = parseInt(document.getElementById('middles-modal-qty')?.value || '1');
-    const cost = (priceA + priceB) * qty;
-    const guaranteed = (100 - priceA - priceB) * qty;
-    const middle = (200 - priceA - priceB) * qty;
+    const cost        = (pa + pb) * qty;
+    const guaranteed  = (100 - pa - pb) * qty;
+    const middleProf  = (200 - pa - pb) * qty;
+    const midWidth    = m.middle_width % 1 === 0 ? m.middle_width : m.middle_width?.toFixed(1);
 
-    if (!confirm(`📐 Place Middle — ${qty} contract(s)\n\nLeg 1: NO ${tickerA} at ${priceA}¢\nLeg 2: NO ${tickerB} at ${priceB}¢\n\nTotal cost: ${cost}¢ ($${(cost / 100).toFixed(2)})\nGuaranteed: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nIf middle hits: +${middle}¢\n\nConfirm?`)) return;
+    if (!confirm(`📐 Deploy Middle Bot — ${qty} contract(s)\n\nLeg A: NO ${m.ticker_a} @ ${pa}¢\nLeg B: NO ${m.ticker_b} @ ${pb}¢\nMiddle window: ±${midWidth} pts\n\nTotal cost: $${(cost / 100).toFixed(2)}\nOne side wins: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nBoth win (middle hits): +${middleProf}¢\nStop-loss: OFF\n\nConfirm?`)) return;
 
     try {
-        const order1 = await fetch(`${API_BASE}/order/single`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker: tickerA, side: 'no', price: priceA, quantity: qty }),
-        }).then(r => r.json());
-        const order2 = await fetch(`${API_BASE}/order/single`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker: tickerB, side: 'no', price: priceB, quantity: qty }),
-        }).then(r => r.json());
-
-        if (order1.success && order2.success) {
-            showNotification(`📐 Middle placed! NO on both spreads deployed.`);
+        const resp = await fetch(`${API_BASE}/middle/bot/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker_a:       m.ticker_a,
+                ticker_b:       m.ticker_b,
+                target_price_a: pa,
+                target_price_b: pb,
+                target_price:   Math.round((pa + pb) / 2),
+                qty,
+                stop_loss_cents: 0,
+                team_a_name:    m.team_a || '',
+                team_b_name:    m.team_b || '',
+                spread_a:       m.spread_a || 0,
+                spread_b:       m.spread_b || 0,
+                no_a_bid:       m.no_a_bid || 0,
+                no_b_bid:       m.no_b_bid || 0,
+                game_id:        m.game_id || '',
+            }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`📐 Middle Bot deployed! A @ ${pa}¢ + B @ ${pb}¢ — floor ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢`);
+            closeMiddlesModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
         } else {
-            showNotification(`❌ Middle error: ${order1.error || order2.error}`);
+            showNotification(`❌ Middle bot error: ${data.error || 'Unknown error'}`);
         }
     } catch (err) {
         showNotification(`❌ Network error: ${err.message}`);

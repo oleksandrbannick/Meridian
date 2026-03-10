@@ -4059,6 +4059,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const floor  = (100 - targetA - targetB) * qty;   // guaranteed profit (both NOs win but margin outside middle)
     const midP   = (200 - targetA - targetB) * qty;   // middle profit (both legs settle, margin inside middle)
     const cost   = (targetA + targetB) * qty;
+    const legAFillQty = bot.leg_a_fill_qty || (bot.leg_a_filled ? qty : 0);
+    const legBFillQty = bot.leg_b_fill_qty || (bot.leg_b_filled ? qty : 0);
     const legAFill = bot.leg_a_filled ? `${bot.leg_a_fill_price || targetA}¢` : null;
     const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || targetB}¢` : null;
     const floorPrice = bot.stop_loss_cents || 0;
@@ -4143,7 +4145,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
                     <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${targetA}¢</strong>${bot.no_a_bid ? `<span style="color:#555;font-size:9px;margin-left:4px;">bid ${bot.no_a_bid}¢</span>` : ''}</span>
-                    <span style="color:${bot.leg_a_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_a_filled?`✓ ${legAFill}`:'PENDING'}</span>
+                    <span style="color:${bot.leg_a_filled?'#00ff88':(legAFillQty>0?'#ffaa00':'#8892a6')};font-weight:700;">${bot.leg_a_filled?`${legAFillQty}/${qty} ✓ FILLED`:(legAFillQty>0?`${legAFillQty}/${qty} filling…`:'PENDING')}</span>
                 </div>
             </div>
             <div style="${legStyle(legBInRange, bot.leg_b_filled)}">
@@ -4152,7 +4154,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
                     <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${targetB}¢</strong>${bot.no_b_bid ? `<span style="color:#555;font-size:9px;margin-left:4px;">bid ${bot.no_b_bid}¢</span>` : ''}</span>
-                    <span style="color:${bot.leg_b_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_b_filled?`✓ ${legBFill}`:'PENDING'}</span>
+                    <span style="color:${bot.leg_b_filled?'#00ff88':(legBFillQty>0?'#ffaa00':'#8892a6')};font-weight:700;">${bot.leg_b_filled?`${legBFillQty}/${qty} ✓ FILLED`:(legBFillQty>0?`${legBFillQty}/${qty} filling…`:'PENDING')}</span>
                 </div>
             </div>
         </div>
@@ -5574,8 +5576,8 @@ async function anchorScan() {
         gameMap.get(gameId).markets.push(m);
     }
 
-    // Compute signal for each game group, then filter
-    const rows = [];
+    // Compute signal for each game group, then filter — one card per GAME
+    const gameRows = [];
     for (const [gameId, { sport, markets, title }] of gameMap) {
         const signal = getGameSignal(gameId, sport, markets);
         if (!signal || signal.type === 'none' || signal.type === 'pregame' || signal.type === 'caution') continue;
@@ -5589,64 +5591,54 @@ async function anchorScan() {
             if (!match) continue;
         }
 
-        // Build one row per winner market in this game
-        for (const m of markets) {
-            const yesBid = getPrice(m, 'yes_bid') || 0;
-            const noBid  = getPrice(m, 'no_bid')  || 0;
-            if (yesBid === 0 && noBid === 0) continue;  // no live prices
-            const sugYes  = Math.min(99, yesBid + 1);
-            const sugNo   = Math.min(99, noBid  + 1);
-            const profit  = 100 - sugYes - sugNo;
-            if (profit <= 0) continue;
-            rows.push({ signal, m, gameId, sport, yesBid, noBid, sugYes, sugNo, profit, title });
-        }
+        // Navigation: use event_ticker from first market
+        const navTicker = markets[0]?.event_ticker || markets[0]?.ticker || '';
+        gameRows.push({ signal, gameId, sport, markets, title, navTicker });
     }
 
-    // Sort: LOCK → ANCHOR → LEAN → DANGER/CLOSE, then by profit desc
+    // Sort: LOCK → ANCHOR → LEAN → DANGER/CLOSE
     const sigRank = { anchor: 0, lean: 1, swing: 2, danger: 3 };
-    rows.sort((a, b) => {
-        // LOCK before ANCHOR (both type='anchor' — distinguish by label)
+    gameRows.sort((a, b) => {
         const aIsLock = a.signal.label.includes('LOCK');
         const bIsLock = b.signal.label.includes('LOCK');
         const ar = aIsLock ? -1 : (sigRank[a.signal.type] ?? 9);
         const br = bIsLock ? -1 : (sigRank[b.signal.type] ?? 9);
-        if (ar !== br) return ar - br;
-        return b.profit - a.profit;
+        return ar - br;
     });
 
-    if (countEl) countEl.textContent = `${rows.length} signal match${rows.length !== 1 ? 'es' : ''}`;
+    if (countEl) countEl.textContent = `${gameRows.length} game${gameRows.length !== 1 ? 's' : ''}`;
 
-    if (rows.length === 0) {
+    if (gameRows.length === 0) {
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">`
             + `No ${_anchorSignalFilter !== 'all' ? _anchorSignalFilter.toUpperCase() + ' ' : ''}signal matches found.<br>`
             + `<span style="font-size:12px;">Try a different signal filter, or wait for games to go live.</span></p>`;
         return;
     }
 
-    results.innerHTML = rows.slice(0, 50).map(({ signal, m, yesBid, noBid, sugYes, sugNo, profit, title }) => {
-        const profitColor = profit >= 10 ? '#ffaa00' : profit >= 5 ? '#00ff88' : '#8892a6';
-        return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${signal.color};">
+    results.innerHTML = gameRows.map(({ signal, title, navTicker, sport, markets }) => {
+        const mktInfo = markets.length > 1 ? `${markets.length} markets` : (markets[0]?.title || navTicker);
+        return `<div
+            onclick="anchorScanNavigate('${navTicker}')"
+            style="cursor:pointer;background:#0a0e1a;border-radius:8px;padding:14px 16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:12px;border-left:3px solid ${signal.color};transition:background 0.12s;"
+            onmouseenter="this.style.background='#0e1420'"
+            onmouseleave="this.style.background='#0a0e1a'">
             <div style="flex:1;min-width:0;">
-                <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                    ${title}
-                    <span style="background:${signal.color}22;color:${signal.color};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${signal.label}</span>
-                </div>
-                <div style="color:#8892a6;font-size:11px;margin-top:3px;">
-                    Bids: YES ${yesBid}¢ / NO ${noBid}¢ &nbsp;·&nbsp;
-                    Post at ${sugYes}¢ + ${sugNo}¢ (bid+1) → +${profit}¢/contract
-                </div>
-                <div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>
+                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${title}</div>
+                <div style="color:#8892a6;font-size:11px;">${signal.description}</div>
+                <div style="color:#444;font-size:10px;margin-top:4px;">${sport} · ${mktInfo}</div>
             </div>
-            <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;">
-                <div style="color:${signal.color};font-weight:800;font-size:1.1rem;">${signal.label.split(' ').slice(1).join(' ')}</div>
-                <div style="color:${profitColor};font-weight:700;font-size:0.9rem;">+${profit}¢</div>
-                <button onclick="quickBot('${m.ticker}', ${sugYes}, ${sugNo})"
-                        style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
-                    🤖 Bot
-                </button>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+                <span style="background:${signal.color}22;color:${signal.color};padding:3px 12px;border-radius:6px;font-size:11px;font-weight:800;">${signal.label}</span>
+                <span style="color:#555;font-size:11px;">Tap to view →</span>
             </div>
         </div>`;
     }).join('');
+}
+
+function anchorScanNavigate(eventTicker) {
+    // Close the scan modal and navigate to the game in the Markets tab
+    document.getElementById('scan-modal')?.classList.remove('show');
+    navigateToMarket(eventTicker);
 }
 
 async function quickBot(ticker, yesPrice, noPrice) {

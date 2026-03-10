@@ -1408,7 +1408,47 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 ).start()
                 break
 
-        break  # Only one bot can match this order_id
+        break  # Only one bot can match this order_id (arb bot)
+
+    # ── Middle Bot WS fill matching (keyed by order_a_id / order_b_id, no ticker filter) ──
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('type') != 'middle':
+            continue
+        if bot.get('status') in ('stopped', 'completed', 'both_filled'):
+            continue
+        matched_leg = None
+        if order_id == bot.get('order_a_id'):
+            matched_leg = 'a'
+        elif order_id == bot.get('order_b_id'):
+            matched_leg = 'b'
+        if not matched_leg:
+            continue
+
+        qty = bot.get('qty', 1)
+        fill_key = f'leg_{matched_leg}_fill_qty'
+        bot[fill_key] = bot.get(fill_key, 0) + count
+        fill_qty = bot[fill_key]
+        print(f'⚡ WS MIDDLE FILL: {bot_id} LEG {matched_leg.upper()} +{count} → {fill_qty}/{qty}')
+
+        if fill_qty >= qty:
+            fill_price = bot.get(f'target_price_{matched_leg}', bot.get('target_price', 49))
+            bot[f'leg_{matched_leg}_filled'] = True
+            bot[f'leg_{matched_leg}_fill_price'] = fill_price
+            other_leg = 'b' if matched_leg == 'a' else 'a'
+            other_filled = bot.get(f'leg_{other_leg}_filled', False)
+            if other_filled:
+                bot['status'] = 'both_filled'
+                bot['both_filled_at'] = time.time()
+                bot_log('MIDDLE_BOTH_FILLED', bot_id, {'leg': matched_leg, 'source': 'ws_realtime'})
+                print(f'⚡ WS MIDDLE BOTH FILLED: {bot_id}')
+            else:
+                bot['status'] = 'one_filled'
+                bot['filled_leg'] = matched_leg
+                bot['one_filled_at'] = time.time()
+                bot_log('MIDDLE_LEG_FILLED', bot_id, {'leg': matched_leg, 'source': 'ws_realtime'})
+                print(f'⚡ WS MIDDLE LEG {matched_leg.upper()} FILLED: {bot_id}')
+            save_state()
+        break
 
 
 def _execute_ws_dog_post(bot_id):

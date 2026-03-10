@@ -147,7 +147,9 @@ def ws_status():
 
 _GAME_SERIES = {'KXNBAGAME','KXNHLGAME','KXNFLGAME','KXMLBGAME','KXMLSGAME',
                 'KXNCAAMBGAME','KXNCAAWBGAME','KXNCAAFGAME','KXEPLGAME',
-                'KXUCLGAME','KXATPMATCH','KXWTAMATCH','KXWBCGAME','KXVTBGAME',
+                'KXUCLGAME','KXATPMATCH','KXWTAMATCH',
+                'KXATPCHALLENGERMATCH','KXWTACHALLENGERMATCH',
+                'KXWBCGAME','KXVTBGAME',
                 'KXBSLGAME','KXABAGAME','KXMLBSTGAME'}
 
 def _capture_opening_lines(markets):
@@ -231,6 +233,8 @@ def get_markets():
             # Tennis
             'KXATPMATCH': 'winner',
             'KXWTAMATCH': 'winner',
+            'KXATPCHALLENGERMATCH': 'winner',
+            'KXWTACHALLENGERMATCH': 'winner',
             # World Baseball Classic
             'KXWBCGAME': 'winner',
             # International Basketball
@@ -255,7 +259,7 @@ def get_markets():
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
-            'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
+            'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH'],
             'wbc': ['KXWBCGAME'],
             'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
         }
@@ -5383,7 +5387,7 @@ def scan_arb_opportunities():
             'ncaaw': ['KXNCAAWBGAME'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
-            'tennis': ['KXATPMATCH', 'KXWTAMATCH'],
+            'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH'],
             'wbc': ['KXWBCGAME'],
             'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
         }

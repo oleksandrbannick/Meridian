@@ -987,7 +987,7 @@ async function refreshVisiblePrices() {
                 const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
                 noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
                 noBtn.innerHTML = noDisplay;
-                if (mkt) noBtn.onclick = () => openBotModal(mkt, 'no', p.no_ask);
+                if (mkt) noBtn.onclick = () => handleManualMiddleNoClick(mkt);
             }
         }
     } catch (e) {
@@ -1759,7 +1759,7 @@ function createMarketRow(market, label) {
     noBtn.setAttribute('data-ticker', market.ticker);
     noBtn.setAttribute('data-side', 'no');
     noBtn.innerHTML = noPrice > 0 ? noPrice + '¢' : '—';
-    noBtn.onclick = () => openBotModal(market, 'no', noAsk);
+    noBtn.onclick = () => handleManualMiddleNoClick(market);
     noBtn.onmouseenter = () => noBtn.style.transform = 'scale(1.05)';
     noBtn.onmouseleave = () => noBtn.style.transform = 'scale(1)';
     
@@ -1944,46 +1944,65 @@ function extractSubtitle(title) {
 }
 
 // For spread markets, show both sides: "UTA -3.5 / MIL +3.5"
-// Falls back to "TEAM -X / +X" if other team can't be parsed
+// Uses ticker team codes (reliable) rather than title abbreviations
 function extractSpreadLabel(market) {
-    const subtitle = extractSubtitle(market.title);
-    const match = subtitle.match(/^([A-Z]+)\s*-([\d.]+)$/);
-    if (!match) return subtitle;
-    const favTeam = match[1];
-    const line    = match[2];
-    // Parse game code from ticker: KXNBASPREAD-26MAR07UTAMIL-UTA35 → teamPair = "UTAMIL"
     const ticker = market.ticker || '';
     const parts  = ticker.split('-');
-    if (parts.length >= 2) {
-        const gameCode = parts[1];
-        const teamPair = gameCode.replace(/^\d{2}[A-Z]{3}\d{2}/, '');  // strip "26MAR07"
-        let otherTeam = '';
-        if (teamPair.startsWith(favTeam)) {
-            otherTeam = teamPair.slice(favTeam.length);
-        } else if (teamPair.endsWith(favTeam)) {
-            otherTeam = teamPair.slice(0, -favTeam.length);
+
+    // ── 1. Get spread number from title ("X wins by over N") ──────────────
+    const spreadMatch = (market.title || '').match(/wins?\s+by\s+over\s+([\d.]+)/i);
+    const line = spreadMatch ? spreadMatch[1] : null;
+
+    // ── 2. Get this market's team code from ticker last segment ────────────
+    // e.g. KXNCAAMBSPREAD-26MAR05ALCNPV-NPV35 → last="NPV35" → teamCode="NPV"
+    let teamCode = '';
+    if (parts.length >= 3) {
+        const lastSeg = parts[parts.length - 1];
+        const m = lastSeg.match(/^([A-Z]+)/);
+        teamCode = m ? m[1] : '';
+    }
+
+    // ── 3. Get the other team from the game code ───────────────────────────
+    // game segment: "26MAR05ALCNPV" → strip date → "ALCNPV"
+    let otherTeam = '';
+    if (parts.length >= 2 && teamCode) {
+        const gamePair = parts[1].replace(/^\d{2}[A-Z]{3}\d{2}/, '');
+        if (gamePair.startsWith(teamCode)) {
+            otherTeam = gamePair.slice(teamCode.length);
+        } else if (gamePair.endsWith(teamCode)) {
+            otherTeam = gamePair.slice(0, -teamCode.length);
         }
-        // Fuzzy fallback: handles cases where subtitle uses "OKL" but game code uses "OKCL"
-        // Try splitting at positions 3 and 4 — check if favTeam's first 2 chars match a segment
-        if ((!otherTeam || otherTeam.length < 2 || otherTeam.length > 5) && teamPair.length >= 4) {
-            const favPrefix = favTeam.slice(0, 2);
-            for (const splitAt of [3, 4]) {
-                const a = teamPair.slice(0, splitAt);
-                const b = teamPair.slice(splitAt);
-                if (b.length >= 2 && b.length <= 5 && a.slice(0, 2) === favPrefix) {
-                    otherTeam = b; break;
-                }
-                if (a.length >= 2 && a.length <= 5 && b.slice(0, 2) === favPrefix) {
-                    otherTeam = a; break;
-                }
+        // Fuzzy: try 3-char and 4-char splits
+        if ((!otherTeam || otherTeam.length < 2 || otherTeam.length > 6) && gamePair.length >= 4) {
+            const pfx = teamCode.slice(0, 2);
+            for (const n of [3, 4, 5]) {
+                const a = gamePair.slice(0, n), b = gamePair.slice(n);
+                if (b.length >= 2 && b.length <= 6 && a.slice(0, 2) === pfx) { otherTeam = b; break; }
+                if (a.length >= 2 && a.length <= 6 && b.slice(0, 2) === pfx) { otherTeam = a; break; }
             }
         }
-        if (otherTeam.length >= 2 && otherTeam.length <= 5) {
-            return `${favTeam} -${line} / ${otherTeam} +${line}`;
-        }
     }
-    // Couldn't extract other team — show single side only (consistent with other games)
-    return `${favTeam} -${line}`;
+
+    // ── 4. Build label ─────────────────────────────────────────────────────
+    if (teamCode && line) {
+        // Determine favorite: the team whose YES is below 50¢ is favored
+        // YES = "team wins by over X" — if YES > 50¢, this team is expected to win big
+        const yesBid = market.yes_bid || market.yes_bid_dollars * 100 || 0;
+        // If yes_bid > 50, this team is the favorite covering this spread
+        const isFav = yesBid >= 50;
+        if (otherTeam.length >= 2 && otherTeam.length <= 6) {
+            return isFav
+                ? `${teamCode} -${line} / ${otherTeam} +${line}`
+                : `${otherTeam} -${line} / ${teamCode} +${line}`;
+        }
+        return isFav ? `${teamCode} -${line}` : `${teamCode} +${line}`;
+    }
+
+    // Fallback to subtitle-based label
+    const subtitle = extractSubtitle(market.title);
+    const fallback = subtitle.match(/^([A-Z]+)\s*-?([\d.]+)$/);
+    if (fallback) return `${fallback[1]} -${fallback[2]}`;
+    return subtitle.length > 30 ? subtitle.slice(0, 27) + '...' : subtitle;
 }
 
 // Extract the line number from a total market
@@ -3850,6 +3869,7 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
 async function placeAllWidthsBots() {
     if (!currentArbMarket) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    if (!confirm(`⚡ Place ALL widths for ${currentArbMarket.ticker}?\n\nThis will deploy multiple bots across all valid spread widths (${qty} contract${qty !== 1 ? 's' : ''} each).\n\nContinue?`)) return;
     const flipFloor   = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
@@ -3904,7 +3924,7 @@ async function placeAllWidthsBots() {
 }
 
 let botsTabMode = 'arb';  // 'arb' | 'middle'
-function _renderMiddleBotCard(bot, botId, container) {
+function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
     const status = bot.status || 'waiting';
@@ -3918,6 +3938,31 @@ function _renderMiddleBotCard(bot, botId, container) {
     const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || target}¢` : null;
     const floorPrice = bot.stop_loss_cents || 0;
 
+    // ── Live middle range indicator (both legs filled) ──
+    let legAInRange = false, legBInRange = false, hasLiveScore = false;
+    if (status === 'both_filled' && gameScores) {
+        const ticker = bot.ticker_a || bot.ticker || '';
+        const parts = ticker.split('-');
+        const gameKey = parts.length >= 2 ? parts[1] : parts[0];
+        const gs = gameScores[gameKey] || gameScores[ticker] || null;
+        if (gs && (gs.home_score != null || gs.away_score != null)) {
+            hasLiveScore = true;
+            const diff = Math.abs((gs.home_score || 0) - (gs.away_score || 0));
+            // NO wins if the spread is NOT covered — i.e. margin < spread
+            // Middle hit when BOTH NOs win: diff < spread_a AND diff < spread_b
+            legAInRange = diff < (bot.spread_a || 99);
+            legBInRange = diff < (bot.spread_b || 99);
+        }
+    }
+
+    // Leg card styles based on range
+    function legStyle(inRange, filled) {
+        if (!filled) return 'background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;opacity:0.7;';
+        if (status !== 'both_filled' || !hasLiveScore) return 'background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;';
+        if (inRange) return 'background:#00ff8808;border:1px solid #00ff8866;border-radius:6px;padding:8px;box-shadow:0 0 8px #00ff8822;';
+        return 'background:#060a14;border:1px solid #aa66ff22;border-radius:6px;padding:8px;opacity:0.5;';
+    }
+
     let legStatusHtml = '';
     if (status === 'one_filled') {
         const fTeam = bot.filled_leg === 'a' ? (bot.team_a_name||'Leg A') : (bot.team_b_name||'Leg B');
@@ -3929,9 +3974,16 @@ function _renderMiddleBotCard(bot, botId, container) {
             ${floorPrice > 0 ? `<span style="color:#ff6666;margin-left:10px;">Floor: ${floorPrice}¢</span>` : '<span style="color:#555;margin-left:10px;">No floor (hold to settle)</span>'}
         </div>`;
     } else if (status === 'both_filled') {
-        legStatusHtml = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:6px 10px;font-size:11px;">
+        const bothInRange = legAInRange && legBInRange;
+        const rangeHtml = hasLiveScore
+            ? (bothInRange
+                ? `<span style="color:#00ff88;font-weight:700;margin-left:10px;">🎯 IN THE MIDDLE</span>`
+                : `<span style="color:#555;margin-left:10px;">outside middle range</span>`)
+            : '';
+        legStatusHtml = `<div style="background:${bothInRange && hasLiveScore ? '#00ff8818' : '#00ff8811'};border:1px solid ${bothInRange && hasLiveScore ? '#00ff8855' : '#00ff8833'};border-radius:5px;padding:6px 10px;font-size:11px;">
             <span style="color:#00ff88;font-weight:700;">🔒 Both legs in — holding to settlement</span>
             <span style="color:#8892a6;margin-left:10px;">A: ${legAFill||'?'} · B: ${legBFill||'?'}</span>
+            ${rangeHtml}
         </div>`;
     }
 
@@ -3951,8 +4003,8 @@ function _renderMiddleBotCard(bot, botId, container) {
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div style="background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO</div>
+            <div style="${legStyle(legAInRange, bot.leg_a_filled)}">
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO${hasLiveScore && status==='both_filled' ? (legAInRange?' ✓':' ✗') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Team A'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;">
@@ -3960,8 +4012,8 @@ function _renderMiddleBotCard(bot, botId, container) {
                     <span style="color:${bot.leg_a_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_a_filled?`✓ ${legAFill}`:'PENDING'}</span>
                 </div>
             </div>
-            <div style="background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO</div>
+            <div style="${legStyle(legBInRange, bot.leg_b_filled)}">
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO${hasLiveScore && status==='both_filled' ? (legBInRange?' ✓':' ✗') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Team B'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;">
@@ -3987,10 +4039,64 @@ function setBotsTab(mode) {
     const midBtn    = document.getElementById('bots-tab-middle');
     const arbList   = document.getElementById('bots-list');
     const midList   = document.getElementById('middle-bots-list');
+    const arbDaily  = document.getElementById('bots-arb-daily');
+    const midDaily  = document.getElementById('bots-middle-daily');
     if (arbBtn) { arbBtn.style.background = mode === 'arb' ? '#253555' : '#1a2540'; arbBtn.style.color = mode === 'arb' ? '#00ff88' : '#8892a6'; }
     if (midBtn) { midBtn.style.background = mode === 'middle' ? '#253555' : '#1a2540'; midBtn.style.color = mode === 'middle' ? '#aa66ff' : '#8892a6'; }
-    if (arbList) arbList.style.display = mode === 'arb' ? '' : 'none';
-    if (midList) midList.style.display = mode === 'middle' ? '' : 'none';
+    if (arbList)  arbList.style.display  = mode === 'arb' ? '' : 'none';
+    if (midList)  midList.style.display  = mode === 'middle' ? '' : 'none';
+    if (arbDaily) arbDaily.style.display = mode === 'arb' ? 'flex' : 'none';
+    if (midDaily) midDaily.style.display = mode === 'middle' ? 'flex' : 'none';
+    // Re-render the main P&L header for the active tab
+    _renderPnlDisplay(mode);
+}
+
+function _renderPnlDisplay(mode) {
+    const pnl = window._lastPnlData;
+    const el  = document.getElementById('pnl-display');
+    if (!el) return;
+    if (!pnl) return;  // not loaded yet
+
+    if (mode === 'middle') {
+        const net   = (pnl.mid_net_cents || 0) / 100;
+        const color = net >= 0 ? '#aa66ff' : '#ff4444';
+        const wins  = pnl.mid_wins   || 0;
+        const losses = pnl.mid_losses || 0;
+        const gross = ((pnl.mid_profit_cents || 0) / 100).toFixed(2);
+        const loss  = ((pnl.mid_loss_cents   || 0) / 100).toFixed(2);
+        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
+        el.innerHTML = `
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Middles Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
+            <span style="color:${color};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${color}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
+            <span style="font-size:11px;">
+                <span style="color:#aa66ff;">↑ $${gross}</span>
+                <span style="color:#555;margin:0 3px;">·</span>
+                <span style="color:#ff5555;">↓ $${loss}</span>
+                <span style="color:#555;margin:0 6px;">|</span>
+                <span style="color:#aa66ff;font-weight:700;">${wins}W</span><span style="color:#444;"> / </span><span style="color:#ff5555;font-weight:700;">${losses}L</span>
+            </span>
+        `;
+    } else {
+        const net      = pnl.net_dollars ?? 0;
+        const netColor = net >= 0 ? '#00ff88' : '#ff4444';
+        const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
+        const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
+        const wins     = pnl.completed_bots || 0;
+        const losses   = pnl.stopped_bots   || 0;
+        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
+        el.innerHTML = `
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
+            <span style="color:${netColor};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${netColor}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
+            <span style="font-size:11px;">
+                <span style="color:#00cc66;">↑ $${gross}</span>
+                <span style="color:#555;margin:0 3px;">·</span>
+                <span style="color:#ff5555;">↓ $${loss}</span>
+                <span style="color:#555;margin:0 6px;">|</span>
+                <span style="color:#00cc66;font-weight:700;">${wins}W</span><span style="color:#444;"> / </span><span style="color:#ff5555;font-weight:700;">${losses}L</span>
+            </span>
+            <span id="anchored-badge" style="font-size:11px;">${_buildAnchoredBadgeHTML()}</span>
+        `;
+    }
 }
 
 async function loadBots() {
@@ -3998,6 +4104,7 @@ async function loadBots() {
         const response = await fetch(`${API_BASE}/bot/list`);
         const data = await response.json();
         const bots = data.bots || {};
+        window._lastBotsData = bots;  // used by emergencyExitGame
         const gameScores = data.game_scores || {};
         const botIds = Object.keys(bots);
 
@@ -4027,7 +4134,7 @@ async function loadBots() {
                 middleList.innerHTML = '';
                 for (const botId of middleBotIds) {
                     const bot = bots[botId];
-                    _renderMiddleBotCard(bot, botId, middleList);
+                    _renderMiddleBotCard(bot, botId, middleList, gameScores);
                 }
             }
         }
@@ -4074,11 +4181,12 @@ async function loadBots() {
             ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0));
         });
 
-        // Sort game groups: most-recently-created bot in each group determines group order
+        // Sort game groups: FIRST bot placed in the group determines group order
+        // (stable — adding more bots to a game doesn't reshuffle it)
         const sortedGameKeys = Object.keys(gameGroups).sort((a, b) => {
-            const newestA = Math.max(...gameGroups[a].map(id => bots[id].created_at || 0));
-            const newestB = Math.max(...gameGroups[b].map(id => bots[id].created_at || 0));
-            return newestB - newestA;
+            const firstA = Math.min(...gameGroups[a].map(id => bots[id].created_at || 0));
+            const firstB = Math.min(...gameGroups[b].map(id => bots[id].created_at || 0));
+            return firstB - firstA;  // newest game first, but stable within a game
         });
 
         // Render grouped bots
@@ -4110,6 +4218,7 @@ async function loadBots() {
             const groupSport = detectSport(sampleTicker);
             const groupSignal = getGameSignal(gameKey, groupSport, []);
             const groupSignalBadge = groupSignal.label ? `<span style="background:${groupSignal.color}22;color:${groupSignal.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;" title="${groupSignal.description || ''}">${groupSignal.label}</span>` : '';
+            const escapedGameKey = gameKey.replace(/'/g, "\\'");
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <a href="#" onclick="navigateToMarket('${sampleTicker.split('-').slice(0,-1).join('-')}');return false;" style="color:#00aaff;font-weight:700;text-decoration:none;" title="View in Markets tab">${sportIcon} ${groupMatchup}</a>
@@ -4117,9 +4226,10 @@ async function loadBots() {
                     ${groupScoreBadge}
                     ${groupSignalBadge}
                 </div>
-                <div style="display:flex;align-items:center;gap:10px;">
+                <div style="display:flex;align-items:center;gap:8px;">
                     <span style="color:#8892a6;font-size:10px;">${groupBots.length} bot${groupBots.length > 1 ? 's' : ''}</span>
                     <span style="color:#00ff88;font-size:11px;font-weight:700;">+${(groupProfitTotal / 100).toFixed(2)}</span>
+                    <button onclick="emergencyExitGame('${escapedGameKey}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🚨 Exit All</button>
                 </div>
             `;
             botsList.appendChild(groupHeader);
@@ -4635,6 +4745,33 @@ async function cancelBot(botId) {
     }
 }
 
+// Emergency exit — cancel/sell ALL bots for a game group
+async function emergencyExitGame(gameKey) {
+    const bots = window._lastBotsData || {};
+    const botIds = Object.keys(bots).filter(id => {
+        const bot = bots[id];
+        const ticker = bot.type === 'middle' ? (bot.ticker_a || bot.ticker || '') : (bot.ticker || '');
+        const parts = ticker.split('-');
+        const gk = parts.length >= 2 ? parts[1] : parts[0];
+        return gk === gameKey && !['stopped','completed'].includes(bot.status);
+    });
+    if (!botIds.length) { showNotification('No active bots found for this game.'); return; }
+    if (!confirm(`🚨 EMERGENCY EXIT\n\nThis will cancel and market-sell ALL ${botIds.length} active bot(s) for this game.\n\nFilled positions will be sold at market price — this cannot be undone.\n\nContinue?`)) return;
+
+    showNotification(`🚨 Exiting ${botIds.length} bot(s)...`);
+    let ok = 0, fail = 0;
+    for (const botId of botIds) {
+        try {
+            const resp = await fetch(`${API_BASE}/bot/cancel/${botId}`, { method: 'DELETE' });
+            const data = await resp.json();
+            if (data.success) ok++; else fail++;
+        } catch { fail++; }
+    }
+    showNotification(`🚨 Emergency exit: ${ok} cancelled · ${fail} failed`);
+    if (fail > 0) alert(`⚠️ ${fail} bot(s) failed to cancel. Check your positions on Kalshi.`);
+    await loadBots();
+}
+
 // Clear all finished (completed + stopped) bots from the list
 async function clearFinishedBots() {
     if (!confirm('Remove all finished bots from the list?')) return;
@@ -5115,6 +5252,19 @@ async function loadBalance() {
 
 // ─── Upgrade #3: Multi-Market Arb Scanner ─────────────────────────────────────
 
+let _scanModalSport = 'all';
+let _middlesModalSport = 'all';
+
+function setScanSport(sport) {
+    _scanModalSport = sport;
+    document.querySelectorAll('.scan-sport-pill').forEach(el => el.classList.toggle('active', el.dataset.sport === sport));
+}
+
+function setMiddlesSport(sport) {
+    _middlesModalSport = sport;
+    document.querySelectorAll('.mid-sport-pill').forEach(el => el.classList.toggle('active', el.dataset.sport === sport));
+}
+
 function openScanModal() {
     const modal = document.getElementById('scan-modal');
     if (modal) modal.classList.add('show');
@@ -5126,8 +5276,7 @@ function openScanModal() {
 
 async function autoScanMarkets() {
     const minWidth = parseInt(document.getElementById('scan-min-width')?.value || '3');
-    const sportParam = (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live')
-        ? `&sport=${currentSportFilter}` : '';
+    const sportParam = (_scanModalSport && _scanModalSport !== 'all') ? `&sport=${_scanModalSport}` : '';
     // Open modal first
     const modal = document.getElementById('scan-modal');
     if (modal) modal.classList.add('show');
@@ -5273,15 +5422,45 @@ async function toggleBotPhase(botId, newPhase) {
 }
 
 // ─── Middle Spread Scanner ────────────────────────────────────────────────────
+function openMiddlesModal() {
+    document.getElementById('middles-modal')?.classList.add('show');
+}
+
 async function scanMiddles() {
-    showNotification('📐 Scanning for middle spread opportunities...');
+    const statusEl = document.getElementById('middles-status');
+    const countEl  = document.getElementById('middles-count');
+    const btnEl    = document.getElementById('middles-scan-btn');
+    const results  = document.getElementById('middles-results');
+
+    // Open modal if not already open
+    document.getElementById('middles-modal')?.classList.add('show');
+
+    // Loading state
+    if (statusEl) statusEl.innerHTML = '<span style="color:#ffaa00;">⏳ Scanning spread markets...</span>';
+    if (countEl)  countEl.textContent = '';
+    if (btnEl)    { btnEl.disabled = true; btnEl.textContent = '⏳ Scanning...'; }
+    if (results)  results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:32px;font-size:13px;">Fetching spread markets across all sports — this takes a few seconds...</p>';
+
+    const t0 = Date.now();
+    const sportParam = (_middlesModalSport && _middlesModalSport !== 'all') ? `?sport=${_middlesModalSport}` : '';
     try {
-        const resp = await fetch(`${API_BASE}/scan/middles`);
+        const resp = await fetch(`${API_BASE}/scan/middles${sportParam}`);
         const data = await resp.json();
-        if (data.error) { showNotification(`❌ ${data.error}`); return; }
-        showMiddlesResults(data);
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        if (data.error) {
+            if (statusEl) statusEl.innerHTML = `<span style="color:#ff4444;">❌ ${data.error}</span>`;
+            if (results)  results.innerHTML = `<p style="color:#ff4444;text-align:center;padding:24px;">${data.error}</p>`;
+        } else {
+            const n = (data.middles || []).length;
+            if (statusEl) statusEl.innerHTML = `<span style="color:#00ff88;">✓ Scan complete</span> <span style="color:#555;">· ${elapsed}s · ${data.total_spreads || 0} spread markets · ${data.games_with_spreads || 0} games</span>`;
+            if (countEl)  countEl.textContent = `${n} middle${n !== 1 ? 's' : ''} found`;
+            showMiddlesResults(data);
+        }
     } catch (err) {
-        showNotification(`❌ Middles scan error: ${err.message}`);
+        if (statusEl) statusEl.innerHTML = `<span style="color:#ff4444;">❌ Network error: ${err.message}</span>`;
+        if (results)  results.innerHTML = `<p style="color:#ff4444;text-align:center;padding:24px;">Scan failed: ${err.message}</p>`;
+    } finally {
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = '🔍 Scan'; }
     }
 }
 
@@ -5292,76 +5471,164 @@ function showMiddlesResults(data) {
     if (!modal || !results) return;
 
     const middles = data.middles || [];
-    if (countEl) countEl.textContent = `${middles.length} middles / ${data.total_spreads || 0} spreads`;
-
     if (middles.length === 0) {
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
             No middle opportunities found across ${data.games_with_spreads || 0} games with spread markets.<br>
             <span style="font-size:12px;">Middles require spread lines for opposing teams in the same game.</span>
         </p>`;
     } else {
-        results.innerHTML = middles.slice(0, 60).map(m => {
+        results.innerHTML = middles.slice(0, 60).map((m, idx) => {
             const isGuaranteed = m.guaranteed_profit > 0;
             const borderColor = isGuaranteed ? '#00ff88' : '#ffaa00';
             const guarLabel = isGuaranteed
                 ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ GUARANTEED ARB</span>`
                 : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">MIDDLE BET</span>`;
             const liveTag = m.is_live
-                ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">🔴 LIVE</span>`
+                ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px;">🔴 LIVE</span>`
                 : '';
-            // Game date/time
             const mDateStr = m.game_date || '';
             const mTimeStr = m.game_time || '';
-            const mDateTimeLabel = mDateStr ? `<span style="color:#6a7488;font-size:10px;margin-left:6px;">📅 ${mDateStr}${mTimeStr ? ' · ' + mTimeStr : ''}</span>` : '';
-            const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
-            const speedColor = speedColors[m.catch_speed] || '#555';
-            const speedLabel = (m.catch_speed || 'slow').toUpperCase();
+            const mDateTimeLabel = mDateStr ? `<span style="color:#6a7488;font-size:10px;margin-left:4px;">📅 ${mDateStr}${mTimeStr ? ' · ' + mTimeStr : ''}</span>` : '';
+            const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#556' };
+            const speedColor = speedColors[m.catch_speed] || '#556';
             const midWidth = m.middle_width % 1 === 0 ? m.middle_width : m.middle_width.toFixed(1);
+
+            // Shaved amounts
+            const shaveA = m.no_a_bid - m.suggested_a;
+            const shaveB = m.no_b_bid - m.suggested_b;
+            const sugProfit = 100 - m.suggested_a - m.suggested_b;
+            const sugBothWin = 200 - m.suggested_a - m.suggested_b;
+
+            const rowStyle = 'display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1a2030;';
+            const labelStyle = 'color:#8892a6;font-size:11px;';
+            const valStyle = 'font-size:11px;font-weight:700;';
+
             return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:10px;border-left:3px solid ${borderColor};">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <!-- Header -->
+                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:10px;">
+                    <span style="color:#fff;font-weight:700;font-size:13px;">${m.team_a} vs ${m.team_b}</span>
+                    ${guarLabel}${liveTag}${mDateTimeLabel}
+                    <span style="background:${speedColor}22;color:${speedColor};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;">${(m.catch_speed||'slow').toUpperCase()}</span>
+                </div>
+
+                <!-- Pricing table -->
+                <div style="background:#060a14;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;">
+                    <!-- Column headers -->
+                    <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;padding-bottom:4px;border-bottom:1px solid #1a2030;margin-bottom:4px;">
+                        <div style="color:#556;font-size:10px;font-weight:600;">LEG</div>
+                        <div style="color:#556;font-size:10px;font-weight:600;text-align:center;">MARKET BID</div>
+                        <div style="color:#ffaa00;font-size:10px;font-weight:600;text-align:center;">YOUR LIMIT</div>
+                    </div>
+                    <!-- Leg A -->
+                    <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;border-bottom:1px solid #0d1220;">
+                        <div>
+                            <span style="color:#ff4444;font-weight:700;font-size:10px;">NO</span>
+                            <span style="color:#ccc;margin-left:4px;">${m.title_a.replace(' Points?','').replace(' points?','')}</span>
+                        </div>
+                        <div style="text-align:center;color:#8892a6;font-weight:600;">${m.no_a_bid}¢</div>
+                        <div style="text-align:center;">
+                            <input id="mid-pa-${idx}" type="number" min="1" max="99" value="${m.suggested_a}"
+                                oninput="updateMiddleProfit(${idx},${m.no_a_bid},${m.no_b_bid})"
+                                style="width:46px;padding:2px 4px;background:#1a2540;border:1px solid #2a3550;border-radius:4px;color:#fff;font-size:12px;font-weight:700;text-align:center;">
+                            ${shaveA > 0 ? `<span style="color:#ff9944;font-size:9px;">-${shaveA}¢</span>` : ''}
+                        </div>
+                    </div>
+                    <!-- Leg B -->
+                    <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;">
+                        <div>
+                            <span style="color:#ff4444;font-weight:700;font-size:10px;">NO</span>
+                            <span style="color:#ccc;margin-left:4px;">${m.title_b.replace(' Points?','').replace(' points?','')}</span>
+                        </div>
+                        <div style="text-align:center;color:#8892a6;font-weight:600;">${m.no_b_bid}¢</div>
+                        <div style="text-align:center;">
+                            <input id="mid-pb-${idx}" type="number" min="1" max="99" value="${m.suggested_b}"
+                                oninput="updateMiddleProfit(${idx},${m.no_a_bid},${m.no_b_bid})"
+                                style="width:46px;padding:2px 4px;background:#1a2540;border:1px solid #2a3550;border-radius:4px;color:#fff;font-size:12px;font-weight:700;text-align:center;">
+                            ${shaveB > 0 ? `<span style="color:#ff9944;font-size:9px;">-${shaveB}¢</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Profit summary -->
+                <div id="mid-summary-${idx}" style="background:#060a14;border-radius:6px;padding:7px 10px;margin-bottom:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px;text-align:center;">
                     <div>
-                        <span style="color:#fff;font-weight:700;font-size:14px;">${m.team_a} vs ${m.team_b}</span>
-                        ${guarLabel}${liveTag}${mDateTimeLabel}
-                        <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px;">${speedLabel}</span>
+                        <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">TOTAL COST</div>
+                        <div style="color:#fff;font-weight:700;" id="mid-cost-${idx}">${m.suggested_a + m.suggested_b}¢</div>
                     </div>
-                    <div style="text-align:right;">
-                        <div style="color:${isGuaranteed ? '#00ff88' : '#ffaa00'};font-weight:800;font-size:16px;">${isGuaranteed ? '+' : ''}${m.guaranteed_profit}¢</div>
-                        <div style="color:#6a7488;font-size:10px;">guaranteed</div>
+                    <div>
+                        <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">ONE LEG WINS</div>
+                        <div style="color:${sugProfit >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;" id="mid-profit-${idx}">${sugProfit >= 0 ? '+' : ''}${sugProfit}¢</div>
                     </div>
-                </div>
-                <div style="font-size:11px;color:#8892a6;margin-bottom:8px;line-height:1.6;">
-                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
-                        <span style="color:#ff4444;font-weight:700;font-size:10px;min-width:20px;">NO</span>
-                        <span>${m.title_a} @ <strong style="color:#fff;">${m.no_a_bid}¢</strong> <span style="color:#6a7488;font-size:10px;">(spread ${m.no_spread_a || 0}¢)</span></span>
-                    </div>
-                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
-                        <span style="color:#ff4444;font-weight:700;font-size:10px;min-width:20px;">NO</span>
-                        <span>${m.title_b} @ <strong style="color:#fff;">${m.no_b_bid}¢</strong> <span style="color:#6a7488;font-size:10px;">(spread ${m.no_spread_b || 0}¢)</span></span>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:6px;padding:6px 8px;background:#0f1419;border-radius:6px;">
-                        <div>Mkt cost: <strong style="color:#fff;">${m.cost}¢</strong></div>
-                        <div>Middle: <strong style="color:#fff;">${midWidth} pts</strong></div>
-                        <div>Both win: <strong style="color:#00ff88;">+${m.middle_profit}¢</strong></div>
-                        <div>Catch: <strong style="color:${speedColor};">${m.catch_score}</strong> · Liq ${Math.round((m.liquidity || 0) * 100)}%</div>
-                    </div>
-                    <div style="margin-top:6px;color:#6a7488;font-size:10px;">
-                        ↳ Post at NO ${m.suggested_a}¢ + NO ${m.suggested_b}¢ = ${m.suggested_a + m.suggested_b}¢ → <strong style="color:#00ff88;">+${m.suggested_profit || (100 - m.suggested_a - m.suggested_b)}¢ guaranteed</strong>
+                    <div>
+                        <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">BOTH WIN (±${midWidth}pts)</div>
+                        <div style="color:#aa66ff;font-weight:800;" id="mid-both-${idx}">+${sugBothWin}¢</div>
                     </div>
                 </div>
-                <div style="display:flex;gap:8px;">
-                    <button onclick="placeMiddle('${m.ticker_a}','${m.ticker_b}',${m.suggested_a},${m.suggested_b})"
+
+                <!-- Action row -->
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <span style="color:#8892a6;font-size:11px;">Qty:</span>
+                    <input id="mid-qty-${idx}" type="number" min="1" value="1"
+                        style="width:44px;padding:4px 6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:5px;color:#fff;font-size:12px;font-weight:600;text-align:center;">
+                    <button onclick="placeMiddleFromCard(${idx},'${m.ticker_a}','${m.ticker_b}')"
                             style="background:${isGuaranteed ? '#00ff88' : '#ffaa00'};color:#000;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
                         📐 Place Middle
                     </button>
                     <button onclick="openMiddleBotFromScanner(${JSON.stringify(m).replace(/"/g,'&quot;')})"
-                            style="background:#aa66ff22;color:#aa66ff;border:1px solid #aa66ff66;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
+                            style="background:#aa66ff22;color:#aa66ff;border:1px solid #aa66ff66;padding:5px 12px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
                         🤖 Open Bot
                     </button>
                 </div>
             </div>`;
         }).join('');
     }
-    modal.classList.add('show');
+    // modal is already shown by scanMiddles(); don't re-open here
+}
+
+function updateMiddleProfit(idx, bidA, bidB) {
+    const pa = parseInt(document.getElementById(`mid-pa-${idx}`)?.value) || bidA;
+    const pb = parseInt(document.getElementById(`mid-pb-${idx}`)?.value) || bidB;
+    const cost = pa + pb;
+    const profit = 100 - cost;
+    const both = 200 - cost;
+    const costEl = document.getElementById(`mid-cost-${idx}`);
+    const profitEl = document.getElementById(`mid-profit-${idx}`);
+    const bothEl = document.getElementById(`mid-both-${idx}`);
+    if (costEl) costEl.textContent = `${cost}¢`;
+    if (profitEl) {
+        profitEl.textContent = `${profit >= 0 ? '+' : ''}${profit}¢`;
+        profitEl.style.color = profit >= 0 ? '#00ff88' : '#ff4444';
+    }
+    if (bothEl) bothEl.textContent = `+${both}¢`;
+}
+
+async function placeMiddleFromCard(idx, tickerA, tickerB) {
+    const pa = parseInt(document.getElementById(`mid-pa-${idx}`)?.value || 0);
+    const pb = parseInt(document.getElementById(`mid-pb-${idx}`)?.value || 0);
+    const qty = parseInt(document.getElementById(`mid-qty-${idx}`)?.value || 1);
+    if (!pa || !pb) { showNotification('❌ Invalid prices'); return; }
+    const cost = (pa + pb) * qty;
+    const guaranteed = (100 - pa - pb) * qty;
+    const middle = (200 - pa - pb) * qty;
+    if (!confirm(`📐 Place Middle — ${qty} contract(s)\n\nLeg A: NO ${tickerA} at ${pa}¢\nLeg B: NO ${tickerB} at ${pb}¢\n\nTotal cost: ${cost}¢ ($${(cost / 100).toFixed(2)})\nOne side wins: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nMiddle hits: +${middle}¢\n\nConfirm?`)) return;
+    try {
+        const order1 = await fetch(`${API_BASE}/order/single`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: tickerA, side: 'no', price: pa, quantity: qty }),
+        }).then(r => r.json());
+        const order2 = await fetch(`${API_BASE}/order/single`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: tickerB, side: 'no', price: pb, quantity: qty }),
+        }).then(r => r.json());
+        if (order1.success && order2.success) {
+            showNotification(`📐 Middle placed! NO on both spreads deployed.`);
+            loadBots(); if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            showNotification(`❌ Middle error: ${order1.error || order2.error}`);
+        }
+    } catch (err) {
+        showNotification(`❌ Network error: ${err.message}`);
+    }
 }
 
 async function placeMiddle(tickerA, tickerB, priceA, priceB) {
@@ -5403,6 +5670,129 @@ function closeMiddlesModal() {
 // Current middle bot data (set when opened from scanner or directly)
 let _currentMiddleData = null;
 
+// ── Manual Middle Builder ─────────────────────────────────────────────────────
+// Stores the first leg while the user picks the second leg.
+let _pendingMiddleLeg1 = null;
+
+/** Extract numeric spread value from a market title like "Phoenix wins by over 3.5 Points?" */
+function extractSpreadFromMarket(market) {
+    const title = market.title || '';
+    const m = title.match(/wins?\s+by\s+over\s+([\d.]+)/i);
+    if (m) return parseFloat(m[1]);
+    return null;
+}
+
+/** Returns true if this is a spread market (used for manual middle building) */
+function isSpreadMarket(market) {
+    return (market.market_type === 'spread') ||
+           (market.ticker || '').toUpperCase().includes('SPREAD');
+}
+
+/** Show (or hide) the floating bottom banner for Leg 1 pending selection */
+function _showPendingLegBanner(leg) {
+    let banner = document.getElementById('pending-middle-leg-banner');
+    if (!leg) { if (banner) banner.remove(); return; }
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'pending-middle-leg-banner';
+        banner.style.cssText = [
+            'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
+            'background:#1a1228', 'border:2px solid #aa66ff', 'border-radius:10px',
+            'padding:12px 18px', 'z-index:99998', 'display:flex', 'align-items:center',
+            'gap:12px', 'box-shadow:0 4px 24px rgba(170,102,255,0.4)',
+            'min-width:320px', 'max-width:540px',
+        ].join(';');
+        document.body.appendChild(banner);
+    }
+    banner.innerHTML = `
+        <span style="font-size:18px;">↔️</span>
+        <div style="flex:1;min-width:0;">
+            <div style="color:#aa66ff;font-weight:700;font-size:10px;letter-spacing:.06em;margin-bottom:3px;">LEG 1 LOCKED — SAME GAME ONLY</div>
+            <div style="color:#fff;font-size:13px;font-weight:700;">NO ${leg.teamLabel} +${leg.spread} &nbsp;@&nbsp; ${leg.noBid}¢</div>
+            <div style="color:#8892a6;font-size:10px;margin-top:2px;">Now click <strong style="color:#ff4444;">NO</strong> on another spread in the <em>same game</em></div>
+        </div>
+        <button onclick="cancelPendingMiddleLeg()"
+            style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0;">✕ Cancel</button>`;
+}
+
+/** Cancel the pending Leg 1 selection */
+function cancelPendingMiddleLeg() {
+    _pendingMiddleLeg1 = null;
+    _showPendingLegBanner(null);
+}
+
+/**
+ * Intercept NO clicks on spread markets.
+ * — First click  → stores as Leg 1, shows floating banner.
+ * — Second click (same game, different ticker) → builds middle, opens bot modal.
+ * — Non-spread markets → falls through to normal openBotModal.
+ */
+function handleManualMiddleNoClick(market) {
+    // Non-spread markets go straight to regular bot
+    if (!isSpreadMarket(market)) {
+        openBotModal(market, 'no', getPrice(market, 'no_ask'));
+        return;
+    }
+    const spread = extractSpreadFromMarket(market);
+    if (spread === null) {
+        openBotModal(market, 'no', getPrice(market, 'no_ask'));
+        return;
+    }
+
+    const noBid    = getPrice(market, 'no_bid')  || 0;
+    const noAsk    = getPrice(market, 'no_ask')  || 0;
+    const gameId   = market.event_ticker || market.ticker || '';
+    const teamLabel = getTeamLabelFromTicker(market.ticker) || market.ticker;
+
+    // No pending leg yet → set Leg 1
+    if (_pendingMiddleLeg1 === null) {
+        _pendingMiddleLeg1 = { market, ticker: market.ticker, spread, noBid, noAsk, teamLabel, gameId };
+        _showPendingLegBanner(_pendingMiddleLeg1);
+        return;
+    }
+
+    // Same ticker tapped again → cancel and open regular bot
+    if (_pendingMiddleLeg1.ticker === market.ticker) {
+        cancelPendingMiddleLeg();
+        openBotModal(market, 'no', noAsk);
+        return;
+    }
+
+    // Same game → build the middle
+    if (_pendingMiddleLeg1.gameId === gameId) {
+        const leg1 = _pendingMiddleLeg1;
+        cancelPendingMiddleLeg();
+        const sug_a = Math.min(Math.floor(96 / 2), leg1.noBid);
+        const sug_b = Math.min(96 - sug_a, noBid);
+        openMiddleBotModal({
+            ticker_a:         leg1.ticker,
+            ticker_b:         market.ticker,
+            team_a:           leg1.teamLabel,
+            team_b:           teamLabel,
+            title_a:          leg1.market.title || leg1.ticker,
+            title_b:          market.title      || market.ticker,
+            spread_a:         leg1.spread,
+            spread_b:         spread,
+            no_a_bid:         leg1.noBid,
+            no_b_bid:         noBid,
+            suggested_a:      sug_a,
+            suggested_b:      sug_b,
+            middle_width:     leg1.spread + spread,
+            guaranteed_profit: 100 - leg1.noBid - noBid,
+            game_id:          gameId,
+            is_manual:        true,
+        });
+        return;
+    }
+
+    // Different game → ask to replace Leg 1
+    if (confirm(`⚠️ Different game!\n\nLeg 1: ${_pendingMiddleLeg1.gameId}\nThis: ${gameId}\n\nReplace Leg 1 with this market?`)) {
+        _pendingMiddleLeg1 = null;
+        handleManualMiddleNoClick(market);
+    }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 /** Bridge from scanner card — closes middles modal then opens bot modal with data */
 function openMiddleBotFromScanner(middle) {
     closeMiddlesModal();
@@ -5432,10 +5822,30 @@ function openMiddleBotModal(middle) {
     setEl('middle-leg-a-bid', middle.no_a_bid != null ? `${middle.no_a_bid}¢` : '—');
     setEl('middle-leg-b-bid', middle.no_b_bid != null ? `${middle.no_b_bid}¢` : '—');
 
-    // Pre-fill suggested price
-    const suggestedPrice = middle.suggested_a || middle.target_price || 49;
+    // Pre-fill suggested price: average of both legs' suggestions (or compute from bids)
+    const sug_a = middle.suggested_a
+        || (middle.no_a_bid ? Math.min(Math.floor(96 / 2), middle.no_a_bid) : 48);
+    const sug_b = middle.suggested_b
+        || (middle.no_b_bid ? Math.min(96 - sug_a, middle.no_b_bid) : 48);
+    const suggestedPrice = middle.target_price || Math.floor((sug_a + sug_b) / 2);
     const priceEl = document.getElementById('middle-target-price');
     if (priceEl) priceEl.value = suggestedPrice;
+
+    // Show middle window indicator
+    const winfoEl = document.getElementById('middle-window-info');
+    if (winfoEl) {
+        if (middle.middle_width != null) {
+            const guar = middle.guaranteed_profit != null
+                ? middle.guaranteed_profit
+                : 100 - (middle.no_a_bid || 0) - (middle.no_b_bid || 0);
+            winfoEl.innerHTML =
+                `<span style="color:#aa66ff;font-weight:700;font-size:13px;">↔ ${middle.middle_width} pt window</span>` +
+                `&nbsp;&nbsp;<span style="color:${guar >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;">guaranteed floor ${guar >= 0 ? '+' : ''}${guar}¢</span>`;
+            winfoEl.style.display = 'block';
+        } else {
+            winfoEl.style.display = 'none';
+        }
+    }
 
     updateMiddleBotCalc();
 
@@ -5460,7 +5870,7 @@ function updateMiddleBotCalc() {
     const guarText = isNaN(guaranteed) ? '—' : `${guaranteed >= 0 ? '+' : ''}${guaranteed}¢`;
     const midText  = isNaN(middleProfit) ? '—' : `+${middleProfit}¢`;
     const costText = isNaN(cost) ? '—' : `$${(cost / 100).toFixed(2)}`;
-    const slText   = isNaN(slExit) ? '—' : `${slExit}¢`;
+    const slText   = sl === 0 ? 'OFF' : (isNaN(slExit) ? '—' : `${slExit}¢`);
 
     setEl('middle-calc-guaranteed', guarText);
     setEl('middle-calc-middle', midText);
@@ -5470,6 +5880,20 @@ function updateMiddleBotCalc() {
     // Color guaranteed based on sign
     const guarEl = document.getElementById('middle-calc-guaranteed');
     if (guarEl) guarEl.style.color = guaranteed >= 0 ? '#00ff88' : '#ff4444';
+
+    // Per-leg price hint (shows how far below each leg's bid you're targeting)
+    const md = _currentMiddleData;
+    const hintEl = document.getElementById('middle-price-hint');
+    if (hintEl && md && md.no_a_bid != null && md.no_b_bid != null) {
+        const shaveA = md.no_a_bid - price;
+        const shaveB = md.no_b_bid - price;
+        const shaveColor = (shaveA < 0 || shaveB < 0) ? '#ff4444'
+                         : (shaveA === 0 && shaveB === 0) ? '#00ff88' : '#ffaa44';
+        hintEl.innerHTML = `A bid ${md.no_a_bid}¢ | B bid ${md.no_b_bid}¢` +
+            ` &mdash; under bids: <span style="color:${shaveColor}">${shaveA >= 0 ? '-' : '+'}${Math.abs(shaveA)} / ${shaveB >= 0 ? '-' : '+'}${Math.abs(shaveB)}¢</span>`;
+    } else if (hintEl) {
+        hintEl.textContent = '';
+    }
 }
 
 /** Launch the middle bot — posts to /api/middle/bot/create */
@@ -5558,29 +5982,8 @@ async function loadPnL() {
     try {
         const resp = await fetch(`${API_BASE}/pnl`);
         const pnl  = await resp.json();
-        const el   = document.getElementById('pnl-display');
-        if (!el) return;
-
-        const net      = pnl.net_dollars ?? 0;
-        const netColor = net >= 0 ? '#00ff88' : '#ff4444';
-        const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
-        const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
-        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
-
-        const wins  = pnl.completed_bots || 0;
-        const losses = pnl.stopped_bots  || 0;
-        el.innerHTML = `
-            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
-            <span style="color:${netColor};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${netColor}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
-            <span style="font-size:11px;">
-                <span style="color:#00cc66;">↑ $${gross}</span>
-                <span style="color:#555;margin:0 3px;">·</span>
-                <span style="color:#ff5555;">↓ $${loss}</span>
-                <span style="color:#555;margin:0 6px;">|</span>
-                <span style="color:#00cc66;font-weight:700;">${wins}W</span><span style="color:#444;"> / </span><span style="color:#ff5555;font-weight:700;">${losses}L</span>
-            </span>
-            <span id="anchored-badge" style="font-size:11px;">${_buildAnchoredBadgeHTML()}</span>
-        `;
+        window._lastPnlData = pnl;  // cache for _renderPnlDisplay / setBotsTab
+        _renderPnlDisplay(botsTabMode);
         // Feed P&L data to bot buddy
         buddyUpdateFromPnl(pnl);
     } catch (e) { /* P&L display is optional */ }
@@ -5669,15 +6072,15 @@ async function loadHistoryStats() {
                     <div style="color:#555;font-size:10px;margin-top:2px;">Win: ${fmtDur(s.avg_win_duration_s)} / Loss: ${fmtDur(s.avg_loss_duration_s)}</div>
                 </div>
                 ${(() => {
-                    const dNet = (pnl.net_cents || 0);
+                    const dNet = (pnl.arb_net_cents || 0);
                     const dColor = dNet >= 0 ? '#00ff88' : '#ff4444';
                     const dDollars = (dNet / 100).toFixed(2);
-                    const dW = pnl.completed_bots || 0;
-                    const dL = pnl.stopped_bots || 0;
+                    const dW = pnl.arb_wins || 0;
+                    const dL = pnl.arb_losses || 0;
                     return `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key || ''}</span></div>
                         <div style="color:${dColor};font-size:24px;font-weight:800;">${dNet >= 0 ? '+' : ''}$${dDollars}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today (arb bots)</div>
                     </div>`;
                 })()}
             </div>

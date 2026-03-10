@@ -77,6 +77,14 @@
         }
         .sport-pill:hover { border-color: #00ff88; color: #00ff88; }
         .sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .scan-sport-pill, .mid-sport-pill {
+            padding: 3px 10px; border-radius: 12px; border: 1px solid #2a3550;
+            background: #1a1f35; color: #8892a6; font-size: 11px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .scan-sport-pill:hover, .mid-sport-pill:hover { border-color: #ffaa00; color: #ffaa00; }
+        .scan-sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .mid-sport-pill.active  { background: #ffaa00; color: #000; border-color: #ffaa00; }
 
         /* ── Bots Section ──────────────────────────────────────────── */
         .bots-section {
@@ -453,8 +461,8 @@
                     <button class="btn btn-primary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks active bots every 2s: fills, reposts, stop-losses">
                         <span id="auto-monitor-text">▶️ Monitor</span>
                     </button>
-                    <button class="btn btn-secondary" onclick="openScanModal()" title="Open arb scanner — set width & qty inside">🔍 Scanner</button>
-                    <button class="btn btn-secondary" onclick="scanMiddles()" title="Find middle spread opportunities — set qty inside">📐 Middles</button>
+                    <button class="btn btn-secondary" onclick="openScanModal()" title="Arb Scanner — finds wide YES/NO spreads to anchor arb bots">⚡ Arb Scanner</button>
+                    <button class="btn btn-secondary" onclick="openMiddlesModal()" title="Middle Scanner — finds NO+NO opposing-spread opportunities">📐 Middles</button>
                     <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
                             style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓</button>
                 </div>
@@ -512,10 +520,13 @@
                 <!-- P&L Dashboard -->
                 <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
                 <!-- ARB / MIDDLE toggle -->
-                <div style="display:flex;gap:0;margin-bottom:12px;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
+                <div style="display:flex;gap:0;margin-bottom:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
                     <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">🤖 ARB BOTS</button>
                     <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">↔️ MIDDLE BOTS</button>
                 </div>
+                <!-- Per-section daily mini-stats -->
+                <div id="bots-arb-daily" style="display:flex;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
+                <div id="bots-middle-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-list"><p style="color: #8892a6;">No active bots</p></div>
                 <div id="middle-bots-list" style="display:none;"><p style="color:#8892a6;">No active middle bots</p></div>
             </div>
@@ -562,16 +573,20 @@
         <!-- HISTORY TAB                                            -->
         <!-- ═══════════════════════════════════════════════════════ -->
         <div class="tab-page" id="tab-history">
-            <!-- Top-level mode toggle -->
-            <div style="display:flex;align-items:center;gap:0;margin-bottom:20px;border:1px solid #2a3550;border-radius:10px;overflow:hidden;width:fit-content;flex-wrap:wrap;">
-                <button id="histmode-arb" onclick="setHistoryMode('arb')"
-                    style="background:#253555;border:none;color:#00ff88;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🤖 ARB BOTS</button>
-                <button id="histmode-bets" onclick="setHistoryMode('bets')"
-                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🎯 STRAIGHT BETS</button>
-                <button id="histmode-instarb" onclick="setHistoryMode('instarb')"
-                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">⚡ INSTA ARBS</button>
-                <button id="histmode-middle" onclick="setHistoryMode('middle')"
-                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 18px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;">↔️ MIDDLES</button>
+            <!-- Top-level mode toggle — 2 rows -->
+            <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:20px;">
+                <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
+                    <button id="histmode-arb" onclick="setHistoryMode('arb')"
+                        style="flex:1;background:#253555;border:none;color:#00ff88;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🤖 ARB BOTS</button>
+                    <button id="histmode-middle" onclick="setHistoryMode('middle')"
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">↔️ MIDDLES</button>
+                </div>
+                <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
+                    <button id="histmode-bets" onclick="setHistoryMode('bets')"
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🎯 STRAIGHT BETS</button>
+                    <button id="histmode-instarb" onclick="setHistoryMode('instarb')"
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">⚡ INSTA ARBS</button>
+                </div>
             </div>
 
             <!-- ARB BOT SECTION -->
@@ -605,9 +620,6 @@
             <!-- INSTA ARBS SECTION -->
             <div id="hist-instarb-section" style="display:none;">
                 <div id="instarb-stats-panel" style="margin-bottom:20px;"></div>
-                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
-                    <button onclick="openInstaArbLogModal()" style="background:#1a2f1a;border:1px solid #00ff88;color:#00ff88;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">+ Log Insta Arb</button>
-                </div>
                 <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Insta Arb Log</h3>
                 <div id="instarb-history-list">
                     <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
@@ -986,6 +998,8 @@
                             </div>
                         </div>
                     </div>
+                    <!-- Middle window indicator (populated by openMiddleBotModal) -->
+                    <div id="middle-window-info" style="display:none;text-align:center;padding:8px;margin:-4px 0 12px;background:#1a1030;border-radius:6px;border:1px solid #aa66ff33;line-height:1.6;"></div>
                     <!-- Controls -->
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
                         <div>
@@ -994,6 +1008,7 @@
                                 style="width:100%;padding:8px;background:#060a14;border:2px solid #aa66ff66;border-radius:6px;color:#aa66ff;font-size:1.4rem;font-weight:800;text-align:center;outline:none;"
                                 onfocus="this.style.borderColor='#aa66ff'" onblur="this.style.borderColor='#aa66ff66'">
                             <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">¢ per contract</div>
+                            <div id="middle-price-hint" style="color:#8892a6;font-size:9px;margin-top:4px;text-align:center;min-height:12px;"></div>
                         </div>
                         <div>
                             <label style="display:block;color:#8892a6;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">CONTRACTS</label>
@@ -1052,6 +1067,17 @@
                     <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
                 </div>
             </div>
+            <!-- Sport filter pills -->
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Sport:</span>
+                <button class="scan-sport-pill active" data-sport="all"   onclick="setScanSport('all')">All</button>
+                <button class="scan-sport-pill"        data-sport="nba"   onclick="setScanSport('nba')">🏀 NBA</button>
+                <button class="scan-sport-pill"        data-sport="nhl"   onclick="setScanSport('nhl')">🏒 NHL</button>
+                <button class="scan-sport-pill"        data-sport="mlb"   onclick="setScanSport('mlb')">⚾ MLB</button>
+                <button class="scan-sport-pill"        data-sport="ncaab" onclick="setScanSport('ncaab')">🎓 NCAAB</button>
+                <button class="scan-sport-pill"        data-sport="nfl"   onclick="setScanSport('nfl')">🏈 NFL</button>
+                <button class="scan-sport-pill"        data-sport="soccer" onclick="setScanSport('soccer')">⚽ Soccer</button>
+            </div>
             <div id="scan-results" style="flex:1;overflow-y:auto;"></div>
         </div>
     </div>
@@ -1059,20 +1085,40 @@
     <!-- Middles Modal -->
     <div class="modal" id="middles-modal">
         <div class="modal-content" style="max-width:700px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid #ffaa00;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                 <div>
-                    <h2 class="modal-header" style="margin:0;">📐 Middle Spread Scanner</h2>
-                    <div style="color:#8892a6;font-size:11px;margin-top:4px;">Find games where you can bet between two spread lines</div>
+                    <h2 class="modal-header" style="margin:0;">📐 Middle Scanner</h2>
+                    <div style="color:#8892a6;font-size:11px;margin-top:2px;">NO+NO opposing-spread — one leg always wins, both win if score is in the middle</div>
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;">
-                    <span id="middles-count" style="color:#8892a6;font-size:12px;"></span>
-                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
-                    <input type="number" id="middles-modal-qty" min="1" value="1"
-                           style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
-                    <button class="btn btn-secondary" onclick="closeMiddlesModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
+                    <button class="btn btn-secondary" onclick="closeMiddlesModal()" style="padding:.4rem .9rem;font-size:13px;">✕</button>
                 </div>
             </div>
-            <div id="middles-results" style="flex:1;overflow-y:auto;"></div>
+            <!-- Sport filter pills -->
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center;">
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Sport:</span>
+                <button class="mid-sport-pill active" data-sport="all"   onclick="setMiddlesSport('all')">All</button>
+                <button class="mid-sport-pill"        data-sport="nba"   onclick="setMiddlesSport('nba')">🏀 NBA</button>
+                <button class="mid-sport-pill"        data-sport="nhl"   onclick="setMiddlesSport('nhl')">🏒 NHL</button>
+                <button class="mid-sport-pill"        data-sport="mlb"   onclick="setMiddlesSport('mlb')">⚾ MLB</button>
+                <button class="mid-sport-pill"        data-sport="ncaab" onclick="setMiddlesSport('ncaab')">🎓 NCAAB</button>
+                <button class="mid-sport-pill"        data-sport="nfl"   onclick="setMiddlesSport('nfl')">🏈 NFL</button>
+                <button class="mid-sport-pill"        data-sport="soccer" onclick="setMiddlesSport('soccer')">⚽ Soccer</button>
+            </div>
+            <!-- Status bar -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:7px 10px;background:#0a0e1a;border-radius:7px;border:1px solid #1e2740;">
+                <span id="middles-status" style="font-size:11px;color:#8892a6;">Press Scan to search for middles</span>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="middles-count" style="color:#8892a6;font-size:11px;"></span>
+                    <button onclick="scanMiddles()" id="middles-scan-btn"
+                            style="background:#ffaa0022;color:#ffaa00;border:1px solid #ffaa0055;padding:5px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:11px;">
+                        🔍 Scan
+                    </button>
+                </div>
+            </div>
+            <div id="middles-results" style="flex:1;overflow-y:auto;">
+                <p style="color:#555;text-align:center;padding:32px;font-size:13px;">Click Scan to find middle opportunities across all spread markets.</p>
+            </div>
         </div>
     </div>
 
@@ -1228,6 +1274,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260310b"></script>
+    <script src="app.js?v=20260310i"></script>
 </body>
 </html>

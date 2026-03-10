@@ -4290,8 +4290,9 @@ def _run_monitor():
                                 live_bid = round(float(no_bid_d) * 100) if no_bid_d else mkt_sl_data.get('no_bid', 0)
                             # Store live bid for frontend
                             bot[f'live_no_bid_{filled_leg}'] = live_bid
-                            # Trigger stop-loss if bid dropped stop_loss_cents below fill price
-                            sl_trigger = fill_price - stop_loss
+                            # Trigger stop-loss: raw price floor (not relative to entry)
+                            # stop_loss_cents here is the absolute floor price, default 15
+                            sl_trigger = stop_loss  # e.g. 15 = exit if bid drops below 15¢
                             if live_bid > 0 and live_bid < sl_trigger:
                                 bot_log('MIDDLE_SL_TRIGGERED', bot_id, {
                                     'filled_leg': filled_leg, 'fill_price': fill_price,

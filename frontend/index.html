@@ -511,7 +511,13 @@
                 </div>
                 <!-- P&L Dashboard -->
                 <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
+                <!-- ARB / MIDDLE toggle -->
+                <div style="display:flex;gap:0;margin-bottom:12px;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
+                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">🤖 ARB BOTS</button>
+                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">↔️ MIDDLE BOTS</button>
+                </div>
                 <div id="bots-list"><p style="color: #8892a6;">No active bots</p></div>
+                <div id="middle-bots-list" style="display:none;"><p style="color:#8892a6;">No active middle bots</p></div>
             </div>
 
             <!-- Feature Guide -->
@@ -611,9 +617,6 @@
             <!-- MIDDLES SECTION -->
             <div id="hist-middle-section" style="display:none;">
                 <div id="middle-stats-panel" style="margin-bottom:20px;"></div>
-                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
-                    <button onclick="openMiddleLogModal()" style="background:#1a1a2f;border:1px solid #aa66ff;color:#aa66ff;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">+ Log Middle</button>
-                </div>
                 <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Middles Log</h3>
                 <div id="middle-history-list">
                     <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
@@ -998,11 +1001,11 @@
                                 style="width:100%;padding:8px;background:#060a14;border:2px solid #1e274066;border-radius:6px;color:#fff;font-size:1.4rem;font-weight:800;text-align:center;outline:none;">
                         </div>
                         <div>
-                            <label style="display:block;color:#ff6666;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">STOP-LOSS ¢</label>
-                            <input type="number" id="middle-stop-loss" min="1" max="40" value="15" oninput="updateMiddleBotCalc()"
+                            <label style="display:block;color:#ff6666;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">FLOOR PRICE ¢</label>
+                            <input type="number" id="middle-stop-loss" min="0" max="40" value="0" oninput="updateMiddleBotCalc()"
                                 style="width:100%;padding:8px;background:#060a14;border:2px solid #ff666644;border-radius:6px;color:#ff6666;font-size:1.4rem;font-weight:800;text-align:center;outline:none;"
                                 onfocus="this.style.borderColor='#ff6666'" onblur="this.style.borderColor='#ff666644'">
-                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">¢ drop triggers exit</div>
+                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">0 = off (hold to settle)</div>
                         </div>
                     </div>
                     <!-- Calc preview -->
@@ -1225,6 +1228,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260310a"></script>
+    <script src="app.js?v=20260310b"></script>
 </body>
 </html>

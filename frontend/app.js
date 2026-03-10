@@ -3903,6 +3903,96 @@ async function placeAllWidthsBots() {
     await loadBots();
 }
 
+let botsTabMode = 'arb';  // 'arb' | 'middle'
+function _renderMiddleBotCard(bot, botId, container) {
+    const nowSec = Date.now() / 1000;
+    const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
+    const status = bot.status || 'waiting';
+    const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped:'#ff4444', completed:'#00ff88' }[status] || '#aa66ff';
+    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped:'🛑 STOPPED', completed:'✓ COMPLETE' }[status] || status;
+    const target = bot.target_price || 49;
+    const qty    = bot.qty || 1;
+    const floor  = (100 - 2 * target) * qty;
+    const midP   = (200 - 2 * target) * qty;
+    const legAFill = bot.leg_a_filled ? `${bot.leg_a_fill_price || target}¢` : null;
+    const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || target}¢` : null;
+    const floorPrice = bot.stop_loss_cents || 0;
+
+    let legStatusHtml = '';
+    if (status === 'one_filled') {
+        const fTeam = bot.filled_leg === 'a' ? (bot.team_a_name||'Leg A') : (bot.team_b_name||'Leg B');
+        const wTeam = bot.filled_leg === 'a' ? (bot.team_b_name||'Leg B') : (bot.team_a_name||'Leg A');
+        const fPrice = bot.filled_leg === 'a' ? legAFill : legBFill;
+        legStatusHtml = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 10px;font-size:11px;">
+            <span style="color:#ffaa00;font-weight:700;">✅ ${fTeam} filled @ ${fPrice}</span>
+            <span style="color:#555;margin-left:10px;">⏳ Waiting: ${wTeam}</span>
+            ${floorPrice > 0 ? `<span style="color:#ff6666;margin-left:10px;">Floor: ${floorPrice}¢</span>` : '<span style="color:#555;margin-left:10px;">No floor (hold to settle)</span>'}
+        </div>`;
+    } else if (status === 'both_filled') {
+        legStatusHtml = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:6px 10px;font-size:11px;">
+            <span style="color:#00ff88;font-weight:700;">🔒 Both legs in — holding to settlement</span>
+            <span style="color:#8892a6;margin-left:10px;">A: ${legAFill||'?'} · B: ${legBFill||'?'}</span>
+        </div>`;
+    }
+
+    const el = document.createElement('div');
+    el.className = 'bot-item';
+    el.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${borderCol};`;
+    el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="color:#aa66ff;font-size:11px;font-weight:700;">↔️ MIDDLE</span>
+                <span style="color:#fff;font-weight:700;font-size:13px;">${bot.team_a_name||'A'} vs ${bot.team_b_name||'B'}</span>
+                <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="color:#555;font-size:10px;">${ageMin}m</span>
+                <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
+            </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;">
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO</div>
+                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Team A'}</div>
+                <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
+                <div style="display:flex;justify-content:space-between;font-size:11px;">
+                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target}¢</strong></span>
+                    <span style="color:${bot.leg_a_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_a_filled?`✓ ${legAFill}`:'PENDING'}</span>
+                </div>
+            </div>
+            <div style="background:#060a14;border:1px solid #aa66ff33;border-radius:6px;padding:8px;">
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO</div>
+                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Team B'}</div>
+                <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
+                <div style="display:flex;justify-content:space-between;font-size:11px;">
+                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target}¢</strong></span>
+                    <span style="color:${bot.leg_b_filled?'#00ff88':'#8892a6'};font-weight:700;">${bot.leg_b_filled?`✓ ${legBFill}`:'PENDING'}</span>
+                </div>
+            </div>
+        </div>
+        <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;">
+            <span>Floor: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
+            <span>Middle: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
+            <span>×${qty}</span>
+            ${floorPrice > 0 ? `<span style="color:#ff6666;">Exit floor: ${floorPrice}¢</span>` : ''}
+        </div>
+        ${legStatusHtml}
+    `;
+    container.appendChild(el);
+}
+
+function setBotsTab(mode) {
+    botsTabMode = mode;
+    const arbBtn    = document.getElementById('bots-tab-arb');
+    const midBtn    = document.getElementById('bots-tab-middle');
+    const arbList   = document.getElementById('bots-list');
+    const midList   = document.getElementById('middle-bots-list');
+    if (arbBtn) { arbBtn.style.background = mode === 'arb' ? '#253555' : '#1a2540'; arbBtn.style.color = mode === 'arb' ? '#00ff88' : '#8892a6'; }
+    if (midBtn) { midBtn.style.background = mode === 'middle' ? '#253555' : '#1a2540'; midBtn.style.color = mode === 'middle' ? '#aa66ff' : '#8892a6'; }
+    if (arbList) arbList.style.display = mode === 'arb' ? '' : 'none';
+    if (midList) midList.style.display = mode === 'middle' ? '' : 'none';
+}
+
 async function loadBots() {
     try {
         const response = await fetch(`${API_BASE}/bot/list`);
@@ -3912,23 +4002,43 @@ async function loadBots() {
         const botIds = Object.keys(bots);
 
         const section = document.getElementById('bots-section');
-        if (botIds.length === 0) {
-            section.style.display = 'block';
-            document.getElementById('bots-list').innerHTML = `<div class="empty-state"><div class="icon">🤖</div><div class="title">No active bots</div><div class="desc">Deploy a bot from the Markets tab or use the Arb Scanner</div></div>`;
-            updateBotBuddy(0, 0);
-            updateBotsBadge(0);
-            return;
-        }
         section.style.display = 'block';
 
-        const botsList = document.getElementById('bots-list');
-        botsList.innerHTML = '';
+        const botsList   = document.getElementById('bots-list');
+        const middleList = document.getElementById('middle-bots-list');
 
-        // Filter to only active bots (finished ones only appear in History tab)
+        // Split into arb and middle bots
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
             return s !== 'completed' && s !== 'stopped';
         });
+        const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle');
+        const middleBotIds = activeBots.filter(id => bots[id].type === 'middle');
+
+        // Update middle bots tab badge
+        const midBtn = document.getElementById('bots-tab-middle');
+        if (midBtn) midBtn.textContent = `↔️ MIDDLE BOTS${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`;
+
+        // Render middle bots list
+        if (middleList) {
+            if (middleBotIds.length === 0) {
+                middleList.innerHTML = '<div class="empty-state"><div class="icon">↔️</div><div class="title">No active middle bots</div><div class="desc">Open a middle bot from the Middles scanner</div></div>';
+            } else {
+                middleList.innerHTML = '';
+                for (const botId of middleBotIds) {
+                    const bot = bots[botId];
+                    _renderMiddleBotCard(bot, botId, middleList);
+                }
+            }
+        }
+
+        if (arbBotIds.length === 0) {
+            botsList.innerHTML = `<div class="empty-state"><div class="icon">🤖</div><div class="title">No active bots</div><div class="desc">Deploy a bot from the Markets tab or use the Arb Scanner</div></div>`;
+            updateBotBuddy(0, 0);
+            updateBotsBadge(middleBotIds.length);
+            return;
+        }
+        botsList.innerHTML = '';
 
         let activeBotCount = 0;
         let filledLegs = 0;
@@ -4017,99 +4127,8 @@ async function loadBots() {
             groupBots.forEach(botId => {
             const bot = bots[botId];
 
-            // ── Middle Bots ──────────────────────────────────────────
-            if (bot.type === 'middle') {
-                activeBotCount++;
-                const nowSec_m = Date.now() / 1000;
-                const ageMin_m = bot.created_at ? Math.floor((nowSec_m - bot.created_at) / 60) : 0;
-                const status_m = bot.status || 'waiting';
-                const statusColors = { waiting: '#aa66ff', one_filled: '#ffaa00', both_filled: '#00ff88', stopped: '#ff4444', completed: '#00ff88' };
-                const borderColor_m = statusColors[status_m] || '#aa66ff';
-                const statusLabel_m = {
-                    waiting:     '⏳ WAITING',
-                    one_filled:  '✅ ONE LEG IN',
-                    both_filled: '🔒 BOTH FILLED',
-                    stopped:     '🛑 STOPPED',
-                    completed:   '✓ COMPLETE',
-                }[status_m] || status_m.toUpperCase().replace(/_/g, ' ');
-
-                const filledLeg_m = bot.filled_leg || null;
-                const legAFill = bot.leg_a_filled ? `${bot.leg_a_fill_price || bot.target_price}¢` : null;
-                const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || bot.target_price}¢` : null;
-                const stopLoss_m = bot.stop_loss_cents || 15;
-                const slTrigger_m = (bot.target_price || 49) - stopLoss_m;
-                const qty_m = bot.qty || 1;
-                const target_m = bot.target_price || 49;
-                const guaranteed_m = (100 - 2 * target_m) * qty_m;
-                const middleProfit_m = (200 - 2 * target_m) * qty_m;
-
-                let legStatusHtml = '';
-                if (status_m === 'one_filled') {
-                    const filledTeam = filledLeg_m === 'a' ? (bot.team_a_name || 'Leg A') : (bot.team_b_name || 'Leg B');
-                    const waitingTeam = filledLeg_m === 'a' ? (bot.team_b_name || 'Leg B') : (bot.team_a_name || 'Leg A');
-                    const fillPriceShown = filledLeg_m === 'a' ? legAFill : legBFill;
-                    legStatusHtml = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:5px 8px;font-size:10px;margin-top:6px;">
-                        <span style="color:#ffaa00;font-weight:700;">✅ ${filledTeam} filled @ ${fillPriceShown}</span>
-                        <span style="color:#555;margin-left:8px;">⏳ Waiting: ${waitingTeam}</span>
-                        <span style="color:#ff6666;margin-left:8px;">SL trigger: ${slTrigger_m}¢</span>
-                    </div>`;
-                } else if (status_m === 'both_filled') {
-                    legStatusHtml = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:5px 8px;font-size:10px;margin-top:6px;">
-                        <span style="color:#00ff88;font-weight:700;">🔒 Both legs filled — holding to settlement</span>
-                        <span style="color:#8892a6;margin-left:8px;">Leg A: ${legAFill || '?'} · Leg B: ${legBFill || '?'}</span>
-                    </div>`;
-                } else if (status_m === 'stopped') {
-                    legStatusHtml = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:5px 8px;font-size:10px;margin-top:6px;">
-                        <span style="color:#ff4444;font-weight:700;">🛑 Stop-loss triggered — exited filled leg</span>
-                    </div>`;
-                }
-
-                const item_m = document.createElement('div');
-                item_m.className = 'bot-item';
-                item_m.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${borderColor_m};`;
-                item_m.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                            <span style="color:#aa66ff;font-size:11px;font-weight:700;">↔️ MIDDLE</span>
-                            <span style="color:#fff;font-weight:700;font-size:13px;">${bot.team_a_name || 'A'} vs ${bot.team_b_name || 'B'}</span>
-                            <span class="bot-status" style="background:${borderColor_m}22;color:${borderColor_m};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel_m}</span>
-                        </div>
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <span style="color:#555;font-size:10px;">${ageMin_m}m</span>
-                            <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${bot.id || botId}')">✕</button>
-                        </div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
-                        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px;">
-                            <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:4px;">LEG A — NO</div>
-                            <div style="color:#fff;font-size:10px;margin-bottom:2px;">${bot.team_a_name || 'Team A'}</div>
-                            <div style="color:#555;font-size:9px;margin-bottom:4px;">${bot.ticker_a || '?'}</div>
-                            <div style="display:flex;justify-content:space-between;">
-                                <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target_m}¢</strong></span>
-                                <span style="color:${bot.leg_a_filled ? '#00ff88' : '#8892a6'};font-weight:700;">${bot.leg_a_filled ? `✓ ${legAFill}` : 'PENDING'}</span>
-                            </div>
-                        </div>
-                        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px;">
-                            <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:4px;">LEG B — NO</div>
-                            <div style="color:#fff;font-size:10px;margin-bottom:2px;">${bot.team_b_name || 'Team B'}</div>
-                            <div style="color:#555;font-size:9px;margin-bottom:4px;">${bot.ticker_b || '?'}</div>
-                            <div style="display:flex;justify-content:space-between;">
-                                <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target_m}¢</strong></span>
-                                <span style="color:${bot.leg_b_filled ? '#00ff88' : '#8892a6'};font-weight:700;">${bot.leg_b_filled ? `✓ ${legBFill}` : 'PENDING'}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;">
-                        <span>Floor: <strong style="color:${guaranteed_m >= 0 ? '#00ff88' : '#ff4444'};">${guaranteed_m >= 0 ? '+' : ''}${guaranteed_m}¢</strong></span>
-                        <span>Middle: <strong style="color:#aa66ff;">+${middleProfit_m}¢</strong></span>
-                        <span>SL: <strong style="color:#ff6666;">${slTrigger_m}¢</strong></span>
-                        <span>×${qty_m}</span>
-                    </div>
-                    ${legStatusHtml}
-                `;
-                botsList.appendChild(item_m);
-                return;
-            }
+            // Middle bots are rendered in their own list — skip here
+            if (bot.type === 'middle') return;
 
             // ── Watch Bots (position watchers) ───────────────────────
             if (bot.type === 'watch') {
@@ -6479,7 +6498,7 @@ async function loadMiddleHistory() {
 
         if (statsEl) {
             statsEl.innerHTML = trades.length === 0
-                ? '<p style="color:#555;text-align:center;font-size:12px;">No middles logged yet. Use "+ Log Middle" to record a middle opportunity.</p>'
+                ? '<p style="color:#555;text-align:center;font-size:12px;">No middles recorded yet. Launch a middle bot from the Middles scanner to start tracking.</p>'
                 : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&amp;L</div>
@@ -6540,9 +6559,7 @@ async function loadMiddleHistory() {
             const arbInfo = arbW >= 0
                 ? `<span style="color:#aa66ff;font-weight:700;">Window: +${arbW}¢</span>`
                 : `<span style="color:#ffaa00;font-weight:700;">Cost: ${arbW}¢</span>`;
-            const settleBtn = isPend
-                ? `<button onclick="openMiddleSettle('${t.id}')" style="margin-top:8px;width:100%;padding:6px;background:#1a1a2f;border:1px solid #aa66ff;color:#aa66ff;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">Settle</button>`
-                : '';
+            const settleBtn = '';
             return `<div style="background:#0f1419;border:1px solid ${borderCol};border-radius:10px;padding:14px;">
                 <!-- Header -->
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">

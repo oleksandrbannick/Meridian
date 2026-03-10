@@ -3783,14 +3783,16 @@ def _run_monitor():
                     # Underdog entries (below floor) ride to settlement — max loss is small.
                     if entry_yes >= flip_thresh and yes_bid < effective_trigger:
                         # Favorite has FLIPPED — bid < threshold = no longer favored, sell now
-                        if bot['status'] in ('stopped', 'completed'):
+                        if bot['status'] in ('stopped', 'completed', 'flipping'):
                             print(f'⛔ SKIPPING duplicate FLIP SL YES for {bot_id} — already {bot["status"]}')
                             continue
                         if bot.get('_ws_flip_selling'):
                             print(f'⚡ SKIPPING monitor FLIP YES for {bot_id} — WS real-time already handling')
                             continue
                         print(f'🔄 FLIP THRESHOLD: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢) — favorite flipped, selling')
-                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': effective_trigger, 'floor': flip_thresh})
+                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': effective_trigger, 'floor': flip_thresh, 'source': 'monitor'})
+                        # Mark as flipping BEFORE execute_sell so monitor can't re-enter during the 3-4s sell
+                        bot['status'] = 'flipping'
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_flip_yes_{bot_id}')
                         if sold:
                             try:
@@ -3894,14 +3896,16 @@ def _run_monitor():
                     # Underdog entries ride to settlement.
                     if entry_no >= flip_thresh and no_bid < effective_trigger:
                         # Favorite has FLIPPED — sell now
-                        if bot['status'] in ('stopped', 'completed'):
+                        if bot['status'] in ('stopped', 'completed', 'flipping'):
                             print(f'⛔ SKIPPING duplicate FLIP SL NO for {bot_id} — already {bot["status"]}')
                             continue
                         if bot.get('_ws_flip_selling'):
                             print(f'⚡ SKIPPING monitor FLIP NO for {bot_id} — WS real-time already handling')
                             continue
                         print(f'🔄 FLIP THRESHOLD: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢) — favorite flipped, selling')
-                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': effective_trigger, 'floor': flip_thresh})
+                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': effective_trigger, 'floor': flip_thresh, 'source': 'monitor'})
+                        # Mark as flipping BEFORE execute_sell so monitor can't re-enter during the 3-4s sell
+                        bot['status'] = 'flipping'
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_flip_no_{bot_id}')
                         if sold:
                             try:

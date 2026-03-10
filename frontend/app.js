@@ -328,6 +328,10 @@ function filterBySport(sport) {
     // Toggle live sub-filter
     if (sport === 'live') {
         currentLiveFilter = !currentLiveFilter;
+        // When enabling live filter, always reset sport to 'all' so all live games show
+        if (currentLiveFilter) {
+            currentSportFilter = 'all';
+        }
     } else {
         currentSportFilter = sport;
     }
@@ -348,10 +352,12 @@ function filterBySport(sport) {
     }
 
     // Live toggle is client-side only
-    if (allMarkets.length === 0) {
-        loadMarkets().then(() => applyFilters());
-    } else {
+    if (!currentLiveFilter) {
+        // Turning OFF live filter: just re-apply with existing data
         applyFilters();
+    } else {
+        // Turning ON: always reload so we have all-sport data (sport was reset to 'all')
+        loadMarkets();
     }
 }
 
@@ -382,17 +388,21 @@ function applyFilters() {
     }
 
     // LIVE sub-filter — works WITHIN whatever sport is selected
-    // Uses ESPN live data when available, falls back to Kalshi-native detection
-    // (expected_expiration_time) for sports ESPN doesn't cover
+    // Filter per-GAME not per-market: if any market in a game is live, include ALL markets
+    // for that game. Prevents partial game cards (e.g. spread shows but winner doesn't)
     if (currentLiveFilter) {
-        filtered = filtered.filter(m => {
+        const liveGameIds = new Set();
+        filtered.forEach(m => {
             const eventTicker = m.event_ticker || m.ticker || '';
             const gameId = extractGameId(eventTicker);
             const sport = detectSport(eventTicker);
-            // 1. ESPN confirms live (most reliable)
-            if (getLiveScoreForGame(gameId, sport)) return true;
-            // 2. Kalshi-native: expected_expiration_time within reasonable window
-            return isKalshiLive(m);
+            if (getLiveScoreForGame(gameId, sport) || isKalshiLive(m)) {
+                liveGameIds.add(gameId);
+            }
+        });
+        filtered = filtered.filter(m => {
+            const eventTicker = m.event_ticker || m.ticker || '';
+            return liveGameIds.has(extractGameId(eventTicker));
         });
     }
 
@@ -451,11 +461,16 @@ function _gameIdDateMatchesESPN(gameId, espnGame) {
     // Directional tolerance: ESPN date may be up to 1 day BEFORE the ticker date
     // (handles late-night UTC games that cross midnight vs local ticker date)
     // but NEVER after the ticker date (a future market cannot show today's live data)
-    const espnDateNorm = new Date(espnDate.getFullYear(), espnDate.getMonth(), espnDate.getDate());
+    const espnDateNorm  = new Date(espnDate.getFullYear(), espnDate.getMonth(), espnDate.getDate());
     const tickerDateNorm = new Date(tickerYear, tickerMonth, tickerDay);
+    const today = new Date();
+    const todayNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const daysDiff = (espnDateNorm.getTime() - tickerDateNorm.getTime()) / (1000 * 60 * 60 * 24);
-    // Allow ESPN date to be same day (daysDiff=0) or up to 1 day before (daysDiff=-1)
-    // Reject if ESPN date is after ticker date (daysDiff>0) or more than 1 day before (daysDiff<-1)
+    // For future tickers (tomorrow+), require exact date match — no tolerance.
+    // The 1-day tolerance exists only for UTC midnight crossing on today's games,
+    // not to allow today's live team data to bleed into tomorrow's markets.
+    if (tickerDateNorm.getTime() > todayNorm.getTime()) return daysDiff === 0;
+    // For today/past tickers: allow ESPN date same day or 1 day before (UTC midnight crossing)
     return daysDiff >= -1 && daysDiff <= 0;
 }
 
@@ -640,38 +655,63 @@ function getGameSignal(gameId, sport, markets) {
     // Phase only adds bonus context in description, never blocks signal
     // ═══════════════════════════════════════════════════════════════════
 
+    // ── Spread-aware effective margin ──────────────────────────────────
+    // For spread markets, use how far the lead is from covering the spread,
+    // not the raw point diff. e.g. BOS -7.5, BOS up 9 → margin = |9-7.5| = 1.5
+    // For winner markets (moneyline), raw scoreDiff is the margin.
+    let effectiveMargin = scoreDiff;
+    let marginLabel = `${scoreDiff} pts`;
+    const spreadMarkets = markets.filter(m => (m.ticker || '').toUpperCase().includes('SPREAD'));
+    if (spreadMarkets.length > 0) {
+        // Try to extract spread line from any spread market title
+        for (const sm of spreadMarkets) {
+            const sub = (sm.title || '');
+            const lineMatch = sub.match(/-([\d.]+)/);
+            if (lineMatch) {
+                const spreadPts = parseFloat(lineMatch[1]);
+                const spreadMargin = Math.abs(scoreDiff - spreadPts);
+                // Use the tighter of raw diff and spread margin
+                if (spreadMargin < effectiveMargin) {
+                    effectiveMargin = spreadMargin;
+                    marginLabel = `${scoreDiff} pts (±${spreadMargin.toFixed(1)} from spread)`;
+                }
+                break;
+            }
+        }
+    }
+
     // 🟢 LOCK — blowout at any point, game is effectively decided
     if (scoreDiff >= 20) {
         return {
             type: 'anchor', label: '🟢 LOCK',
             color: '#00ff88', glowAnim: 'arbGlow',
-            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Blowout, prices locked`,
+            description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Blowout, prices locked`,
             liq
         };
     }
 
     // 🟢 ANCHOR — strong lead, very stable
-    if (scoreDiff >= 10) {
+    if (effectiveMargin >= 10) {
         return {
             type: 'anchor', label: '🟢 ANCHOR',
             color: '#4ade80', glowAnim: 'arbGlow',
-            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Strong lead, stable prices`,
+            description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Strong lead, stable prices`,
             liq
         };
     }
 
     // 🟡 LEAN — moderate lead, favoring one side
-    if (scoreDiff >= 5) {
+    if (effectiveMargin >= 5) {
         return {
             type: 'anchor', label: '🟡 LEAN',
             color: '#ffaa33', glowAnim: 'arbGlowGold',
-            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Moderate lead, decent stability`,
+            description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Moderate lead, decent stability`,
             liq
         };
     }
 
-    // � DANGER — tight game in decisive stretch (guardrail will block deploy)
-    const inDangerZone = scoreDiff <= 5 && (
+    // 🔴 DANGER — tight game in decisive stretch (deploy + repost both blocked)
+    const inDangerZone = effectiveMargin <= 5 && (
         ((sport === 'NBA' || sport === 'NCAAW') && period >= 4) ||
         (sport === 'NCAAB' && period >= 2 && clockMins <= 10)
     );
@@ -679,16 +719,16 @@ function getGameSignal(gameId, sport, markets) {
         return {
             type: 'danger', label: '🔴 DANGER',
             color: '#ff4444', glowAnim: '',
-            description: `±${scoreDiff} pts · ${phaseLabel} — Tight + late game, bot will block deploy`,
+            description: `±${marginLabel} · ${phaseLabel} — Tight + late game, deploy & repost blocked`,
             liq
         };
     }
 
-    // �🔵 CLOSE — tight game, volatile prices but arb still works
+    // 🔵 CLOSE — tight game, volatile prices but arb still works
     return {
         type: 'swing', label: '🔵 CLOSE',
         color: '#60a5fa', glowAnim: 'arbGlowBlue',
-        description: `±${scoreDiff} pts · ${phaseLabel} — Tight game, prices volatile`,
+        description: `±${marginLabel} · ${phaseLabel} — Tight game, prices volatile`,
         liq
     };
 }
@@ -717,9 +757,10 @@ function isKalshiLive(market) {
         const now = Date.now();
         const hoursUntilExp = (expTime.getTime() - now) / (1000 * 60 * 60);
         
-        // Window: game must be expected to end within 3 hours AND not ended > 30min ago
-        // Basketball games last ~2-2.5h, so a game that JUST started has exp ~2.5-3h away
-        if (hoursUntilExp < -0.5 || hoursUntilExp > 3.0) return false;
+        // Window: game must be expected to end within 5 hours AND not ended > 30min ago
+        // GAME (moneyline) markets have longer settlement buffers than SPREAD/TOTAL.
+        // A game that just started may have exp 4-5h away; 5h window catches all types.
+        if (hoursUntilExp < -0.5 || hoursUntilExp > 5.0) return false;
         
         // Check game date — must be today (or yesterday for late-night games)
         const ticker = market.event_ticker || '';
@@ -847,6 +888,9 @@ async function loadMarkets() {
 // ─── Live Price Refresh: update visible market prices from orderbook ─────────
 
 let priceRefreshRunning = false;
+let _botsAnchored = 0;  // bots with one leg filled (fav in, dog pending)
+let _botsActive   = 0;  // total active bot count
+let _botHealth    = { healthy: 0, holding: 0, dropping: 0, warning: 0, danger: 0, safe: 0 };
 
 function startPriceRefresh() {
     if (priceRefreshInterval) clearInterval(priceRefreshInterval);
@@ -919,13 +963,9 @@ async function refreshVisiblePrices() {
                 // Suppress phantom 100¢ ask when opposite side has no bids
                 const yesPrice = (p.yes_ask >= 99 && (p.no_bid || 0) <= 1) ? (p.yes_bid || 0) : (p.yes_ask > 0 ? p.yes_ask : 0);
                 const yesDisplay = yesPrice > 0 ? `${yesPrice}¢` : '—';
-                const oldText = yesBtn.querySelector('div:first-child')?.textContent || '';
-                if (oldText !== yesDisplay && yesPrice > 0) {
-                    console.log(`  🟢 ${ticker} YES: ${oldText} → ${yesDisplay}`);
-                }
                 const newStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes') : 'background: #1a1f2e; color: #555;';
                 yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
-                yesBtn.querySelector('div:first-child').textContent = yesDisplay;
+                yesBtn.innerHTML = yesDisplay;
                 if (mkt) yesBtn.onclick = () => openBotModal(mkt, 'yes', p.yes_ask);
             }
 
@@ -937,7 +977,7 @@ async function refreshVisiblePrices() {
                 const noDisplay = noPrice > 0 ? `${noPrice}¢` : '—';
                 const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
                 noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
-                noBtn.querySelector('div:first-child').textContent = noDisplay;
+                noBtn.innerHTML = noDisplay;
                 if (mkt) noBtn.onclick = () => openBotModal(mkt, 'no', p.no_ask);
             }
         }
@@ -1508,10 +1548,10 @@ function displayEventRow(eventData, container) {
         });
         // Show first 2 spreads (one per team at tightest line)
         sorted.slice(0, 2).forEach(m => {
-            marketsGrid.appendChild(createMarketRow(m, extractSubtitle(m.title) || 'Spread'));
+            marketsGrid.appendChild(createMarketRow(m, extractSpreadLabel(m) || 'Spread'));
         });
         if (sorted.length > 2) {
-            const spreadSection = createCollapsible('📊 More Spreads', sorted.slice(2), m => extractSubtitle(m.title) || 'Spread', `${eventData.gameId}_spreads`);
+            const spreadSection = createCollapsible('📊 More Spreads', sorted.slice(2), m => extractSpreadLabel(m) || 'Spread', `${eventData.gameId}_spreads`);
             marketsGrid.appendChild(spreadSection);
         }
     }
@@ -1550,7 +1590,7 @@ function displayEventRow(eventData, container) {
     }
     // 1H Spreads
     if (categorized.firstHalfSpreads.length > 0) {
-        const fhSpreadSection = createCollapsible('📊 1st Half Spreads', categorized.firstHalfSpreads, m => extractSubtitle(m.title) || '1H Spread', `${eventData.gameId}_1h_spreads`);
+        const fhSpreadSection = createCollapsible('📊 1st Half Spreads', categorized.firstHalfSpreads, m => extractSpreadLabel(m) || '1H Spread', `${eventData.gameId}_1h_spreads`);
         marketsGrid.appendChild(fhSpreadSection);
     }
     // 1H Totals
@@ -1871,6 +1911,49 @@ function extractSubtitle(title) {
     }
     
     return title.length > 40 ? title.substring(0, 37) + '...' : title;
+}
+
+// For spread markets, show both sides: "UTA -3.5 / MIL +3.5"
+// Falls back to "TEAM -X / +X" if other team can't be parsed
+function extractSpreadLabel(market) {
+    const subtitle = extractSubtitle(market.title);
+    const match = subtitle.match(/^([A-Z]+)\s*-([\d.]+)$/);
+    if (!match) return subtitle;
+    const favTeam = match[1];
+    const line    = match[2];
+    // Parse game code from ticker: KXNBASPREAD-26MAR07UTAMIL-UTA35 → teamPair = "UTAMIL"
+    const ticker = market.ticker || '';
+    const parts  = ticker.split('-');
+    if (parts.length >= 2) {
+        const gameCode = parts[1];
+        const teamPair = gameCode.replace(/^\d{2}[A-Z]{3}\d{2}/, '');  // strip "26MAR07"
+        let otherTeam = '';
+        if (teamPair.startsWith(favTeam)) {
+            otherTeam = teamPair.slice(favTeam.length);
+        } else if (teamPair.endsWith(favTeam)) {
+            otherTeam = teamPair.slice(0, -favTeam.length);
+        }
+        // Fuzzy fallback: handles cases where subtitle uses "OKL" but game code uses "OKCL"
+        // Try splitting at positions 3 and 4 — check if favTeam's first 2 chars match a segment
+        if ((!otherTeam || otherTeam.length < 2 || otherTeam.length > 5) && teamPair.length >= 4) {
+            const favPrefix = favTeam.slice(0, 2);
+            for (const splitAt of [3, 4]) {
+                const a = teamPair.slice(0, splitAt);
+                const b = teamPair.slice(splitAt);
+                if (b.length >= 2 && b.length <= 5 && a.slice(0, 2) === favPrefix) {
+                    otherTeam = b; break;
+                }
+                if (a.length >= 2 && a.length <= 5 && b.slice(0, 2) === favPrefix) {
+                    otherTeam = a; break;
+                }
+            }
+        }
+        if (otherTeam.length >= 2 && otherTeam.length <= 5) {
+            return `${favTeam} -${line} / ${otherTeam} +${line}`;
+        }
+    }
+    // Couldn't extract other team — show single side only (consistent with other games)
+    return `${favTeam} -${line}`;
 }
 
 // Extract the line number from a total market
@@ -3168,7 +3251,7 @@ function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const total  = yes + no;
     const profit = 100 - total;
     const isArb  = profit > 0;
@@ -3293,6 +3376,7 @@ function setFlipFloor(val) {
         btn55.textContent = '55¢';
     }
     updateProfitPreview();
+    updateBreakevenDisplay();
 }
 
 function applyPreset(width) {
@@ -3305,7 +3389,7 @@ function applyPreset(width) {
 function updateBreakevenDisplay() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no  = parseInt(document.getElementById('bot-no-price')?.value)  || 0;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const width = 100 - yes - no;
     const favEntry = Math.max(yes, no);
     const effectiveTrigger = Math.max(favEntry - 15, Math.min(flipFloor, favEntry - 10));
@@ -3469,7 +3553,7 @@ async function createBot() {
     const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
-    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 60;
+    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
@@ -3561,6 +3645,29 @@ async function createBot() {
 }
 
 // Load and display active bots
+// Build a compact inline score badge from a gameScores entry
+function buildScoreBadgeHtml(gs, size = 'normal') {
+    if (!gs || gs.home_score === undefined) return '';
+    const away = gs.away_score ?? 0;
+    const home = gs.home_score ?? 0;
+    const detail = gs.status_detail || '';
+    const isLive = detail && !detail.toLowerCase().includes('final');
+
+    if (size === 'compact') {
+        // Tiny pill for individual bot rows
+        const dotHtml = isLive ? `<span style="animation:pulse 1.5s infinite;display:inline-block;">●</span> ` : '';
+        const color   = isLive ? '#ff6666' : '#8892a6';
+        const bg      = isLive ? '#ff333311' : '#1e274022';
+        const border  = isLive ? '#ff333344' : '#2a355044';
+        return `<span style="background:${bg};border:1px solid ${border};color:${color};padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;">${dotHtml}${away}-${home}${detail ? ` · ${detail}` : ''}</span>`;
+    } else {
+        // Normal size for group header
+        const dotHtml = isLive ? `<span style="animation:pulse 1.5s infinite;display:inline-block;color:#ff4444;">●</span>` : '';
+        const color   = isLive ? '#ff6666' : '#8892a6';
+        return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${color};">${dotHtml}<span>${away}-${home}</span>${detail ? `<span style="font-size:9px;color:#8892a6;font-weight:400;">${detail}</span>` : ''}</span>`;
+    }
+}
+
 async function loadBots() {
     try {
         const response = await fetch(`${API_BASE}/bot/list`);
@@ -3590,6 +3697,8 @@ async function loadBots() {
 
         let activeBotCount = 0;
         let filledLegs = 0;
+        let anchoredCount = 0;  // one leg filled, waiting for dog
+        let anchoredHealthBuckets = { waiting: 0, healthy: 0, holding: 0, dropping: 0, warning: 0, danger: 0, safe: 0 };
 
         // ══════════════════════════════════════════════════════════════
         // GROUP BY GAME, NEWEST FIRST
@@ -3631,7 +3740,8 @@ async function loadBots() {
             const groupBots = gameGroups[gameKey];
             const sampleBot = bots[groupBots[0]];
             const groupMatchup = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
-            const groupPhase = groupBots.some(id => bots[id].game_phase === 'live') ? '🔴 LIVE' : '⏳ PRE';
+            const groupIsLive = groupBots.some(id => bots[id].game_phase === 'live');
+            const groupPhase = groupIsLive ? '🔴 LIVE' : '⏳ PRE';
             const groupProfitTotal = groupBots.reduce((sum, id) => {
                 const b = bots[id];
                 if (b.type === 'watch') {
@@ -3648,16 +3758,17 @@ async function loadBots() {
             const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
             // Live score from backend
             const gs = gameScores[gameKey] || {};
-            let scoreHtml = '';
-            if (gs.home_score !== undefined) {
-                const sd = gs.status_detail || '';
-                scoreHtml = `<span style="color:#fff;font-weight:700;font-size:11px;margin-left:8px;">${gs.away_score} - ${gs.home_score}</span><span style="color:#8892a6;font-size:9px;margin-left:4px;">${sd}</span>`;
-            }
+            const groupScoreBadge = buildScoreBadgeHtml(gs, 'normal');
+            // Signal badge (anchor/danger/warning/healthy etc.)
+            const groupSport = detectSport(sampleTicker);
+            const groupSignal = getGameSignal(gameKey, groupSport, []);
+            const groupSignalBadge = groupSignal.label ? `<span style="background:${groupSignal.color}22;color:${groupSignal.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;" title="${groupSignal.description || ''}">${groupSignal.label}</span>` : '';
             groupHeader.innerHTML = `
-                <div style="display:flex;align-items:center;gap:8px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <a href="#" onclick="navigateToMarket('${sampleTicker.split('-').slice(0,-1).join('-')}');return false;" style="color:#00aaff;font-weight:700;text-decoration:none;" title="View in Markets tab">${sportIcon} ${groupMatchup}</a>
-                    <span style="color:#8892a6;font-size:10px;">${groupPhase}</span>
-                    ${scoreHtml}
+                    <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
+                    ${groupScoreBadge}
+                    ${groupSignalBadge}
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;">
                     <span style="color:#8892a6;font-size:10px;">${groupBots.length} bot${groupBots.length > 1 ? 's' : ''}</span>
@@ -3683,6 +3794,7 @@ async function loadBots() {
                 const nowSec = Date.now() / 1000;
                 const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
                 const watchDisplayName = formatBotDisplayName(bot.ticker, bot.spread_line);
+                const watchScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
 
                 // Unrealized P&L for watch
                 const curBidNum = typeof liveBid === 'number' ? liveBid : 0;
@@ -3705,6 +3817,7 @@ async function loadBots() {
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <span style="color:#9966ff;font-size:11px;font-weight:700;">👁 WATCH</span>
                             <a href="#" onclick="navigateToMarket('${(bot.ticker||'').toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${watchDisplayName}</a>
+                            ${watchScoreBadge}
                             <span class="bot-status watching">${orderFilled ? 'WATCHING' : 'PENDING'}</span>
                             <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
                             ${fillStatusHtml}
@@ -3771,8 +3884,11 @@ async function loadBots() {
             activeBotCount++;
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
+            // Anchored = exactly one leg filled (fav in, dog still pending)
+            if ((yFill >= qty) !== (nFill >= qty)) anchoredCount++;
 
             const displayName = formatBotDisplayName(bot.ticker, bot.spread_line);
+            const botScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
 
             // Cycle info for repeat bots
             const repeatCount = bot.repeat_count || 0;
@@ -3894,6 +4010,7 @@ async function loadBots() {
             let healthColor = '#00aaff';  // default: blue (neutral/waiting)
             let healthAnim = '';
             let healthLabel = '';
+            let anchoredHealthKey = '';
 
             if (bot.status === 'waiting_repeat') {
                 // Waiting for spread to reopen — takes priority over old fill data
@@ -3907,6 +4024,7 @@ async function loadBots() {
                 // Fav order posted but not filled yet — always "waiting to fill"
                 healthColor = '#00aaff';
                 healthLabel = '⏳ WAITING TO FILL';
+                anchoredHealthKey = 'waiting';
             } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
                 // One leg filled — watch the filled side's bid vs flip threshold
                 const filledSide = bot.status === 'yes_filled' ? 'yes' : 'no';
@@ -3917,6 +4035,7 @@ async function loadBots() {
                 if (isUnderdog) {
                     // Underdog entry — no SL, rides to settlement
                     healthColor = '#00ff88'; healthLabel = '🛡 SAFE';
+                    anchoredHealthKey = 'safe';
                 } else if (liveBid != null && liveBid > 0) {
                     const effectiveTriggerHealth = Math.max(entryPrice - 15, Math.min(flipThresh, entryPrice - 10));
                     const distFromFlip = liveBid - effectiveTriggerHealth;
@@ -3925,23 +4044,28 @@ async function loadBots() {
                         healthColor = '#ff4444';
                         healthAnim = 'animation: dangerPulse 1s ease-in-out infinite;';
                         healthLabel = '🔴 DANGER';
+                        anchoredHealthKey = 'danger';
                     } else if (distFromFlip <= 8) {
                         // Within 8¢ of flip — WARNING, pulsing orange
                         healthColor = '#ff8800';
                         healthAnim = 'animation: warningPulse 1.5s ease-in-out infinite;';
                         healthLabel = '🟠 WARNING';
+                        anchoredHealthKey = 'warning';
                     } else if (liveBid < entryPrice - 5) {
                         // Bid dropped 5+ cents below entry — losing ground
                         healthColor = '#ffaa00';
                         healthLabel = '🟡 DROPPING';
+                        anchoredHealthKey = 'dropping';
                     } else if (liveBid > entryPrice) {
                         // Bid is ABOVE entry — moved in our direction
                         healthColor = '#00ff88';
                         healthLabel = '💚 HEALTHY';
+                        anchoredHealthKey = 'healthy';
                     } else {
                         // Bid near entry, well above flip — normal hold
                         healthColor = '#00aaff';
-                        healthLabel = '📊 HOLDING';
+                        healthLabel = '🔵 HOLDING';
+                        anchoredHealthKey = 'holding';
                     }
                 } else {
                     healthColor = '#ffaa00'; healthLabel = '❓ NO BID';
@@ -3949,6 +4073,7 @@ async function loadBots() {
             } else if (bot.status === 'pending_fills') {
                 healthColor = '#00aaff'; healthLabel = '⏳ FILLING';
             }
+            if (anchoredHealthKey) anchoredHealthBuckets[anchoredHealthKey]++;
 
             const item = document.createElement('div');
             item.className = 'bot-item';
@@ -3958,13 +4083,14 @@ async function loadBots() {
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <a href="#" onclick="navigateToMarket('${botEventPrefix}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${displayName}</a>
+                        ${botScoreBadge}
                         <span class="bot-status ${statusClass}">${statusLabel}</span>
                         ${healthLabel ? `<span style="font-size:10px;font-weight:700;color:${healthColor};">${healthLabel}</span>` : ''}
                         ${cycleInfo}
                         <button onclick="toggleBotPhase('${botId}','${phase === 'live' ? 'pregame' : 'live'}')"
                                 style="background:${phase === 'live' ? '#ff333322' : '#1e2740'};border:1px solid ${phase === 'live' ? '#ff333366' : '#2a3550'};color:${phase === 'live' ? '#ff6666' : '#8892a6'};padding:1px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;"
                                 title="Auto-detected from ESPN. Click to override.">${phaseIcon} ${phaseLabel}</button>
-                        <span style="color:#00ff88;font-weight:800;font-size:13px;">+${profit}¢</span>
+                        <span style="color:#00ff88;font-weight:800;font-size:13px;" title="${bot.arb_width && profit > bot.arb_width ? `Original target: ${bot.arb_width}¢ — repost caught wider spread` : ''}">+${profit}¢${bot.arb_width && profit > bot.arb_width ? `<span style="color:#ffaa00;font-size:9px;margin-left:3px;" title="Wider than target — market widened on repost">↑</span>` : ''}</span>
                         <span style="color:#8892a6;font-size:11px;">×${qty} = $${(profit * qty / 100).toFixed(2)}</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;">
@@ -4048,6 +4174,11 @@ async function loadBots() {
             });  // end groupBots.forEach
         });  // end sortedGameKeys.forEach
 
+        _botsAnchored = anchoredCount;
+        _botsActive   = activeBotCount;
+        _botHealth    = anchoredHealthBuckets;
+        const badge = document.getElementById('anchored-badge');
+        if (badge) badge.innerHTML = _buildAnchoredBadgeHTML();
         updateBotBuddy(activeBotCount, filledLegs);
         updateBotsBadge(activeBotCount);
     } catch (error) {
@@ -4177,78 +4308,95 @@ function toggleAutoMonitor() {
 // Bot buddy messages — rotates through fun status messages with personality
 const botBuddyMessages = {
     idle: [
-        `<strong>Idle</strong> — Enable Auto-Monitor to put me to work!`,
-        `<strong>Sleeping...</strong> Hit the monitor button and I'll watch your bots 24/7`,
-        `<strong>Standing by</strong> — Your bots aren't being watched right now`,
-        `<strong>Bored...</strong> Give me something to monitor! 🥱`,
-        `<strong>Waiting</strong> — I promise I'll be fast once you turn me on`,
+        `<strong>Idle</strong> — Hit Auto-Monitor and I'll never sleep on you`,
+        `<strong>Sleeping...</strong> Wake me up and I'll watch your bots 24/7`,
+        `<strong>Standing by</strong> — Bots aren't being watched right now`,
+        `<strong>Nothing to do...</strong> I get bored easily 🥱`,
+        `<strong>Waiting</strong> — I'm fast once you turn me on, I promise`,
+        `<strong>Ready when you are</strong> — just hit the monitor button`,
     ],
     scanning: [
-        `<strong>Working!</strong> Checking fills every 2 seconds...`,
-        `<strong>On it!</strong> Watching order books, detecting fills...`,
-        `<strong>Monitoring</strong> — Reposting stale orders & watching for flips`,
-        `<strong>Scanning...</strong> Keeping an eye on your positions`,
-        `<strong>Active!</strong> Reposts, resizes & flip protection running`,
-        `<strong>Locked in</strong> — Nothing gets past me 🔍`,
-        `<strong>Patrolling</strong> — Order books under surveillance`,
+        `<strong>On it.</strong> Checking fills every 2 seconds, nothing slips past me`,
+        `<strong>Locked in</strong> — order books under surveillance 🔍`,
+        `<strong>Patrolling</strong> — repost logic + flip protection running`,
+        `<strong>Steady.</strong> Watching spreads, queuing reposts, checking for flips`,
+        `<strong>Eyes open.</strong> I'll catch the fill before you even look up`,
+        `<strong>Working.</strong> Bid/ask on every anchor, every 2 seconds`,
+        `<strong>All clear</strong> — just keeping the orders fresh`,
+        `<strong>Watching.</strong> Market's moving but I'm right here`,
     ],
     fav_posted: [
-        `<strong>🎯 Favorite posted!</strong> Waiting for the liquid side to fill first`,
-        `<strong>Smart sequencing!</strong> Fav side is in the book — underdog queued after fill`,
-        `<strong>Fav-first active</strong> — Higher-bid side posted, watching for fill...`,
+        `<strong>🎯 Fav posted.</strong> Liquid side is in the book, dog side queued for after fill`,
+        `<strong>Sequencing active</strong> — higher-bid side posted first, waiting for bite`,
+        `<strong>Fav-first running</strong> — watching for fill, then I'll post the underdog`,
+        `<strong>Waiting on the fill</strong> — fav order's live, the arb clock is ticking`,
     ],
     fav_filled: [
-        `<strong>Fav filled!</strong> Now posting the underdog side — arb almost locked 🔒`,
-        `<strong>Phase 2!</strong> Favorite got eaten — underdog order going in now`,
-        `<strong>Nice fill!</strong> Liquid side done, posting the other leg 🎯`,
+        `<strong>Fav filled!</strong> Posting the dog side now — almost there 🔒`,
+        `<strong>Phase 2.</strong> Liquid side got eaten — underdog going in right now`,
+        `<strong>One leg in.</strong> Fav filled, posting the other side. Don't touch it`,
+        `<strong>Halfway there.</strong> Dog order going up — sit tight`,
     ],
     filled: [
-        `<strong>Nice!</strong> A leg just filled — holding until the other side fills or the game settles`,
-        `<strong>Progress!</strong> One side is in — no SL panic, just waiting for the arb to complete`,
-        `<strong>Order filled!</strong> Riding it out. Only selling if the favorite flips below the flip floor`,
+        `<strong>Leg filled.</strong> Holding until the other side fills or the game settles`,
+        `<strong>One side in.</strong> No panic — arb isn't complete until both legs fill`,
+        `<strong>In position.</strong> Waiting on the other leg. Flip protection is active`,
+        `<strong>Anchored.</strong> One leg in, watching the flip floor`,
     ],
     completed: [
-        `<strong>Locked in!</strong> Both sides filled — profit secured at settlement 🎉`,
+        `<strong>LET'S GO!</strong> Both legs filled — profit locked at settlement 🎉`,
+        `<strong>That's a W.</strong> Clean arb, clean profit. Love to see it 💰`,
+        `<strong>Locked in!</strong> Dual fill confirmed — collecting at settlement`,
+        `<strong>We ate.</strong> Both sides filled, profit secured. Easy money 😎`,
+        `<strong>Arb complete!</strong> Settlement will close this out green. Nice trade`,
     ],
     celebrating: [
-        `<strong>LET'S GO!</strong> Profit locked — I love when a plan comes together 🎉`,
-        `<strong>MONEY!</strong> Another win in the books 💰`,
-        `<strong>Nailed it!</strong> Clean fill, clean profit. You're welcome 😎`,
+        `<strong>LET'S GO!</strong> Profit locked — love when a plan comes together 🎉`,
+        `<strong>We won!</strong> Another one in the books 💰`,
+        `<strong>Nailed it.</strong> Clean fill, clean profit. You're welcome 😎`,
+        `<strong>Bag secured.</strong> That's what the strategy is for`,
     ],
     flip_triggered: [
-        `<strong>Favorite flipped.</strong> Bid dropped below the flip floor — sold to cut losses 🛡️`,
-        `<strong>Flip detected.</strong> The favorite is no longer favored — exited the position`,
-        `<strong>Flip protection fired.</strong> Thesis broken, sold before it got worse`,
+        `<strong>Flip fired.</strong> Bid dropped below the floor — sold to cut exposure 🛡️`,
+        `<strong>Flip protection triggered.</strong> The fav isn't favored anymore — exited`,
+        `<strong>Floor hit.</strong> Thesis broke, I got out before it got worse`,
+        `<strong>Sold on flip.</strong> That's what the floor is there for — capital protected`,
     ],
     stop_loss: [
-        `<strong>Watch SL fired.</strong> Straight bet dropped past the stop — exiting to protect capital`,
-        `<strong>Position stopped.</strong> This is why we set SLs on directional bets 🛡️`,
-        `<strong>SL triggered.</strong> Prop/straight bet hit the limit — sold`,
+        `<strong>Stop-loss fired.</strong> Straight bet hit the limit — exiting to protect capital`,
+        `<strong>SL triggered.</strong> Price crossed the line — sold. That's the plan`,
+        `<strong>Out.</strong> Position stopped. Risk managed, move on`,
     ],
     take_profit: [
-        `<strong>Cha-ching!</strong> Take profit hit — securing those gains 🎯`,
-        `<strong>Target reached!</strong> Sold for profit. Discipline pays off`,
+        `<strong>Cha-ching!</strong> Take-profit hit — locking those gains 🎯`,
+        `<strong>Target reached.</strong> Sold for profit. Discipline pays`,
+        `<strong>TP triggered.</strong> That's why we set targets — got out at the top`,
     ],
     watching: [
-        `<strong>Eyes on it</strong> — Watching your positions like a hawk 🦅`,
-        `<strong>Position active</strong> — Monitoring price vs your SL/TP levels`,
+        `<strong>Eyes on it</strong> — monitoring your position vs SL/TP`,
+        `<strong>Position active</strong> — price vs levels, I'm watching`,
     ],
     near_flip: [
-        `<strong>⚠️ Getting close...</strong> A position is approaching the flip floor`,
-        `<strong>Heads up!</strong> Bid is drifting toward the flip threshold`,
+        `<strong>⚠️ Getting close...</strong> A position is creeping toward the flip floor`,
+        `<strong>Heads up.</strong> Bid drifting toward the threshold — not there yet`,
+        `<strong>Watch this one.</strong> Approaching the floor, flip protection on standby`,
     ],
     holding: [
-        `<strong>Holding steady</strong> — Bid is above the flip floor, no reason to sell`,
-        `<strong>Riding it out</strong> — Normal volatility, just oscillation. No panic`,
-        `<strong>Diamond hands (the smart kind)</strong> — Only a real flip triggers a sell`,
+        `<strong>Holding steady</strong> — bid is above the floor, no reason to sell yet`,
+        `<strong>Riding it out</strong> — this is normal volatility. Not every dip is a flip`,
+        `<strong>Diamond hands (the smart kind)</strong> — only a real flip triggers the exit`,
+        `<strong>Sitting tight.</strong> It's moving around but we're still well above the floor`,
+        `<strong>No action needed.</strong> Bid's healthy, flip protection hasn't fired`,
     ],
     profitable: [
-        `<strong>Looking good!</strong> Session is in the green — keep it rolling 📈`,
-        `<strong>Making money!</strong> Your strategy is working today 💪`,
+        `<strong>Looking good!</strong> Session is in the green — keep it going 📈`,
+        `<strong>Making money!</strong> Strategy is working today 💪`,
+        `<strong>Green session.</strong> Let's keep it that way`,
     ],
     losing: [
         `<strong>Rough patch.</strong> Session is red, but that's trading. Stick to the plan`,
         `<strong>Down but not out.</strong> Risk is managed, we'll bounce back`,
+        `<strong>Temporary.</strong> Red days happen. Stay disciplined`,
     ],
 };
 
@@ -4263,87 +4411,153 @@ let buddyPetCount = 0;
 let buddyStatsExpanded = false;
 let buddyCelebrationTimeout = null;
 let buddySessionPnl = 0;
+let buddyReactionLockedUntil = 0;  // timestamp — P&L/fleet mood won't override until this passes
+let lastBuddyMsgTime = 0;          // for background message cooldown
+let lastBuddyMsgState = '';
 
-function updateBotBuddyMsg(state) {
+// force=true skips the cooldown (use for event-driven updates)
+function updateBotBuddyMsg(state, force = false) {
     const el = document.getElementById('bot-buddy-msg');
     if (!el) return;
+    const now = Date.now();
+    // Background state messages (scanning, holding, etc.) only refresh every 18s to stop flickering
+    if (!force && state === lastBuddyMsgState && now - lastBuddyMsgTime < 18000) return;
+    lastBuddyMsgState = state;
+    lastBuddyMsgTime = now;
+
     const pool = botBuddyMessages[state] || botBuddyMessages.idle;
     let idx = Math.floor(Math.random() * pool.length);
     if (idx === lastBuddyMsgIdx && pool.length > 1) idx = (idx + 1) % pool.length;
     lastBuddyMsgIdx = idx;
-    const dotColor = state === 'idle' ? '#555' : 
+    const dotColor = state === 'idle' ? '#555' :
                      state === 'stop_loss' || state === 'near_sl' || state === 'losing' ? '#ffaa33' :
                      state === 'celebrating' || state === 'take_profit' ? '#ffdd00' : '#00ff88';
     const dotAnim = state === 'idle' ? 'animation:none;' : '';
     el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${dotAnim}"></span>${pool[idx]}`;
 }
 
+// ── Confetti (fires on arb complete only) ────────────────────────────
+function triggerConfetti() {
+    const container = document.getElementById('confetti-container');
+    if (!container) return;
+
+    // Flash overlay
+    const flash = document.createElement('div');
+    flash.className = 'fill-flash';
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 1000);
+
+    const colors = ['#00ff88','#00aaff','#ffdd00','#ff88bb','#ffffff','#aaffcc','#88ddff','#ffaa44'];
+    const shapes = ['50%', '0%', '50% 0 50% 0', '30%'];
+    const count  = 110;
+    const fallH  = (window.innerHeight || 700) + 60;
+
+    container.innerHTML = '';
+
+    for (let i = 0; i < count; i++) {
+        const p = document.createElement('div');
+        p.className = 'confetti-piece';
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        const shape = shapes[Math.floor(Math.random() * shapes.length)];
+        const w     = 7 + Math.random() * 9;
+        const h     = w * (0.4 + Math.random() * 0.8);
+        const left  = Math.random() * window.innerWidth;
+        const delay = Math.random() * 1600;   // ms
+        const dur   = 2600 + Math.random() * 2000; // ms
+        const rotEnd = 360 + Math.floor(Math.random() * 720);
+
+        p.style.cssText = `left:${left}px;top:-${h + 10}px;width:${w}px;height:${h}px;background:${color};border-radius:${shape};`;
+        container.appendChild(p);
+
+        // Use Web Animations API — works reliably on Android Chrome + iOS Safari
+        setTimeout(() => {
+            p.animate([
+                { transform: `translateY(0px) rotate(0deg)`, opacity: 1 },
+                { transform: `translateY(${fallH * 0.7}px) rotate(${rotEnd * 0.6}deg)`, opacity: 1, offset: 0.8 },
+                { transform: `translateY(${fallH}px) rotate(${rotEnd}deg)`, opacity: 0 },
+            ], { duration: dur, easing: 'linear', fill: 'forwards' });
+        }, delay);
+    }
+
+    setTimeout(() => { container.innerHTML = ''; }, 5800);
+}
+
 // Set buddy mood (changes face expression and colors)
 function setBuddyMood(mood) {
     const buddy = document.getElementById('bot-buddy');
     if (!buddy) return;
-    // Remove all mood classes
     buddy.classList.remove('mood-happy', 'mood-neutral', 'mood-worried', 'mood-celebrating', 'mood-focused', 'mood-alert');
     buddy.classList.add(`mood-${mood}`);
     buddyCurrentMood = mood;
+}
+
+// Set mood from fleet health state (only runs when reaction lock has expired)
+function setBuddyMoodFromFleet() {
+    if (Date.now() < buddyReactionLockedUntil) return;
+    const h = _botHealth;
+    if (!h) return;
+    if (h.danger  > 0) { setBuddyMood('alert');   return; }
+    if (h.warning > 0) { setBuddyMood('worried');  return; }
+    if (h.dropping > 0){ setBuddyMood('worried');  return; }
+    if (h.holding > 0) { setBuddyMood('focused');  return; }
+    if (buddySessionPnl >= 0) { setBuddyMood('happy');   return; }
+    setBuddyMood('neutral');
 }
 
 // React to monitor events (called from monitorBots when actions come in)
 function buddyReactToEvent(action) {
     buddyEventCount++;
     buddyLastEvent = action.action;
-    
+
+    const lockThen = (ms) => {
+        clearTimeout(buddyCelebrationTimeout);
+        buddyReactionLockedUntil = Date.now() + ms;
+        buddyCelebrationTimeout = setTimeout(() => {
+            buddyReactionLockedUntil = 0;
+            setBuddyMoodFromFleet();
+        }, ms);
+    };
+
     if (action.action === 'completed') {
         setBuddyMood('celebrating');
-        updateBotBuddyMsg('celebrating');
-        // Celebrate for 8 seconds, then return to normal
-        clearTimeout(buddyCelebrationTimeout);
-        buddyCelebrationTimeout = setTimeout(() => {
-            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
-        }, 8000);
+        updateBotBuddyMsg('celebrating', true);
+        triggerConfetti();
+        lockThen(12000);
     } else if (action.action === 'flip_yes' || action.action === 'flip_no') {
         setBuddyMood('worried');
-        updateBotBuddyMsg('flip_triggered');
-        clearTimeout(buddyCelebrationTimeout);
-        buddyCelebrationTimeout = setTimeout(() => {
-            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
-        }, 6000);
-    } else if (action.action === 'stop_loss_watch') {
+        updateBotBuddyMsg('flip_triggered', true);
+        lockThen(8000);
+    } else if (action.action === 'stop_loss_yes' || action.action === 'stop_loss_no' || action.action === 'stop_loss_watch') {
         setBuddyMood('alert');
-        updateBotBuddyMsg('stop_loss');
-        clearTimeout(buddyCelebrationTimeout);
-        buddyCelebrationTimeout = setTimeout(() => {
-            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
-        }, 6000);
+        updateBotBuddyMsg('stop_loss', true);
+        lockThen(8000);
     } else if (action.action === 'take_profit_watch') {
         setBuddyMood('celebrating');
-        updateBotBuddyMsg('take_profit');
-        clearTimeout(buddyCelebrationTimeout);
-        buddyCelebrationTimeout = setTimeout(() => {
-            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
-        }, 6000);
+        updateBotBuddyMsg('take_profit', true);
+        lockThen(8000);
     } else if (action.action === 'fav_filled_dog_posted') {
         setBuddyMood('happy');
-        updateBotBuddyMsg('fav_filled');
+        updateBotBuddyMsg('fav_filled', true);
+        lockThen(10000);
     } else if (action.action === 'fav_reposted') {
-        updateBotBuddyMsg('fav_posted');
+        updateBotBuddyMsg('fav_posted', true);
     } else if (action.action === 'fav_stale_cancelled') {
-        updateBotBuddyMsg('scanning');
+        updateBotBuddyMsg('scanning', true);
     } else if (action.action === 'holding_yes' || action.action === 'holding_no') {
-        setBuddyMood('focused');
-        updateBotBuddyMsg('holding');
-        clearTimeout(buddyCelebrationTimeout);
-        buddyCelebrationTimeout = setTimeout(() => {
-            setBuddyMood(buddySessionPnl >= 0 ? 'happy' : 'neutral');
-        }, 10000);
+        // Don't override a stronger reaction, but set focused if not locked
+        if (Date.now() >= buddyReactionLockedUntil) {
+            setBuddyMood('focused');
+            updateBotBuddyMsg('holding', true);
+            lockThen(14000);
+        }
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
-        updateBotBuddyMsg('filled');
+        updateBotBuddyMsg('filled', true);
+        lockThen(8000);
     } else if (action.action === 'reposted') {
-        // brief message, no mood change
         updateBotBuddyMsg('scanning');
     }
-    
+
     updateBuddyStats();
 }
 
@@ -4351,7 +4565,7 @@ function buddyReactToEvent(action) {
 function buddyUpdateFromPnl(pnlData) {
     if (!pnlData) return;
     buddySessionPnl = pnlData.net_dollars ?? 0;
-    
+
     // Update the stats panel
     const pnlEl = document.getElementById('buddy-pnl');
     if (pnlEl) {
@@ -4359,16 +4573,10 @@ function buddyUpdateFromPnl(pnlData) {
         pnlEl.style.color = color;
         pnlEl.textContent = `${buddySessionPnl >= 0 ? '+' : ''}$${buddySessionPnl.toFixed(2)}`;
     }
-    
-    // Update mood based on P&L (unless celebrating/reacting)
-    if (buddyCurrentMood !== 'celebrating') {
-        if (buddySessionPnl >= 0) {
-            setBuddyMood('happy');
-        } else if (buddySessionPnl < -10) {
-            setBuddyMood('worried');
-        } else {
-            setBuddyMood('neutral');
-        }
+
+    // Only update mood if no event reaction is active
+    if (Date.now() >= buddyReactionLockedUntil) {
+        setBuddyMoodFromFleet();
     }
 }
 
@@ -4462,21 +4670,19 @@ function petBuddy(e) {
 function updateBotBuddy(activeCount, filledLegs) {
     const buddy = document.getElementById('bot-buddy');
     if (!buddy) return;
-    // Show buddy whenever there are any bots (active or not)
     if (activeCount > 0 || document.getElementById('bots-section')?.style.display === 'block') {
         buddy.style.display = 'flex';
     }
-    // Auto-restart monitor if it somehow stopped
     if (!autoMonitorInterval) {
         autoResumeMonitor();
     }
+    // Update mood from fleet health (gated behind reaction lock inside)
+    setBuddyMoodFromFleet();
+    // Background message — only refreshes every 18s (cooldown in updateBotBuddyMsg)
     if (filledLegs > 0) {
         updateBotBuddyMsg('filled');
     } else if (activeCount > 0) {
-        // Only update message if not in a reaction state
-        if (buddyCurrentMood !== 'celebrating' && buddyCurrentMood !== 'worried') {
-            updateBotBuddyMsg('scanning');
-        }
+        updateBotBuddyMsg('scanning');
     }
 }
 
@@ -4646,7 +4852,7 @@ function showScanResults(opportunities, minWidth, totalScanned) {
 async function quickBot(ticker, yesPrice, noPrice) {
     // Read qty from scan modal first, fall back to controls bar
     const quantity        = parseInt(document.getElementById('scan-modal-qty')?.value || document.getElementById('scan-qty')?.value || '1');
-    const flip_threshold  = 60;
+    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
@@ -4838,6 +5044,28 @@ function closeMiddlesModal() {
 
 // ─── Upgrade #6: P&L Dashboard ────────────────────────────────────────────────
 
+function _buildAnchoredBadgeHTML() {
+    if (_botsActive === 0) return '';
+    const h = _botHealth;
+    // Left group: bot counts (waiting + anchored go together)
+    const leftParts = [];
+    if (h.waiting     > 0) leftParts.push(`<span style="color:#8892a6;font-weight:700;">⏳ ${h.waiting}</span>`);
+    if (_botsAnchored > 0) leftParts.push(`<span style="color:#00aaff;font-weight:700;">⚓ ${_botsAnchored}</span>`);
+    const dot = `<span style="color:#555;margin:0 3px;">·</span>`;
+    const leftStr = leftParts.join(dot);
+    // Right group: health statuses (only relevant to anchored bots)
+    const healthParts = [];
+    if (h.healthy  > 0) healthParts.push(`<span style="color:#00ff88;font-weight:700;">💚 ${h.healthy}</span>`);
+    if (h.safe     > 0) healthParts.push(`<span style="color:#00ff88;font-weight:700;">🛡 ${h.safe}</span>`);
+    if (h.holding  > 0) healthParts.push(`<span style="color:#00aaff;font-weight:700;">🔵 ${h.holding}</span>`);
+    if (h.dropping > 0) healthParts.push(`<span style="color:#ffaa00;font-weight:700;">🟡 ${h.dropping}</span>`);
+    if (h.warning  > 0) healthParts.push(`<span style="color:#ff8800;font-weight:700;">🟠 ${h.warning}</span>`);
+    if (h.danger   > 0) healthParts.push(`<span style="color:#ff4444;font-weight:700;">🔴 ${h.danger}</span>`);
+    const rightStr = healthParts.join(' ');
+    const sep = leftStr && rightStr ? `<span style="color:#555;margin:0 6px;">—</span>` : '';
+    return leftStr + sep + rightStr;
+}
+
 async function loadPnL() {
     try {
         const resp = await fetch(`${API_BASE}/pnl`);
@@ -4851,10 +5079,19 @@ async function loadPnL() {
         const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
         const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
 
+        const wins  = pnl.completed_bots || 0;
+        const losses = pnl.stopped_bots  || 0;
         el.innerHTML = `
-            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">Today <span style="color:#555;font-size:9px;">${dayLabel}</span></span>
-            <span style="color:${netColor};font-weight:800;font-size:1.2rem;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
-            <span style="color:#8892a6;font-size:11px;">↑$${gross} ↓$${loss} &nbsp; ${pnl.completed_bots || 0}W/${pnl.stopped_bots || 0}L</span>
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
+            <span style="color:${netColor};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${netColor}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
+            <span style="font-size:11px;">
+                <span style="color:#00cc66;">↑ $${gross}</span>
+                <span style="color:#555;margin:0 3px;">·</span>
+                <span style="color:#ff5555;">↓ $${loss}</span>
+                <span style="color:#555;margin:0 6px;">|</span>
+                <span style="color:#00cc66;font-weight:700;">${wins}W</span><span style="color:#444;"> / </span><span style="color:#ff5555;font-weight:700;">${losses}L</span>
+            </span>
+            <span id="anchored-badge" style="font-size:11px;">${_buildAnchoredBadgeHTML()}</span>
         `;
         // Feed P&L data to bot buddy
         buddyUpdateFromPnl(pnl);
@@ -4885,8 +5122,9 @@ async function loadHistoryStats() {
     const widthPanel = document.getElementById('width-breakdown-panel');
     if (!panel) return;
     try {
+        const dateParam = selectedHistoryDay ? `?date=${selectedHistoryDay}` : '';
         const [statsResp, pnlResp] = await Promise.all([
-            fetch(`${API_BASE}/bot/history/stats`),
+            fetch(`${API_BASE}/bot/history/stats${dateParam}`),
             fetch(`${API_BASE}/pnl`),
         ]);
         const s = await statsResp.json();
@@ -5029,7 +5267,7 @@ async function loadHistoryStats() {
                     })()}
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis (entry-15¢, floor 60¢)</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis (entry-15¢, floor 55¢)</div>
                     ${fs.total > 0 ? `
                     <div style="display:flex;flex-direction:column;gap:5px;">
                         <div style="display:flex;justify-content:space-between;">
@@ -5083,29 +5321,43 @@ async function loadHistoryStats() {
         // ── Width Performance Table (with breakeven %) ──
         if (widthPanel && s.width_breakdown && s.width_breakdown.length > 0) {
             const rows = s.width_breakdown.map(w => {
-                const frColor = w.fill_rate >= w.breakeven_pct ? '#00ff88' : w.fill_rate >= w.breakeven_pct * 0.8 ? '#ffaa00' : '#ff4444';
+                const sysBe = w.system_be_pct;
+                const actBe = w.breakeven_pct;
+                const fr    = w.fill_rate;
+                // Fill rate: green = beats actual BE, yellow = between system & actual, red = below system BE
+                const frColor = fr >= actBe ? '#00ff88' : (sysBe != null && fr >= sysBe) ? '#ffaa00' : '#ff4444';
+                // Actual BE: green = below system BE (losses smaller than theory), yellow = within 5pp, red = above system BE
+                const beColor = sysBe == null ? '#ffaa33'
+                    : actBe <= sysBe ? '#00ff88'
+                    : actBe <= sysBe + 5 ? '#ffaa00'
+                    : '#ff4444';
                 const nColor = w.net_cents >= 0 ? '#00ff88' : '#ff4444';
                 const edgeColor = w.edge >= 0 ? '#00ff88' : '#ff4444';
                 const edgeIcon = w.edge >= 5 ? '🟢' : w.edge >= 0 ? '🟡' : '🔴';
-                const flipInfo = w.flips > 0 ? `<span style="color:#ff6666;font-size:9px;">${w.flips} flip${w.flips > 1 ? 's' : ''}</span>` : '';
-                const settledInfo = w.settled_losses > 0 ? `<span style="color:#ffaa00;font-size:9px;">${w.settled_losses} settled</span>` : '';
-                const lossDetail = (flipInfo || settledInfo) ? ` <span style="color:#555;font-size:9px;">(${[flipInfo, settledInfo].filter(Boolean).join(', ')})</span>` : '';
+                const settledInfo = w.settled_losses > 0 ? `<span style="color:#ffaa00;font-size:9px;"> (${w.settled_losses} settled)</span>` : '';
+                const sysBeColor = sysBe != null
+                    ? (fr >= sysBe ? '#00aaff' : '#ff6b35')
+                    : '#555';
+                const ftSecs = w.avg_fill_duration_s;
+                const ftColor = ftSecs === null ? '#555' : ftSecs < 300 ? '#00ff88' : ftSecs < 900 ? '#ffaa00' : '#ff4444';
+                const avgWColor = '#00ff88';
+                const avgLColor = '#ff6666';
                 return `<tr style="border-bottom:1px solid #1e274033;">
                     <td style="padding:6px 10px;color:#fff;font-weight:700;">${w.width}¢</td>
                     <td style="padding:6px 10px;color:${frColor};font-weight:700;">${w.fill_rate}%</td>
-                    <td style="padding:6px 10px;color:#ffaa33;font-weight:600;">${w.breakeven_pct}%</td>
-                    <td style="padding:6px 10px;color:#8892a6;font-size:10px;">${w.system_be_pct != null ? w.system_be_pct + '%' : '—'}</td>
+                    <td style="padding:6px 10px;color:${beColor};font-weight:600;">${w.breakeven_pct}%</td>
+                    <td style="padding:6px 10px;color:${sysBeColor};font-weight:600;">${w.system_be_pct != null ? w.system_be_pct + '%' : '—'}</td>
                     <td style="padding:6px 10px;color:${edgeColor};font-weight:700;">${edgeIcon} ${w.edge >= 0 ? '+' : ''}${w.edge}%</td>
-                    <td style="padding:6px 10px;color:#8892a6;">${w.wins}W / ${w.losses}L${lossDetail}</td>
+                    <td style="padding:6px 10px;"><span style="color:#00ff88;font-weight:700;">${w.wins}W</span> / <span style="color:#ff4444;font-weight:700;">${w.losses}L</span>${settledInfo}</td>
                     <td style="padding:6px 10px;color:${nColor};font-weight:700;">${w.net_cents >= 0 ? '+' : ''}${w.net_cents}¢</td>
-                    <td style="padding:6px 10px;color:#8892a6;font-size:10px;">+${w.avg_profit_cents}¢ / -${w.avg_loss_cents}¢</td>
-                    <td style="padding:6px 10px;color:#8892a6;">${w.avg_fill_duration_s !== null ? fmtDur(w.avg_fill_duration_s) : '—'}</td>
+                    <td style="padding:6px 10px;font-size:10px;"><span style="color:${avgWColor};">+${w.avg_profit_cents}¢</span> / <span style="color:${avgLColor};">-${w.avg_loss_cents}¢</span></td>
+                    <td style="padding:6px 10px;color:${ftColor};font-weight:600;">${ftSecs !== null ? fmtDur(ftSecs) : '—'}</td>
                 </tr>`;
             }).join('');
             widthPanel.innerHTML = `
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Width Performance — Fill Rate vs Breakeven</div>
-                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit) from real data. System BE% = 15/(15+W) — theoretical assuming 15\u00a2 flip loss (entry \u226570\u00a2). Fill rate must exceed both to be profitable.</div>
+                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit) from real data. System BE% = 15/(15+W) — theoretical assuming 15\u00a2 flip loss (55\u00a2 floor, entry \u226570\u00a2). Fill rate must exceed both to be profitable.</div>
                     <div style="overflow-x:auto;">
                     <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px;">
                         <tr style="border-bottom:1px solid #1e2740;">
@@ -5158,6 +5410,7 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 
 // ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
 let calendarViewDate = new Date(); // tracks which month is displayed
+let selectedHistoryDay = null;     // YYYY-MM-DD string, null = full history
 
 async function loadPnLCalendar() {
     const panel = document.getElementById('pnl-calendar-panel');
@@ -5259,12 +5512,25 @@ function renderPnLCalendar(panel, days) {
             content = `<span style="color:#222;font-size:10px;">${d}</span>`;
         }
 
-        const todayRing = isToday ? 'box-shadow:0 0 0 2px #00aaff;' : '';
-        cellsHtml += `<div style="background:${bg};border:1px solid ${border};border-radius:6px;padding:4px 2px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:48px;${todayRing}" title="${key}">${content}</div>`;
+        const isSelected = key === selectedHistoryDay;
+        const todayRing = isSelected
+            ? 'box-shadow:0 0 0 2px #ffaa00;'
+            : isToday ? 'box-shadow:0 0 0 2px #00aaff;' : '';
+        const clickable = (dayData || isToday) && !isFuture;
+        const cursor = clickable ? 'cursor:pointer;' : '';
+        cellsHtml += `<div onclick="${clickable ? `selectHistoryDay('${key}')` : ''}" style="background:${bg};border:1px solid ${border};border-radius:6px;padding:4px 2px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:48px;${todayRing}${cursor}" title="${key}">${content}</div>`;
     }
+
+    const filterBanner = selectedHistoryDay
+        ? `<div style="display:flex;align-items:center;justify-content:space-between;background:#ffaa0022;border:1px solid #ffaa0066;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:11px;">
+               <span style="color:#ffaa00;font-weight:700;">📅 Filtered: ${selectedHistoryDay}</span>
+               <button onclick="selectHistoryDay(null)" style="background:none;border:none;color:#ffaa00;cursor:pointer;font-size:12px;font-weight:700;padding:0 4px;">✕ Clear</button>
+           </div>`
+        : '';
 
     panel.innerHTML = `
         <div style="background:#0d1120;border:1px solid #1e2740;border-radius:12px;padding:16px;">
+            ${filterBanner}
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                 <button onclick="calendarPrevMonth()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">‹</button>
                 <div style="text-align:center;">
@@ -5284,6 +5550,14 @@ function renderPnLCalendar(panel, days) {
     `;
 }
 
+function selectHistoryDay(dateStr) {
+    // Toggle: clicking same day deselects, clicking null clears
+    selectedHistoryDay = (dateStr && dateStr !== selectedHistoryDay) ? dateStr : null;
+    loadPnLCalendar();
+    loadHistoryStats();
+    loadTradeHistoryList();
+}
+
 function calendarPrevMonth() {
     calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1);
     loadPnLCalendar();
@@ -5294,16 +5568,12 @@ function calendarNextMonth() {
     loadPnLCalendar();
 }
 
-async function loadTradeHistory() {
+async function loadTradeHistoryList() {
     const el = document.getElementById('trade-history-list');
     if (!el) return;
-
-    // Load stats panel + calendar in parallel
-    loadHistoryStats();
-    loadPnLCalendar();
-
     try {
-        const resp = await fetch(`${API_BASE}/bot/history?limit=50`);
+        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const resp = await fetch(`${API_BASE}/bot/history?limit=50${dateParam}`);
         const data = await resp.json();
         const trades = data.trades || [];
         
@@ -5454,6 +5724,13 @@ async function loadTradeHistory() {
     } catch (err) {
         el.innerHTML = `<p style="color:#ff4444;">Failed to load history: ${err.message}</p>`;
     }
+}
+
+async function loadTradeHistory() {
+    // Load stats panel + calendar in parallel, then trade list
+    loadHistoryStats();
+    loadPnLCalendar();
+    loadTradeHistoryList();
 }
 
 async function clearTradeHistory() {
@@ -5630,7 +5907,7 @@ function generateBotRiskWarnings() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
+    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
     const total = yes + no;
 
     const warnings = [];

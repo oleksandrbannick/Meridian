@@ -3678,6 +3678,33 @@ def _run_monitor():
                 # NEVER go above the current bid. Repost AT the bid to stay competitive
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
+                    # Danger-zone guard: don't chase the market in tight late-game situations.
+                    # Same rules as deploy-block: NBA/NCAAW Q4+, NCAAB 2nd-half ≤10 min,
+                    # both using spread-adjusted margin for spread tickers.
+                    if _is_basketball(ticker):
+                        _gc = _get_game_context(ticker)
+                        if _gc:
+                            if _detect_market_type(ticker) == 'spread':
+                                _sd = _get_spread_effective_tightness(ticker)
+                                if _sd is None: _sd = _gc.get('score_diff', 999)
+                            else:
+                                _sd = _gc.get('score_diff', 999)
+                            _period = _gc.get('period', 0)
+                            _clock_str = _gc.get('clock', '')
+                            _sport_r = _detect_sport(ticker)
+                            _cmins = 999
+                            _cm = re.match(r'(\d+):(\d+)', _clock_str)
+                            if _cm: _cmins = int(_cm.group(1)) + int(_cm.group(2)) / 60
+                            _in_danger = False
+                            if _sport_r == 'ncaab':
+                                _in_danger = ((_period == 2 and _cmins <= 10 and _sd <= 5) or
+                                              (_period >= 3 and _sd <= 5))
+                            else:  # NBA, NCAAW (4 quarters)
+                                _in_danger = _period >= 4 and _sd <= 5
+                            if _in_danger:
+                                print(f'⛔ REPOST BLOCKED (danger zone): {bot_id} '
+                                      f'— {_sport_r} P{_period} {_clock_str}, margin={_sd:.1f}¢')
+                                continue
                     # Width-aware repost: identify fav (higher bid) and dog (lower bid).
                     # Dog posts at its current bid — fav is capped so that
                     # fav + dog = 100 - min_width, preserving target spread.
@@ -3736,58 +3763,9 @@ def _run_monitor():
                             print(f"Repost failed for {bot_id}: {re_err}")
                     continue
 
-                # ── Partial fill: resize unfilled leg after STALE_CANCEL_MINUTES ──
-                if yes_filled > 0 and no_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
-                    # Repost NO — NEVER above current bid, and PRESERVE arb width
-                    target_w = bot.get('arb_width', bot.get('profit_per', 5))
-                    max_no_for_width = 100 - bot['yes_price'] - target_w  # preserve width
-                    new_no_price = min(no_bid, max_no_for_width, 98)
-                    new_no_price = max(1, new_no_price)
-                    if new_no_price > no_bid:
-                        print(f'⚠ Resize NO skipped: cap {new_no_price}¢ > bid {no_bid}¢ — would overpay')
-                    else:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['no_order_id'])
-                            api_rate_limiter.wait()
-                            nn = kalshi_client.create_order(ticker=ticker, side='no', action='buy',
-                                                            count=yes_filled, no_price=new_no_price)
-                            bot.update({'no_order_id': nn['order']['order_id'],
-                                        'quantity': yes_filled, 'no_price': new_no_price,
-                                        'profit_per': 100 - bot['yes_price'] - new_no_price,
-                                        'posted_at': now})
-                            print(f'🔄 Resize NO: {bot_id} YES@{bot["yes_price"]}¢ + NO@{new_no_price}¢ → {100 - bot["yes_price"] - new_no_price}¢ width (target {target_w}¢)')
-                            actions.append({'bot_id': bot_id, 'action': 'partial_resize_no',
-                                            'yes_filled': yes_filled, 'new_no': new_no_price})
-                        except Exception as pe:
-                            print(f"Partial resize NO failed for {bot_id}: {pe}")
-                    continue
-
-                if no_filled > 0 and yes_filled == 0 and age_min >= STALE_CANCEL_MINUTES:
-                    # Repost YES — NEVER above current bid, and PRESERVE arb width
-                    target_w = bot.get('arb_width', bot.get('profit_per', 5))
-                    max_yes_for_width = 100 - bot['no_price'] - target_w  # preserve width
-                    new_yes_price = min(yes_bid, max_yes_for_width, 98)
-                    new_yes_price = max(1, new_yes_price)
-                    if new_yes_price > yes_bid:
-                        print(f'⚠ Resize YES skipped: cap {new_yes_price}¢ > bid {yes_bid}¢ — would overpay')
-                    else:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['yes_order_id'])
-                            api_rate_limiter.wait()
-                            ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy',
-                                                            count=no_filled, yes_price=new_yes_price)
-                            bot.update({'yes_order_id': ny['order']['order_id'],
-                                        'quantity': no_filled, 'yes_price': new_yes_price,
-                                        'profit_per': 100 - new_yes_price - bot['no_price'],
-                                        'posted_at': now})
-                            print(f'🔄 Resize YES: {bot_id} YES@{new_yes_price}¢ + NO@{bot["no_price"]}¢ → {100 - new_yes_price - bot["no_price"]}¢ width (target {target_w}¢)')
-                            actions.append({'bot_id': bot_id, 'action': 'partial_resize_yes',
-                                            'no_filled': no_filled, 'new_yes': new_yes_price})
-                        except Exception as pe:
-                            print(f"Partial resize YES failed for {bot_id}: {pe}")
-                    continue
+                # Dog leg is NEVER reposted regardless of which side is fav.
+                # Applies to both YES-dog (when NO is fav) and NO-dog (when YES is fav).
+                # Chasing the dog away from the original price breaks the arb width.
 
                 # ── YES fully filled, NO still open — FLIP THRESHOLD check ──
                 if yes_filled >= qty and no_filled < qty:
@@ -4061,7 +4039,12 @@ def list_bots():
 def bot_history():
     """Get completed/stopped trade history"""
     limit = int(request.args.get('limit', 50))
-    return jsonify({'trades': trade_history[:limit], 'total': len(trade_history)})
+    date_filter = request.args.get('date', '').strip()
+    if date_filter:
+        filtered = [t for t in trade_history if _trade_day_key(t) == date_filter]
+    else:
+        filtered = trade_history
+    return jsonify({'trades': filtered[:limit], 'total': len(filtered)})
 
 
 @app.route('/api/logs', methods=['GET'])
@@ -4176,8 +4159,13 @@ def _compute_completed_stats(arb_wins):
 @app.route('/api/bot/history/stats', methods=['GET'])
 def history_stats():
     """Compute analytics from trade history for the optimization dashboard."""
-    arb_trades = [t for t in trade_history if t.get('type') != 'watch']
-    watch_trades = [t for t in trade_history if t.get('type') == 'watch']
+    date_filter = request.args.get('date', '').strip()
+    if date_filter:
+        source = [t for t in trade_history if _trade_day_key(t) == date_filter]
+    else:
+        source = trade_history
+    arb_trades = [t for t in source if t.get('type') != 'watch']
+    watch_trades = [t for t in source if t.get('type') == 'watch']
 
     WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
     arb_wins = [t for t in arb_trades if t.get('result', '') in WIN_RESULTS]

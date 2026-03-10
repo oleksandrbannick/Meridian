@@ -77,14 +77,17 @@
         }
         .sport-pill:hover { border-color: #00ff88; color: #00ff88; }
         .sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
-        .scan-sport-pill, .mid-sport-pill {
+        .scan-sport-pill, .mid-sport-pill, .anchor-signal-pill {
             padding: 3px 10px; border-radius: 12px; border: 1px solid #2a3550;
             background: #1a1f35; color: #8892a6; font-size: 11px; font-weight: 600;
             cursor: pointer; transition: all 0.15s; white-space: nowrap;
         }
-        .scan-sport-pill:hover, .mid-sport-pill:hover { border-color: #ffaa00; color: #ffaa00; }
-        .scan-sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
-        .mid-sport-pill.active  { background: #ffaa00; color: #000; border-color: #ffaa00; }
+        .scan-sport-pill:hover, .mid-sport-pill:hover, .anchor-signal-pill:hover { border-color: #ffaa00; color: #ffaa00; }
+        .scan-sport-pill.active  { background: #00ff88; color: #000; border-color: #00ff88; }
+        .mid-sport-pill.active   { background: #ffaa00; color: #000; border-color: #ffaa00; }
+        .anchor-signal-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .scan-mode-pill { padding:5px 12px; font-size:11px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; }
+        .scan-mode-pill.active { color:#fff; background:#1a3a5a; border-radius:6px; }
 
         /* ── Bots Section ──────────────────────────────────────────── */
         .bots-section {
@@ -1052,30 +1055,48 @@
 
     <!-- Scan Modal -->
     <div class="modal" id="scan-modal">
-        <div class="modal-content" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+        <div class="modal-content" style="max-width:660px;max-height:82vh;display:flex;flex-direction:column;">
+            <!-- Header: title + mode toggle + controls -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+                    <div style="display:flex;background:#0a0e1a;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
+                        <button class="scan-mode-pill active" data-mode="instarb" onclick="setScanMode('instarb')">⚡ Instant Arb</button>
+                        <button class="scan-mode-pill"        data-mode="anchor"  onclick="setScanMode('anchor')">🔒 Anchor Hunt</button>
+                    </div>
+                </div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
-                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Min Width¢:</label>
-                    <input type="number" id="scan-min-width" min="1" max="20" value="3"
-                           style="width:52px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                    <!-- Instant Arb controls -->
+                    <div id="scan-instarb-controls" style="display:flex;gap:6px;align-items:center;">
+                        <label style="color:#8892a6;font-size:11px;font-weight:600;">Min Width¢:</label>
+                        <input type="number" id="scan-min-width" min="1" max="20" value="3"
+                               style="width:52px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                    </div>
+                    <!-- Anchor Hunt signal filter -->
+                    <div id="scan-anchor-controls" style="display:none;gap:6px;align-items:center;">
+                        <span style="color:#8892a6;font-size:11px;font-weight:600;">Signal:</span>
+                        <button class="anchor-signal-pill active" data-signal="all"    onclick="setAnchorSignal('all')">All</button>
+                        <button class="anchor-signal-pill"        data-signal="lock"   onclick="setAnchorSignal('lock')">🟢 LOCK</button>
+                        <button class="anchor-signal-pill"        data-signal="anchor" onclick="setAnchorSignal('anchor')">🟢 ANCHOR</button>
+                        <button class="anchor-signal-pill"        data-signal="lean"   onclick="setAnchorSignal('lean')">🟡 LEAN</button>
+                    </div>
                     <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
                     <input type="number" id="scan-modal-qty" min="1" value="1"
                            style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
-                    <button class="btn btn-primary" onclick="autoScanMarkets()" style="padding:.4rem .9rem;font-size:13px;">🔍 Scan</button>
+                    <button class="btn btn-primary" onclick="runScan()" style="padding:.4rem .9rem;font-size:13px;">🔍 Scan</button>
                     <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
                 </div>
             </div>
-            <!-- Sport filter pills -->
+            <!-- Sport filter pills (shared by both modes) -->
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">Sport:</span>
-                <button class="scan-sport-pill active" data-sport="all"   onclick="setScanSport('all')">All</button>
-                <button class="scan-sport-pill"        data-sport="nba"   onclick="setScanSport('nba')">🏀 NBA</button>
-                <button class="scan-sport-pill"        data-sport="nhl"   onclick="setScanSport('nhl')">🏒 NHL</button>
-                <button class="scan-sport-pill"        data-sport="mlb"   onclick="setScanSport('mlb')">⚾ MLB</button>
-                <button class="scan-sport-pill"        data-sport="ncaab" onclick="setScanSport('ncaab')">🎓 NCAAB</button>
-                <button class="scan-sport-pill"        data-sport="nfl"   onclick="setScanSport('nfl')">🏈 NFL</button>
+                <button class="scan-sport-pill active" data-sport="all"    onclick="setScanSport('all')">All</button>
+                <button class="scan-sport-pill"        data-sport="nba"    onclick="setScanSport('nba')">🏀 NBA</button>
+                <button class="scan-sport-pill"        data-sport="nhl"    onclick="setScanSport('nhl')">🏒 NHL</button>
+                <button class="scan-sport-pill"        data-sport="mlb"    onclick="setScanSport('mlb')">⚾ MLB</button>
+                <button class="scan-sport-pill"        data-sport="ncaab"  onclick="setScanSport('ncaab')">🎓 NCAAB</button>
+                <button class="scan-sport-pill"        data-sport="nfl"    onclick="setScanSport('nfl')">🏈 NFL</button>
                 <button class="scan-sport-pill"        data-sport="soccer" onclick="setScanSport('soccer')">⚽ Soccer</button>
             </div>
             <div id="scan-results" style="flex:1;overflow-y:auto;"></div>

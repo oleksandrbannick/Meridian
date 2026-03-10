@@ -3971,12 +3971,16 @@ async function placeAllWidthsBots() {
 
     // Build order table string
     const pad = (s, n) => String(s).padStart(n);
+    let totalStopLossCents = 0;
     let orderLines = [`⚡ Deploy ALL Widths — ${currentArbMarket.ticker}`, ''];
-    orderLines.push('  WIDTH   YES    NO   PROFIT   COST');
-    orderLines.push('  ─────────────────────────────────');
+    orderLines.push('  WIDTH   YES    NO    STOP LOSS   PROFIT   COST');
+    orderLines.push('  ───────────────────────────────────────────────');
     for (const { w, arb, favPrice, dogPrice, profit } of validWidths) {
-        const costDollars = ((favPrice + dogPrice) * qty / 100).toFixed(2);
-        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
+        const costDollars     = ((favPrice + dogPrice) * qty / 100).toFixed(2);
+        const stopLossCents   = (favPrice - flipFloor) * qty;   // loss if fav fills then stops at floor
+        totalStopLossCents   += stopLossCents;
+        const stopLossDollars = (stopLossCents / 100).toFixed(2);
+        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   -$${pad(stopLossDollars,5)}   +${pad(profit+'¢',3)}   $${costDollars}`);
     }
     if (skipReasons.length > 0) {
         orderLines.push('');
@@ -3984,7 +3988,8 @@ async function placeAllWidthsBots() {
     }
     orderLines.push('');
     orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
-    orderLines.push(`  Total cost: ~$${(totalCostCents / 100).toFixed(2)}`);
+    orderLines.push(`  Total entry cost:      $${(totalCostCents / 100).toFixed(2)}`);
+    orderLines.push(`  Max stop-loss loss:   -$${(totalStopLossCents / 100).toFixed(2)}  (if all widths stopped at ${flipFloor}¢)`);
     orderLines.push('');
     orderLines.push('Place these orders?');
 
@@ -5358,8 +5363,10 @@ async function loadBalance() {
 
 // ─── Upgrade #3: Multi-Market Arb Scanner ─────────────────────────────────────
 
-let _scanModalSport = 'all';
+let _scanModalSport    = 'all';
 let _middlesModalSport = 'all';
+let _scanMode          = 'instarb';  // 'instarb' | 'anchor'
+let _anchorSignalFilter = 'all';     // 'all' | 'lock' | 'anchor' | 'lean'
 
 function setScanSport(sport) {
     _scanModalSport = sport;
@@ -5369,6 +5376,29 @@ function setScanSport(sport) {
 function setMiddlesSport(sport) {
     _middlesModalSport = sport;
     document.querySelectorAll('.mid-sport-pill').forEach(el => el.classList.toggle('active', el.dataset.sport === sport));
+}
+
+function setScanMode(mode) {
+    _scanMode = mode;
+    document.querySelectorAll('.scan-mode-pill').forEach(el => el.classList.toggle('active', el.dataset.mode === mode));
+    const instarbCtrl = document.getElementById('scan-instarb-controls');
+    const anchorCtrl  = document.getElementById('scan-anchor-controls');
+    if (instarbCtrl) instarbCtrl.style.display = mode === 'instarb' ? 'flex' : 'none';
+    if (anchorCtrl)  anchorCtrl.style.display  = mode === 'anchor'  ? 'flex' : 'none';
+    const results = document.getElementById('scan-results');
+    if (results) results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Set your filters above and click Scan.</p>';
+    const countEl = document.getElementById('scan-count');
+    if (countEl) countEl.textContent = '';
+}
+
+function setAnchorSignal(sig) {
+    _anchorSignalFilter = sig;
+    document.querySelectorAll('.anchor-signal-pill').forEach(el => el.classList.toggle('active', el.dataset.signal === sig));
+}
+
+function runScan() {
+    if (_scanMode === 'anchor') anchorScan();
+    else autoScanMarkets();
 }
 
 function openScanModal() {
@@ -5454,6 +5484,127 @@ function showScanResults(opportunities, minWidth, totalScanned) {
         }).join('');
     }
     modal.classList.add('show');
+}
+
+// ─── Anchor Hunt Scanner ─────────────────────────────────────────────────────
+// Client-side scanner that uses already-loaded allMarkets + live score data
+// to find games with LOCK / ANCHOR / LEAN signals and suggest Bot placements.
+function anchorScan() {
+    const results = document.getElementById('scan-results');
+    const countEl = document.getElementById('scan-count');
+    if (!results) return;
+
+    if (!allMarkets.length) {
+        results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Load markets first (open the Markets tab), then scan.</p>';
+        return;
+    }
+
+    if (countEl) countEl.textContent = 'Scanning signals…';
+
+    // Only winner-type markets (GAME- ticker, no SPREAD/TOTAL/1H/PTS/REB etc.)
+    const winnerMkts = allMarkets.filter(m => {
+        const t = (m.ticker || '').toUpperCase();
+        return t.includes('GAME-') && !t.includes('SPREAD') && !t.includes('TOTAL')
+            && !t.includes('1H') && !t.includes('2H');
+    });
+
+    // Group by gameId, applying sport filter
+    const gameMap = new Map();
+    for (const m of winnerMkts) {
+        const et    = m.event_ticker || m.ticker || '';
+        const sport = detectSport(et);
+
+        // Sport pill filter
+        if (_scanModalSport !== 'all') {
+            const su = sport.toUpperCase();
+            const fu = _scanModalSport.toUpperCase();
+            const ok = (fu === 'NBA'    && su === 'NBA')
+                    || (fu === 'NHL'    && su === 'NHL')
+                    || (fu === 'MLB'    && su === 'MLB')
+                    || (fu === 'NCAAB'  && su === 'NCAAB')
+                    || (fu === 'NFL'    && (su === 'NFL' || su === 'NCAAF'))
+                    || (fu === 'SOCCER' && (su === 'MLS' || su === 'EPL' || su === 'UCL'));
+            if (!ok) continue;
+        }
+
+        const gameId = extractGameId(et);
+        if (!gameMap.has(gameId)) gameMap.set(gameId, { sport, markets: [], title: m.title || et });
+        gameMap.get(gameId).markets.push(m);
+    }
+
+    // Compute signal for each game group, then filter
+    const rows = [];
+    for (const [gameId, { sport, markets, title }] of gameMap) {
+        const signal = getGameSignal(gameId, sport, markets);
+        if (!signal || signal.type === 'none' || signal.type === 'pregame' || signal.type === 'caution') continue;
+
+        // Signal filter
+        if (_anchorSignalFilter !== 'all') {
+            const lbl = signal.label.toUpperCase();
+            const match = (_anchorSignalFilter === 'lock'   && lbl.includes('LOCK'))
+                       || (_anchorSignalFilter === 'anchor' && lbl.includes('ANCHOR'))
+                       || (_anchorSignalFilter === 'lean'   && lbl.includes('LEAN'));
+            if (!match) continue;
+        }
+
+        // Build one row per winner market in this game
+        for (const m of markets) {
+            const yesBid = getPrice(m, 'yes_bid') || 0;
+            const noBid  = getPrice(m, 'no_bid')  || 0;
+            if (yesBid === 0 && noBid === 0) continue;  // no live prices
+            const sugYes  = Math.min(99, yesBid + 1);
+            const sugNo   = Math.min(99, noBid  + 1);
+            const profit  = 100 - sugYes - sugNo;
+            if (profit <= 0) continue;
+            rows.push({ signal, m, gameId, sport, yesBid, noBid, sugYes, sugNo, profit, title });
+        }
+    }
+
+    // Sort: LOCK → ANCHOR → LEAN → DANGER/CLOSE, then by profit desc
+    const sigRank = { anchor: 0, lean: 1, swing: 2, danger: 3 };
+    rows.sort((a, b) => {
+        // LOCK before ANCHOR (both type='anchor' — distinguish by label)
+        const aIsLock = a.signal.label.includes('LOCK');
+        const bIsLock = b.signal.label.includes('LOCK');
+        const ar = aIsLock ? -1 : (sigRank[a.signal.type] ?? 9);
+        const br = bIsLock ? -1 : (sigRank[b.signal.type] ?? 9);
+        if (ar !== br) return ar - br;
+        return b.profit - a.profit;
+    });
+
+    if (countEl) countEl.textContent = `${rows.length} signal match${rows.length !== 1 ? 'es' : ''}`;
+
+    if (rows.length === 0) {
+        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">`
+            + `No ${_anchorSignalFilter !== 'all' ? _anchorSignalFilter.toUpperCase() + ' ' : ''}signal matches found.<br>`
+            + `<span style="font-size:12px;">Try a different signal filter, or wait for games to go live.</span></p>`;
+        return;
+    }
+
+    results.innerHTML = rows.slice(0, 50).map(({ signal, m, yesBid, noBid, sugYes, sugNo, profit, title }) => {
+        const profitColor = profit >= 10 ? '#ffaa00' : profit >= 5 ? '#00ff88' : '#8892a6';
+        return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${signal.color};">
+            <div style="flex:1;min-width:0;">
+                <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    ${title}
+                    <span style="background:${signal.color}22;color:${signal.color};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${signal.label}</span>
+                </div>
+                <div style="color:#8892a6;font-size:11px;margin-top:3px;">
+                    Bids: YES ${yesBid}¢ / NO ${noBid}¢ &nbsp;·&nbsp;
+                    Post at ${sugYes}¢ + ${sugNo}¢ (bid+1) → +${profit}¢/contract
+                </div>
+                <div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;">
+                <div style="color:${signal.color};font-weight:800;font-size:1.1rem;">${signal.label.split(' ').slice(1).join(' ')}</div>
+                <div style="color:${profitColor};font-weight:700;font-size:0.9rem;">+${profit}¢</div>
+                <button onclick="quickBot('${m.ticker}', ${sugYes}, ${sugNo})"
+                        style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
+                    🤖 Bot
+                </button>
+            </div>
+        </div>`;
+    }).join('');
 }
 
 async function quickBot(ticker, yesPrice, noPrice) {

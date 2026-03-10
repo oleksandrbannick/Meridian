@@ -4971,11 +4971,24 @@ async function loadBalance() {
 
 // ─── Upgrade #3: Multi-Market Arb Scanner ─────────────────────────────────────
 
+function openScanModal() {
+    const modal = document.getElementById('scan-modal');
+    if (modal) modal.classList.add('show');
+    const results = document.getElementById('scan-results');
+    if (results && !results.innerHTML) {
+        results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Set your filters above and click Scan.</p>';
+    }
+}
+
 async function autoScanMarkets() {
     const minWidth = parseInt(document.getElementById('scan-min-width')?.value || '3');
     const sportParam = (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live')
         ? `&sport=${currentSportFilter}` : '';
-    showNotification(`🔍 Scanning all sports markets for ≥ ${minWidth}¢ spread...`);
+    // Open modal first
+    const modal = document.getElementById('scan-modal');
+    if (modal) modal.classList.add('show');
+    const countEl = document.getElementById('scan-count');
+    if (countEl) countEl.textContent = 'Scanning…';
     try {
         const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}${sportParam}`);
         const data = await resp.json();
@@ -5628,19 +5641,28 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 // ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
 let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDay = null;     // YYYY-MM-DD string, null = full history
-let historyViewMode   = 'arb';    // 'arb' | 'bets' | 'all'
+let historyViewMode   = 'arb';    // 'arb' | 'bets'
 
-function setHistoryView(mode) {
+function setHistoryMode(mode) {
     historyViewMode = mode;
-    ['arb','bets','all'].forEach(m => {
-        const btn = document.getElementById(`history-view-${m}`);
-        if (btn) {
-            btn.style.background  = m === mode ? '#253555' : '#1a2540';
-            btn.style.borderColor = m === mode ? '#5a7aaa' : '#3a4a6a';
-            btn.style.color       = m === mode ? '#ccc'    : '#8892a6';
-        }
-    });
-    loadTradeHistoryList();
+    const arbBtn  = document.getElementById('histmode-arb');
+    const betsBtn = document.getElementById('histmode-bets');
+    const arbSec  = document.getElementById('hist-arb-section');
+    const betsSec = document.getElementById('hist-bets-section');
+    if (mode === 'arb') {
+        if (arbBtn)  { arbBtn.style.background = '#253555'; arbBtn.style.color = '#00ff88'; }
+        if (betsBtn) { betsBtn.style.background = '#1a2540'; betsBtn.style.color = '#8892a6'; }
+        if (arbSec)  arbSec.style.display = '';
+        if (betsSec) betsSec.style.display = 'none';
+        loadHistoryStats();
+        loadTradeHistoryList();
+    } else {
+        if (betsBtn) { betsBtn.style.background = '#253555'; betsBtn.style.color = '#ffaa00'; }
+        if (arbBtn)  { arbBtn.style.background = '#1a2540'; arbBtn.style.color = '#8892a6'; }
+        if (betsSec) betsSec.style.display = '';
+        if (arbSec)  arbSec.style.display = 'none';
+        loadBetsHistory();
+    }
 }
 
 async function loadPnLCalendar() {
@@ -5806,14 +5828,7 @@ async function loadTradeHistoryList() {
         const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
         const data = await resp.json();
-        let trades = data.trades || [];
-
-        // Filter by view mode
-        if (historyViewMode === 'arb') {
-            trades = trades.filter(t => t.type !== 'watch' && t.type !== 'middle');
-        } else if (historyViewMode === 'bets') {
-            trades = trades.filter(t => t.type === 'watch' || t.type === 'middle');
-        }
+        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle');
         trades = trades.slice(0, 50);
 
         // Clear button at top
@@ -5966,14 +5981,78 @@ async function loadTradeHistoryList() {
 }
 
 async function loadTradeHistory() {
-    // Load stats panel + calendar in parallel, then trade list
-    loadHistoryStats();
-    loadPnLCalendar();
-    loadTradeHistoryList();
+    if (historyViewMode === 'bets') {
+        loadBetsHistory();
+    } else {
+        loadHistoryStats();
+        loadPnLCalendar();
+        loadTradeHistoryList();
+    }
+}
+
+async function loadBetsHistory() {
+    const statsEl = document.getElementById('bets-stats-panel');
+    const listEl  = document.getElementById('bets-history-list');
+    if (!listEl) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/history?limit=200`);
+        const data = await resp.json();
+        const trades = (data.trades || []).filter(t => t.type === 'watch' || t.type === 'middle');
+
+        if (statsEl) {
+            const wins   = trades.filter(t => t.result === 'take_profit_watch' || t.result === 'settled_win_yes' || t.result === 'settled_win_no').length;
+            const losses = trades.filter(t => t.result === 'stop_loss_watch' || t.result === 'settled_loss_yes' || t.result === 'settled_loss_no').length;
+            const net    = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
+            const netCol = net >= 0 ? '#00ff88' : '#ff4444';
+            statsEl.innerHTML = trades.length === 0 ? '' : `
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                    <div style="background:#0f1419;border-radius:8px;padding:12px 16px;border:1px solid #1e2740;text-align:center;min-width:100px;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&amp;L</div>
+                        <div style="color:${netCol};font-size:22px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:12px 16px;border:1px solid #1e2740;text-align:center;min-width:100px;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Record</div>
+                        <div style="font-size:18px;font-weight:800;"><span style="color:#00ff88;">${wins}W</span> / <span style="color:#ff4444;">${losses}L</span></div>
+                        <div style="color:#555;font-size:10px;">${trades.length} total bets</div>
+                    </div>
+                </div>`;
+        }
+
+        if (trades.length === 0) {
+            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No straight bets or middles recorded yet.</p>';
+            return;
+        }
+        listEl.innerHTML = trades.slice(0, 50).map(t => {
+            const dt = new Date(t.timestamp * 1000);
+            const dateStr = dt.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+            const isWin = t.result === 'take_profit_watch' || t.result?.includes('settled_win');
+            const pnl = (t.profit_cents||0) - (t.loss_cents||0);
+            const pnlCol = pnl >= 0 ? '#00ff88' : '#ff4444';
+            const icon = isWin ? '✅' : '⛔';
+            const typeLabel = t.type === 'middle' ? 'MIDDLE' : 'BET';
+            const typeColor = t.type === 'middle' ? '#ffaa00' : '#9966ff';
+            const team = formatBotDisplayName ? formatBotDisplayName(t.ticker||'', t.spread_line||'') : t.ticker;
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;border-left:3px solid ${pnlCol}44;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:0;">
+                    <span style="color:#aaa;font-size:10px;">${icon} ${dateStr}</span>
+                    <span style="background:${typeColor}22;color:${typeColor};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${typeLabel}</span>
+                    <div style="color:#fff;font-size:13px;font-weight:600;margin-top:2px;">${team}</div>
+                    <div style="color:#8892a6;font-size:11px;">${t.side?.toUpperCase()||''} @ ${t.entry_price||t.yes_price||'?'}¢ × ${t.quantity||1}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:${pnlCol};font-weight:800;font-size:15px;">${pnl>=0?'+':''}${pnl}¢</div>
+                    <div style="color:#555;font-size:10px;">$${(pnl/100).toFixed(2)}</div>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
+    }
 }
 
 async function clearTradeHistory() {
-    if (!confirm('Clear all trade history and reset P&L? This cannot be undone.')) return;
+    const answer = prompt('Type DELETE to confirm clearing all trade history. This cannot be undone.');
+    if (answer !== 'DELETE') { showNotification('Cancelled — type DELETE exactly to confirm'); return; }
     try {
         await fetch(`${API_BASE}/bot/history/clear`, { method: 'POST' });
         loadTradeHistory();

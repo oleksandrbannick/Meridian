@@ -453,18 +453,10 @@
                     <button class="btn btn-primary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks active bots every 2s: fills, reposts, stop-losses">
                         <span id="auto-monitor-text">▶️ Monitor</span>
                     </button>
-                    <button class="btn btn-secondary" onclick="autoScanMarkets()" title="Scan all markets for arb opportunities">🔍 Scanner</button>
-                    <button class="btn btn-secondary" onclick="scanMiddles()" title="Find middle spread opportunities">📐 Middles</button>
+                    <button class="btn btn-secondary" onclick="openScanModal()" title="Open arb scanner — set width & qty inside">🔍 Scanner</button>
+                    <button class="btn btn-secondary" onclick="scanMiddles()" title="Find middle spread opportunities — set qty inside">📐 Middles</button>
                     <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
                             style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓</button>
-                </div>
-                <div class="bot-tools-row">
-                    <label style="color:#8892a6;font-size:11px;">Width¢</label>
-                    <input type="number" id="scan-min-width" min="1" max="20" value="3"
-                           style="width:52px;padding:0.55rem 0.4rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.85rem;text-align:center;">
-                    <label style="color:#8892a6;font-size:11px;">Qty</label>
-                    <input type="number" id="scan-qty" min="1" value="1"
-                           style="width:44px;padding:0.55rem 0.4rem;background:#1a1f35;border:1px solid #2a3550;border-radius:8px;color:#fff;font-size:0.85rem;text-align:center;">
                 </div>
             </div>
 
@@ -529,18 +521,12 @@
                     <button onclick="toggleFeatureGuide()" style="background:none;border:none;color:#8892a6;cursor:pointer;font-size:14px;">✕</button>
                 </div>
                 <div style="display:grid;gap:12px;">
-                    <div><strong style="color:#fff;">▶️ Auto-Monitor</strong> — <strong style="color:#ff6666;">Must be enabled for bots to work.</strong> Runs every 2 seconds:
-                        <ul style="margin:4px 0 0 16px;padding:0;">
-                            <li><strong>Fill detection</strong> — notices when orders get filled</li>
-                            <li><strong>Stale repost</strong> — cancels &amp; re-posts at current bid</li>
-                            <li><strong>Stop loss</strong> — market-sells if bid drops below threshold</li>
-                            <li><strong>Watch bots</strong> — monitors your existing Kalshi positions too</li>
-                        </ul>
-                    </div>
-                    <div><strong style="color:#fff;">🔍 Arb Scanner</strong> — Finds markets where YES bid + NO bid &lt; 100¢. The gap = your profit when both fill.</div>
-                    <div><strong style="color:#fff;">📐 Middles</strong> — Finds games with multiple spread lines where betting between them wins both sides.</div>
-                    <div><strong style="color:#fff;">💼 Positions Tab</strong> — Shows your real Kalshi positions. Attach a watch-bot for automatic stop-loss / take-profit.</div>
-                    <div><strong style="color:#fff;">⚠️ Risk Warnings</strong> — The app warns you before placing risky orders (non-profitable, extreme prices, tight stop-loss).</div>
+                    <div><strong style="color:#fff;">▶️ Auto-Monitor</strong> — <strong style="color:#ff6666;">Must be enabled for bots to work.</strong> Runs every 2 seconds: fills, reposts, flip stop-losses, and watch-bot management.</div>
+                    <div><strong style="color:#fff;">🔍 Arb Scanner</strong> — Opens scanner with your settings. Set Min Width (minimum gap in cents) and Qty, then hit Scan. Places both YES+NO limit orders at bid+1 (front of queue). Profit = gap - 2¢ when both fill. Use All Widths to run bots at every profitable width simultaneously.</div>
+                    <div><strong style="color:#fff;">📐 Middles</strong> — Finds games with opposing-team spread lines. You bet NO on both sides — only one team can cover, so you always win at least one. Win both if the game lands in the middle.</div>
+                    <div><strong style="color:#fff;">🛡 Flip (Stop-Loss)</strong> — If one leg fills and the market moves against you (bid falls below entry-15¢, floor 55¢), the bot market-sells the filled leg to exit and cancels the other. This limits loss to ~15-25¢ per contract.</div>
+                    <div><strong style="color:#fff;">💼 Positions Tab</strong> — Your real Kalshi positions. Click Watch to attach a bot that monitors with stop-loss + take-profit targets.</div>
+                    <div><strong style="color:#fff;">📜 History → ARB view</strong> — Your arb-only performance: fill rate, P&L, width breakdown, flip analysis. Toggle BETS to see watch-bot / straight bet history separately.</div>
                 </div>
             </div>
         </div>
@@ -570,36 +556,38 @@
         <!-- HISTORY TAB                                            -->
         <!-- ═══════════════════════════════════════════════════════ -->
         <div class="tab-page" id="tab-history">
-            <h2 style="color:#ffaa00;margin-bottom:16px;">📜 Trade Analytics</h2>
-
-            <!-- P&L Calendar -->
-            <div id="pnl-calendar-panel" style="margin-bottom:20px;"></div>
-
-            <!-- Analytics Summary Panel -->
-            <div id="history-stats-panel" style="margin-bottom:20px;">
-                <p style="color:#555;text-align:center;font-size:12px;">Loading analytics...</p>
+            <!-- Top-level mode toggle -->
+            <div style="display:flex;align-items:center;gap:0;margin-bottom:20px;border:1px solid #2a3550;border-radius:10px;overflow:hidden;width:fit-content;">
+                <button id="histmode-arb" onclick="setHistoryMode('arb')"
+                    style="background:#253555;border:none;color:#00ff88;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🤖 ARB BOTS</button>
+                <button id="histmode-bets" onclick="setHistoryMode('bets')"
+                    style="background:#1a2540;border:none;color:#8892a6;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;">🎯 STRAIGHT BETS</button>
             </div>
 
-            <!-- Sport Breakdown -->
-            <div id="sport-breakdown-panel" style="margin-bottom:20px;"></div>
-
-            <!-- Width Breakdown Table -->
-            <div id="width-breakdown-panel" style="margin-bottom:20px;"></div>
-
-            <!-- Trade Log with view toggle -->
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin:0;">Trade Log</h3>
-                <div style="display:flex;gap:6px;">
-                    <button id="history-view-arb" onclick="setHistoryView('arb')" style="background:#1a2540;border:1px solid #3a4a6a;color:#8892a6;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">ARB</button>
-                    <button id="history-view-bets" onclick="setHistoryView('bets')" style="background:#1a2540;border:1px solid #3a4a6a;color:#8892a6;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">BETS</button>
-                    <button id="history-view-all" onclick="setHistoryView('all')" style="background:#253555;border:1px solid #5a7aaa;color:#ccc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">ALL</button>
+            <!-- ARB BOT SECTION (shown when mode=arb) -->
+            <div id="hist-arb-section">
+                <div id="pnl-calendar-panel" style="margin-bottom:20px;"></div>
+                <div id="history-stats-panel" style="margin-bottom:20px;">
+                    <p style="color:#555;text-align:center;font-size:12px;">Loading analytics...</p>
+                </div>
+                <div id="sport-breakdown-panel" style="margin-bottom:20px;"></div>
+                <div id="width-breakdown-panel" style="margin-bottom:20px;"></div>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Arb Trade Log</h3>
+                <div id="trade-history-list">
+                    <div class="empty-state">
+                        <div class="icon">📜</div>
+                        <div class="title">No trades yet</div>
+                        <div class="desc">Trades will appear here as your bots execute</div>
+                    </div>
                 </div>
             </div>
-            <div id="trade-history-list">
-                <div class="empty-state">
-                    <div class="icon">📜</div>
-                    <div class="title">No trades yet</div>
-                    <div class="desc">Trades will appear here as your bots execute</div>
+
+            <!-- BETS & MIDDLES SECTION (shown when mode=bets) -->
+            <div id="hist-bets-section" style="display:none;">
+                <div id="bets-stats-panel" style="margin-bottom:20px;"></div>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Bets &amp; Middles Log</h3>
+                <div id="bets-history-list">
+                    <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
                 </div>
             </div>
         </div>
@@ -944,11 +932,15 @@
         <div class="modal-content" style="max-width:640px;max-height:80vh;display:flex;flex-direction:column;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
                 <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
-                <div style="display:flex;gap:8px;align-items:center;">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
+                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Min Width¢:</label>
+                    <input type="number" id="scan-min-width" min="1" max="20" value="3"
+                           style="width:52px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
                     <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
                     <input type="number" id="scan-modal-qty" min="1" value="1"
                            style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                    <button class="btn btn-primary" onclick="autoScanMarkets()" style="padding:.4rem .9rem;font-size:13px;">🔍 Scan</button>
                     <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
                 </div>
             </div>
@@ -1023,6 +1015,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260309u"></script>
+    <script src="app.js?v=20260309v"></script>
 </body>
 </html>

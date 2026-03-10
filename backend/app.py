@@ -822,6 +822,8 @@ def save_state():
     except Exception as e:
         print(f'⚠ save_state: {e}')
 
+BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_backup.json')
+
 def load_state():
     """Load persisted bots and history from disk."""
     global active_bots, trade_history, session_pnl, _opening_lines
@@ -838,6 +840,14 @@ def load_state():
                     if k in saved:
                         session_pnl[k] = saved[k]
             print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history, {len(_opening_lines)} opening lines')
+            # Write a backup on startup so we can always recover
+            if trade_history:
+                try:
+                    import shutil
+                    shutil.copy2(DATA_FILE, BACKUP_FILE)
+                    print(f'📦 Backup written: {len(trade_history)} trades')
+                except Exception as be:
+                    print(f'⚠ backup: {be}')
     except Exception as e:
         print(f'⚠ load_state: {e}')
 

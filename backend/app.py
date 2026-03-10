@@ -4484,9 +4484,12 @@ def create_middle_bot():
         data = request.json or {}
         ticker_a        = data.get('ticker_a', '').strip()
         ticker_b        = data.get('ticker_b', '').strip()
-        target_price    = int(data.get('target_price', 49))
+        # Per-leg prices (new); fall back to legacy target_price if not provided
+        _legacy_price   = int(data.get('target_price', 49))
+        target_price_a  = int(data.get('target_price_a', _legacy_price))
+        target_price_b  = int(data.get('target_price_b', _legacy_price))
         qty             = int(data.get('qty', 1))
-        stop_loss_cents = int(data.get('stop_loss_cents', 15))
+        stop_loss_cents = int(data.get('stop_loss_cents', 0))
         team_a_name     = data.get('team_a_name', '')
         team_b_name     = data.get('team_b_name', '')
         spread_a        = data.get('spread_a', 0)
@@ -4497,23 +4500,23 @@ def create_middle_bot():
 
         if not ticker_a or not ticker_b:
             return jsonify({'error': 'Missing required fields: ticker_a, ticker_b'}), 400
-        if target_price < 1 or target_price > 99:
-            return jsonify({'error': f'target_price {target_price}¢ out of range (1-99)'}), 400
+        if not (1 <= target_price_a <= 99) or not (1 <= target_price_b <= 99):
+            return jsonify({'error': f'Prices out of range (1-99): A={target_price_a} B={target_price_b}'}), 400
         if qty < 1:
             return jsonify({'error': 'qty must be at least 1'}), 400
 
-        # Place NO limit orders on both legs
+        # Place NO limit orders on both legs (each at their own price)
         api_rate_limiter.wait()
         order_a_resp = kalshi_client.create_order(
             ticker=ticker_a, side='no', action='buy',
-            count=qty, no_price=target_price
+            count=qty, no_price=target_price_a
         )
         order_a_id = order_a_resp['order']['order_id']
 
         api_rate_limiter.wait()
         order_b_resp = kalshi_client.create_order(
             ticker=ticker_b, side='no', action='buy',
-            count=qty, no_price=target_price
+            count=qty, no_price=target_price_b
         )
         order_b_id = order_b_resp['order']['order_id']
 
@@ -4525,7 +4528,9 @@ def create_middle_bot():
             'ticker_a':         ticker_a,
             'ticker_b':         ticker_b,
             'ticker':           ticker_a,  # used by grouping/display logic
-            'target_price':     target_price,
+            'target_price':     target_price_a,   # legacy single-price field (leg A)
+            'target_price_a':   target_price_a,
+            'target_price_b':   target_price_b,
             'qty':              qty,
             'stop_loss_cents':  stop_loss_cents,
             'team_a_name':      team_a_name,
@@ -4552,27 +4557,30 @@ def create_middle_bot():
             ws_manager.add_ticker(ticker_a)
             ws_manager.add_ticker(ticker_b)
 
-        guaranteed = 100 - 2 * target_price
-        middle_profit = 200 - 2 * target_price
+        guaranteed    = 100 - target_price_a - target_price_b
+        middle_profit = 200 - target_price_a - target_price_b
+        price_str = f'{target_price_a}¢/{target_price_b}¢' if target_price_a != target_price_b else f'{target_price_a}¢'
 
         bot_log('MIDDLE_BOT_CREATED', bot_id, {
             'ticker_a': ticker_a, 'ticker_b': ticker_b,
-            'target_price': target_price, 'qty': qty, 'stop_loss_cents': stop_loss_cents,
+            'target_price_a': target_price_a, 'target_price_b': target_price_b,
+            'qty': qty, 'stop_loss_cents': stop_loss_cents,
             'order_a_id': order_a_id, 'order_b_id': order_b_id,
             'guaranteed': guaranteed, 'middle_profit': middle_profit,
         })
-        print(f'📐 MIDDLE BOT CREATED: {bot_id} | NO {ticker_a} + NO {ticker_b} @ {target_price}¢ × {qty}')
+        print(f'📐 MIDDLE BOT CREATED: {bot_id} | NO {ticker_a} @ {target_price_a}¢ + NO {ticker_b} @ {target_price_b}¢ × {qty}')
 
         return jsonify({
-            'success':        True,
-            'bot_id':         bot_id,
-            'order_a_id':     order_a_id,
-            'order_b_id':     order_b_id,
-            'target_price':   target_price,
-            'guaranteed':     guaranteed,
-            'middle_profit':  middle_profit,
-            'message':        f'Middle bot deployed: NO on both spreads @ {target_price}¢ × {qty} — '
-                              f'guaranteed {guaranteed:+}¢, middle profit +{middle_profit}¢',
+            'success':          True,
+            'bot_id':           bot_id,
+            'order_a_id':       order_a_id,
+            'order_b_id':       order_b_id,
+            'target_price_a':   target_price_a,
+            'target_price_b':   target_price_b,
+            'guaranteed':       guaranteed,
+            'middle_profit':    middle_profit,
+            'message':          f'Middle bot deployed: NO {ticker_a} @ {target_price_a}¢ + NO {ticker_b} @ {target_price_b}¢ × {qty} — '
+                                f'guaranteed {guaranteed:+}¢, middle profit +{middle_profit}¢',
         })
 
     except Exception as e:

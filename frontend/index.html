@@ -77,16 +77,17 @@
         }
         .sport-pill:hover { border-color: #00ff88; color: #00ff88; }
         .sport-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
-        .scan-sport-pill, .mid-sport-pill, .anchor-signal-pill {
+        .scan-sport-pill, .mid-sport-pill, .anchor-signal-pill, .middle-arb-pill {
             padding: 3px 10px; border-radius: 12px; border: 1px solid #2a3550;
             background: #1a1f35; color: #8892a6; font-size: 11px; font-weight: 600;
             cursor: pointer; transition: all 0.15s; white-space: nowrap;
         }
-        .scan-sport-pill:hover, .mid-sport-pill:hover, .anchor-signal-pill:hover { border-color: #ffaa00; color: #ffaa00; }
+        .scan-sport-pill:hover, .mid-sport-pill:hover, .anchor-signal-pill:hover, .middle-arb-pill:hover { border-color: #ffaa00; color: #ffaa00; }
         .scan-sport-pill.active  { background: #00ff88; color: #000; border-color: #00ff88; }
         .mid-sport-pill.active   { background: #ffaa00; color: #000; border-color: #ffaa00; }
         .anchor-signal-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
-        .scan-mode-pill { padding:5px 12px; font-size:11px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; }
+        .middle-arb-pill.active  { background: #aa66ff; color: #fff; border-color: #aa66ff; }
+        .scan-mode-pill { padding:6px 16px; font-size:12px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; flex:1; }
         .scan-mode-pill.active { color:#fff; background:#1a3a5a; border-radius:6px; }
 
         /* ── Bots Section ──────────────────────────────────────────── */
@@ -1003,27 +1004,49 @@
                     </div>
                     <!-- Middle window indicator (populated by openMiddleBotModal) -->
                     <div id="middle-window-info" style="display:none;text-align:center;padding:8px;margin:-4px 0 12px;background:#1a1030;border-radius:6px;border:1px solid #aa66ff33;line-height:1.6;"></div>
-                    <!-- Controls -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+                    <!-- Arb width selector -->
+                    <div style="margin-bottom:12px;">
+                        <div style="color:#aa66ff;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:6px;">ARB WIDTH — built-in guaranteed floor</div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                            <button class="middle-arb-pill active" data-width="0"  onclick="updateMiddleArbPreset(0)">Straight 0¢</button>
+                            <button class="middle-arb-pill"        data-width="2"  onclick="updateMiddleArbPreset(2)">+2¢ arb</button>
+                            <button class="middle-arb-pill"        data-width="4"  onclick="updateMiddleArbPreset(4)">+4¢ arb</button>
+                            <button class="middle-arb-pill"        data-width="6"  onclick="updateMiddleArbPreset(6)">+6¢ arb</button>
+                            <button class="middle-arb-pill"        data-width="8"  onclick="updateMiddleArbPreset(8)">+8¢ arb</button>
+                            <span style="color:#555;font-size:10px;">or custom:</span>
+                            <input type="number" id="middle-arb-custom" min="0" max="50" placeholder="¢"
+                                   style="width:48px;padding:3px 6px;background:#060a14;border:1px solid #aa66ff44;border-radius:6px;color:#aa66ff;font-size:12px;font-weight:700;text-align:center;"
+                                   oninput="updateMiddleArbPreset(parseInt(this.value) || 0); clearMiddleArbPills()">
+                        </div>
+                        <div id="middle-arb-desc" style="color:#8892a6;font-size:10px;margin-top:5px;">Equal shave from both legs to hit target — adjust prices manually if needed.</div>
+                    </div>
+                    <!-- Controls: per-leg prices + qty + stop-loss -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
                         <div>
-                            <label style="display:block;color:#aa66ff;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">TARGET PRICE</label>
-                            <input type="number" id="middle-target-price" min="1" max="90" value="49" oninput="updateMiddleBotCalc()"
-                                style="width:100%;padding:8px;background:#060a14;border:2px solid #aa66ff66;border-radius:6px;color:#aa66ff;font-size:1.4rem;font-weight:800;text-align:center;outline:none;"
+                            <label style="display:block;color:#ff7777;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:5px;">LEG A PRICE ¢</label>
+                            <input type="number" id="middle-price-a" min="1" max="90" value="49" oninput="clearMiddleArbPills(); updateMiddleBotCalc()"
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #aa66ff66;border-radius:6px;color:#aa66ff;font-size:1.3rem;font-weight:800;text-align:center;outline:none;"
                                 onfocus="this.style.borderColor='#aa66ff'" onblur="this.style.borderColor='#aa66ff66'">
-                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">¢ per contract</div>
-                            <div id="middle-price-hint" style="color:#8892a6;font-size:9px;margin-top:4px;text-align:center;min-height:12px;"></div>
+                            <div id="middle-price-a-hint" style="color:#555;font-size:9px;margin-top:3px;text-align:center;">bid: —</div>
                         </div>
                         <div>
-                            <label style="display:block;color:#8892a6;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">CONTRACTS</label>
+                            <label style="display:block;color:#ff7777;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:5px;">LEG B PRICE ¢</label>
+                            <input type="number" id="middle-price-b" min="1" max="90" value="49" oninput="clearMiddleArbPills(); updateMiddleBotCalc()"
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #aa66ff66;border-radius:6px;color:#aa66ff;font-size:1.3rem;font-weight:800;text-align:center;outline:none;"
+                                onfocus="this.style.borderColor='#aa66ff'" onblur="this.style.borderColor='#aa66ff66'">
+                            <div id="middle-price-b-hint" style="color:#555;font-size:9px;margin-top:3px;text-align:center;">bid: —</div>
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:5px;">CONTRACTS</label>
                             <input type="number" id="middle-qty" min="1" value="1" oninput="updateMiddleBotCalc()"
-                                style="width:100%;padding:8px;background:#060a14;border:2px solid #1e274066;border-radius:6px;color:#fff;font-size:1.4rem;font-weight:800;text-align:center;outline:none;">
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #1e274066;border-radius:6px;color:#fff;font-size:1.3rem;font-weight:800;text-align:center;outline:none;">
                         </div>
                         <div>
-                            <label style="display:block;color:#ff6666;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">FLOOR PRICE ¢</label>
+                            <label style="display:block;color:#ff6666;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:5px;">FLOOR PRICE ¢</label>
                             <input type="number" id="middle-stop-loss" min="0" max="40" value="0" oninput="updateMiddleBotCalc()"
-                                style="width:100%;padding:8px;background:#060a14;border:2px solid #ff666644;border-radius:6px;color:#ff6666;font-size:1.4rem;font-weight:800;text-align:center;outline:none;"
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #ff666644;border-radius:6px;color:#ff6666;font-size:1.3rem;font-weight:800;text-align:center;outline:none;"
                                 onfocus="this.style.borderColor='#ff6666'" onblur="this.style.borderColor='#ff666644'">
-                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">0 = off (hold to settle)</div>
+                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">0 = off</div>
                         </div>
                     </div>
                     <!-- Calc preview -->
@@ -1056,39 +1079,36 @@
     <!-- Scan Modal -->
     <div class="modal" id="scan-modal">
         <div class="modal-content" style="max-width:660px;max-height:82vh;display:flex;flex-direction:column;">
-            <!-- Header: title + mode toggle + controls -->
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
-                    <div style="display:flex;background:#0a0e1a;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
-                        <button class="scan-mode-pill active" data-mode="instarb" onclick="setScanMode('instarb')">⚡ Instant Arb</button>
-                        <button class="scan-mode-pill"        data-mode="anchor"  onclick="setScanMode('anchor')">🔒 Anchor Hunt</button>
-                    </div>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <!-- Row 1: title + count + scan/close -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+                <div style="display:flex;gap:8px;align-items:center;">
                     <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
-                    <!-- Instant Arb controls -->
-                    <div id="scan-instarb-controls" style="display:flex;gap:6px;align-items:center;">
-                        <label style="color:#8892a6;font-size:11px;font-weight:600;">Min Width¢:</label>
-                        <input type="number" id="scan-min-width" min="1" max="20" value="3"
-                               style="width:52px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
-                    </div>
-                    <!-- Anchor Hunt signal filter -->
-                    <div id="scan-anchor-controls" style="display:none;gap:6px;align-items:center;">
-                        <span style="color:#8892a6;font-size:11px;font-weight:600;">Signal:</span>
-                        <button class="anchor-signal-pill active" data-signal="all"    onclick="setAnchorSignal('all')">All</button>
-                        <button class="anchor-signal-pill"        data-signal="lock"   onclick="setAnchorSignal('lock')">🟢 LOCK</button>
-                        <button class="anchor-signal-pill"        data-signal="anchor" onclick="setAnchorSignal('anchor')">🟢 ANCHOR</button>
-                        <button class="anchor-signal-pill"        data-signal="lean"   onclick="setAnchorSignal('lean')">🟡 LEAN</button>
-                    </div>
-                    <label style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</label>
-                    <input type="number" id="scan-modal-qty" min="1" value="1"
-                           style="width:50px;padding:6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
                     <button class="btn btn-primary" onclick="runScan()" style="padding:.4rem .9rem;font-size:13px;">🔍 Scan</button>
                     <button class="btn btn-secondary" onclick="closeScanModal()" style="padding:.4rem .9rem;font-size:13px;">✕ Close</button>
                 </div>
             </div>
-            <!-- Sport filter pills (shared by both modes) -->
+            <!-- Row 2: mode toggle (full-width) -->
+            <div style="display:flex;background:#0a0e1a;border:1px solid #2a3550;border-radius:8px;overflow:hidden;margin-bottom:8px;">
+                <button class="scan-mode-pill active" data-mode="instarb" onclick="setScanMode('instarb')">⚡ Instant Arb</button>
+                <button class="scan-mode-pill"        data-mode="anchor"  onclick="setScanMode('anchor')">🔒 Anchor Hunt</button>
+            </div>
+            <!-- Row 3: mode-specific controls -->
+            <div id="scan-instarb-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Min Width¢:</span>
+                <input type="number" id="scan-min-width" min="1" max="20" value="3"
+                       style="width:52px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                <span style="color:#555;font-size:11px;">Qty is set in the bot confirm dialog</span>
+            </div>
+            <div id="scan-anchor-controls" style="display:none;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Signal:</span>
+                <button class="anchor-signal-pill active" data-signal="all"    onclick="setAnchorSignal('all')">All</button>
+                <button class="anchor-signal-pill"        data-signal="lock"   onclick="setAnchorSignal('lock')">🟢 LOCK</button>
+                <button class="anchor-signal-pill"        data-signal="anchor" onclick="setAnchorSignal('anchor')">🟢 ANCHOR</button>
+                <button class="anchor-signal-pill"        data-signal="lean"   onclick="setAnchorSignal('lean')">🟡 LEAN</button>
+                <span style="color:#555;font-size:11px;margin-left:4px;">Qty set in bot confirm</span>
+            </div>
+            <!-- Row 4: sport pills (shared) -->
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">Sport:</span>
                 <button class="scan-sport-pill active" data-sport="all"    onclick="setScanSport('all')">All</button>

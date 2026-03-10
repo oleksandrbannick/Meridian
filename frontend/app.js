@@ -5608,8 +5608,8 @@ function anchorScan() {
 }
 
 async function quickBot(ticker, yesPrice, noPrice) {
-    // Read qty from scan modal first, fall back to controls bar
-    const quantity        = parseInt(document.getElementById('scan-modal-qty')?.value || document.getElementById('scan-qty')?.value || '1');
+    // Qty comes from the global controls bar (not the scan modal) — user sets it there before deploying
+    const quantity        = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
@@ -6079,14 +6079,15 @@ function openMiddleBotModal(middle) {
     setEl('middle-leg-a-bid', middle.no_a_bid != null ? `${middle.no_a_bid}¢` : '—');
     setEl('middle-leg-b-bid', middle.no_b_bid != null ? `${middle.no_b_bid}¢` : '—');
 
-    // Pre-fill suggested price: average of both legs' suggestions (or compute from bids)
-    const sug_a = middle.suggested_a
-        || (middle.no_a_bid ? Math.min(Math.floor(96 / 2), middle.no_a_bid) : 48);
-    const sug_b = middle.suggested_b
-        || (middle.no_b_bid ? Math.min(96 - sug_a, middle.no_b_bid) : 48);
-    const suggestedPrice = middle.target_price || Math.floor((sug_a + sug_b) / 2);
-    const priceEl = document.getElementById('middle-target-price');
-    if (priceEl) priceEl.value = suggestedPrice;
+    // Auto-recommend: default to 0¢ arb (straight middle), equal shave from each bid
+    // This populates middle-price-a and middle-price-b
+    updateMiddleArbPreset(0);
+
+    // Show bid hints
+    const hintA = document.getElementById('middle-price-a-hint');
+    const hintB = document.getElementById('middle-price-b-hint');
+    if (hintA) hintA.textContent = middle.no_a_bid != null ? `bid: ${middle.no_a_bid}¢` : 'bid: —';
+    if (hintB) hintB.textContent = middle.no_b_bid != null ? `bid: ${middle.no_b_bid}¢` : 'bid: —';
 
     // Show middle window indicator
     const winfoEl = document.getElementById('middle-window-info');
@@ -6097,7 +6098,7 @@ function openMiddleBotModal(middle) {
                 : 100 - (middle.no_a_bid || 0) - (middle.no_b_bid || 0);
             winfoEl.innerHTML =
                 `<span style="color:#aa66ff;font-weight:700;font-size:13px;">↔ ${middle.middle_width} pt window</span>` +
-                `&nbsp;&nbsp;<span style="color:${guar >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;">guaranteed floor ${guar >= 0 ? '+' : ''}${guar}¢</span>`;
+                `&nbsp;&nbsp;<span style="color:${guar >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;">market floor ${guar >= 0 ? '+' : ''}${guar}¢ at current bids</span>`;
             winfoEl.style.display = 'block';
         } else {
             winfoEl.style.display = 'none';
@@ -6112,22 +6113,79 @@ function openMiddleBotModal(middle) {
     document.getElementById('bot-modal').classList.add('show');
 }
 
+/** Auto-fill leg prices based on arb width preset using equal-shave from current bids */
+function updateMiddleArbPreset(width) {
+    const w  = parseInt(width) || 0;
+    const md = _currentMiddleData;
+    const elA = document.getElementById('middle-price-a');
+    const elB = document.getElementById('middle-price-b');
+    const descEl = document.getElementById('middle-arb-desc');
+
+    if (md && md.no_a_bid != null && md.no_b_bid != null) {
+        // Equal-shave formula:
+        //   target_sum   = 100 - w  (floor = 0 for straight, +w¢ for arb)
+        //   total_shave  = (bid_a + bid_b) - target_sum
+        //   shave_each   = total_shave / 2  (split evenly between legs)
+        //   price_x      = bid_x - shave_each
+        const targetSum  = 100 - w;
+        const totalShave = (md.no_a_bid + md.no_b_bid) - targetSum;
+        const shaveEach  = totalShave / 2;
+        const pA = Math.max(1, Math.min(90, Math.round(md.no_a_bid - shaveEach)));
+        const pB = Math.max(1, Math.min(90, Math.round(md.no_b_bid - shaveEach)));
+        if (elA) elA.value = pA;
+        if (elB) elB.value = pB;
+        const shaveADisp = (md.no_a_bid - pA);
+        const shaveBDisp = (md.no_b_bid - pB);
+        const signA = shaveADisp >= 0 ? '-' : '+';
+        const signB = shaveBDisp >= 0 ? '-' : '+';
+        if (descEl) {
+            const floorPer = 100 - pA - pB;
+            const floorColor = floorPer > 0 ? '#00ff88' : floorPer === 0 ? '#ffaa44' : '#ff4444';
+            descEl.innerHTML = `Shave: A ${signA}${Math.abs(shaveADisp)}¢ · B ${signB}${Math.abs(shaveBDisp)}¢ from bid &nbsp;·&nbsp; `
+                + `<span style="color:${floorColor};font-weight:700;">floor = ${floorPer >= 0 ? '+' : ''}${floorPer}¢</span> per contract`;
+        }
+    } else {
+        // No bid data — symmetric at 50 - w/2
+        const p = Math.max(1, Math.min(90, Math.round((100 - w) / 2)));
+        if (elA) elA.value = p;
+        if (elB) elB.value = p;
+        if (descEl) descEl.textContent = 'Load a middle from the scanner to auto-fill from live bids.';
+    }
+
+    // Highlight active preset pill
+    document.querySelectorAll('.middle-arb-pill').forEach(el => {
+        el.classList.toggle('active', el.dataset.width === String(w));
+    });
+    // Clear the custom input if we're on a preset
+    const customEl = document.getElementById('middle-arb-custom');
+    if (customEl && [0,2,4,6,8].includes(w)) customEl.value = '';
+
+    updateMiddleBotCalc();
+}
+
+/** Called when user manually edits a price — clears preset pill highlights */
+function clearMiddleArbPills() {
+    document.querySelectorAll('.middle-arb-pill').forEach(el => el.classList.remove('active'));
+}
+
 /** Update the middle bot modal P&L calc preview */
 function updateMiddleBotCalc() {
-    const price = parseInt(document.getElementById('middle-target-price')?.value || '49');
-    const qty   = parseInt(document.getElementById('middle-qty')?.value || '1');
-    const sl    = parseInt(document.getElementById('middle-stop-loss')?.value || '15');
+    const pA  = parseInt(document.getElementById('middle-price-a')?.value  || '49');
+    const pB  = parseInt(document.getElementById('middle-price-b')?.value  || '49');
+    const qty = parseInt(document.getElementById('middle-qty')?.value       || '1');
+    const sl  = parseInt(document.getElementById('middle-stop-loss')?.value || '0');
 
-    const guaranteed = (100 - 2 * price) * qty;
-    const middleProfit = (200 - 2 * price) * qty;
-    const cost = 2 * price * qty;
-    const slExit = price - sl;
+    const guaranteed   = (100 - pA - pB) * qty;
+    const middleProfit = (200 - pA - pB) * qty;
+    const cost         = (pA + pB) * qty;
+    const slExitA      = pA - sl;
+    const slExitB      = pB - sl;
 
     const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-    const guarText = isNaN(guaranteed) ? '—' : `${guaranteed >= 0 ? '+' : ''}${guaranteed}¢`;
+    const guarText = isNaN(guaranteed)   ? '—' : `${guaranteed >= 0 ? '+' : ''}${guaranteed}¢`;
     const midText  = isNaN(middleProfit) ? '—' : `+${middleProfit}¢`;
-    const costText = isNaN(cost) ? '—' : `$${(cost / 100).toFixed(2)}`;
-    const slText   = sl === 0 ? 'OFF' : (isNaN(slExit) ? '—' : `${slExit}¢`);
+    const costText = isNaN(cost)         ? '—' : `$${(cost / 100).toFixed(2)}`;
+    const slText   = sl === 0 ? 'OFF' : (isNaN(slExitA) ? '—' : `A: ${slExitA}¢ / B: ${slExitB}¢`);
 
     setEl('middle-calc-guaranteed', guarText);
     setEl('middle-calc-middle', midText);
@@ -6138,27 +6196,29 @@ function updateMiddleBotCalc() {
     const guarEl = document.getElementById('middle-calc-guaranteed');
     if (guarEl) guarEl.style.color = guaranteed >= 0 ? '#00ff88' : '#ff4444';
 
-    // Per-leg price hint (shows how far below each leg's bid you're targeting)
+    // Update bid hint
     const md = _currentMiddleData;
-    const hintEl = document.getElementById('middle-price-hint');
-    if (hintEl && md && md.no_a_bid != null && md.no_b_bid != null) {
-        const shaveA = md.no_a_bid - price;
-        const shaveB = md.no_b_bid - price;
-        const shaveColor = (shaveA < 0 || shaveB < 0) ? '#ff4444'
-                         : (shaveA === 0 && shaveB === 0) ? '#00ff88' : '#ffaa44';
-        hintEl.innerHTML = `A bid ${md.no_a_bid}¢ | B bid ${md.no_b_bid}¢` +
-            ` &mdash; under bids: <span style="color:${shaveColor}">${shaveA >= 0 ? '-' : '+'}${Math.abs(shaveA)} / ${shaveB >= 0 ? '-' : '+'}${Math.abs(shaveB)}¢</span>`;
-    } else if (hintEl) {
-        hintEl.textContent = '';
+    if (md && md.no_a_bid != null && md.no_b_bid != null) {
+        const hintA = document.getElementById('middle-price-a-hint');
+        const hintB = document.getElementById('middle-price-b-hint');
+        if (hintA) {
+            const shA = md.no_a_bid - pA;
+            hintA.innerHTML = `bid: ${md.no_a_bid}¢ <span style="color:${shA>=0?'#ffaa44':'#ff4444'}">(${shA>=0?'-':'+'}${Math.abs(shA)}¢)</span>`;
+        }
+        if (hintB) {
+            const shB = md.no_b_bid - pB;
+            hintB.innerHTML = `bid: ${md.no_b_bid}¢ <span style="color:${shB>=0?'#ffaa44':'#ff4444'}">(${shB>=0?'-':'+'}${Math.abs(shB)}¢)</span>`;
+        }
     }
 }
 
 /** Launch the middle bot — posts to /api/middle/bot/create */
 async function launchMiddleBot() {
-    const price = parseInt(document.getElementById('middle-target-price')?.value || '49');
-    const qty   = parseInt(document.getElementById('middle-qty')?.value || '1');
-    const sl    = parseInt(document.getElementById('middle-stop-loss')?.value || '15');
-    const md    = _currentMiddleData || {};
+    const pA  = parseInt(document.getElementById('middle-price-a')?.value  || '49');
+    const pB  = parseInt(document.getElementById('middle-price-b')?.value  || '49');
+    const qty = parseInt(document.getElementById('middle-qty')?.value       || '1');
+    const sl  = parseInt(document.getElementById('middle-stop-loss')?.value || '0');
+    const md  = _currentMiddleData || {};
 
     const ticker_a = md.ticker_a || '';
     const ticker_b = md.ticker_b || '';
@@ -6167,21 +6227,25 @@ async function launchMiddleBot() {
         alert('No middle opportunity selected. Open this from the Middles Scanner.');
         return;
     }
-    if (price < 1 || price > 90) { alert('Target price must be 1-90¢'); return; }
+    if (pA < 1 || pA > 90 || pB < 1 || pB > 90) { alert('Prices must be 1–90¢'); return; }
     if (qty < 1) { alert('Quantity must be at least 1'); return; }
 
-    const guaranteed = (100 - 2 * price) * qty;
-    const middleProfit = (200 - 2 * price) * qty;
-    const cost = 2 * price * qty;
+    const guaranteed   = (100 - pA - pB) * qty;
+    const middleProfit = (200 - pA - pB) * qty;
+    const cost         = (pA + pB) * qty;
 
-    const confirmMsg = `↔️ Launch Middle Bot\n\nLeg A: NO ${ticker_a} @ ${price}¢ × ${qty}\nLeg B: NO ${ticker_b} @ ${price}¢ × ${qty}\n\nTotal cost: $${(cost / 100).toFixed(2)}\nGuaranteed floor: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nMiddle profit (both win): +${middleProfit}¢\nStop-loss: ${sl}¢ drop from fill price\n\nConfirm?`;
+    const legsEqual = pA === pB;
+    const priceStr  = legsEqual ? `both @ ${pA}¢` : `A @ ${pA}¢ / B @ ${pB}¢`;
+    const confirmMsg = `↔️ Launch Middle Bot\n\nLeg A: NO ${ticker_a} @ ${pA}¢ × ${qty}\nLeg B: NO ${ticker_b} @ ${pB}¢ × ${qty}\n\nTotal cost: $${(cost / 100).toFixed(2)}\nGuaranteed floor: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nMiddle profit (both win): +${middleProfit}¢\nStop-loss: ${sl > 0 ? sl + '¢ drop from fill price' : 'OFF (hold to settle)'}\n\nConfirm?`;
     if (!confirm(confirmMsg)) return;
 
     try {
         const payload = {
             ticker_a,
             ticker_b,
-            target_price:    price,
+            target_price_a:  pA,
+            target_price_b:  pB,
+            target_price:    Math.round((pA + pB) / 2),  // legacy fallback
             qty,
             stop_loss_cents: sl,
             team_a_name:     md.team_a || md.title_a || '',
@@ -6199,7 +6263,7 @@ async function launchMiddleBot() {
         });
         const data = await resp.json();
         if (data.success) {
-            showNotification(`↔️ Middle Bot launched! Orders placed on both legs @ ${price}¢`);
+            showNotification(`↔️ Middle Bot launched! A @ ${pA}¢ + B @ ${pB}¢ — floor ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢`);
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();

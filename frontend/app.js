@@ -700,26 +700,30 @@ function getGameSignal(gameId, sport, markets) {
         };
     }
 
-    // 🟡 LEAN — moderate lead, favoring one side
-    if (effectiveMargin >= 5) {
-        return {
-            type: 'anchor', label: '🟡 LEAN',
-            color: '#ffaa33', glowAnim: 'arbGlowGold',
-            description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Moderate lead, decent stability`,
-            liq
-        };
-    }
-
-    // 🔴 DANGER — tight game in decisive stretch (deploy + repost both blocked)
+    // 🔴 DANGER — tight game in decisive stretch; check BEFORE LEAN so late close games get flagged
+    // "Within 5" means scoreDiff 0-5; LEAN only fires if we're NOT in danger zone
     const inDangerZone = effectiveMargin <= 5 && (
         ((sport === 'NBA' || sport === 'NCAAW') && period >= 4) ||
-        (sport === 'NCAAB' && period >= 2 && clockMins <= 10)
+        // NCAAB: entire 2nd half is danger if tight (clock parse unreliable, period=2 is enough)
+        (sport === 'NCAAB' && period >= 2) ||
+        // NHL/other: 3rd period or OT
+        (sport === 'NHL' && period >= 3)
     );
     if (inDangerZone) {
         return {
             type: 'danger', label: '🔴 DANGER',
             color: '#ff4444', glowAnim: '',
             description: `±${marginLabel} · ${phaseLabel} — Tight + late game, deploy & repost blocked`,
+            liq
+        };
+    }
+
+    // 🟡 LEAN — moderate lead (5+ pts), not in danger zone
+    if (effectiveMargin >= 5) {
+        return {
+            type: 'anchor', label: '🟡 LEAN',
+            color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Moderate lead, decent stability`,
             liq
         };
     }

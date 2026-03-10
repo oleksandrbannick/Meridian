@@ -652,6 +652,10 @@
                         style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
                         ⚡ Dual Arb Bot
                     </button>
+                    <button id="mode-middle" onclick="setTradeMode('middle')"
+                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        ↔️ Middle Bot
+                    </button>
                 </div>
                 <!-- Market card (shared) -->
                 <div id="bot-market-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
@@ -952,6 +956,78 @@
                         <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
+
+                <!-- ═══════ MIDDLE BOT SECTION ═══════ -->
+                <div id="middle-bot-section" style="display:none;">
+                    <div style="background:#0a0e1a;border:1px solid #aa66ff44;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#6a7488;line-height:1.5;">
+                        <strong style="color:#aa66ff;">↔️ Middle Bot:</strong> Posts NO on both spread markets at target price. Game volatility fills both — guaranteed profit floor + middle bonus if both NOs win. Stop-loss exits filled leg if the other stalls.
+                    </div>
+                    <!-- Two-column leg display -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                        <div style="background:#060a14;border:1px solid #ff444444;border-radius:8px;padding:12px;">
+                            <div style="color:#ff4444;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:6px;">LEG A — NO</div>
+                            <div id="middle-leg-a-team" style="color:#fff;font-weight:700;font-size:13px;margin-bottom:3px;">—</div>
+                            <div id="middle-leg-a-ticker" style="color:#555;font-size:9px;margin-bottom:6px;word-break:break-all;"></div>
+                            <div style="display:flex;justify-content:space-between;font-size:11px;">
+                                <span style="color:#8892a6;">Spread: <strong id="middle-leg-a-spread" style="color:#fff;">—</strong></span>
+                                <span style="color:#8892a6;">NO bid: <strong id="middle-leg-a-bid" style="color:#ff4444;">—</strong></span>
+                            </div>
+                        </div>
+                        <div style="background:#060a14;border:1px solid #ff444444;border-radius:8px;padding:12px;">
+                            <div style="color:#ff4444;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:6px;">LEG B — NO</div>
+                            <div id="middle-leg-b-team" style="color:#fff;font-weight:700;font-size:13px;margin-bottom:3px;">—</div>
+                            <div id="middle-leg-b-ticker" style="color:#555;font-size:9px;margin-bottom:6px;word-break:break-all;"></div>
+                            <div style="display:flex;justify-content:space-between;font-size:11px;">
+                                <span style="color:#8892a6;">Spread: <strong id="middle-leg-b-spread" style="color:#fff;">—</strong></span>
+                                <span style="color:#8892a6;">NO bid: <strong id="middle-leg-b-bid" style="color:#ff4444;">—</strong></span>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Controls -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+                        <div>
+                            <label style="display:block;color:#aa66ff;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">TARGET PRICE</label>
+                            <input type="number" id="middle-target-price" min="1" max="90" value="49" oninput="updateMiddleBotCalc()"
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #aa66ff66;border-radius:6px;color:#aa66ff;font-size:1.4rem;font-weight:800;text-align:center;outline:none;"
+                                onfocus="this.style.borderColor='#aa66ff'" onblur="this.style.borderColor='#aa66ff66'">
+                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">¢ per contract</div>
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">CONTRACTS</label>
+                            <input type="number" id="middle-qty" min="1" value="1" oninput="updateMiddleBotCalc()"
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #1e274066;border-radius:6px;color:#fff;font-size:1.4rem;font-weight:800;text-align:center;outline:none;">
+                        </div>
+                        <div>
+                            <label style="display:block;color:#ff6666;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:5px;">STOP-LOSS ¢</label>
+                            <input type="number" id="middle-stop-loss" min="1" max="40" value="15" oninput="updateMiddleBotCalc()"
+                                style="width:100%;padding:8px;background:#060a14;border:2px solid #ff666644;border-radius:6px;color:#ff6666;font-size:1.4rem;font-weight:800;text-align:center;outline:none;"
+                                onfocus="this.style.borderColor='#ff6666'" onblur="this.style.borderColor='#ff666644'">
+                            <div style="color:#555;font-size:9px;margin-top:3px;text-align:center;">¢ drop triggers exit</div>
+                        </div>
+                    </div>
+                    <!-- Calc preview -->
+                    <div id="middle-calc-preview" style="margin-bottom:14px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:12px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
+                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Guaranteed floor</div>
+                                <div id="middle-calc-guaranteed" style="color:#00ff88;font-weight:800;font-size:18px;">—</div>
+                            </div>
+                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
+                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Middle profit (both win)</div>
+                                <div id="middle-calc-middle" style="color:#aa66ff;font-weight:800;font-size:18px;">—</div>
+                            </div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:#555;padding-top:8px;border-top:1px solid #1e2740;">
+                            <span>Total cost: <strong id="middle-calc-cost" style="color:#8892a6;">—</strong></span>
+                            <span>SL exit at: <strong id="middle-calc-sl" style="color:#ff6666;">—</strong></span>
+                        </div>
+                    </div>
+                    <!-- Launch button -->
+                    <button onclick="launchMiddleBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#aa66ff 0%,#8844dd 100%);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
+                        ↔️ Launch Middle Bot
+                    </button>
+                </div>
+
             </div>
         </div>
     </div>

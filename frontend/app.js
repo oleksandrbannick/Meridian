@@ -2534,33 +2534,39 @@ function setTradeMode(mode) {
     currentTradeMode = mode;
     const straightSection = document.getElementById('straight-section');
     const arbSection = document.getElementById('arb-section');
+    const middleSection = document.getElementById('middle-bot-section');
     const straightBtn = document.getElementById('mode-straight');
     const arbBtn = document.getElementById('mode-arb');
+    const middleBtn = document.getElementById('mode-middle');
     const iconEl = document.getElementById('modal-icon');
     const titleEl = document.getElementById('modal-mode-title');
     const subtitleEl = document.getElementById('modal-mode-subtitle');
 
+    // Hide all, deactivate all
+    if (straightSection) straightSection.style.display = 'none';
+    if (arbSection) arbSection.style.display = 'none';
+    if (middleSection) middleSection.style.display = 'none';
+    [straightBtn, arbBtn, middleBtn].forEach(btn => {
+        if (btn) { btn.style.background = 'transparent'; btn.style.color = '#8892a6'; btn.style.borderBottom = '2px solid transparent'; }
+    });
+
     if (mode === 'straight') {
-        straightSection.style.display = 'block';
-        arbSection.style.display = 'none';
-        straightBtn.style.background = '#00ff8822';
-        straightBtn.style.color = '#00ff88';
-        straightBtn.style.borderBottom = '2px solid #00ff88';
-        arbBtn.style.background = 'transparent';
-        arbBtn.style.color = '#8892a6';
-        arbBtn.style.borderBottom = '2px solid transparent';
+        if (straightSection) straightSection.style.display = 'block';
+        if (straightBtn) { straightBtn.style.background = '#00ff8822'; straightBtn.style.color = '#00ff88'; straightBtn.style.borderBottom = '2px solid #00ff88'; }
         iconEl.textContent = '💰';
         titleEl.textContent = 'Straight Bet';
         subtitleEl.textContent = 'Limit Order';
+    } else if (mode === 'middle') {
+        if (middleSection) middleSection.style.display = 'block';
+        if (middleBtn) { middleBtn.style.background = '#aa66ff22'; middleBtn.style.color = '#aa66ff'; middleBtn.style.borderBottom = '2px solid #aa66ff'; }
+        iconEl.textContent = '↔️';
+        titleEl.textContent = 'Middle Bot';
+        subtitleEl.textContent = 'Dual-Spread Automation';
+        updateMiddleBotCalc();
     } else {
-        straightSection.style.display = 'none';
-        arbSection.style.display = 'block';
-        arbBtn.style.background = '#00ff8822';
-        arbBtn.style.color = '#00ff88';
-        arbBtn.style.borderBottom = '2px solid #00ff88';
-        straightBtn.style.background = 'transparent';
-        straightBtn.style.color = '#8892a6';
-        straightBtn.style.borderBottom = '2px solid transparent';
+        // arb
+        if (arbSection) arbSection.style.display = 'block';
+        if (arbBtn) { arbBtn.style.background = '#00ff8822'; arbBtn.style.color = '#00ff88'; arbBtn.style.borderBottom = '2px solid #00ff88'; }
         iconEl.textContent = '⚡';
         titleEl.textContent = 'Dual-Arb Bot';
         subtitleEl.textContent = 'Settlement Arbitrage Engine';
@@ -3127,6 +3133,11 @@ function openBotModal(market, _side, _price) {
         warnEl.style.display = 'none';
     }
 
+    // Ensure single-market layout: show market card, reset middle data
+    const marketCard = document.getElementById('bot-market-card');
+    if (marketCard) marketCard.style.display = '';
+    _currentMiddleData = null;
+
     document.getElementById('bot-modal').classList.add('show');
 
     // ── Auto-refresh market prices every 3s using ORDERBOOK (real-time) ──
@@ -3512,6 +3523,10 @@ function closeModal() {
         modalRefreshInterval = null;
     }
     document.getElementById('bot-modal').classList.remove('show');
+    // Restore market card for next time single-market modal is used
+    const marketCard = document.getElementById('bot-market-card');
+    if (marketCard) marketCard.style.display = '';
+    _currentMiddleData = null;
     // Reset all-widths toggle
     const cb = document.getElementById('all-widths-toggle');
     if (cb && cb.checked) {
@@ -3937,7 +3952,9 @@ async function loadBots() {
         const gameGroups = {};
         activeBots.forEach(botId => {
             const bot = bots[botId];
-            const gk = getGameKey(bot.ticker);
+            // Middle bots use ticker_a (ticker is also set to ticker_a as fallback)
+            const effectiveTicker = bot.type === 'middle' ? (bot.ticker_a || bot.ticker || '') : (bot.ticker || '');
+            const gk = getGameKey(effectiveTicker);
             if (!gameGroups[gk]) gameGroups[gk] = [];
             gameGroups[gk].push(botId);
         });
@@ -3999,6 +4016,100 @@ async function loadBots() {
 
             groupBots.forEach(botId => {
             const bot = bots[botId];
+
+            // ── Middle Bots ──────────────────────────────────────────
+            if (bot.type === 'middle') {
+                activeBotCount++;
+                const nowSec_m = Date.now() / 1000;
+                const ageMin_m = bot.created_at ? Math.floor((nowSec_m - bot.created_at) / 60) : 0;
+                const status_m = bot.status || 'waiting';
+                const statusColors = { waiting: '#aa66ff', one_filled: '#ffaa00', both_filled: '#00ff88', stopped: '#ff4444', completed: '#00ff88' };
+                const borderColor_m = statusColors[status_m] || '#aa66ff';
+                const statusLabel_m = {
+                    waiting:     '⏳ WAITING',
+                    one_filled:  '✅ ONE LEG IN',
+                    both_filled: '🔒 BOTH FILLED',
+                    stopped:     '🛑 STOPPED',
+                    completed:   '✓ COMPLETE',
+                }[status_m] || status_m.toUpperCase().replace(/_/g, ' ');
+
+                const filledLeg_m = bot.filled_leg || null;
+                const legAFill = bot.leg_a_filled ? `${bot.leg_a_fill_price || bot.target_price}¢` : null;
+                const legBFill = bot.leg_b_filled ? `${bot.leg_b_fill_price || bot.target_price}¢` : null;
+                const stopLoss_m = bot.stop_loss_cents || 15;
+                const slTrigger_m = (bot.target_price || 49) - stopLoss_m;
+                const qty_m = bot.qty || 1;
+                const target_m = bot.target_price || 49;
+                const guaranteed_m = (100 - 2 * target_m) * qty_m;
+                const middleProfit_m = (200 - 2 * target_m) * qty_m;
+
+                let legStatusHtml = '';
+                if (status_m === 'one_filled') {
+                    const filledTeam = filledLeg_m === 'a' ? (bot.team_a_name || 'Leg A') : (bot.team_b_name || 'Leg B');
+                    const waitingTeam = filledLeg_m === 'a' ? (bot.team_b_name || 'Leg B') : (bot.team_a_name || 'Leg A');
+                    const fillPriceShown = filledLeg_m === 'a' ? legAFill : legBFill;
+                    legStatusHtml = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:5px 8px;font-size:10px;margin-top:6px;">
+                        <span style="color:#ffaa00;font-weight:700;">✅ ${filledTeam} filled @ ${fillPriceShown}</span>
+                        <span style="color:#555;margin-left:8px;">⏳ Waiting: ${waitingTeam}</span>
+                        <span style="color:#ff6666;margin-left:8px;">SL trigger: ${slTrigger_m}¢</span>
+                    </div>`;
+                } else if (status_m === 'both_filled') {
+                    legStatusHtml = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:5px 8px;font-size:10px;margin-top:6px;">
+                        <span style="color:#00ff88;font-weight:700;">🔒 Both legs filled — holding to settlement</span>
+                        <span style="color:#8892a6;margin-left:8px;">Leg A: ${legAFill || '?'} · Leg B: ${legBFill || '?'}</span>
+                    </div>`;
+                } else if (status_m === 'stopped') {
+                    legStatusHtml = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:5px 8px;font-size:10px;margin-top:6px;">
+                        <span style="color:#ff4444;font-weight:700;">🛑 Stop-loss triggered — exited filled leg</span>
+                    </div>`;
+                }
+
+                const item_m = document.createElement('div');
+                item_m.className = 'bot-item';
+                item_m.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${borderColor_m};`;
+                item_m.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span style="color:#aa66ff;font-size:11px;font-weight:700;">↔️ MIDDLE</span>
+                            <span style="color:#fff;font-weight:700;font-size:13px;">${bot.team_a_name || 'A'} vs ${bot.team_b_name || 'B'}</span>
+                            <span class="bot-status" style="background:${borderColor_m}22;color:${borderColor_m};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel_m}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="color:#555;font-size:10px;">${ageMin_m}m</span>
+                            <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${bot.id || botId}')">✕</button>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
+                        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px;">
+                            <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:4px;">LEG A — NO</div>
+                            <div style="color:#fff;font-size:10px;margin-bottom:2px;">${bot.team_a_name || 'Team A'}</div>
+                            <div style="color:#555;font-size:9px;margin-bottom:4px;">${bot.ticker_a || '?'}</div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target_m}¢</strong></span>
+                                <span style="color:${bot.leg_a_filled ? '#00ff88' : '#8892a6'};font-weight:700;">${bot.leg_a_filled ? `✓ ${legAFill}` : 'PENDING'}</span>
+                            </div>
+                        </div>
+                        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px;">
+                            <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:4px;">LEG B — NO</div>
+                            <div style="color:#fff;font-size:10px;margin-bottom:2px;">${bot.team_b_name || 'Team B'}</div>
+                            <div style="color:#555;font-size:9px;margin-bottom:4px;">${bot.ticker_b || '?'}</div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${target_m}¢</strong></span>
+                                <span style="color:${bot.leg_b_filled ? '#00ff88' : '#8892a6'};font-weight:700;">${bot.leg_b_filled ? `✓ ${legBFill}` : 'PENDING'}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;">
+                        <span>Floor: <strong style="color:${guaranteed_m >= 0 ? '#00ff88' : '#ff4444'};">${guaranteed_m >= 0 ? '+' : ''}${guaranteed_m}¢</strong></span>
+                        <span>Middle: <strong style="color:#aa66ff;">+${middleProfit_m}¢</strong></span>
+                        <span>SL: <strong style="color:#ff6666;">${slTrigger_m}¢</strong></span>
+                        <span>×${qty_m}</span>
+                    </div>
+                    ${legStatusHtml}
+                `;
+                botsList.appendChild(item_m);
+                return;
+            }
 
             // ── Watch Bots (position watchers) ───────────────────────
             if (bot.type === 'watch') {
@@ -5223,6 +5334,10 @@ function showMiddlesResults(data) {
                             style="background:${isGuaranteed ? '#00ff88' : '#ffaa00'};color:#000;border:none;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
                         📐 Place Middle
                     </button>
+                    <button onclick="openMiddleBotFromScanner(${JSON.stringify(m).replace(/"/g,'&quot;')})"
+                            style="background:#aa66ff22;color:#aa66ff;border:1px solid #aa66ff66;padding:5px 14px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
+                        🤖 Open Bot
+                    </button>
                 </div>
             </div>`;
         }).join('');
@@ -5262,6 +5377,138 @@ async function placeMiddle(tickerA, tickerB, priceA, priceB) {
 
 function closeMiddlesModal() {
     document.getElementById('middles-modal')?.classList.remove('show');
+}
+
+// ─── Middle Bot Modal ─────────────────────────────────────────────────────────
+
+// Current middle bot data (set when opened from scanner or directly)
+let _currentMiddleData = null;
+
+/** Bridge from scanner card — closes middles modal then opens bot modal with data */
+function openMiddleBotFromScanner(middle) {
+    closeMiddlesModal();
+    // Reset market card display
+    const marketCard = document.getElementById('bot-market-card');
+    if (marketCard) marketCard.style.display = 'none';
+    openMiddleBotModal(middle);
+}
+
+/**
+ * Open the bot modal pre-filled with middle bot data from the scanner.
+ * Switches to the 'middle' tab and populates both legs.
+ */
+function openMiddleBotModal(middle) {
+    _currentMiddleData = middle;
+    // If a single-market modal is open, reuse it but switch to middle tab
+    setTradeMode('middle');
+
+    // Populate leg cards
+    const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setEl('middle-leg-a-team', middle.team_a || middle.title_a || middle.ticker_a || 'Leg A');
+    setEl('middle-leg-b-team', middle.team_b || middle.title_b || middle.ticker_b || 'Leg B');
+    setEl('middle-leg-a-ticker', middle.ticker_a || '');
+    setEl('middle-leg-b-ticker', middle.ticker_b || '');
+    setEl('middle-leg-a-spread', middle.spread_a != null ? `${middle.spread_a}` : '—');
+    setEl('middle-leg-b-spread', middle.spread_b != null ? `${middle.spread_b}` : '—');
+    setEl('middle-leg-a-bid', middle.no_a_bid != null ? `${middle.no_a_bid}¢` : '—');
+    setEl('middle-leg-b-bid', middle.no_b_bid != null ? `${middle.no_b_bid}¢` : '—');
+
+    // Pre-fill suggested price
+    const suggestedPrice = middle.suggested_a || middle.target_price || 49;
+    const priceEl = document.getElementById('middle-target-price');
+    if (priceEl) priceEl.value = suggestedPrice;
+
+    updateMiddleBotCalc();
+
+    // Open the modal (hide the single-market card since we're showing leg cards instead)
+    const marketCard = document.getElementById('bot-market-card');
+    if (marketCard) marketCard.style.display = 'none';
+    document.getElementById('bot-modal').classList.add('show');
+}
+
+/** Update the middle bot modal P&L calc preview */
+function updateMiddleBotCalc() {
+    const price = parseInt(document.getElementById('middle-target-price')?.value || '49');
+    const qty   = parseInt(document.getElementById('middle-qty')?.value || '1');
+    const sl    = parseInt(document.getElementById('middle-stop-loss')?.value || '15');
+
+    const guaranteed = (100 - 2 * price) * qty;
+    const middleProfit = (200 - 2 * price) * qty;
+    const cost = 2 * price * qty;
+    const slExit = price - sl;
+
+    const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    const guarText = isNaN(guaranteed) ? '—' : `${guaranteed >= 0 ? '+' : ''}${guaranteed}¢`;
+    const midText  = isNaN(middleProfit) ? '—' : `+${middleProfit}¢`;
+    const costText = isNaN(cost) ? '—' : `$${(cost / 100).toFixed(2)}`;
+    const slText   = isNaN(slExit) ? '—' : `${slExit}¢`;
+
+    setEl('middle-calc-guaranteed', guarText);
+    setEl('middle-calc-middle', midText);
+    setEl('middle-calc-cost', costText);
+    setEl('middle-calc-sl', slText);
+
+    // Color guaranteed based on sign
+    const guarEl = document.getElementById('middle-calc-guaranteed');
+    if (guarEl) guarEl.style.color = guaranteed >= 0 ? '#00ff88' : '#ff4444';
+}
+
+/** Launch the middle bot — posts to /api/middle/bot/create */
+async function launchMiddleBot() {
+    const price = parseInt(document.getElementById('middle-target-price')?.value || '49');
+    const qty   = parseInt(document.getElementById('middle-qty')?.value || '1');
+    const sl    = parseInt(document.getElementById('middle-stop-loss')?.value || '15');
+    const md    = _currentMiddleData || {};
+
+    const ticker_a = md.ticker_a || '';
+    const ticker_b = md.ticker_b || '';
+
+    if (!ticker_a || !ticker_b) {
+        alert('No middle opportunity selected. Open this from the Middles Scanner.');
+        return;
+    }
+    if (price < 1 || price > 90) { alert('Target price must be 1-90¢'); return; }
+    if (qty < 1) { alert('Quantity must be at least 1'); return; }
+
+    const guaranteed = (100 - 2 * price) * qty;
+    const middleProfit = (200 - 2 * price) * qty;
+    const cost = 2 * price * qty;
+
+    const confirmMsg = `↔️ Launch Middle Bot\n\nLeg A: NO ${ticker_a} @ ${price}¢ × ${qty}\nLeg B: NO ${ticker_b} @ ${price}¢ × ${qty}\n\nTotal cost: $${(cost / 100).toFixed(2)}\nGuaranteed floor: ${guaranteed >= 0 ? '+' : ''}${guaranteed}¢\nMiddle profit (both win): +${middleProfit}¢\nStop-loss: ${sl}¢ drop from fill price\n\nConfirm?`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const payload = {
+            ticker_a,
+            ticker_b,
+            target_price:    price,
+            qty,
+            stop_loss_cents: sl,
+            team_a_name:     md.team_a || md.title_a || '',
+            team_b_name:     md.team_b || md.title_b || '',
+            spread_a:        md.spread_a || 0,
+            spread_b:        md.spread_b || 0,
+            no_a_bid:        md.no_a_bid || 0,
+            no_b_bid:        md.no_b_bid || 0,
+            game_id:         md.game_id || '',
+        };
+        const resp = await fetch(`${API_BASE}/middle/bot/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`↔️ Middle Bot launched! Orders placed on both legs @ ${price}¢`);
+            closeModal();
+            loadBots();
+            if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            alert(`Middle bot error: ${data.error || 'Unknown error'}`);
+        }
+    } catch (err) {
+        alert(`Network error: ${err.message}`);
+    }
 }
 
 // ─── Upgrade #6: P&L Dashboard ────────────────────────────────────────────────

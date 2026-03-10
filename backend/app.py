@@ -268,34 +268,53 @@ def get_markets():
             for sport_series in SPORTS_SERIES.values():
                 series_to_fetch.extend(sport_series)
         
-        # Fetch markets from each series in parallel (capped at 10 workers to respect rate limits)
+        # Fetch markets from each series in parallel
+        # Use 6 workers to stay under Kalshi's 10 req/s rate limit,
+        # and retry on 429 with exponential backoff so no series gets silently dropped.
         all_markets = []
         series_counts = {}
 
         def _fetch_series(series):
-            try:
-                series_markets = []
-                cursor = None
-                mtype = SERIES_TYPE_MAP.get(series, 'prop')
-                while True:
-                    result = kalshi_client.get_markets_by_series(series, status=status, limit=200, cursor=cursor)
-                    markets = result.get('markets', [])
-                    if not markets:
+            series_markets = []
+            cursor = None
+            mtype = SERIES_TYPE_MAP.get(series, 'prop')
+            while True:
+                # Retry each page up to 3 times on 429
+                page_result = None
+                for attempt in range(3):
+                    try:
+                        page_result = kalshi_client.get_markets_by_series(
+                            series, status=status, limit=200, cursor=cursor)
                         break
-                    markets = [m for m in markets if 'mve_selected_legs' not in m
-                               and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
-                    for m in markets:
-                        m['market_type'] = mtype
-                        m['series_ticker'] = series  # API returns None, fill it
-                    series_markets.extend(markets)
-                    cursor = result.get('cursor')
-                    if not cursor or len(result.get('markets', [])) < 200:
-                        break
-                return series, series_markets
-            except Exception:
-                return series, []
+                    except requests.exceptions.HTTPError as e:
+                        if e.response is not None and e.response.status_code == 429:
+                            wait = 1.5 * (attempt + 1)
+                            print(f'⏳ Rate-limited on {series}, retry {attempt+1}/3 in {wait}s')
+                            time.sleep(wait)
+                            continue
+                        print(f'⚠️ HTTP error fetching {series}: {e}')
+                        return series, series_markets
+                    except Exception as e:
+                        print(f'⚠️ Error fetching {series}: {e}')
+                        return series, series_markets
+                if page_result is None:
+                    print(f'❌ Exhausted retries for {series}')
+                    return series, series_markets
+                markets = page_result.get('markets', [])
+                if not markets:
+                    break
+                markets = [m for m in markets if 'mve_selected_legs' not in m
+                           and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+                for m in markets:
+                    m['market_type'] = mtype
+                    m['series_ticker'] = series  # API returns None, fill it
+                series_markets.extend(markets)
+                cursor = page_result.get('cursor')
+                if not cursor or len(page_result.get('markets', [])) < 200:
+                    break
+            return series, series_markets
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             for series, series_markets in executor.map(_fetch_series, series_to_fetch):
                 if series_markets:
                     series_counts[series] = len(series_markets)
@@ -2787,7 +2806,7 @@ def _run_monitor():
         auto_reset_daily_pnl()
 
         actions = []
-        active_statuses = ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat')
+        active_statuses = ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -4140,6 +4159,256 @@ def _run_monitor():
                 print(f"Error monitoring bot {bot_id}: {e}")
                 continue
 
+        # ── Middle Bots ──────────────────────────────────────────────
+        for bot_id, bot in list(active_bots.items()):
+            if bot.get('type') != 'middle':
+                continue
+            if bot['status'] not in ('waiting', 'one_filled'):
+                continue
+            try:
+                now_m = time.time()
+                qty_m = bot.get('qty', 1)
+
+                # ── Status: waiting — both orders pending ──
+                if bot['status'] == 'waiting':
+                    # Check order A
+                    a_filled = False
+                    a_fill_price = None
+                    if bot.get('order_a_id'):
+                        try:
+                            api_rate_limiter.wait()
+                            resp_a = kalshi_client.get_order(bot['order_a_id'])
+                            ord_a = resp_a.get('order', resp_a) if isinstance(resp_a, dict) else {}
+                            a_count = ord_a.get('filled_count', ord_a.get('fill_count', 0))
+                            if a_count >= qty_m:
+                                a_filled = True
+                                a_fill_price = get_actual_fill_price(bot['order_a_id'], 'no')
+                        except Exception as oe:
+                            bot_log('ERROR', bot_id, {'step': 'check_order_a', 'error': str(oe)}, level='WARN')
+
+                    # Check order B
+                    b_filled = False
+                    b_fill_price = None
+                    if bot.get('order_b_id'):
+                        try:
+                            api_rate_limiter.wait()
+                            resp_b = kalshi_client.get_order(bot['order_b_id'])
+                            ord_b = resp_b.get('order', resp_b) if isinstance(resp_b, dict) else {}
+                            b_count = ord_b.get('filled_count', ord_b.get('fill_count', 0))
+                            if b_count >= qty_m:
+                                b_filled = True
+                                b_fill_price = get_actual_fill_price(bot['order_b_id'], 'no')
+                        except Exception as oe:
+                            bot_log('ERROR', bot_id, {'step': 'check_order_b', 'error': str(oe)}, level='WARN')
+
+                    if a_filled and b_filled:
+                        bot['leg_a_filled'] = True
+                        bot['leg_b_filled'] = True
+                        bot['leg_a_fill_price'] = a_fill_price or bot['target_price']
+                        bot['leg_b_fill_price'] = b_fill_price or bot['target_price']
+                        bot['status'] = 'both_filled'
+                        bot['both_filled_at'] = now_m
+                        bot_log('MIDDLE_BOTH_FILLED', bot_id, {'leg_a_price': bot['leg_a_fill_price'], 'leg_b_price': bot['leg_b_fill_price']})
+                        print(f'📐 MIDDLE BOTH FILLED: {bot_id}')
+                        actions.append({'bot_id': bot_id, 'action': 'middle_both_filled'})
+                        save_state()
+                    elif a_filled:
+                        bot['leg_a_filled'] = True
+                        bot['leg_a_fill_price'] = a_fill_price or bot['target_price']
+                        bot['status'] = 'one_filled'
+                        bot['filled_leg'] = 'a'
+                        bot['one_filled_at'] = now_m
+                        bot_log('MIDDLE_LEG_FILLED', bot_id, {'leg': 'a', 'price': bot['leg_a_fill_price']})
+                        print(f'📐 MIDDLE LEG A FILLED: {bot_id}')
+                        actions.append({'bot_id': bot_id, 'action': 'middle_leg_a_filled'})
+                        save_state()
+                    elif b_filled:
+                        bot['leg_b_filled'] = True
+                        bot['leg_b_fill_price'] = b_fill_price or bot['target_price']
+                        bot['status'] = 'one_filled'
+                        bot['filled_leg'] = 'b'
+                        bot['one_filled_at'] = now_m
+                        bot_log('MIDDLE_LEG_FILLED', bot_id, {'leg': 'b', 'price': bot['leg_b_fill_price']})
+                        print(f'📐 MIDDLE LEG B FILLED: {bot_id}')
+                        actions.append({'bot_id': bot_id, 'action': 'middle_leg_b_filled'})
+                        save_state()
+
+                # ── Status: one_filled — check other leg and stop-loss ──
+                elif bot['status'] == 'one_filled':
+                    filled_leg = bot.get('filled_leg', 'a')
+                    unfilled_leg = 'b' if filled_leg == 'a' else 'a'
+                    unfilled_order_key = f'order_{unfilled_leg}_id'
+                    filled_ticker_key = f'ticker_{filled_leg}'
+                    filled_price_key = f'leg_{filled_leg}_fill_price'
+                    stop_loss = bot.get('stop_loss_cents', 15)
+                    fill_price = bot.get(filled_price_key) or bot['target_price']
+
+                    # Check if unfilled leg has filled
+                    other_filled = False
+                    other_fill_price = None
+                    if bot.get(unfilled_order_key):
+                        try:
+                            api_rate_limiter.wait()
+                            resp_uf = kalshi_client.get_order(bot[unfilled_order_key])
+                            ord_uf = resp_uf.get('order', resp_uf) if isinstance(resp_uf, dict) else {}
+                            uf_count = ord_uf.get('filled_count', ord_uf.get('fill_count', 0))
+                            if uf_count >= qty_m:
+                                other_filled = True
+                                other_fill_price = get_actual_fill_price(bot[unfilled_order_key], 'no')
+                        except Exception as oe:
+                            bot_log('ERROR', bot_id, {'step': 'check_unfilled_leg', 'error': str(oe)}, level='WARN')
+
+                    if other_filled:
+                        bot[f'leg_{unfilled_leg}_filled'] = True
+                        bot[f'leg_{unfilled_leg}_fill_price'] = other_fill_price or bot['target_price']
+                        bot['status'] = 'both_filled'
+                        bot['both_filled_at'] = now_m
+                        bot_log('MIDDLE_BOTH_FILLED', bot_id, {
+                            'leg_a_price': bot.get('leg_a_fill_price'),
+                            'leg_b_price': bot.get('leg_b_fill_price'),
+                        })
+                        print(f'📐 MIDDLE BOTH FILLED (2nd leg): {bot_id}')
+                        actions.append({'bot_id': bot_id, 'action': 'middle_both_filled'})
+                        save_state()
+                    else:
+                        # Check stop-loss: get live bid of the filled leg
+                        filled_ticker = bot.get(filled_ticker_key, '')
+                        try:
+                            live_bid = 0
+                            ws_p = ws_manager.get_price(filled_ticker) if ws_manager else None
+                            if ws_p:
+                                live_bid = ws_p.get('no_bid', 0) or 0
+                            if not live_bid and filled_ticker:
+                                api_rate_limiter.wait()
+                                mkt_sl = kalshi_client.get_market(filled_ticker)
+                                mkt_sl_data = mkt_sl.get('market', mkt_sl)
+                                no_bid_d = mkt_sl_data.get('no_bid_dollars')
+                                live_bid = round(float(no_bid_d) * 100) if no_bid_d else mkt_sl_data.get('no_bid', 0)
+                            # Store live bid for frontend
+                            bot[f'live_no_bid_{filled_leg}'] = live_bid
+                            # Trigger stop-loss if bid dropped stop_loss_cents below fill price
+                            sl_trigger = fill_price - stop_loss
+                            if live_bid > 0 and live_bid < sl_trigger:
+                                bot_log('MIDDLE_SL_TRIGGERED', bot_id, {
+                                    'filled_leg': filled_leg, 'fill_price': fill_price,
+                                    'live_bid': live_bid, 'sl_trigger': sl_trigger,
+                                })
+                                print(f'🛑 MIDDLE STOP-LOSS: {bot_id} — {filled_leg} bid={live_bid}¢ < trigger={sl_trigger}¢')
+                                # Cancel the unfilled order
+                                if bot.get(unfilled_order_key):
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(bot[unfilled_order_key])
+                                        bot_log('ORDER_CANCELLED', bot_id, {'order_id': bot[unfilled_order_key], 'reason': 'middle_sl'})
+                                    except Exception as ce:
+                                        bot_log('ERROR', bot_id, {'step': 'cancel_unfilled', 'error': str(ce)}, level='WARN')
+                                # Market-sell the filled leg
+                                sold_sl, sell_info_sl = execute_sell(filled_ticker, 'no', qty_m, reason=f'middle_sl_{bot_id}')
+                                sell_price_sl = (sell_info_sl or {}).get('actual_fill_price') or (sell_info_sl or {}).get('sell_price', 0)
+                                loss_cents = (fill_price - (sell_price_sl or fill_price)) * qty_m
+                                bot['status'] = 'stopped'
+                                bot['stopped_at'] = now_m
+                                bot['sl_sell_price'] = sell_price_sl
+                                session_pnl['gross_loss_cents'] += max(0, loss_cents)
+                                session_pnl['stopped_bots'] += 1
+                                _record_trade({
+                                    'bot_id': bot_id, 'type': 'middle',
+                                    'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
+                                    'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                                    'target_price': bot.get('target_price'), 'qty': qty_m,
+                                    'filled_leg': filled_leg, 'fill_price': fill_price,
+                                    'sl_sell_price': sell_price_sl, 'loss_cents': loss_cents,
+                                    'result': 'stopped_sl', 'timestamp': now_m,
+                                    'note': f'stop-loss: {filled_leg} bid={live_bid}¢ < trigger={sl_trigger}¢',
+                                }, bot)
+                                bot_log('MIDDLE_SL_FIRED', bot_id, {'sold': sold_sl, 'sell_price': sell_price_sl, 'loss_cents': loss_cents})
+                                actions.append({'bot_id': bot_id, 'action': 'middle_stop_loss', 'loss_cents': loss_cents})
+                                save_state()
+                        except Exception as sl_err:
+                            bot_log('ERROR', bot_id, {'step': 'sl_check', 'error': str(sl_err)}, level='WARN')
+
+            except Exception as mid_err:
+                print(f'Error monitoring middle bot {bot_id}: {mid_err}')
+                continue
+
+        # ── Settle both_filled middle bots when markets close ────────
+        for bot_id, bot in list(active_bots.items()):
+            if bot.get('type') != 'middle' or bot['status'] != 'both_filled':
+                continue
+            try:
+                now_s = time.time()
+                ticker_a = bot.get('ticker_a', '')
+                ticker_b = bot.get('ticker_b', '')
+                # Check if both markets are settled
+                settled_a = False
+                settled_b = False
+                result_a = ''
+                result_b = ''
+                try:
+                    api_rate_limiter.wait()
+                    mkt_a = kalshi_client.get_market(ticker_a)
+                    mkt_a_data = mkt_a.get('market', mkt_a)
+                    if mkt_a_data.get('status', '') in ('closed', 'settled', 'finalized'):
+                        settled_a = True
+                        result_a = mkt_a_data.get('result', '').lower()
+                except Exception:
+                    pass
+                try:
+                    api_rate_limiter.wait()
+                    mkt_b = kalshi_client.get_market(ticker_b)
+                    mkt_b_data = mkt_b.get('market', mkt_b)
+                    if mkt_b_data.get('status', '') in ('closed', 'settled', 'finalized'):
+                        settled_b = True
+                        result_b = mkt_b_data.get('result', '').lower()
+                except Exception:
+                    pass
+
+                if settled_a and settled_b:
+                    qty_s = bot.get('qty', 1)
+                    fill_a = bot.get('leg_a_fill_price', bot.get('target_price', 49))
+                    fill_b = bot.get('leg_b_fill_price', bot.get('target_price', 49))
+                    # NO wins when market result is 'no'
+                    leg_a_win = (result_a == 'no')
+                    leg_b_win = (result_b == 'no')
+                    middle_hit = leg_a_win and leg_b_win
+                    profit_a = (100 - fill_a) * qty_s if leg_a_win else (-fill_a * qty_s)
+                    profit_b = (100 - fill_b) * qty_s if leg_b_win else (-fill_b * qty_s)
+                    total_profit = profit_a + profit_b
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now_s
+                    bot['leg_a_result'] = 'win' if leg_a_win else 'loss'
+                    bot['leg_b_result'] = 'win' if leg_b_win else 'loss'
+                    bot['middle_hit'] = middle_hit
+                    if total_profit > 0:
+                        session_pnl['gross_profit_cents'] += total_profit
+                        session_pnl['completed_bots'] += 1
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(total_profit)
+                        session_pnl['stopped_bots'] += 1
+                    _record_trade({
+                        'bot_id': bot_id, 'type': 'middle',
+                        'ticker_a': ticker_a, 'ticker_b': ticker_b,
+                        'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                        'target_price': bot.get('target_price'), 'qty': qty_s,
+                        'leg_a_fill_price': fill_a, 'leg_b_fill_price': fill_b,
+                        'leg_a_result': bot['leg_a_result'], 'leg_b_result': bot['leg_b_result'],
+                        'middle_hit': middle_hit,
+                        'profit_cents': total_profit,
+                        'result': 'middle_hit' if middle_hit else ('arb_win' if (leg_a_win or leg_b_win) else 'loss'),
+                        'timestamp': now_s,
+                        'note': f'{"MIDDLE HIT" if middle_hit else ("partial win" if (leg_a_win or leg_b_win) else "both lost")} — A:{result_a} B:{result_b}',
+                    }, bot)
+                    bot_log('MIDDLE_SETTLED', bot_id, {
+                        'middle_hit': middle_hit, 'profit_cents': total_profit,
+                        'leg_a_result': result_a, 'leg_b_result': result_b,
+                    })
+                    print(f'📐 MIDDLE SETTLED: {bot_id} | middle_hit={middle_hit} | profit={total_profit}¢')
+                    actions.append({'bot_id': bot_id, 'action': 'middle_settled', 'profit_cents': total_profit, 'middle_hit': middle_hit})
+                    save_state()
+            except Exception as ms_err:
+                print(f'Error settling middle bot {bot_id}: {ms_err}')
+                continue
+
         save_state()
         active_count = len([b for b in active_bots.values() if b['status'] in active_statuses])
         if actions:
@@ -4148,6 +4417,115 @@ def _run_monitor():
             'success':     True,
             'actions':     actions,
             'active_bots': active_count,
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/middle/bot/create', methods=['POST'])
+def create_middle_bot():
+    """
+    Middle Bot: places limit BUY NO orders on two opposing spread markets at target_price.
+    Both orders rest in the book waiting for game volatility to push prices down to target.
+    When both fill, profit is locked. Stop-loss sells the filled leg if the other stalls.
+    """
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        data = request.json or {}
+        ticker_a        = data.get('ticker_a', '').strip()
+        ticker_b        = data.get('ticker_b', '').strip()
+        target_price    = int(data.get('target_price', 49))
+        qty             = int(data.get('qty', 1))
+        stop_loss_cents = int(data.get('stop_loss_cents', 15))
+        team_a_name     = data.get('team_a_name', '')
+        team_b_name     = data.get('team_b_name', '')
+        spread_a        = data.get('spread_a', 0)
+        spread_b        = data.get('spread_b', 0)
+        no_a_bid        = data.get('no_a_bid', 0)
+        no_b_bid        = data.get('no_b_bid', 0)
+        game_id         = data.get('game_id', '')
+
+        if not ticker_a or not ticker_b:
+            return jsonify({'error': 'Missing required fields: ticker_a, ticker_b'}), 400
+        if target_price < 1 or target_price > 99:
+            return jsonify({'error': f'target_price {target_price}¢ out of range (1-99)'}), 400
+        if qty < 1:
+            return jsonify({'error': 'qty must be at least 1'}), 400
+
+        # Place NO limit orders on both legs
+        api_rate_limiter.wait()
+        order_a_resp = kalshi_client.create_order(
+            ticker=ticker_a, side='no', action='buy',
+            count=qty, no_price=target_price
+        )
+        order_a_id = order_a_resp['order']['order_id']
+
+        api_rate_limiter.wait()
+        order_b_resp = kalshi_client.create_order(
+            ticker=ticker_b, side='no', action='buy',
+            count=qty, no_price=target_price
+        )
+        order_b_id = order_b_resp['order']['order_id']
+
+        bot_id = f"mid_bot_{int(time.time())}"
+        active_bots[bot_id] = {
+            'id':               bot_id,
+            'type':             'middle',
+            'status':           'waiting',
+            'ticker_a':         ticker_a,
+            'ticker_b':         ticker_b,
+            'ticker':           ticker_a,  # used by grouping/display logic
+            'target_price':     target_price,
+            'qty':              qty,
+            'stop_loss_cents':  stop_loss_cents,
+            'team_a_name':      team_a_name,
+            'team_b_name':      team_b_name,
+            'spread_a':         spread_a,
+            'spread_b':         spread_b,
+            'no_a_bid':         no_a_bid,
+            'no_b_bid':         no_b_bid,
+            'game_id':          game_id,
+            'order_a_id':       order_a_id,
+            'order_b_id':       order_b_id,
+            'leg_a_filled':     False,
+            'leg_b_filled':     False,
+            'leg_a_fill_price': None,
+            'leg_b_fill_price': None,
+            'filled_leg':       None,
+            'created_at':       time.time(),
+            'placed_at':        time.time(),
+        }
+        save_state()
+
+        # Subscribe WS to both tickers for real-time price updates
+        if ws_manager.connected:
+            ws_manager.add_ticker(ticker_a)
+            ws_manager.add_ticker(ticker_b)
+
+        guaranteed = 100 - 2 * target_price
+        middle_profit = 200 - 2 * target_price
+
+        bot_log('MIDDLE_BOT_CREATED', bot_id, {
+            'ticker_a': ticker_a, 'ticker_b': ticker_b,
+            'target_price': target_price, 'qty': qty, 'stop_loss_cents': stop_loss_cents,
+            'order_a_id': order_a_id, 'order_b_id': order_b_id,
+            'guaranteed': guaranteed, 'middle_profit': middle_profit,
+        })
+        print(f'📐 MIDDLE BOT CREATED: {bot_id} | NO {ticker_a} + NO {ticker_b} @ {target_price}¢ × {qty}')
+
+        return jsonify({
+            'success':        True,
+            'bot_id':         bot_id,
+            'order_a_id':     order_a_id,
+            'order_b_id':     order_b_id,
+            'target_price':   target_price,
+            'guaranteed':     guaranteed,
+            'middle_profit':  middle_profit,
+            'message':        f'Middle bot deployed: NO on both spreads @ {target_price}¢ × {qty} — '
+                              f'guaranteed {guaranteed:+}¢, middle profit +{middle_profit}¢',
         })
 
     except Exception as e:
@@ -4731,8 +5109,32 @@ def cancel_bot(bot_id):
             qty = bot.get('quantity', 1)
             bot_type = bot.get('type', 'arb')
 
+            # ── Handle middle bots ──
+            if bot_type == 'middle':
+                mid_qty = bot.get('qty', 1)
+                # Cancel any unfilled orders
+                for order_key in ('order_a_id', 'order_b_id'):
+                    if bot.get(order_key):
+                        try:
+                            kalshi_client.cancel_order(bot[order_key])
+                            cancelled.append(order_key)
+                        except Exception as me:
+                            print(f'⚠ cancel_bot({bot_id}): cancel {order_key} failed: {me}')
+                # Sell any filled legs
+                for leg, ticker_key in (('a', 'ticker_a'), ('b', 'ticker_b')):
+                    if bot.get(f'leg_{leg}_filled'):
+                        leg_ticker = bot.get(ticker_key, '')
+                        if leg_ticker:
+                            sold, sell_info = execute_sell(leg_ticker, 'no', mid_qty, reason=f'cancel_middle_{leg}_{bot_id}')
+                            if sold:
+                                sold_positions.append(f'LEG_{leg.upper()}_NO {mid_qty}x')
+                                sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
+                                sell_prices[f'leg_{leg}'] = sp
+                            else:
+                                warnings.append(f'FAILED to sell LEG_{leg.upper()} NO {mid_qty}x — position may still be open on Kalshi!')
+
             # ── Handle watch bots ──
-            if bot_type == 'watch':
+            elif bot_type == 'watch':
                 watch_side = bot.get('side', 'yes')
                 if bot.get('order_filled', False):
                     watch_qty = bot.get('fill_qty', bot.get('quantity', 1))

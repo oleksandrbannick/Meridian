@@ -60,3 +60,10 @@ instance/
 *.db
 *.sqlite
 *.sqlite3
+
+# Large binaries
+bin/
+nohup.out
+backend/data_backup.json
+backend/check_tennis.py
+backend/check_games.py

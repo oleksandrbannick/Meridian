@@ -5508,11 +5508,15 @@ function anchorScan() {
 
     if (countEl) countEl.textContent = 'Scanning signals…';
 
-    // Only winner-type markets (GAME- ticker, no SPREAD/TOTAL/1H/PTS/REB etc.)
+    // Only game-winner markets for recognized sports — NCAAB/NHL/MLB etc. don't use "GAME-" in
+    // their ticker prefix (e.g. KXNCAAB-, KXMARMAD-, KXNHL-) so we can't filter on that string.
+    // Instead: recognized sport + no qualifier suffix (SPREAD/TOTAL/1H/2H).
+    const ANCHORSCAN_SPORTS = new Set(['NBA','NFL','NHL','MLB','NCAAB','NCAAW','NCAAF','MLS','EPL','UCL','Tennis','WBC','VTB','BSL','ABA','Esports']);
     const winnerMkts = allMarkets.filter(m => {
         const t = (m.ticker || '').toUpperCase();
-        return t.includes('GAME-') && !t.includes('SPREAD') && !t.includes('TOTAL')
-            && !t.includes('1H') && !t.includes('2H');
+        if (t.includes('SPREAD') || t.includes('TOTAL') || t.includes('1H') || t.includes('2H')) return false;
+        const et = m.event_ticker || m.ticker || '';
+        return ANCHORSCAN_SPORTS.has(detectSport(et));
     });
 
     // Group by gameId, applying sport filter

@@ -1189,7 +1189,7 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
         if status not in ('yes_filled', 'no_filled'):
             continue
         # Already being handled by a WS flip sell or already stopped
-        if bot.get('_ws_flip_selling') or status in ('stopped', 'completed'):
+        if bot.get('_ws_flip_selling') or status in ('stopped', 'completed') or bot.get('_flip_done'):
             continue
 
         flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
@@ -1234,7 +1234,7 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
     """
     with ws_flip_lock:
         bot = active_bots.get(bot_id)
-        if not bot or bot['status'] in ('stopped', 'completed'):
+        if not bot or bot['status'] in ('stopped', 'completed') or bot.get('_flip_done'):
             if bot:
                 bot.pop('_ws_flip_selling', None)
             return
@@ -1269,9 +1269,18 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
                     kalshi_client.cancel_order(bot[other_order_key])
             except Exception:
                 pass
+            # ── Sell any partial fills on the other side ──────────────
+            # If the dog order partially filled before we cancelled it,
+            # those contracts are still open and must be sold now.
+            other_fill_qty = bot.get(f'{other_side}_fill_qty', 0)
+            if other_fill_qty > 0:
+                print(f'⚡ WS FLIP: selling {other_fill_qty}x partial {other_side.upper()} fill on {bot_id}')
+                execute_sell(ticker, other_side, other_fill_qty,
+                             reason=f'ws_flip_partial_{other_side}_{bot_id}')
 
             orig_repeat_count = bot.get('repeat_count', 0)
             bot['status'] = 'stopped'
+            bot['_flip_done'] = True   # permanent guard — prevents any second flip on this bot
             bot['repeat_count'] = 0
             bot['stopped_at'] = now
             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', trigger_bid)
@@ -1304,6 +1313,11 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
                 'exit_source': 'ws_realtime',
             }, bot)
             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+            bot_log('ARB_FLIP_COMPLETED', bot_id, {
+                'leg': filled_side, 'entry': entry_price,
+                'actual_sell': actual_sell, 'pnl_cents': pnl_cents,
+                'verified': verified, 'qty': filled_qty,
+            })
             print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ pnl={pnl_cents:+}¢ (real-time)')
             save_state()
         else:
@@ -2362,6 +2376,21 @@ def create_bot():
         if profit_per <= 0:
             return jsonify({'error': f'Not an arb: yes({yes_price}¢) + no({no_price}¢) = {yes_price+no_price}¢ ≥ 100¢'}), 400
 
+        # ── PER-TICKER ACTIVE BOT LIMIT ──────────────────────────────────────────
+        # Prevent dangerous pile-ups: block > 5 active bots on the same ticker.
+        # Pass force_ticker=true in the request to override.
+        if not data.get('force_ticker'):
+            active_count = sum(1 for b in active_bots.values()
+                               if b.get('ticker') == ticker
+                               and b.get('status') not in ('stopped', 'completed'))
+            if active_count >= 5:
+                return jsonify({
+                    'error': f'Already {active_count} active bots on {ticker} (limit 5). '
+                             f'Wait for existing bots to complete or pass force_ticker=true to override.',
+                    'ticker_limit_hit': True,
+                    'active_count': active_count,
+                }), 400
+
         # ── PRICE VALIDATION: fetch ORDERBOOK for real-time best bids ──────────
         # The market endpoint returns stale prices; orderbook is real-time
         try:
@@ -2373,10 +2402,11 @@ def create_bot():
             live_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
             live_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
 
-            # Rule: NEVER place a limit buy ABOVE the current bid.
-            if yes_price > live_yes_bid and live_yes_bid > 0:
+            # Rule: NEVER place a limit buy more than 1¢ ABOVE the current bid.
+            # Allowing bid+1 enables scanner queue-jump (front of book) which is legitimate.
+            if yes_price > live_yes_bid + 1 and live_yes_bid > 0:
                 return jsonify({'error': f'YES price {yes_price}¢ is ABOVE current bid {live_yes_bid}¢ — market has moved. Refresh and retry.'}), 400
-            if no_price > live_no_bid and live_no_bid > 0:
+            if no_price > live_no_bid + 1 and live_no_bid > 0:
                 return jsonify({'error': f'NO price {no_price}¢ is ABOVE current bid {live_no_bid}¢ — market has moved. Refresh and retry.'}), 400
 
             # Also check the spread still makes sense
@@ -2584,13 +2614,15 @@ def verify_position_cleared(ticker, side, expected_gone):
         return False, -1
 
 
-def get_actual_fill_price(order_id, side='yes'):
+def get_actual_fill_price(order_id, side='yes', retries=2):
     """
     Get the actual average fill price from Kalshi for a completed order.
     side='yes' → use yes_price field, side='no' → use no_price field.
     Returns price in cents, or None if not available.
+    Retries up to `retries` times with a short delay to handle Kalshi fill latency.
     """
-    try:
+    for attempt in range(retries + 1):
+      try:
         api_rate_limiter.wait()
         # Check fills for this order to get actual execution price
         fills_resp = kalshi_client.get_fills()
@@ -2613,12 +2645,17 @@ def get_actual_fill_price(order_id, side='yes'):
         api_rate_limiter.wait()
         order_resp = kalshi_client.get_order(order_id)
         order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
-        # Some APIs return average_price or similar
         avg = order_data.get('average_fill_price', order_data.get('avg_fill_price'))
         if avg:
             return round(float(avg) * 100) if float(avg) < 1 else int(avg)
-    except Exception as e:
-        print(f'⚠ get_actual_fill_price error: {e}')
+        # If not found yet, retry after a short delay
+        if attempt < retries:
+            time.sleep(0.8)
+            continue
+      except Exception as e:
+        print(f'⚠ get_actual_fill_price error (attempt {attempt+1}): {e}')
+        if attempt < retries:
+            time.sleep(0.8)
     return None
 
 
@@ -3941,8 +3978,8 @@ def _run_monitor():
                         if bot['status'] in ('stopped', 'completed', 'flipping'):
                             print(f'⛔ SKIPPING duplicate FLIP SL YES for {bot_id} — already {bot["status"]}')
                             continue
-                        if bot.get('_ws_flip_selling'):
-                            print(f'⚡ SKIPPING monitor FLIP YES for {bot_id} — WS real-time already handling')
+                        if bot.get('_ws_flip_selling') or bot.get('_flip_done'):
+                            print(f'⚡ SKIPPING monitor FLIP YES for {bot_id} — WS real-time already handling / flip_done')
                             continue
                         print(f'🔄 FLIP THRESHOLD: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢) — favorite flipped, selling')
                         bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': effective_trigger, 'floor': flip_thresh, 'source': 'monitor'})
@@ -3964,8 +4001,14 @@ def _run_monitor():
                                     kalshi_client.cancel_order(bot['no_order_id'])
                             except Exception:
                                 pass
+                            # Sell any partial NO fills before marking stopped
+                            no_partial = bot.get('no_fill_qty', 0)
+                            if no_partial > 0:
+                                print(f'🔄 FLIP YES: selling {no_partial}x partial NO fill on {bot_id}')
+                                execute_sell(ticker, 'no', no_partial, reason=f'flip_yes_partial_no_{bot_id}')
                             orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
+                            bot['_flip_done'] = True   # permanent guard — prevents any second flip on this bot
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', yes_bid)
@@ -3997,6 +4040,10 @@ def _run_monitor():
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
                             }, bot)
+                            bot_log('ARB_FLIP_COMPLETED', bot_id, {
+                                'leg': 'yes', 'entry': entry_yes, 'actual_sell': actual_sell,
+                                'pnl_cents': pnl_cents, 'verified': verified, 'qty': yes_filled,
+                            })
                             actions.append({'bot_id': bot_id, 'action': 'flip_yes',
                                             'entry': entry_yes, 'exit_bid': actual_sell,
                                             'pnl_cents': pnl_cents, 'verified': verified})
@@ -4060,8 +4107,8 @@ def _run_monitor():
                         if bot['status'] in ('stopped', 'completed', 'flipping'):
                             print(f'⛔ SKIPPING duplicate FLIP SL NO for {bot_id} — already {bot["status"]}')
                             continue
-                        if bot.get('_ws_flip_selling'):
-                            print(f'⚡ SKIPPING monitor FLIP NO for {bot_id} — WS real-time already handling')
+                        if bot.get('_ws_flip_selling') or bot.get('_flip_done'):
+                            print(f'⚡ SKIPPING monitor FLIP NO for {bot_id} — WS real-time already handling / flip_done')
                             continue
                         print(f'🔄 FLIP THRESHOLD: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢) — favorite flipped, selling')
                         bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': effective_trigger, 'floor': flip_thresh, 'source': 'monitor'})
@@ -4083,8 +4130,14 @@ def _run_monitor():
                                     kalshi_client.cancel_order(bot['yes_order_id'])
                             except Exception:
                                 pass
+                            # Sell any partial YES fills before marking stopped
+                            yes_partial = bot.get('yes_fill_qty', 0)
+                            if yes_partial > 0:
+                                print(f'🔄 FLIP NO: selling {yes_partial}x partial YES fill on {bot_id}')
+                                execute_sell(ticker, 'yes', yes_partial, reason=f'flip_no_partial_yes_{bot_id}')
                             orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
+                            bot['_flip_done'] = True   # permanent guard — prevents any second flip on this bot
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', no_bid)
@@ -4116,6 +4169,10 @@ def _run_monitor():
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
                             }, bot)
+                            bot_log('ARB_FLIP_COMPLETED', bot_id, {
+                                'leg': 'no', 'entry': entry_no, 'actual_sell': actual_sell,
+                                'pnl_cents': pnl_cents, 'verified': verified, 'qty': no_filled,
+                            })
                             actions.append({'bot_id': bot_id, 'action': 'flip_no',
                                             'entry': entry_no, 'exit_bid': actual_sell,
                                             'pnl_cents': pnl_cents, 'verified': verified})
@@ -5025,6 +5082,18 @@ def settle_middle(trade_id):
     return jsonify({'error': 'Middle trade not found'}), 404
 
 
+@app.route('/api/middle/<trade_id>/delete', methods=['DELETE', 'POST'])
+def delete_middle(trade_id):
+    """Permanently remove a middle history entry."""
+    global trade_history
+    before = len(trade_history)
+    trade_history = [t for t in trade_history if not (t.get('id') == trade_id and t.get('type') == 'middle')]
+    if len(trade_history) == before:
+        return jsonify({'error': 'Middle trade not found'}), 404
+    save_state()
+    return jsonify({'ok': True, 'deleted': trade_id})
+
+
 # ── Insta Arb log (scanner-placed immediate both-sides arb) ─────────────────
 
 @app.route('/api/instarb/log', methods=['POST'])
@@ -5365,11 +5434,13 @@ def scan_arb_opportunities():
     per contract (but also longer fill time / lower liquidity).
     """
     try:
+        print(f'🔍 scan_arb START thread={threading.current_thread().name}', flush=True)
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
 
         min_width = max(1, int(request.args.get('min_width', 3)))
         sport_filter = request.args.get('sport', '')
+        print(f'🔍 scan_arb sport={sport_filter!r}', flush=True)
 
         # Use the same series map as /api/markets
         SPORTS_SERIES = {
@@ -5400,24 +5471,31 @@ def scan_arb_opportunities():
             for s in SPORTS_SERIES.values():
                 series_to_fetch.extend(s)
 
-        # Fetch all open markets from each series (with pagination)
-        all_markets = []
-        for series in series_to_fetch:
-            try:
-                cursor = None
-                while True:
+        # Fetch all open markets from each series (parallel, same pattern as /api/markets)
+        def _fetch_arb_series(series):
+            series_markets = []
+            cursor = None
+            while True:
+                try:
                     result = kalshi_client.get_markets_by_series(series, status='open', limit=200, cursor=cursor)
-                    markets = result.get('markets', [])
-                    if not markets:
-                        break
-                    markets = [m for m in markets if 'mve_selected_legs' not in m
-                               and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
-                    all_markets.extend(markets)
-                    cursor = result.get('cursor')
-                    if not cursor or len(result.get('markets', [])) < 200:
-                        break
-            except Exception:
-                continue
+                except Exception:
+                    break
+                markets = result.get('markets', [])
+                if not markets:
+                    break
+                markets = [m for m in markets if 'mve_selected_legs' not in m
+                           and 'KXMVECROSSCATEGORY' not in m.get('ticker', '')]
+                series_markets.extend(markets)
+                cursor = result.get('cursor')
+                if not cursor or len(result.get('markets', [])) < 200:
+                    break
+            return series, series_markets
+
+        all_markets = []
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            for _, series_markets in executor.map(_fetch_arb_series, series_to_fetch):
+                all_markets.extend(series_markets)
+        print(f'🔍 scan_arb: {len(all_markets)} markets fetched', flush=True)
 
         # Filter stale/postponed markets
         now = datetime.now(timezone.utc)
@@ -5488,14 +5566,25 @@ def scan_arb_opportunities():
             # No ask data (total 198) → essentially 0
             liquidity = round(min(1.0, 2.0 / max(1, total_spread)), 3)
 
-            # ── Live game detection ────────────────────────────────
+            # ── Live game detection (use market data we already have) ─
             ticker_str = m.get('ticker', '')
             event_ticker = m.get('event_ticker', '')
-            is_live = _is_game_live(ticker_str)
+            is_live = False
+            exp_str = m.get('expected_expiration_time', '')
+            if exp_str:
+                try:
+                    exp_time = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
+                    hours_until_exp = (exp_time - datetime.now(timezone.utc)).total_seconds() / 3600.0
+                    is_tennis = ticker_str.startswith('KXATP') or ticker_str.startswith('KXWTA')
+                    max_hours = 20.0 if is_tennis else 3.5
+                    if -0.5 < hours_until_exp < max_hours:
+                        is_live = True
+                except Exception:
+                    pass
 
             # ── Game date & time ───────────────────────────────────
             game_date = _parse_game_date(event_ticker)
-            game_time = _get_game_time(ticker_str)  # from ESPN (today's games only)
+            game_time = _get_game_time(ticker_str)  # from ESPN cache (fast after first load)
 
             # ── CATCH SCORE ────────────────────────────────────────
             # How quickly and reliably you'll catch the width as
@@ -5731,10 +5820,12 @@ def scan_middles():
     Middle bonus if both hit.
     """
     try:
+        print(f'🔍 scan_middles START thread={threading.current_thread().name}', flush=True)
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
 
         sport_filter = request.args.get('sport', '')
+        print(f'🔍 scan_middles sport={sport_filter!r}', flush=True)
 
         # Fetch all spread markets
         SPREAD_SERIES = {
@@ -5752,22 +5843,29 @@ def scan_middles():
             for ss in SPREAD_SERIES.values():
                 series_to_fetch.extend(ss)
 
-        all_spreads = []
-        for series in series_to_fetch:
-            try:
-                cursor = None
-                while True:
+        def _fetch_mid_series(series):
+            series_markets = []
+            cursor = None
+            while True:
+                try:
                     result = kalshi_client.get_markets_by_series(series, status='open', limit=200, cursor=cursor)
-                    markets = result.get('markets', [])
-                    if not markets:
-                        break
-                    markets = [m for m in markets if 'mve_selected_legs' not in m]
-                    all_spreads.extend(markets)
-                    cursor = result.get('cursor')
-                    if not cursor or len(result.get('markets', [])) < 200:
-                        break
-            except Exception:
-                continue
+                except Exception:
+                    break
+                markets = result.get('markets', [])
+                if not markets:
+                    break
+                markets = [m for m in markets if 'mve_selected_legs' not in m]
+                series_markets.extend(markets)
+                cursor = result.get('cursor')
+                if not cursor or len(result.get('markets', [])) < 200:
+                    break
+            return series_markets
+
+        all_spreads = []
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            for series_markets in executor.map(_fetch_mid_series, series_to_fetch):
+                all_spreads.extend(series_markets)
+        print(f'🔍 scan_middles: {len(all_spreads)} spread markets fetched', flush=True)
 
         def tc(m, field):
             d = m.get(field + '_dollars')
@@ -5901,10 +5999,19 @@ def scan_middles():
                             max_no = max(no_a, no_b, 1)
                             balance = round(min_no / max_no, 2)
 
-                            # ── Live game detection ───────────────────────
+                            # ── Live game detection (use market data, no extra API calls) ─
                             ticker_a_str = mkt_a['market'].get('ticker', '')
                             event_ticker_a = mkt_a['market'].get('event_ticker', '')
-                            is_live = _is_game_live(ticker_a_str)
+                            is_live = False
+                            exp_str_a = mkt_a['market'].get('expected_expiration_time', '')
+                            if exp_str_a:
+                                try:
+                                    exp_t = datetime.fromisoformat(exp_str_a.replace('Z', '+00:00'))
+                                    hrs = (exp_t - datetime.now(timezone.utc)).total_seconds() / 3600.0
+                                    if -0.5 < hrs < 3.5:
+                                        is_live = True
+                                except Exception:
+                                    pass
                             live_mult = 3.0 if is_live else 1.0
 
                             # ── Game date & time ─────────────────────────

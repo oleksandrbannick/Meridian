@@ -620,11 +620,13 @@ function getGameSignal(gameId, sport, markets) {
 
     // Determine game phase (used for description text, NOT for gating signals)
     let gamePhase = 'early';
-    if (sport === 'NBA') {
+    if (sport === 'NBA' || sport === 'NCAAW') {
+        // 4-quarter format
         if (period >= 4) gamePhase = clockMins <= 5 ? 'final_stretch' : 'late';
         else if (period >= 3) gamePhase = 'mid';
-        else if (period === 2 || isHalftimeSignal) gamePhase = 'mid';
-    } else if (sport === 'NCAAB' || sport === 'NCAAW') {
+        else if (period === 2) gamePhase = 'mid';
+    } else if (sport === 'NCAAB') {
+        // 2-half format
         if (isHalftimeSignal) gamePhase = 'mid';
         else if (period >= 2) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
         else if (period === 1 && clockMins <= 10) gamePhase = 'mid';

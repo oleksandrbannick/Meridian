@@ -4938,7 +4938,7 @@ def history_stats():
         if t.get('result', '') not in flip_system_results:
             continue
         w = t.get('arb_width', 0)
-        if w <= 0:
+        if w < 5:  # ignore non-preset widths (2/3/4¢ are bad reconstructed data)
             continue
         if w not in width_stats:
             width_stats[w] = {'wins': 0, 'losses': 0, 'total_profit': 0,

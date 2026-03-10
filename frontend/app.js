@@ -4053,8 +4053,9 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const status = bot.status || 'waiting';
     const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped:'#ff4444', completed:'#00ff88' }[status] || '#aa66ff';
     const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped:'🛑 STOPPED', completed:'✓ COMPLETE' }[status] || status;
-    const targetA = bot.target_price_a || bot.target_price || 49;
-    const targetB = bot.target_price_b || bot.target_price || 49;
+    const targetA = bot.target_price_a || bot.target_price || 0;
+    // Don't fall back to target_price for leg B — it stores leg A's price (legacy), which caused both to show same value
+    const targetB = bot.target_price_b || 0;
     const qty    = bot.qty || 1;
     const floor  = (100 - targetA - targetB) * qty;   // guaranteed profit (both NOs win but margin outside middle)
     const midP   = (200 - targetA - targetB) * qty;   // middle profit (both legs settle, margin inside middle)
@@ -4140,30 +4141,30 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="${legStyle(legAInRange, bot.leg_a_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A — NO${hasLiveScore ? (legAInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
-                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Team A'}</div>
-                <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A${hasLiveScore ? (legAInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
+                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Opp'} +${bot.spread_a||'?'}</div>
+                <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${bot.team_a_name||'?'} wins by ${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
-                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${targetA}¢</strong>${bot.no_a_bid ? `<span style="color:#555;font-size:9px;margin-left:4px;">bid ${bot.no_a_bid}¢</span>` : ''}</span>
+                    <span style="color:#8892a6;">${bot.no_a_bid ? `Bid: <strong style="color:#8892a6;">${bot.no_a_bid}¢</strong> ` : ''}Limit: <strong style="color:#aa66ff;">${targetA || '?'}¢</strong></span>
                     <span style="color:${bot.leg_a_filled?'#00ff88':(legAFillQty>0?'#ffaa00':'#8892a6')};font-weight:700;">${bot.leg_a_filled?`${legAFillQty}/${qty} ✓ FILLED`:(legAFillQty>0?`${legAFillQty}/${qty} filling…`:'PENDING')}</span>
                 </div>
             </div>
             <div style="${legStyle(legBInRange, bot.leg_b_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B — NO${hasLiveScore ? (legBInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
-                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Team B'}</div>
-                <div style="color:#555;font-size:9px;margin-bottom:4px;">+${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B${hasLiveScore ? (legBInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
+                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Opp'} +${bot.spread_b||'?'}</div>
+                <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${bot.team_b_name||'?'} wins by ${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;">
-                    <span style="color:#8892a6;">Target: <strong style="color:#aa66ff;">${targetB}¢</strong>${bot.no_b_bid ? `<span style="color:#555;font-size:9px;margin-left:4px;">bid ${bot.no_b_bid}¢</span>` : ''}</span>
+                    <span style="color:#8892a6;">${bot.no_b_bid ? `Bid: <strong style="color:#8892a6;">${bot.no_b_bid}¢</strong> ` : ''}Limit: <strong style="color:#aa66ff;">${targetB || '?'}¢</strong></span>
                     <span style="color:${bot.leg_b_filled?'#00ff88':(legBFillQty>0?'#ffaa00':'#8892a6')};font-weight:700;">${bot.leg_b_filled?`${legBFillQty}/${qty} ✓ FILLED`:(legBFillQty>0?`${legBFillQty}/${qty} filling…`:'PENDING')}</span>
                 </div>
             </div>
         </div>
         <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;flex-wrap:wrap;">
-            <span>Guaranteed: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
-            <span>Middle: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
-            <span style="color:#8892a6;">Cost: <strong style="color:#fff;">${cost}¢</strong></span>
+            ${targetA && targetB ? `<span>One leg wins: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
+            <span>Middle hits: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
+            <span style="color:#8892a6;">Cost: <strong style="color:#fff;">${cost}¢</strong></span>` : '<span style="color:#555;font-style:italic;">price data unavailable</span>'}
             <span>×${qty}</span>
-            ${floorPrice > 0 ? `<span style="color:#ff6666;">Exit floor: ${floorPrice}¢</span>` : ''}
+            ${floorPrice > 0 ? `<span style="color:#ff6666;">Stop-loss: ${floorPrice}¢ drop</span>` : ''}
         </div>
         ${legStatusHtml}
     `;
@@ -5811,11 +5812,11 @@ function showMiddlesResults(data) {
                         <div style="color:#556;font-size:10px;font-weight:600;text-align:center;">MARKET BID</div>
                         <div style="color:#ffaa00;font-size:10px;font-weight:600;text-align:center;">YOUR LIMIT</div>
                     </div>
-                    <!-- Leg A -->
+                    <!-- Leg A: reflected view — NO team_a by X → team_b +X -->
                     <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;border-bottom:1px solid #0d1220;">
                         <div>
-                            <span style="color:#ff4444;font-weight:700;font-size:10px;">NO</span>
-                            <span style="color:#ccc;margin-left:4px;">${m.title_a.replace(' Points?','').replace(' points?','')}</span>
+                            <span style="color:#fff;font-weight:700;font-size:11px;">${m.team_b||'Opp'} +${m.spread_a||'?'}</span>
+                            <div style="color:#555;font-size:9px;">NO: ${m.title_a.replace(' Points?','').replace(' points?','')}</div>
                         </div>
                         <div style="text-align:center;color:#8892a6;font-weight:600;">${m.no_a_bid}¢</div>
                         <div style="text-align:center;">
@@ -5825,11 +5826,11 @@ function showMiddlesResults(data) {
                             ${shaveA > 0 ? `<span style="color:#ff9944;font-size:9px;">-${shaveA}¢</span>` : ''}
                         </div>
                     </div>
-                    <!-- Leg B -->
+                    <!-- Leg B: reflected view — NO team_b by X → team_a +X -->
                     <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;">
                         <div>
-                            <span style="color:#ff4444;font-weight:700;font-size:10px;">NO</span>
-                            <span style="color:#ccc;margin-left:4px;">${m.title_b.replace(' Points?','').replace(' points?','')}</span>
+                            <span style="color:#fff;font-weight:700;font-size:11px;">${m.team_a||'Opp'} +${m.spread_b||'?'}</span>
+                            <div style="color:#555;font-size:9px;">NO: ${m.title_b.replace(' Points?','').replace(' points?','')}</div>
                         </div>
                         <div style="text-align:center;color:#8892a6;font-weight:600;">${m.no_b_bid}¢</div>
                         <div style="text-align:center;">
@@ -6092,14 +6093,17 @@ function openMiddleBotModal(middle) {
     // If a single-market modal is open, reuse it but switch to middle tab
     setTradeMode('middle');
 
-    // Populate leg cards
+    // Populate leg cards — show reflected traditional spread (NO team A by X = team B +X)
     const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-    setEl('middle-leg-a-team', middle.team_a || middle.title_a || middle.ticker_a || 'Leg A');
-    setEl('middle-leg-b-team', middle.team_b || middle.title_b || middle.ticker_b || 'Leg B');
+    const teamA = middle.team_a || middle.title_a || middle.ticker_a || 'Team A';
+    const teamB = middle.team_b || middle.title_b || middle.ticker_b || 'Team B';
+    // Reflected view: NO teamA wins by spread_a → teamB +spread_a
+    setEl('middle-leg-a-team', `${teamB} +${middle.spread_a || '?'}`);
+    setEl('middle-leg-b-team', `${teamA} +${middle.spread_b || '?'}`);
+    setEl('middle-leg-a-market', `NO: ${teamA} wins by ${middle.spread_a || '?'}`);
+    setEl('middle-leg-b-market', `NO: ${teamB} wins by ${middle.spread_b || '?'}`);
     setEl('middle-leg-a-ticker', middle.ticker_a || '');
     setEl('middle-leg-b-ticker', middle.ticker_b || '');
-    setEl('middle-leg-a-spread', middle.spread_a != null ? `${middle.spread_a}` : '—');
-    setEl('middle-leg-b-spread', middle.spread_b != null ? `${middle.spread_b}` : '—');
     setEl('middle-leg-a-bid', middle.no_a_bid != null ? `${middle.no_a_bid}¢` : '—');
     setEl('middle-leg-b-bid', middle.no_b_bid != null ? `${middle.no_b_bid}¢` : '—');
 

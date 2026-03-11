@@ -3419,7 +3419,6 @@ function updateProfitPreview() {
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const total  = yes + no;
     const profit = 100 - total;
     const isArb  = profit > 0;
@@ -3427,19 +3426,27 @@ function updateProfitPreview() {
     const dollarCost   = (total * qty / 100).toFixed(2);
     const roi = total > 0 ? ((profit / total) * 100).toFixed(1) : '0.0';
 
-    // Flip threshold risk: worst case is selling at flip floor
-    const yesEffTrig = yes >= flipFloor ? Math.max(yes - 15, Math.min(flipFloor, yes - 10)) : 0;
-    const noEffTrig  = no  >= flipFloor ? Math.max(no  - 15, Math.min(flipFloor, no  - 10)) : 0;
-    const yesFlipLoss = yes >= flipFloor ? (yes - yesEffTrig) * qty : 0;
-    const noFlipLoss  = no  >= flipFloor ? (no  - noEffTrig)  * qty : 0;
-    const yesLossDollar = (yesFlipLoss / 100).toFixed(2);
-    const noLossDollar  = (noFlipLoss / 100).toFixed(2);
-    const yesHasFlip = yes >= flipFloor;
-    const noHasFlip  = no >= flipFloor;
-
     const borderColor = isArb ? '#00ff88' : '#ff4444';
     const bgColor     = isArb ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,68,0.04)';
     const accentColor = isArb ? '#00ff88' : '#ff4444';
+
+    // Falling knife warning: if entries are too low to have wiggle room
+    const favEntry = Math.max(yes, no);
+    const MIN_FAV_ENTRY = 65;
+    const knifeWarn = (favEntry > 0 && favEntry < MIN_FAV_ENTRY && profit < 25)
+        ? `<div style="background:rgba(255,68,68,0.08);border:1px solid #ff444444;border-radius:6px;padding:8px 10px;margin:0 16px 10px;">
+               <span style="color:#ff4444;font-size:11px;font-weight:700;">⚠️ FALLING KNIFE — Favorite at ${favEntry}¢ with only ${profit}¢ profit</span>
+               <div style="color:#ff4444aa;font-size:10px;margin-top:3px;">Entries below 65¢ don't have enough room. Deploy will be blocked.</div>
+           </div>`
+        : '';
+
+    // Exit timer info
+    const exitInfo = isArb
+        ? `<div style="padding:6px 16px 10px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:10px;color:#8892a6;border-top:1px solid #00aaff11;">
+               <span style="color:#00aaff;">⏱</span>
+               <span>Simultaneous orders — if one leg fills solo: fav fills → 20 min exit · dog fills → 10 min exit</span>
+           </div>`
+        : '';
 
     document.getElementById('profit-preview').innerHTML = `
         <div style="border:1px solid ${borderColor}33;border-radius:10px;background:${bgColor};overflow:hidden;">
@@ -3472,56 +3479,9 @@ function updateProfitPreview() {
                 </div>
             </div>
             ${!isArb ? `<div style="padding:6px 16px 10px;text-align:center;font-size:11px;color:#ff4444;">⚠ Not profitable — reduce prices or increase width</div>` : ''}
-            ${isArb && qty > 1 ? `<div style="padding:2px 16px 10px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
-            <!-- Flip threshold protection + Breakeven % -->
-            <div style="padding:8px 16px 10px;border-top:1px solid #00aaff22;">
-                ${(() => {
-                    // Falling knife warning: if the favorite price is below 65¢
-                    const favEntry = Math.max(yes, no);
-                    const MIN_FAV_ENTRY = 65;
-                    if (favEntry < MIN_FAV_ENTRY && profit < 25) {
-                        return `<div style="background:rgba(255,68,68,0.08);border:1px solid #ff444444;border-radius:6px;padding:8px 10px;margin-bottom:8px;">
-                            <span style="color:#ff4444;font-size:11px;font-weight:700;">⚠️ FALLING KNIFE — Favorite at ${favEntry}¢ with only ${profit}¢ profit</span>
-                            <div style="color:#ff4444aa;font-size:10px;margin-top:3px;">Entries below 65¢ don't have enough room (need 10¢+ wiggle). Deploy will be blocked.</div>
-                        </div>`;
-                    }
-                    return '';
-                })()}
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;">
-                    <span style="color:#00aaff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">🛡 Flip Protection (entry−15¢, floor ${flipFloor}¢)</span>
-                    ${(() => {
-                        // Breakeven %: how many arbs must complete to offset one flip loss
-                        // Effective trigger = max(favEntry - 15, flipFloor)
-                        // Flip loss = favEntry - effectiveTrigger.  Profit per fill = width.
-                        // BE% = flipLoss / (flipLoss + width)
-                        const favEntry = Math.max(yes, no);
-                        const effectiveTrigger = Math.max(favEntry - 15, Math.min(flipFloor, favEntry - 10));
-                        const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
-                        if (profit <= 0) return `<span style="color:#8892a6;font-size:10px;font-weight:700;">— No arb</span>`;
-                        if (flipLoss <= 0) return `<span style="color:#ff4444;font-size:10px;font-weight:700;">⛔ Blocked (fav below ${flipFloor}¢)</span>`;
-                        const bePct = (flipLoss / (flipLoss + profit) * 100).toFixed(1);
-                        const fillsToRecover = Math.ceil(flipLoss / profit);
-                        const beColor = parseFloat(bePct) >= 75 ? '#ff4444' : parseFloat(bePct) >= 50 ? '#ffaa00' : '#00ff88';
-                        return `<span style="color:${beColor};font-size:10px;font-weight:700;" title="${fillsToRecover} completed arbs needed to recover 1 flip loss">BE: ${bePct}% (${fillsToRecover}:1)</span>`;
-                    })()}
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                    <div style="background:#00aaff08;border:1px solid #00aaff22;border-radius:6px;padding:6px 10px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#00ff88;font-size:10px;font-weight:600;">YES leg</span>
-                            ${yesHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${yesLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
-                        </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">${yesHasFlip ? `trigger: max(${yes}-15, min(${flipFloor},${yes}-10))=${Math.max(yes-15,Math.min(flipFloor,yes-10))}¢` : `entry ${yes}¢ < ${flipFloor}¢ — rides to settlement`}</div>
-                    </div>
-                    <div style="background:#00aaff08;border:1px solid #00aaff22;border-radius:6px;padding:6px 10px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#ff4444;font-size:10px;font-weight:600;">NO leg</span>
-                            ${noHasFlip ? `<span style="color:#ff4444;font-weight:800;font-size:13px;">−$${noLossDollar}</span>` : `<span style="color:#8892a6;font-size:10px;">no SL (underdog)</span>`}
-                        </div>
-                        <div style="color:#555;font-size:9px;margin-top:2px;">${noHasFlip ? `trigger: max(${no}-15, min(${flipFloor},${no}-10))=${Math.max(no-15,Math.min(flipFloor,no-10))}¢` : `entry ${no}¢ < ${flipFloor}¢ — rides to settlement`}</div>
-                    </div>
-                </div>
-            </div>
+            ${isArb && qty > 1 ? `<div style="padding:2px 16px 8px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
+            ${knifeWarn}
+            ${exitInfo}
         </div>`;
 }
 
@@ -6540,50 +6500,39 @@ async function loadHistoryStats() {
         // ── Width Performance Table (with breakeven %) ──
         if (widthPanel && s.width_breakdown && s.width_breakdown.length > 0) {
             const rows = s.width_breakdown.map(w => {
-                const sysBe = w.system_be_pct;
                 const actBe = w.breakeven_pct;
                 const fr    = w.fill_rate;
-                // Fill rate: green = beats actual BE, yellow = between system & actual, red = below system BE
-                const frColor = fr >= actBe ? '#00ff88' : (sysBe != null && fr >= sysBe) ? '#ffaa00' : '#ff4444';
-                // Actual BE: green = below system BE (losses smaller than theory), yellow = within 5pp, red = above system BE
-                const beColor = sysBe == null ? '#ffaa33'
-                    : actBe <= sysBe ? '#00ff88'
-                    : actBe <= sysBe + 5 ? '#ffaa00'
-                    : '#ff4444';
+                const edge  = w.edge;
+                // Both fill rate and BE% colored by edge: positive = green, close = yellow, negative = red
+                const frColor = edge >= 5 ? '#00ff88' : edge >= -5 ? '#ffaa00' : '#ff4444';
+                const beColor = edge >= 5 ? '#00ff88' : edge >= -5 ? '#ffaa00' : '#ff4444';
                 const nColor = w.net_cents >= 0 ? '#00ff88' : '#ff4444';
                 const edgeColor = w.edge >= 0 ? '#00ff88' : '#ff4444';
                 const edgeIcon = w.edge >= 5 ? '🟢' : w.edge >= 0 ? '🟡' : '🔴';
                 const settledInfo = w.settled_losses > 0 ? `<span style="color:#ffaa00;font-size:9px;"> (${w.settled_losses} settled)</span>` : '';
-                const sysBeColor = sysBe != null
-                    ? (fr >= sysBe ? '#00aaff' : '#ff6b35')
-                    : '#555';
                 const ftSecs = w.avg_fill_duration_s;
                 const ftColor = ftSecs === null ? '#555' : ftSecs < 300 ? '#00ff88' : ftSecs < 900 ? '#ffaa00' : '#ff4444';
-                const avgWColor = '#00ff88';
-                const avgLColor = '#ff6666';
                 return `<tr style="border-bottom:1px solid #1e274033;">
                     <td style="padding:6px 10px;color:#fff;font-weight:700;">${w.width}¢</td>
                     <td style="padding:6px 10px;color:${frColor};font-weight:700;">${w.fill_rate}%</td>
                     <td style="padding:6px 10px;color:${beColor};font-weight:600;">${w.breakeven_pct}%</td>
-                    <td style="padding:6px 10px;color:${sysBeColor};font-weight:600;">${w.system_be_pct != null ? w.system_be_pct + '%' : '—'}</td>
                     <td style="padding:6px 10px;color:${edgeColor};font-weight:700;">${edgeIcon} ${w.edge >= 0 ? '+' : ''}${w.edge}%</td>
                     <td style="padding:6px 10px;"><span style="color:#00ff88;font-weight:700;">${w.wins}W</span> / <span style="color:#ff4444;font-weight:700;">${w.losses}L</span>${settledInfo}</td>
                     <td style="padding:6px 10px;color:${nColor};font-weight:700;">${w.net_cents >= 0 ? '+' : ''}${w.net_cents}¢</td>
-                    <td style="padding:6px 10px;font-size:10px;"><span style="color:${avgWColor};">+${w.avg_profit_cents}¢</span> / <span style="color:${avgLColor};">-${w.avg_loss_cents}¢</span></td>
+                    <td style="padding:6px 10px;font-size:10px;"><span style="color:#00ff88;">+${w.avg_profit_cents}¢</span> / <span style="color:#ff6666;">-${w.avg_loss_cents}¢</span></td>
                     <td style="padding:6px 10px;color:${ftColor};font-weight:600;">${ftSecs !== null ? fmtDur(ftSecs) : '—'}</td>
                 </tr>`;
             }).join('');
             widthPanel.innerHTML = `
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Width Performance — Fill Rate vs Breakeven</div>
-                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit) from real data. Fill rate must exceed BE% to be profitable. New system: exits via timeout (20/10 min) instead of flip stop-loss.</div>
+                    <div style="color:#555;font-size:10px;margin-bottom:10px;">BE% = avg loss ÷ (avg loss + avg profit). Fill rate must beat BE% to profit. Edge = Fill Rate − BE%.</div>
                     <div style="overflow-x:auto;">
-                    <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:500px;">
                         <tr style="border-bottom:1px solid #1e2740;">
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Width</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Fill Rate</th>
-                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Actual BE</th>
-                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">System BE</th>
+                            <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">BE%</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Edge</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Record</th>
                             <th style="padding:6px 10px;text-align:left;color:#555;font-weight:600;">Net</th>
@@ -6870,7 +6819,10 @@ async function loadTradeHistoryList() {
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
-            const pnl = isWin ? (t.profit_cents || 0) : -(t.loss_cents || 0);
+            // Manual single-leg exits store profit_cents (may be +/-); other non-wins use loss_cents
+            const pnl = isWin ? (t.profit_cents || 0)
+                      : (isManualExit && !t.loss_cents) ? (t.profit_cents || 0)
+                      : -(t.loss_cents || 0);
             const isSettled = isSettledWin || isSettledLoss;
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
             const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isWin ? '✅' : (isManualExit ? '🔧' : '⛔')));

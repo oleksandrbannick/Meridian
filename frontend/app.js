@@ -583,10 +583,8 @@ function getGameSignal(gameId, sport, markets) {
 
     // No live game data — pregame
     if (!gameData || !gameData.state || gameData.state === 'pre') {
-        return {
-            type: 'pregame', label: '', color: '#8892a6',
-            glowAnim: '', description: 'Pregame — waiting for tip-off', liq
-        };
+        return { type: 'pregame', label: '⏳ PREGAME', color: '#8892a6',
+            glowAnim: '', description: 'Waiting for game to start', liq };
     }
 
     // Game is over
@@ -594,7 +592,7 @@ function getGameSignal(gameId, sport, markets) {
         return { type: 'none', label: 'Final', color: '#555', glowAnim: '', description: 'Game over', liq };
     }
 
-    // ── Game is LIVE — score-based stability signal (no phase gating) ──
+    // ── Game is LIVE ──
     const homeScore = parseInt(gameData.homeScore) || 0;
     const awayScore = parseInt(gameData.awayScore) || 0;
     const scoreDiff = Math.abs(homeScore - awayScore);
@@ -607,165 +605,126 @@ function getGameSignal(gameId, sport, markets) {
     const clockMatch = clock.match(/(\d+):(\d+)/);
     if (clockMatch) clockMins = parseInt(clockMatch[1]) + parseInt(clockMatch[2]) / 60;
 
-    // Detect halftime
     const isHalftimeSignal = (gameData.statusDetail || '').toLowerCase().includes('half');
-
-    // Determine game phase (used for description text, NOT for gating signals)
-    let gamePhase = 'early';
-    if (sport === 'NBA' || sport === 'NCAAW') {
-        // 4-quarter format
-        if (period >= 4) gamePhase = clockMins <= 5 ? 'final_stretch' : 'late';
-        else if (period >= 3) gamePhase = 'mid';
-        else if (period === 2) gamePhase = 'mid';
-    } else if (sport === 'NCAAB') {
-        // 2-half format
-        if (isHalftimeSignal) gamePhase = 'mid';
-        else if (period >= 2) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
-        else if (period === 1 && clockMins <= 10) gamePhase = 'mid';
-    } else if (sport === 'NHL') {
-        if (period >= 3) gamePhase = clockMins <= 8 ? 'final_stretch' : 'late';
-        else if (period >= 2) gamePhase = 'mid';
-    } else {
-        if (period >= 2) gamePhase = 'late';
-    }
-
-    const phaseLabel = `${gameData.periodLabel} ${clock}`;
+    const phaseLabel = `${gameData.periodLabel} ${clock}`.trim();
     const favPrice = Math.max(liq.yesBid, liq.noBid);
 
     // ════════════════════════════════════════════════════════════════════════
-    // SIGNAL LOGIC — each sport uses thresholds that make sense for its scoring
+    // NEW SIGNAL LOGIC — optimised for simultaneous dual-arb
+    //
+    // Goal: BOTH legs filling is what pays.  A close game bouncing back and
+    // forth is IDEAL.  A blowout means only the winner leg ever moves to your
+    // limit — the dog leg just sits there.  Near end-of-game means no time for
+    // prices to swing back.
+    //
+    //  🔵 COIN FLIP  — tied / < 1 possession, game is back-and-forth → best
+    //  🟢 LEAN       — small lead, still volatile, both legs can fill → good
+    //  🟡 DRIFTING   — moderate lead, dog leg filling slower → mediocre
+    //  🔴 RUNAWAY    — blowout, dog side dead, skip or use very wide width → bad
+    //  ⌛ LATE GAME  — not enough time for swings regardless of score → warning
+    //  ⚪ EARLY      — no score context yet
+    //  ⏳ PREGAME    — not started
     // ════════════════════════════════════════════════════════════════════════
 
-    // ─── NFL / NCAAF (American football) ────────────────────────────────────
-    // Scoring in 7-pt increments.  A 17-pt lead = 3 possessions = game over.
-    // DANGER: ≤8 pts (1 possession) in Q4 with <8 min left.
+    // ─── NFL / NCAAF ─────────────────────────────────────────────────────────
     if (sport === 'NFL' || sport === 'NCAAF') {
-        if (scoreDiff <= 8 && period >= 4 && clockMins <= 8) {
-            return { type: 'danger', label: '🔴 DANGER', color: '#ff4444', glowAnim: '',
-                description: `±${scoreDiff} pts · ${phaseLabel} — One-possession game late, very volatile`, liq };
-        }
-        if (scoreDiff >= 17) return { type: 'anchor', label: '🟢 LOCK',   color: '#00ff88', glowAnim: 'arbGlow',     description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 3-possession lead, locked`, liq };
-        if (scoreDiff >= 10) return { type: 'anchor', label: '🟢 ANCHOR', color: '#4ade80', glowAnim: 'arbGlow',     description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 2-score lead, stable`, liq };
-        if (scoreDiff >= 7)  return { type: 'anchor', label: '🟡 LEAN',   color: '#ffaa33', glowAnim: 'arbGlowGold', description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 1-score lead, some risk`, liq };
-        return { type: 'swing', label: '🔵 CLOSE', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-            description: `±${scoreDiff} pts · ${phaseLabel} — Field goal game, volatile`, liq };
+        const lateAndTight = scoreDiff <= 8 && period >= 4 && clockMins <= 5;
+        if (lateAndTight) return { type: 'late_game', label: '⌛ LATE GAME', color: '#ff4444', glowAnim: '',
+            description: `±${scoreDiff} pts · ${phaseLabel} — Running out of time, both legs may not fill`, liq };
+        if (scoreDiff >= 17) return { type: 'runaway',   label: '🔴 RUNAWAY',   color: '#ff6644', glowAnim: '',
+            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 3-score lead, dog side dead`, liq };
+        if (scoreDiff >= 10) return { type: 'drifting',  label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — 2-score lead, dog filling slower`, liq };
+        if (scoreDiff >= 4)  return { type: 'lean',      label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} pts · ${phaseLabel} · Fav ${favPrice}¢ — Small lead, decent volatility`, liq };
+        return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `±${scoreDiff} pts · ${phaseLabel} — Field goal game, both legs will bounce`, liq };
     }
 
-    // ─── NHL (Hockey) ────────────────────────────────────────────────────────
-    // Low scoring: 0-6 goals typical.  3-goal lead is a blowout.
-    // Goals count more per unit than basketball points — use raw goal diff.
-    // DANGER: tied or 1-goal game any time in 3rd period or OT.
+    // ─── NHL ──────────────────────────────────────────────────────────────────
     if (sport === 'NHL') {
-        if (scoreDiff <= 1 && period >= 3) {
-            return { type: 'danger', label: '🔴 DANGER', color: '#ff4444', glowAnim: '',
-                description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-goal game`} · ${phaseLabel} — Late & tight, extremely volatile`, liq };
-        }
-        // EARLY: 0-0 in 1st period
-        if (totalPoints === 0 && period <= 1) {
-            return { type: 'caution', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
-                description: `${phaseLabel} — No score yet, waiting for first goal context`, liq };
-        }
-        if (scoreDiff >= 3) return { type: 'anchor', label: '🟢 LOCK',   color: '#00ff88', glowAnim: 'arbGlow',     description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 3-goal lead, locked`, liq };
-        if (scoreDiff >= 2) return { type: 'anchor', label: '🟢 ANCHOR', color: '#4ade80', glowAnim: 'arbGlow',     description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 2-goal lead, stable`, liq };
-        if (scoreDiff >= 1) return { type: 'anchor', label: '🟡 LEAN',   color: '#ffaa33', glowAnim: 'arbGlowGold', description: `+${scoreDiff} goal · ${phaseLabel} · Fav ${favPrice}¢ — 1-goal lead`, liq };
-        return { type: 'swing', label: '🔵 CLOSE', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-            description: `Tied · ${phaseLabel} — Even game, volatile`, liq };
+        if (totalPoints === 0 && period <= 1) return { type: 'early', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
+            description: `${phaseLabel} — No score yet`, liq };
+        const lateAndTight = scoreDiff <= 1 && period >= 3 && clockMins <= 5;
+        if (lateAndTight) return { type: 'late_game', label: '⌛ LATE GAME', color: '#ff4444', glowAnim: '',
+            description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-goal game`} · ${phaseLabel} — Final minutes, skip`, liq };
+        if (scoreDiff >= 3) return { type: 'runaway',   label: '🔴 RUNAWAY',   color: '#ff6644', glowAnim: '',
+            description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 3-goal lead, dog side dead`, liq };
+        if (scoreDiff >= 2) return { type: 'drifting',  label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 2-goal lead, dog slower`, liq };
+        if (scoreDiff >= 1) return { type: 'lean',      label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} goal · ${phaseLabel} · Fav ${favPrice}¢ — 1-goal lead, still volatile`, liq };
+        return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `Tied · ${phaseLabel} — Both legs will bounce`, liq };
     }
 
-    // ─── Tennis (ATP / WTA) ──────────────────────────────────────────────────
-    // homeScore / awayScore = sets won.  period = current set number.
-    // Sets won: 0-0 = early;  1-0 = lean;  2-0 = lock;  1-1 = danger (deciding set);  2-1 = anchor.
+    // ─── Tennis ───────────────────────────────────────────────────────────────
     if (sport === 'Tennis') {
         const homeSets = parseInt(gameData.homeScore) || 0;
         const awaySets = parseInt(gameData.awayScore) || 0;
-        const leadSets = Math.max(homeSets, awaySets);
+        const leadSets  = Math.max(homeSets, awaySets);
         const trailSets = Math.min(homeSets, awaySets);
         const setsDiff  = leadSets - trailSets;
         const setsWon   = homeSets + awaySets;
         const label14   = `${leadSets}-${trailSets} sets`;
-        if (setsWon === 0) {
-            return { type: 'caution', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
-                description: `${phaseLabel} — Match just started`, liq };
-        }
-        // 2-0: up two sets, opponent must win two straight — match is nearly decided
-        if (setsDiff === 2 && trailSets === 0) {
-            return { type: 'anchor', label: '🟢 LOCK', color: '#00ff88', glowAnim: 'arbGlow',
-                description: `${label14} · ${phaseLabel} · Fav ${favPrice}¢ — Dominant, match nearly over`, liq };
-        }
-        // 2-1: one set from the match, opponent needs to win 1 more
-        if (setsDiff === 1 && setsWon === 3) {
-            return { type: 'anchor', label: '🟢 ANCHOR', color: '#4ade80', glowAnim: 'arbGlow',
-                description: `${label14} · ${phaseLabel} · Fav ${favPrice}¢ — One set from match`, liq };
-        }
-        // 1-1: deciding set, prices will swing on every game
-        if (homeSets === 1 && awaySets === 1) {
-            return { type: 'danger', label: '🔴 DANGER', color: '#ff4444', glowAnim: '',
-                description: `1-1 sets · ${phaseLabel} — Deciding set, anyone's match`, liq };
-        }
-        // 1-0: up one set
-        if (setsDiff === 1 && setsWon === 1) {
-            return { type: 'anchor', label: '🟡 LEAN', color: '#ffaa33', glowAnim: 'arbGlowGold',
-                description: `${label14} · ${phaseLabel} · Fav ${favPrice}¢ — One set ahead`, liq };
-        }
-        return { type: 'swing', label: '🔵 CLOSE', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-            description: `${label14} · ${phaseLabel} — Even match`, liq };
+        if (setsWon === 0) return { type: 'early', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
+            description: `${phaseLabel} — Match just started`, liq };
+        // 1-1: deciding set — maximum volatility, best entry
+        if (homeSets === 1 && awaySets === 1) return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `1-1 sets · ${phaseLabel} — Deciding set, anyone's match, both legs will move`, liq };
+        // 1-0: one set ahead
+        if (setsDiff === 1 && setsWon === 1) return { type: 'lean', label: '🟢 LEAN', color: '#4ade80', glowAnim: 'arbGlow',
+            description: `${label14} · ${phaseLabel} · Fav ${favPrice}¢ — One set ahead, still volatile`, liq };
+        // 2-1: one set from match
+        if (setsDiff === 1 && setsWon === 3) return { type: 'drifting', label: '🟡 DRIFTING', color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `${label14} · ${phaseLabel} · Fav ${favPrice}¢ — One set from match, dog filling harder`, liq };
+        // 2-0: dominant, match nearly over
+        if (setsDiff === 2 && trailSets === 0) return { type: 'runaway', label: '🔴 RUNAWAY', color: '#ff6644', glowAnim: '',
+            description: `${label14} · ${phaseLabel} · Fav ${favPrice}¢ — Dominant, match nearly over`, liq };
+        return { type: 'lean', label: '🟢 LEAN', color: '#4ade80', glowAnim: 'arbGlow',
+            description: `${label14} · ${phaseLabel} — Some volatility remaining`, liq };
     }
 
-    // ─── MLB (Baseball) ─────────────────────────────────────────────────────
-    // Runs, 9 innings.  Late-inning run value is much higher than early-inning.
-    // DANGER: tied or 1-run game in 8th+ inning (closer territory).
+    // ─── MLB ──────────────────────────────────────────────────────────────────
     if (sport === 'MLB') {
-        const lateInning  = period >= 7;
-        const closerInning = period >= 8;
-        if (closerInning && scoreDiff <= 1) {
-            return { type: 'danger', label: '🔴 DANGER', color: '#ff4444', glowAnim: '',
-                description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-run game`} · ${phaseLabel} — Closer territory, very volatile`, liq };
-        }
-        if (scoreDiff >= 5) return { type: 'anchor', label: '🟢 LOCK',   color: '#00ff88', glowAnim: 'arbGlow',     description: `+${scoreDiff} runs · ${phaseLabel} · Fav ${favPrice}¢ — 5-run lead, locked`, liq };
-        if (scoreDiff >= 3) return { type: 'anchor', label: '🟢 ANCHOR', color: '#4ade80', glowAnim: 'arbGlow',     description: `+${scoreDiff} runs · ${phaseLabel} · Fav ${favPrice}¢ — Multi-run cushion`, liq };
-        if (scoreDiff >= 2) return { type: 'anchor', label: '🟡 LEAN',   color: '#ffaa33', glowAnim: 'arbGlowGold', description: `+${scoreDiff} runs · ${phaseLabel} · Fav ${favPrice}¢ — 2-run lead`, liq };
-        if (totalPoints === 0 && period <= 2) {
-            return { type: 'caution', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
-                description: `${phaseLabel} — Early innings, no score context yet`, liq };
-        }
-        return { type: 'swing', label: '🔵 CLOSE', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-            description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-run game`} · ${phaseLabel} — Tight game`, liq };
+        if (totalPoints === 0 && period <= 2) return { type: 'early', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
+            description: `${phaseLabel} — Early innings`, liq };
+        const lateAndTight = period >= 8 && scoreDiff <= 1;
+        if (lateAndTight) return { type: 'late_game', label: '⌛ LATE GAME', color: '#ff4444', glowAnim: '',
+            description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-run game`} · ${phaseLabel} — Closer territory, skip`, liq };
+        if (scoreDiff >= 5) return { type: 'runaway',  label: '🔴 RUNAWAY',   color: '#ff6644', glowAnim: '',
+            description: `+${scoreDiff} runs · ${phaseLabel} · Fav ${favPrice}¢ — 5-run lead, dog side dead`, liq };
+        if (scoreDiff >= 3) return { type: 'drifting', label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} runs · ${phaseLabel} · Fav ${favPrice}¢ — Multi-run lead, dog slower`, liq };
+        if (scoreDiff >= 2) return { type: 'lean',     label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} runs · ${phaseLabel} · Fav ${favPrice}¢ — 2-run lead, volatile`, liq };
+        return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-run game`} · ${phaseLabel} — Both legs will bounce`, liq };
     }
 
-    // ─── Soccer (MLS / EPL / UCL / other) ───────────────────────────────────
-    // Goals, typical 0-4 final.  Clock counts UP (minutes).  90 min + stoppage.
-    // DANGER: 1-goal lead or tied in 2nd half, 80+ min (stoppage-time pressure).
+    // ─── Soccer ───────────────────────────────────────────────────────────────
     if (sport === 'MLS' || sport === 'EPL' || sport === 'UCL' ||
         (sport !== 'NBA' && sport !== 'NCAAB' && sport !== 'NCAAW' &&
          sport !== 'NFL' && sport !== 'NCAAF' && sport !== 'NHL' &&
          sport !== 'MLB' && sport !== 'Tennis')) {
-        const stoppage = period >= 2 && clockMins >= 80;
-        if (stoppage && scoreDiff <= 1) {
-            return { type: 'danger', label: '🔴 DANGER', color: '#ff4444', glowAnim: '',
-                description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-goal game`} · ${phaseLabel} — Stoppage time, anything can happen`, liq };
-        }
-        if (scoreDiff >= 3) return { type: 'anchor', label: '🟢 LOCK',   color: '#00ff88', glowAnim: 'arbGlow',     description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 3-goal lead, locked`, liq };
-        if (scoreDiff >= 2) return { type: 'anchor', label: '🟢 ANCHOR', color: '#4ade80', glowAnim: 'arbGlow',     description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 2-goal cushion`, liq };
-        if (scoreDiff >= 1) return { type: 'anchor', label: '🟡 LEAN',   color: '#ffaa33', glowAnim: 'arbGlowGold', description: `+${scoreDiff} goal · ${phaseLabel} · Fav ${favPrice}¢ — 1-goal lead`, liq };
-        return { type: 'swing', label: '🔵 CLOSE', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-            description: `Tied · ${phaseLabel} — Level game, volatile`, liq };
+        const lateAndTight = period >= 2 && clockMins >= 80 && scoreDiff <= 1;
+        if (lateAndTight) return { type: 'late_game', label: '⌛ LATE GAME', color: '#ff4444', glowAnim: '',
+            description: `${scoreDiff === 0 ? 'Tied' : `${scoreDiff}-goal game`} · ${phaseLabel} — Stoppage time, skip`, liq };
+        if (scoreDiff >= 3) return { type: 'runaway',  label: '🔴 RUNAWAY',   color: '#ff6644', glowAnim: '',
+            description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 3-goal lead, dog side dead`, liq };
+        if (scoreDiff >= 2) return { type: 'drifting', label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: 'arbGlowGold',
+            description: `+${scoreDiff} goals · ${phaseLabel} · Fav ${favPrice}¢ — 2-goal cushion, dog slower`, liq };
+        if (scoreDiff >= 1) return { type: 'lean',     label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGlow',
+            description: `+${scoreDiff} goal · ${phaseLabel} · Fav ${favPrice}¢ — 1-goal lead, volatile`, liq };
+        return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
+            description: `Tied · ${phaseLabel} — Level game, both legs will bounce`, liq };
     }
 
     // ─── Basketball: NBA / NCAAB / NCAAW ────────────────────────────────────
-    // High scoring (80-120 pts).  Spread-aware margin for spread markets.
-    // DANGER: within 5 pts in the decisive final stretch.
+    if (totalPoints <= 4) return { type: 'early', label: '⚪ EARLY', color: '#8892a6', glowAnim: '',
+        description: `${phaseLabel} — Game just started, no score context`, liq };
 
-    // Too early: hardly any score context
-    if (totalPoints <= 4 && gamePhase === 'early') {
-        return {
-            type: 'caution', label: '⚪ EARLY',
-            color: '#8892a6', glowAnim: '',
-            description: `${phaseLabel} — Game just started, waiting for score context`,
-            liq
-        };
-    }
-
-    // Spread-aware effective margin for basketball
+    // Spread-aware effective margin
     let effectiveMargin = scoreDiff;
     let marginLabel = `${scoreDiff} pts`;
     const spreadMarkets = markets.filter(m => (m.ticker || '').toUpperCase().includes('SPREAD'));
@@ -777,44 +736,52 @@ function getGameSignal(gameId, sport, markets) {
                 const spreadMargin = Math.abs(scoreDiff - spreadPts);
                 if (spreadMargin < effectiveMargin) {
                     effectiveMargin = spreadMargin;
-                    marginLabel = `${scoreDiff} pts (±${spreadMargin.toFixed(1)} from spread)`;
+                    marginLabel = `${scoreDiff} pts (±${spreadMargin.toFixed(1)} vs spread)`;
                 }
                 break;
             }
         }
     }
 
-    if (scoreDiff >= 20) return { type: 'anchor', label: '🟢 LOCK',   color: '#00ff88', glowAnim: 'arbGlow',     description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Blowout, prices locked`, liq };
-    if (effectiveMargin >= 10) return { type: 'anchor', label: '🟢 ANCHOR', color: '#4ade80', glowAnim: 'arbGlow', description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Strong lead, stable`, liq };
-
-    const inDangerZone = effectiveMargin <= 5 && (
-        ((sport === 'NBA' || sport === 'NCAAW') && period >= 4) ||
-        (sport === 'NCAAB' && period >= 2)
+    // Late-game tight = time warning (no hard block)
+    const lateAndTight = effectiveMargin <= 5 && (
+        ((sport === 'NBA' || sport === 'NCAAW') && period >= 4 && clockMins <= 4) ||
+        (sport === 'NCAAB' && period >= 2 && clockMins <= 5)
     );
-    if (inDangerZone) {
-        return { type: 'danger', label: '🔴 DANGER', color: '#ff4444', glowAnim: '',
-            description: `±${marginLabel} · ${phaseLabel} — Tight + late, deploy & repost blocked`, liq };
-    }
+    if (lateAndTight) return { type: 'late_game', label: '⌛ LATE GAME', color: '#ff4444', glowAnim: '',
+        description: `±${marginLabel} · ${phaseLabel} — Tight + late, running out of time for both legs to fill`, liq };
 
-    if (effectiveMargin >= 5) return { type: 'anchor', label: '🟡 LEAN', color: '#ffaa33', glowAnim: 'arbGlowGold', description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Moderate lead`, liq };
+    if (scoreDiff >= 20) return { type: 'runaway',  label: '🔴 RUNAWAY',   color: '#ff6644', glowAnim: '',
+        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Blowout, dog side dead`, liq };
+    if (effectiveMargin >= 12) return { type: 'drifting', label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: 'arbGlowGold',
+        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Big lead, dog fills getting harder`, liq };
+    if (effectiveMargin >= 5) return { type: 'lean',      label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGlow',
+        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Small lead, decent volatility`, liq };
 
-    return { type: 'swing', label: '🔵 CLOSE', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-        description: `±${marginLabel} · ${phaseLabel} — Tight game, volatile`, liq };
+    return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
+        description: `±${marginLabel} · ${phaseLabel} — Close game, both legs will bounce`, liq };
 }
 
 function getRecommendedPresets(tier, signalType) {
-    // Signal type affects preset choice:
-    // anchor = can use tighter presets (safer position)
-    // swing = need wider presets (more room for oscillation)
-    // caution/pregame = medium as default
-    if (signalType === 'anchor') {
-        return { tight: [5, 6, 7, 8], medium: [8, 9, 10, 11], wide: [10, 12, 13, 15] }[tier] || [8, 9, 10, 11];
+    // coin_flip = close game, prices bouncing both ways → tighter widths catch fills quickly
+    // lean = small lead, still volatile → medium widths
+    // drifting = bigger lead, dog filling slower → wider widths
+    // runaway = blowout, dog side dead → widest (warn user)
+    // late_game/early/pregame → medium defaults
+    if (signalType === 'coin_flip') {
+        return { tight: [5, 6, 7, 8], medium: [7, 8, 9, 10], wide: [8, 10, 11, 12] }[tier] || [7, 8, 9, 10];
     }
-    if (signalType === 'swing') {
-        return { tight: [8, 9, 10, 11], medium: [10, 11, 12, 13], wide: [12, 13, 15, 18] }[tier] || [10, 11, 12, 13];
+    if (signalType === 'lean') {
+        return { tight: [6, 7, 8, 9], medium: [8, 9, 10, 11], wide: [10, 11, 12, 13] }[tier] || [8, 9, 10, 11];
     }
-    // Default: medium presets for caution/pregame
-    return { tight: [5, 6, 7, 8], medium: [8, 10, 11, 12], wide: [12, 13, 15, 18] }[tier] || [8, 10, 11, 12];
+    if (signalType === 'drifting') {
+        return { tight: [10, 11, 12, 13], medium: [12, 13, 15, 16], wide: [14, 15, 17, 18] }[tier] || [12, 13, 15, 16];
+    }
+    if (signalType === 'runaway') {
+        return { tight: [14, 15, 16, 18], medium: [16, 17, 18, 20], wide: [17, 18, 19, 20] }[tier] || [16, 17, 18, 20];
+    }
+    // late_game / early / pregame → medium defaults
+    return { tight: [6, 7, 8, 9], medium: [8, 10, 11, 12], wide: [12, 13, 15, 18] }[tier] || [8, 10, 11, 12];
 }
 
 function isKalshiLive(market) {
@@ -3132,30 +3099,26 @@ function openBotModal(market, _side, _price) {
         const recLabel = recPresets.join('¢, ') + '¢';
         // Signal-aware recommendation text
         let sigText = '', sigColor = liq.tierColor;
-        if (sigType === 'anchor') {
-            const sigLabel = signal.label || '';
-            if (sigLabel.includes('LOCK')) {
-                sigText = '🟢 LOCK — blowout, prices stable, tight presets OK';
-                sigColor = '#00ff88';
-            } else if (sigLabel.includes('ANCHOR')) {
-                sigText = '🟢 ANCHOR — strong lead, safe deploy';
-                sigColor = '#4ade80';
-            } else {
-                // LEAN — moderate lead, uses anchor presets but with caution
-                sigText = '🟡 LEAN — moderate lead, decent setup';
-                sigColor = '#ffaa33';
-            }
-        } else if (sigType === 'danger') {
-            sigText = '🔴 DANGER — tight + late, bot will block deploy';
-            sigColor = '#ff4444';
-        } else if (sigType === 'swing') {
-            sigText = '🔵 CLOSE — tight game, prices volatile, use wider widths';
+        if (sigType === 'coin_flip') {
+            sigText = '🔵 COIN FLIP — close game, both legs will bounce → best entry';
             sigColor = '#60a5fa';
-        } else if (sigType === 'caution') {
+        } else if (sigType === 'lean') {
+            sigText = '🟢 LEAN — small lead, still volatile, decent entry';
+            sigColor = '#4ade80';
+        } else if (sigType === 'drifting') {
+            sigText = '🟡 DRIFTING — lead building, dog fills getting harder';
+            sigColor = '#ffaa33';
+        } else if (sigType === 'runaway') {
+            sigText = '🔴 RUNAWAY — blowout, dog side dead, use very wide or skip';
+            sigColor = '#ff6644';
+        } else if (sigType === 'late_game') {
+            sigText = '⌛ LATE GAME — running out of time for both legs to fill';
+            sigColor = '#ff4444';
+        } else if (sigType === 'early') {
             sigText = '⚪ EARLY — game just started, no score context yet';
             sigColor = '#8892a6';
         } else if (sigType === 'pregame') {
-            sigText = '⏳ Pregame — waiting for tip-off';
+            sigText = '⏳ PREGAME — waiting for tip-off';
             sigColor = '#8892a6';
         } else {
             sigText = `💡 ${liq.tierLabel}`;
@@ -3432,13 +3395,7 @@ function updateProfitPreview() {
 
     // Falling knife warning: if entries are too low to have wiggle room
     const favEntry = Math.max(yes, no);
-    const MIN_FAV_ENTRY = 65;
-    const knifeWarn = (favEntry > 0 && favEntry < MIN_FAV_ENTRY && profit < 25)
-        ? `<div style="background:rgba(255,68,68,0.08);border:1px solid #ff444444;border-radius:6px;padding:8px 10px;margin:0 16px 10px;">
-               <span style="color:#ff4444;font-size:11px;font-weight:700;">⚠️ FALLING KNIFE — Favorite at ${favEntry}¢ with only ${profit}¢ profit</span>
-               <div style="color:#ff4444aa;font-size:10px;margin-top:3px;">Entries below 65¢ don't have enough room. Deploy will be blocked.</div>
-           </div>`
-        : '';
+
 
     // Exit timer info
     const exitInfo = isArb
@@ -3480,7 +3437,6 @@ function updateProfitPreview() {
             </div>
             ${!isArb ? `<div style="padding:6px 16px 10px;text-align:center;font-size:11px;color:#ff4444;">⚠ Not profitable — reduce prices or increase width</div>` : ''}
             ${isArb && qty > 1 ? `<div style="padding:2px 16px 8px;text-align:center;font-size:11px;color:#8892a6;">${qty} contracts × ${profit}¢ = <strong style="color:#00ff88;">+$${dollarProfit}</strong> locked at settlement</div>` : ''}
-            ${knifeWarn}
             ${exitInfo}
         </div>`;
 }
@@ -3791,17 +3747,8 @@ async function createBot() {
         return;
     }
 
-    // ── Guardrail: don't deploy fav side below 65¢ (ensures min 10¢ wiggle room) ──
-    // Only blocks when profit margin is thin (< 25¢) = competitive market.
-    // Fat profit (≥ 25¢) = illiquid arb where both sides are cheap — that's fine.
-    const MIN_FAV_ENTRY = 65;
     const favPrice = Math.max(yes_price, no_price);
     const profitPer = 100 - yes_price - no_price;
-    if (favPrice < MIN_FAV_ENTRY && profitPer < 25) {
-        alert(`⚠️ Favorite side is only ${favPrice}¢ — below the ${MIN_FAV_ENTRY}¢ minimum.\nEntries below 65¢ leave less than 10¢ of wiggle room before the flip trigger fires.\n\nWait for recovery or skip this market.`);
-        return;
-    }
-
     const totalCost = (yes_price + no_price) * quantity;
     const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
     if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: auto-detect\n8-min timeout if one leg fills${repeatMsg}\n\nConfirm order?`)) return;
@@ -3889,7 +3836,6 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
 async function placeAllWidthsBots() {
     if (!currentArbMarket) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flipFloor   = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
@@ -3900,16 +3846,14 @@ async function placeAllWidthsBots() {
 
     for (const w of ALL_PRESET_WIDTHS) {
         const arb      = calculateArbPrices(currentArbMarket, w);
-        const favPrice = Math.max(arb.targetYes, arb.targetNo);
-        const dogPrice = Math.min(arb.targetYes, arb.targetNo);
-        const profit   = 100 - favPrice - dogPrice;
-        const isKnife  = favPrice < MIN_FAV_ENTRY_FOR_BOT && profit < 25;
-        if (isKnife || favPrice < flipFloor || profit <= 0) {
-            const reason = isKnife ? 'knife' : favPrice < flipFloor ? 'below floor' : 'no profit';
-            skipReasons.push(`  ⛔  ${w}¢ width — ${reason}`);
+        const yesPrice = arb.targetYes;
+        const noPrice  = arb.targetNo;
+        const profit   = 100 - yesPrice - noPrice;
+        if (profit <= 0) {
+            skipReasons.push(`  ⛔  ${w}¢ width — no profit`);
         } else {
-            validWidths.push({ w, arb, favPrice, dogPrice, profit });
-            totalCostCents += (favPrice + dogPrice) * qty;
+            validWidths.push({ w, arb, yesPrice, noPrice, profit });
+            totalCostCents += (yesPrice + noPrice) * qty;
         }
     }
 
@@ -3920,16 +3864,12 @@ async function placeAllWidthsBots() {
 
     // Build order table string
     const pad = (s, n) => String(s).padStart(n);
-    let totalStopLossCents = 0;
     let orderLines = [`⚡ Deploy ALL Widths — ${currentArbMarket.ticker}`, ''];
-    orderLines.push('  WIDTH   YES    NO    STOP LOSS   PROFIT   COST');
-    orderLines.push('  ───────────────────────────────────────────────');
-    for (const { w, arb, favPrice, dogPrice, profit } of validWidths) {
-        const costDollars     = ((favPrice + dogPrice) * qty / 100).toFixed(2);
-        const stopLossCents   = (favPrice - flipFloor) * qty;   // loss if fav fills then stops at floor
-        totalStopLossCents   += stopLossCents;
-        const stopLossDollars = (stopLossCents / 100).toFixed(2);
-        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   -$${pad(stopLossDollars,5)}   +${pad(profit+'¢',3)}   $${costDollars}`);
+    orderLines.push('  WIDTH   YES    NO    PROFIT   COST');
+    orderLines.push('  ─────────────────────────────────');
+    for (const { w, arb, yesPrice, noPrice, profit } of validWidths) {
+        const costDollars = ((yesPrice + noPrice) * qty / 100).toFixed(2);
+        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
     }
     if (skipReasons.length > 0) {
         orderLines.push('');
@@ -3937,8 +3877,7 @@ async function placeAllWidthsBots() {
     }
     orderLines.push('');
     orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
-    orderLines.push(`  Total entry cost:      $${(totalCostCents / 100).toFixed(2)}`);
-    orderLines.push(`  Max stop-loss loss:   -$${(totalStopLossCents / 100).toFixed(2)}  (if all widths stopped at ${flipFloor}¢)`);
+    orderLines.push(`  Total entry cost: $${(totalCostCents / 100).toFixed(2)}`);
     orderLines.push('');
     orderLines.push('Place these orders?');
 

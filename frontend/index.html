@@ -438,7 +438,7 @@
                     </div>
 
                     <div style="border-top:1px solid #1e2740;margin-top:6px;padding-top:8px;color:#8892a6;">
-                        <strong style="color:#ccc;">How the bot works:</strong> Posts YES and NO limit orders simultaneously — both below current bids. When prices dip (score change, run, momentum shift) both legs fill and profit is locked in. If only one fills, the 20-min (fav) or 10-min (dog) exit timer triggers to cancel or sell. The signal tells you how much price swing to expect before you deploy.
+                        <strong style="color:#ccc;">How the bot works:</strong> Posts YES and NO limit orders simultaneously — both below current bids. When prices dip (score change, run, momentum shift) both legs fill and profit is locked in. If only one fills, the 8-min (fav) or 5-min (dog) exit timer triggers to cancel or sell. The signal tells you how much price swing to expect before you deploy.
                     </div>
                 </div>
             </div>
@@ -915,8 +915,8 @@
                         </div>
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Exit Timer</label>
-                            <div style="padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#00aaff;font-size:12px;font-weight:700;text-align:center;" title="If one leg fills but other doesn't: fav fills → 20min exit; underdog fills → 10min exit">
-                                20 / 10 min
+                            <div style="padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#00aaff;font-size:12px;font-weight:700;text-align:center;" title="If one leg fills but other doesn't: fav fills → 8min exit; underdog fills → 5min exit">
+                                8 / 5 min
                             </div>
                         </div>
                         <div>
@@ -1304,6 +1304,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260311h"></script>
+    <script src="app.js?v=20260311i"></script>
 </body>
 </html>

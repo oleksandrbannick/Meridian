@@ -4420,7 +4420,7 @@ async function loadBots() {
                 } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
                     const filledAt = bot.first_fill_at || 0;
                     const waitedMin = filledAt > 0 ? (Date.now()/1000 - filledAt) / 60 : 0;
-                    const toutMin = bot.timeout_min || 20;
+                    const toutMin = bot.timeout_min || 8;
                     const minsLeft = Math.max(0, toutMin - waitedMin);
                     const tColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
                     timeoutInfo = `<span style="color:${tColor};font-size:10px;">⏳ Exit in ${minsLeft.toFixed(0)}m</span>`;
@@ -4452,7 +4452,7 @@ async function loadBots() {
                 stopLossInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:4px 8px;font-size:10px;color:#00aaff;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span><span style="color:#00aaff;">⚡ BOTH POSTED</span> — YES ${bot.yes_price}¢ + NO ${bot.no_price}¢ live simultaneously</span>
                     <span style="color:#8892a6;">Bids: YES <strong style="color:#00ff88;">${yBid}¢</strong> · NO <strong style="color:#ff4444;">${nBid}¢</strong></span>
-                    <span style="color:#555;">${ageMin}m · ${bot.timeout_min || 20}-min exit if one fills</span>
+                    <span style="color:#555;">${ageMin}m · ${bot.timeout_min || 8}-min exit if one fills</span>
                 </div>`;
             } else if (bot.status === 'fav_posted') {
                 const favSide = (bot.fav_side || '?').toUpperCase();
@@ -4476,7 +4476,7 @@ async function loadBots() {
                 const pendingSide = bot.status === 'yes_filled' ? 'NO' : 'YES';
                 const entryFilled = bot.status === 'yes_filled' ? (bot.yes_price || 0) : (bot.no_price || 0);
                 const liveBidFilled = bot.status === 'yes_filled' ? bot.live_yes_bid : bot.live_no_bid;
-                const toutMin = bot.timeout_min || 20;
+                const toutMin = bot.timeout_min || 8;
                 const minsLeft = Math.max(0, toutMin - fillAgeMin);
                 const isFavFilled = entryFilled >= (bot.status === 'yes_filled' ? (bot.no_price || 0) : (bot.yes_price || 0));
                 const urgColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
@@ -4524,7 +4524,7 @@ async function loadBots() {
                 anchoredHealthKey = 'waiting';
             } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
                 // One leg filled — health is based on timeout proximity
-                const toutMin = bot.timeout_min || 20;
+                const toutMin = bot.timeout_min || 8;
                 const minsLeftHealth = Math.max(0, toutMin - fillAgeMin);
                 if (minsLeftHealth <= 3) {
                     healthColor = '#ff4444';
@@ -4631,7 +4631,7 @@ async function loadBots() {
                     <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
                     <span>Cost: <strong style="color:#8892a6;">$${((100 - profit) * qty / 100).toFixed(2)}</strong></span>
                     <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
-                    <span title="If one leg fills but other doesn't within timeout, exit at market">⏱ ${bot.timeout_min || 20}m exit</span>
+                    <span title="If one leg fills but other doesn't within timeout, exit at market">⏱ ${bot.timeout_min || 8}m exit</span>
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
                 </div>
                 ${stopLossInfo}
@@ -6405,13 +6405,13 @@ async function loadHistoryStats() {
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">⏱ Timeout Exits</div>
                     ${timeoutN > 0 ? (() => {
-                        const txTrades = (s.result_breakdown_trades || []).filter(t => t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no');
-                        const txLoss = txTrades.reduce((a, t) => a + (t.loss_cents || 0), 0);
-                        const txProfit = txTrades.reduce((a, t) => a + (t.profit_cents || 0), 0);
-                        const txNet = txProfit - txLoss;
+                        const tx = s.timeout_stats || {};
+                        const txProfit = tx.total_profit_cents || 0;
+                        const txLoss   = tx.total_loss_cents   || 0;
+                        const txNet    = tx.net_cents != null ? tx.net_cents : (txProfit - txLoss);
                         const txNetColor = txNet >= 0 ? '#00ff88' : '#ff4444';
-                        const txYes = rb.timeout_exit_yes || 0;
-                        const txNo  = rb.timeout_exit_no  || 0;
+                        const txYes = tx.yes_n ?? (rb.timeout_exit_yes || 0);
+                        const txNo  = tx.no_n  ?? (rb.timeout_exit_no  || 0);
                         return `<div style="display:flex;flex-direction:column;gap:5px;">
                             <div style="display:flex;justify-content:space-between;">
                                 <span style="color:#8892a6;font-size:11px;">Total exits</span>

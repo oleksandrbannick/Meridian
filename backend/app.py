@@ -1166,7 +1166,7 @@ ws_flip_lock = threading.Lock()
 def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
     """
     No-op stub — flip logic removed in simultaneous dual-order architecture.
-    8-minute timeout is handled by the monitor loop instead.
+    5/8-minute timeout is handled by the monitor loop instead.
     Kept for signature compatibility.
     """
     return
@@ -1175,7 +1175,7 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
 def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty, floor=None):
     """
     No-op stub — flip logic removed in simultaneous dual-order architecture.
-    8-minute timeout is handled by the monitor loop instead.
+    5/8-minute timeout is handled by the monitor loop instead.
     Kept for signature compatibility.
     """
     pass
@@ -3795,10 +3795,10 @@ def _run_monitor():
                         bot['first_leg'] = 'yes'
 
                     # YES is fav if its posted price >= NO price
-                    # Timeout: fav fills first → 20 min (underdog takes time, patient)
-                    #          underdog fills first → 10 min (fav may have moved, exit sooner)
+                    # Timeout: fav fills first → 8 min (underdog can be slower, but exit if market moves)
+                    #          underdog fills first → 5 min (fav not filling = market moved against us, exit fast)
                     yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
-                    timeout_min = 20.0 if yes_is_fav else 10.0
+                    timeout_min = 8.0 if yes_is_fav else 5.0
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     if phase == 'live' and wait_min >= timeout_min:
@@ -3859,7 +3859,7 @@ def _run_monitor():
 
                     # NO is fav if its posted price >= YES price
                     no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
-                    timeout_min = 20.0 if no_is_fav else 10.0
+                    timeout_min = 8.0 if no_is_fav else 5.0
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     if phase == 'live' and wait_min >= timeout_min:
                         try:
@@ -4631,6 +4631,13 @@ def history_stats():
         r = t.get('result', 'unknown')
         result_counts[r] = result_counts.get(r, 0) + 1
 
+    # ── Timeout exit aggregates ────────────────────────────────────
+    timeout_trades = [t for t in arb_trades if t.get('result', '') in ('timeout_exit_yes', 'timeout_exit_no')]
+    timeout_total_profit = sum(t.get('profit_cents', 0) for t in timeout_trades)
+    timeout_total_loss   = sum(t.get('loss_cents',   0) for t in timeout_trades)
+    timeout_yes_n  = sum(1 for t in timeout_trades if t.get('result') == 'timeout_exit_yes')
+    timeout_no_n   = sum(1 for t in timeout_trades if t.get('result') == 'timeout_exit_no')
+
     # ── Flip analysis ──────────────────────────────────────────────
     flip_trades = [t for t in arb_trades if t.get('result', '').startswith('flip_')]
     flip_total = len(flip_trades)
@@ -4691,12 +4698,16 @@ def history_stats():
         })
 
     # ── Fill rate by width (with real breakeven %) ─────────────────
-    # Only count flip-threshold trades (current system). Exclude old
-    # stop_loss_yes/stop_loss_no trades which used a different risk system
-    # and would skew the breakeven % with inflated losses.
-    flip_system_results = WIN_RESULTS + ('flip_yes', 'flip_no',
-                           'force_exit_yes', 'force_exit_no',
-                           'settled_loss_yes', 'settled_loss_no')
+    # Count all current-system results (wins + all exit types).
+    # Excludes old stop_loss_yes/no which used a different risk model.
+    current_system_results = WIN_RESULTS + (
+        'timeout_exit_yes', 'timeout_exit_no',
+        'manual_exit_yes', 'manual_exit_no',
+        'flip_yes', 'flip_no',          # legacy — kept for historical data
+        'force_exit_yes', 'force_exit_no',
+        'settled_loss_yes', 'settled_loss_no',
+    )
+    flip_system_results = current_system_results  # alias kept for below code
     width_stats = {}
     for t in arb_trades:
         if t.get('result', '') not in flip_system_results:
@@ -4822,6 +4833,14 @@ def history_stats():
         'avg_loss_duration_s': round(sum(loss_durations) / len(loss_durations)) if loss_durations else None,
         'width_breakdown': width_breakdown,
         'result_breakdown': result_counts,
+        'timeout_stats': {
+            'total': len(timeout_trades),
+            'yes_n': timeout_yes_n,
+            'no_n':  timeout_no_n,
+            'total_profit_cents': timeout_total_profit,
+            'total_loss_cents':   timeout_total_loss,
+            'net_cents': timeout_total_profit - timeout_total_loss,
+        },
         'flip_stats': {
             'total': flip_total,
             'total_loss_cents': flip_total_loss,

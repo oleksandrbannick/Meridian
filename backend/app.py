@@ -2632,7 +2632,7 @@ def _run_monitor():
         auto_reset_daily_pnl()
 
         actions = []
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -4067,6 +4067,7 @@ def _run_monitor():
                                     'bot_id': bot_id, 'type': 'middle',
                                     'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
                                     'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                                    'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
                                     'target_price': bot.get('target_price'), 'qty': qty_m,
                                     'filled_leg': filled_leg, 'fill_price': fill_price,
                                     'sl_sell_price': sell_price_sl, 'loss_cents': loss_cents,
@@ -4078,6 +4079,47 @@ def _run_monitor():
                                 save_state()
                         except Exception as sl_err:
                             bot_log('ERROR', bot_id, {'step': 'sl_check', 'error': str(sl_err)}, level='WARN')
+
+                        # ── One-leg timeout: game over, clean up unfilled order ──
+                        # If the unfilled market is dead (bid=0 / closed) OR bot stuck >3 hours,
+                        # cancel the unfilled order and wait for the filled leg to settle.
+                        try:
+                            one_filled_age_min = (now_m - (bot.get('one_filled_at') or now_m)) / 60
+                            unfilled_ticker_val = bot.get(f'ticker_{unfilled_leg}', '')
+                            if one_filled_age_min > 30 and unfilled_ticker_val and bot['status'] == 'one_filled':
+                                uf_dead = False
+                                uf_bid_check = 0
+                                ws_uf = ws_manager.get_price(unfilled_ticker_val) if ws_manager else None
+                                if ws_uf:
+                                    uf_bid_check = ws_uf.get('no_bid', 0) or 0
+                                if uf_bid_check == 0:
+                                    api_rate_limiter.wait()
+                                    mkt_uf = kalshi_client.get_market(unfilled_ticker_val)
+                                    mkt_uf_data = mkt_uf.get('market', mkt_uf)
+                                    uf_bid_check = mkt_uf_data.get('no_bid', 0) or 0
+                                    if mkt_uf_data.get('status', '') in ('closed', 'settled', 'finalized') or uf_bid_check == 0:
+                                        uf_dead = True
+                                if uf_dead or one_filled_age_min > 180:
+                                    # Cancel unfilled order
+                                    if bot.get(unfilled_order_key):
+                                        try:
+                                            api_rate_limiter.wait()
+                                            kalshi_client.cancel_order(bot[unfilled_order_key])
+                                            bot_log('ORDER_CANCELLED', bot_id, {'order_id': bot[unfilled_order_key], 'reason': 'middle_one_leg_timeout'})
+                                        except Exception:
+                                            pass
+                                    bot['status'] = 'one_leg_timeout'
+                                    bot['timeout_at'] = now_m
+                                    bot_log('MIDDLE_ONE_LEG_TIMEOUT', bot_id, {
+                                        'filled_leg': filled_leg,
+                                        'age_min': round(one_filled_age_min, 1),
+                                        'reason': 'market_dead' if uf_dead else 'time_limit',
+                                    })
+                                    print(f'⌛ MIDDLE ONE-LEG TIMEOUT: {bot_id} — {filled_leg} filled, {unfilled_leg} expired after {round(one_filled_age_min, 1)} min')
+                                    actions.append({'bot_id': bot_id, 'action': 'middle_one_leg_timeout'})
+                                    save_state()
+                        except Exception as to_err:
+                            bot_log('ERROR', bot_id, {'step': 'one_leg_timeout_check', 'error': str(to_err)}, level='WARN')
 
             except Exception as mid_err:
                 print(f'Error monitoring middle bot {bot_id}: {mid_err}')
@@ -4160,6 +4202,59 @@ def _run_monitor():
                     save_state()
             except Exception as ms_err:
                 print(f'Error settling middle bot {bot_id}: {ms_err}')
+                continue
+
+        # ── Settle one_leg_timeout: wait for the filled leg's market to close ──
+        for bot_id, bot in list(active_bots.items()):
+            if bot.get('type') != 'middle' or bot['status'] != 'one_leg_timeout':
+                continue
+            try:
+                now_s = time.time()
+                filled_leg = bot.get('filled_leg', 'a')
+                unfilled_leg = 'b' if filled_leg == 'a' else 'a'
+                filled_ticker = bot.get(f'ticker_{filled_leg}', '')
+                if not filled_ticker:
+                    continue
+                api_rate_limiter.wait()
+                mkt_f = kalshi_client.get_market(filled_ticker)
+                mkt_f_data = mkt_f.get('market', mkt_f)
+                if mkt_f_data.get('status', '') in ('closed', 'settled', 'finalized'):
+                    result_f = mkt_f_data.get('result', '').lower()
+                    filled_leg_win = (result_f == 'no')
+                    qty_s = bot.get('qty', 1)
+                    fill_price = bot.get(f'leg_{filled_leg}_fill_price') or bot.get('target_price', 49)
+                    profit = (100 - fill_price) * qty_s if filled_leg_win else (-fill_price * qty_s)
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now_s
+                    bot[f'leg_{filled_leg}_result'] = 'win' if filled_leg_win else 'loss'
+                    bot[f'leg_{unfilled_leg}_result'] = 'cancelled'
+                    if profit > 0:
+                        session_pnl['gross_profit_cents'] += profit
+                        session_pnl['completed_bots'] += 1
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(profit)
+                        session_pnl['stopped_bots'] += 1
+                    _record_trade({
+                        'bot_id': bot_id, 'type': 'middle',
+                        'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
+                        'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                        'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
+                        'target_price': bot.get('target_price'), 'qty': qty_s,
+                        'leg_a_fill_price': bot.get('leg_a_fill_price'), 'leg_b_fill_price': bot.get('leg_b_fill_price'),
+                        'leg_a_result': bot.get('leg_a_result') or ('win' if filled_leg == 'a' and filled_leg_win else ('loss' if filled_leg == 'a' else 'cancelled')),
+                        'leg_b_result': bot.get('leg_b_result') or ('win' if filled_leg == 'b' and filled_leg_win else ('loss' if filled_leg == 'b' else 'cancelled')),
+                        'middle_hit': False,
+                        'profit_cents': profit,
+                        'result': 'arb_win' if profit > 0 else 'loss',
+                        'timestamp': now_s,
+                        'note': f'one-leg settle: {filled_leg} {"win" if filled_leg_win else "loss"}, {unfilled_leg} cancelled/unfilled',
+                    }, bot)
+                    bot_log('MIDDLE_ONE_LEG_SETTLED', bot_id, {'filled_leg': filled_leg, 'profit_cents': profit})
+                    print(f'📐 MIDDLE ONE-LEG SETTLED: {bot_id} | {filled_leg} {"win" if filled_leg_win else "loss"} | profit={profit}¢')
+                    actions.append({'bot_id': bot_id, 'action': 'middle_one_leg_settled', 'profit_cents': profit})
+                    save_state()
+            except Exception as ol_err:
+                print(f'Error settling one_leg_timeout bot {bot_id}: {ol_err}')
                 continue
 
         save_state()

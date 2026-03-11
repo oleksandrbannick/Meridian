@@ -3926,8 +3926,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
     const status = bot.status || 'waiting';
-    const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped:'#ff4444', completed:'#00ff88' }[status] || '#aa66ff';
-    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped:'🛑 STOPPED', completed:'✓ COMPLETE' }[status] || status;
+    const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped:'#ff4444', completed:'#00ff88', one_leg_timeout:'#ff8800' }[status] || '#aa66ff';
+    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped:'🛑 STOPPED', completed:'✓ COMPLETE', one_leg_timeout:'⌛ SETTLING' }[status] || status;
     const targetA = bot.target_price_a || bot.target_price || 0;
     // Don't fall back to target_price for leg B — it stores leg A's price (legacy), which caused both to show same value
     const targetB = bot.target_price_b || 0;
@@ -7116,15 +7116,22 @@ async function loadMiddleHistory() {
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'middle');
 
-        const settled = trades.filter(t => t.status === 'settled');
+        const settled = trades.filter(t => !!t.result);  // has a result = settled/completed
         const midHits = settled.filter(t => t.middle_hit === true);
         const arbWins = settled.filter(t => t.result === 'arb_win');
-        const losses  = settled.filter(t => t.result === 'loss');
-        const pending = trades.filter(t => t.status === 'pending');
+        const losses  = settled.filter(t => t.result === 'loss' || t.result === 'stopped_sl');
+        const pending = trades.filter(t => !t.result);  // no result = still active/pending
         const net = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
         const netCol = net >= 0 ? '#00ff88' : '#ff4444';
         const hitRate = settled.length > 0 ? (midHits.length / settled.length * 100).toFixed(0) : 0;
-        const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s+(t.arb_width||0),0)/trades.length).toFixed(1) : 0;
+        // arb_width: use stored field or compute from fill prices (100 - legA - legB = guaranteed floor per contract)
+        const avgWidth = settled.length > 0
+            ? (settled.reduce((s,t) => {
+                const w = t.arb_width != null ? t.arb_width
+                    : (t.leg_a_fill_price && t.leg_b_fill_price) ? (100 - t.leg_a_fill_price - t.leg_b_fill_price) : 0;
+                return s + w;
+            }, 0) / settled.length).toFixed(1)
+            : 0;
 
         if (statsEl) {
             statsEl.innerHTML = trades.length === 0
@@ -7182,7 +7189,7 @@ async function loadMiddleHistory() {
             // Support both manual log format (leg1/leg2) and bot-automated format (ticker_a/b, team_a/b_name)
             const isBot = !t.leg1 && (t.ticker_a || t.team_a_name);
             const l1 = isBot ? {
-                title: t.team_a_name ? `NO ${t.team_b_name||''} +${t.spread_a||'?'}` : (t.ticker_a || ''),
+                title: t.team_a_name ? `NO ${t.team_b_name||''}${t.spread_a > 0 ? ` +${t.spread_a}` : ''}` : (t.ticker_a || ''),
                 ticker: t.ticker_a || '',
                 side: 'no',
                 price: t.leg_a_fill_price || t.target_price || '?',
@@ -7190,7 +7197,7 @@ async function loadMiddleHistory() {
                 result: t.leg_a_result || null,
             } : (t.leg1 || {});
             const l2 = isBot ? {
-                title: t.team_b_name ? `NO ${t.team_a_name||''} +${t.spread_b||'?'}` : (t.ticker_b || ''),
+                title: t.team_b_name ? `NO ${t.team_a_name||''}${t.spread_b > 0 ? ` +${t.spread_b}` : ''}` : (t.ticker_b || ''),
                 ticker: t.ticker_b || '',
                 side: 'no',
                 price: t.leg_b_fill_price || t.target_price || '?',

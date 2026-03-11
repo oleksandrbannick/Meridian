@@ -398,47 +398,47 @@
                 </div>
                 <div id="legend-body" class="hidden" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
 
-                    <div style="color:#8892a6;margin-bottom:10px;">These signals tell you <strong style="color:#ccc;">when to deploy the bot</strong> based on the live game situation. They read the score, clock, and market price to tell you if conditions are right — ordered from strongest to riskiest below.</div>
+                    <div style="color:#8892a6;margin-bottom:10px;">These signals read the live score and clock to tell you how volatile prices are right now. For the simultaneous dual-arb bot (posts YES + NO at the same time), <strong style="color:#ccc;">close games are best</strong> — both sides bounce. Blowouts are worst — the dog side dies.</div>
 
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px 24px;margin-top:8px;">
                         <div>
-                            <div style="border-left:3px solid #00ff88;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#00ff8822;color:#00ff88;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 LOCK</span><br>
-                                <span style="color:#ccc;font-weight:600;">Blowout (20+ pts) — deploy with full confidence</span><br>
-                                <span style="color:#8892a6;">The game is effectively over. Prices are stable and anchored. Dips will recover quickly. Best possible setup. Bright green glow.</span>
+                            <div style="border-left:3px solid #60a5fa;padding-left:10px;margin-bottom:8px;">
+                                <span style="background:#60a5fa22;color:#60a5fa;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🔵 COIN FLIP</span><br>
+                                <span style="color:#ccc;font-weight:600;">Tied or within 1–3 pts — best setup</span><br>
+                                <span style="color:#8892a6;">Score is dead even. Both sides bounce constantly — YES and NO orders fill fast. Use tighter widths (5–8¢). Blue glow.</span>
                             </div>
                             <div style="border-left:3px solid #4ade80;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#4ade8022;color:#4ade80;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 ANCHOR</span><br>
-                                <span style="color:#ccc;font-weight:600;">Strong lead (10–19 pts) — safe to deploy</span><br>
-                                <span style="color:#8892a6;">One team has a clear lead. The favorite is well-established — dips are likely to recover. Green glow.</span>
+                                <span style="background:#4ade8022;color:#4ade80;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟢 LEAN</span><br>
+                                <span style="color:#ccc;font-weight:600;">Small lead (3–10 pts) — still very volatile</span><br>
+                                <span style="color:#8892a6;">One team has a small edge but the game isn't decided. Plenty of swings left. Good entry. Use medium widths (8–11¢). Green glow.</span>
                             </div>
                             <div style="border-left:3px solid #ffaa33;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#ffaa3322;color:#ffaa33;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟡 LEAN</span><br>
-                                <span style="color:#ccc;font-weight:600;">Moderate lead (5–9 pts) — decent setup, some risk</span><br>
-                                <span style="color:#8892a6;">A lead exists but it's not insurmountable. Dips are more likely to stick. Deploy if the price is right. Gold glow.</span>
+                                <span style="background:#ffaa3322;color:#ffaa33;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🟡 DRIFTING</span><br>
+                                <span style="color:#ccc;font-weight:600;">Moderate lead (10–20 pts) — dog filling slower</span><br>
+                                <span style="color:#8892a6;">The underdog side is starting to lose liquidity. Fav fills fine, dog may take longer. Use wider widths (12–16¢). Gold glow.</span>
                             </div>
                         </div>
                         <div>
-                            <div style="border-left:3px solid #60a5fa;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#60a5fa22;color:#60a5fa;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🔵 CLOSE</span><br>
-                                <span style="color:#ccc;font-weight:600;">Tight game (0–4 pts, early/mid) — volatile but workable</span><br>
-                                <span style="color:#8892a6;">Score is close but there's still plenty of game. Arbs can still work but prices will swing more. Use wider presets. Blue glow.</span>
+                            <div style="border-left:3px solid #ff6644;padding-left:10px;margin-bottom:8px;">
+                                <span style="background:#ff664422;color:#ff6644;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🔴 RUNAWAY</span><br>
+                                <span style="color:#ccc;font-weight:600;">Blowout (20+ pts) — dog side mostly dead</span><br>
+                                <span style="color:#8892a6;">The underdog market has low volume. Dog leg may not fill before timeout. Wider widths needed (16–20¢). Warning only — no hard block.</span>
                             </div>
                             <div style="border-left:3px solid #ff4444;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#ff444422;color:#ff4444;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">🔴 DANGER</span><br>
-                                <span style="color:#ccc;font-weight:600;">Tight + late game — bot will block deployment</span><br>
-                                <span style="color:#8892a6;">Score within 5 pts in Q4 (NBA) or last 10 min of 2nd half (college). This is where catastrophic flip losses happen. The bot blocks new deploys. Red — do not override unless you have strong conviction.</span>
+                                <span style="background:#ff444422;color:#ff4444;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">⌛ LATE GAME</span><br>
+                                <span style="color:#ccc;font-weight:600;">End of game — time warning</span><br>
+                                <span style="color:#8892a6;">Clock is nearly out. Prices will settle soon. Make sure your timeout windows are shorter than time remaining. Warning only — no hard block.</span>
                             </div>
                             <div style="border-left:3px solid #8892a6;padding-left:10px;margin-bottom:8px;">
-                                <span style="background:#8892a622;color:#8892a6;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">⚪ EARLY</span><br>
-                                <span style="color:#ccc;font-weight:600;">Game just started — wait for a lead to form</span><br>
-                                <span style="color:#8892a6;">Too early to read the game. No score context yet. Check back after a quarter or half.</span>
+                                <span style="background:#8892a622;color:#8892a6;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">⚪ EARLY / ⏳ PREGAME</span><br>
+                                <span style="color:#ccc;font-weight:600;">No live context yet</span><br>
+                                <span style="color:#8892a6;">Game hasn't started or just tipped off. No score signal. Can still deploy but you're flying blind on volatility.</span>
                             </div>
                         </div>
                     </div>
 
                     <div style="border-top:1px solid #1e2740;margin-top:6px;padding-top:8px;color:#8892a6;">
-                        <strong style="color:#ccc;">How the bot works:</strong> Posts a limit order below the favorite's bid and waits for a dip to fill it. Once filled, the favorite recovers and the underdog drops — the bot catches the other side for a locked profit at settlement. The signal tells you how stable conditions are before you deploy.
+                        <strong style="color:#ccc;">How the bot works:</strong> Posts YES and NO limit orders simultaneously — both below current bids. When prices dip (score change, run, momentum shift) both legs fill and profit is locked in. If only one fills, the 20-min (fav) or 10-min (dog) exit timer triggers to cancel or sell. The signal tells you how much price swing to expect before you deploy.
                     </div>
                 </div>
             </div>
@@ -1304,6 +1304,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260311f"></script>
+    <script src="app.js?v=20260311g"></script>
 </body>
 </html>

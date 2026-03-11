@@ -1165,193 +1165,20 @@ ws_flip_lock = threading.Lock()
 
 def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
     """
-    Real-time flip threshold check triggered directly from the WebSocket
-    ticker handler. Fires the instant a price update arrives — no polling delay.
-
-    Only acts on bots that:
-      - Are on this ticker
-      - Have exactly one leg filled (yes_filled or no_filled status)
-      - Have a favorite entry >= flip_threshold
-      - Current bid has dropped to <= flip_threshold
-
-    The actual sell is dispatched to a background thread so the WS handler
-    doesn't block on API calls.
+    No-op stub — flip logic removed in simultaneous dual-order architecture.
+    8-minute timeout is handled by the monitor loop instead.
+    Kept for signature compatibility.
     """
-    if not active_bots or not kalshi_client:
-        return
-
-    for bot_id, bot in list(active_bots.items()):
-        if bot.get('ticker') != ticker:
-            continue
-        if bot.get('type') == 'watch':
-            continue
-        status = bot.get('status', '')
-        if status not in ('yes_filled', 'no_filled'):
-            continue
-        # Already being handled by a WS flip sell or already stopped
-        if bot.get('_ws_flip_selling') or status in ('stopped', 'completed') or bot.get('_flip_done'):
-            continue
-
-        flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
-        qty = bot['quantity']
-
-        # YES filled, check if yes_bid has flipped
-        if status == 'yes_filled':
-            yes_filled = bot.get('yes_fill_qty', 0)
-            entry_yes = bot['yes_price']
-            # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
-            effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_yes - 10))
-            if yes_filled >= qty and entry_yes >= flip_thresh and yes_bid < effective_trigger:
-                # Mark immediately to prevent monitor double-fire
-                bot['_ws_flip_selling'] = True
-                print(f'⚡ WS REAL-TIME FLIP: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢, thresh {flip_thresh}¢) — selling NOW')
-                threading.Thread(
-                    target=_execute_ws_flip,
-                    args=(bot_id, 'yes', entry_yes, yes_bid, effective_trigger, yes_filled, flip_thresh),
-                    daemon=True
-                ).start()
-
-        # NO filled, check if no_bid has flipped
-        elif status == 'no_filled':
-            no_filled = bot.get('no_fill_qty', 0)
-            entry_no = bot['no_price']
-            # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
-            effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_no - 10))
-            if no_filled >= qty and entry_no >= flip_thresh and no_bid < effective_trigger:
-                bot['_ws_flip_selling'] = True
-                print(f'⚡ WS REAL-TIME FLIP: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢, thresh {flip_thresh}¢) — selling NOW')
-                threading.Thread(
-                    target=_execute_ws_flip,
-                    args=(bot_id, 'no', entry_no, no_bid, effective_trigger, no_filled, flip_thresh),
-                    daemon=True
-                ).start()
+    return
 
 
 def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty, floor=None):
     """
-    Execute the flip sell in a background thread (called from WS handler).
-    Uses ws_flip_lock to prevent race with monitor.
+    No-op stub — flip logic removed in simultaneous dual-order architecture.
+    8-minute timeout is handled by the monitor loop instead.
+    Kept for signature compatibility.
     """
-    with ws_flip_lock:
-        bot = active_bots.get(bot_id)
-        if not bot or bot['status'] in ('stopped', 'completed') or bot.get('_flip_done'):
-            if bot:
-                bot.pop('_ws_flip_selling', None)
-            return
-
-        now = time.time()
-        ticker = bot['ticker']
-        other_side = 'no' if filled_side == 'yes' else 'yes'
-        other_order_key = f'{other_side}_order_id'
-
-        bot_log('ARB_FLIP_FIRED', bot_id, {
-            'leg': filled_side, 'entry': entry_price,
-            'bid': trigger_bid, 'threshold': flip_thresh,
-            'floor': floor if floor is not None else flip_thresh,
-            'source': 'ws_realtime'
-        })
-
-        sold, sell_info = execute_sell(ticker, filled_side, filled_qty,
-                                       reason=f'ws_flip_{filled_side}_{bot_id}')
-        if sold:
-            # Cancel the unfilled other-side order
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(bot[other_order_key])
-            except Exception:
-                pass
-            try:
-                api_rate_limiter.wait()
-                other_check = kalshi_client.get_order(bot[other_order_key])
-                other_data = other_check.get('order', other_check) if isinstance(other_check, dict) else {}
-                if other_data.get('status', '') not in ('canceled', 'cancelled'):
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(bot[other_order_key])
-            except Exception:
-                pass
-            # ── Sell any partial fills on the other side ──────────────
-            # If the dog order partially filled before we cancelled it,
-            # those contracts are still open and must be sold now.
-            other_fill_qty = bot.get(f'{other_side}_fill_qty', 0)
-            if other_fill_qty > 0:
-                print(f'⚡ WS FLIP: selling {other_fill_qty}x partial {other_side.upper()} fill on {bot_id}')
-                execute_sell(ticker, other_side, other_fill_qty,
-                             reason=f'ws_flip_partial_{other_side}_{bot_id}')
-
-            orig_repeat_count = bot.get('repeat_count', 0)
-            bot['status'] = 'stopped'
-            bot['_flip_done'] = True   # permanent guard — prevents any second flip on this bot
-            bot['repeat_count'] = 0
-            bot['stopped_at'] = now
-            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', trigger_bid)
-            pnl_cents = (actual_sell - entry_price) * filled_qty  # positive=profit, negative=loss
-            verified = sell_info.get('verified_cleared', False)
-            if pnl_cents >= 0:
-                session_pnl['gross_profit_cents'] += pnl_cents
-                session_pnl['completed_bots']     += 1
-            else:
-                session_pnl['gross_loss_cents'] += abs(pnl_cents)
-                session_pnl['stopped_bots']     += 1
-            _record_trade({
-                'bot_id': bot_id, 'ticker': ticker,
-                'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
-                'quantity': filled_qty,
-                'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
-                'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                'result': f'flip_{filled_side}', 'exit_bid': actual_sell,
-                'verified_cleared': verified, 'timestamp': now,
-                'placed_at': bot.get('created_at', now),
-                'team_label': ticker.split('-')[-1] if '-' in ticker else '',
-                'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
-                'first_leg': bot.get('first_leg', filled_side),
-                'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
-                'game_phase': bot.get('game_phase', 'live'),
-                'flip_threshold': flip_thresh,
-                'game_context': _get_game_context(ticker),
-                'repeats_done': bot.get('repeats_done', 0),
-                'repeat_count': orig_repeat_count,
-                'exit_source': 'ws_realtime',
-            }, bot)
-            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
-            bot_log('ARB_FLIP_COMPLETED', bot_id, {
-                'leg': filled_side, 'entry': entry_price,
-                'actual_sell': actual_sell, 'pnl_cents': pnl_cents,
-                'verified': verified, 'qty': filled_qty,
-            })
-            print(f'⚡ WS FLIP SOLD: {bot_id} {filled_side.upper()} entry={entry_price}¢ exit={actual_sell}¢ pnl={pnl_cents:+}¢ (real-time)')
-            save_state()
-            # ── Post-flip position verification ─────────────────────────────
-            # The cancel/fill race can leave NO contracts open even when
-            # bot.no_fill_qty was 0 at flip time. Check actual Kalshi position
-            # and sell any stranded contracts.
-            def _post_flip_position_check(tid, bid):
-                try:
-                    time.sleep(2)   # allow in-flight WS fill events to land
-                    api_rate_limiter.wait()
-                    pos_resp = kalshi_client.get_positions(ticker=tid)
-                    positions = pos_resp.get('market_positions', [])
-                    for p in positions:
-                        if p.get('ticker') == tid:
-                            pos = p.get('position', 0)
-                            # negative = NO contracts held; sell them
-                            if pos < 0:
-                                stranded_qty = abs(pos)
-                                print(f'⚡ POST-FLIP CLEANUP: {tid} has {stranded_qty} stranded NO contracts — selling', flush=True)
-                                bot_log('FLIP_STRANDED_NO_DETECTED', bid, {
-                                    'ticker': tid, 'stranded_no_qty': stranded_qty,
-                                })
-                                execute_sell(tid, 'no', stranded_qty,
-                                             reason=f'post_flip_cleanup_{bid}')
-                            break
-                except Exception as e:
-                    print(f'⚠ Post-flip position check failed for {tid}: {e}', flush=True)
-            threading.Thread(target=_post_flip_position_check, args=(ticker, bot_id), daemon=True).start()
-        else:
-            # Sell failed — clear the flag so monitor can retry
-            bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
-            print(f'⚠ WS FLIP sell FAILED for {bot_id} — monitor will retry')
-
-        bot.pop('_ws_flip_selling', None)
+    pass
 
 
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
@@ -2424,7 +2251,6 @@ def create_bot():
         no_price       = int(data.get('no_price'))    # limit buy price for NO, in cents
         quantity       = int(data.get('quantity', 1))
         stop_loss_cents = max(1, int(data.get('stop_loss_cents', 5)))  # ¢ drop for watch bots (props/straight)
-        flip_threshold  = int(data.get('flip_threshold', FLIP_THRESHOLD_CENTS))  # arb: sell if bid ≤ this (favorite flipped)
         # Auto-detect game phase from ESPN — no manual setting needed
         # But allow manual override for games ESPN doesn't cover (NIT, CBI, etc.)
         manual_phase = data.get('game_phase')
@@ -2477,109 +2303,24 @@ def create_bot():
         except Exception as pv_err:
             print(f'⚠ Price validation skipped: {pv_err}')
 
-        # ── FAVORITE-FIRST ANCHORING ──────────────────────────────
-        # Post ONLY the favorite side (higher bid = more liquidity, fills faster,
-        # less adverse selection). The underdog order is posted by the monitor
-        # AFTER the favorite fills. This prevents the dangerous scenario where
-        # the underdog fills first and the market moves against us (82% loss rate
-        # when NO fills first in historical data).
-        fav_side = 'yes' if live_yes_bid >= live_no_bid else 'no'
-        dog_side = 'no' if fav_side == 'yes' else 'yes'
-        fav_price = yes_price if fav_side == 'yes' else no_price
-        dog_price = no_price if fav_side == 'yes' else yes_price
+        # ── SIMULTANEOUS DUAL LIMIT ORDER PLACEMENT ───────────────
+        # Place both YES and NO limit orders at the same time.
+        # If both fill → profit locked at settlement.
+        # If one fills but other is pending after 8 min → cancel pending, sell filled at market.
+        api_rate_limiter.wait()
+        yes_order = kalshi_client.create_order(
+            ticker=ticker, side='yes', action='buy',
+            count=quantity, yes_price=yes_price
+        )
+        api_rate_limiter.wait()
+        no_order = kalshi_client.create_order(
+            ticker=ticker, side='no', action='buy',
+            count=quantity, no_price=no_price
+        )
+        yes_order_id = yes_order['order']['order_id']
+        no_order_id  = no_order['order']['order_id']
 
-        # ── Guardrail: don't deploy fav side below MIN_FAV_ENTRY ──
-        # Only applies when profit margin is thin (< 25¢) = competitive market
-        # where a low fav price means the thesis is actually breaking.
-        # When profit is fat (≥ 25¢), both sides are cheap due to illiquidity
-        # — that's a legit arb, not a falling knife.
-        profit_per = 100 - fav_price - dog_price
-        if fav_price < MIN_FAV_ENTRY_CENTS and profit_per < 25:
-            return jsonify({
-                'error': f'Favorite side ({fav_side.upper()}) entry at {fav_price}¢ is below the {MIN_FAV_ENTRY_CENTS}¢ minimum '
-                         f'and profit is only {profit_per}¢. '
-                         f'The favorite has dropped too far — this is a falling knife, not a dip buy. '
-                         f'Wait for it to recover or skip this market.'
-            }), 400
-
-        # ── Guardrail: block deployment in tight basketball games ──
-        # Basketball-specific: tight late-game situations are the #1 source of
-        # catastrophic flip losses. When score is within 5 points in the
-        # decisive stretch, markets swing wildly and trigger cascading stop losses.
-        # Data: 62% win rate but -$39 net on tight games — tail risk.
-        # Rules by sport:
-        #   NBA / NCAAW (4 quarters): block in Q4+ / OT
-        #   NCAAB men's (2 halves):  block if 2nd half AND ≤ 10 min remaining
-        # Allow override with force_tight=True for manual conviction plays.
-        TIGHT_GAME_MAX_DIFF = 5
-        force_tight = data.get('force_tight', False)
-        if game_phase == 'live' and not force_tight and _is_basketball(ticker):
-            gc = _get_game_context(ticker)
-            if gc:
-                # For spread tickers compare lead vs spread line; for moneyline use raw diff
-                if _detect_market_type(ticker) == 'spread':
-                    spread_tight = _get_spread_effective_tightness(ticker)
-                    sd = spread_tight if spread_tight is not None else gc.get('score_diff', 999)
-                    diff_label = f'{sd:.1f}-pt spread margin'
-                else:
-                    sd = gc.get('score_diff', 999)
-                    diff_label = f'{sd}-pt lead'
-                period = gc.get('period', 0)
-                clock_str = gc.get('clock', '')
-                sport = _detect_sport(ticker)
-
-                # Parse clock to minutes remaining (format: "MM:SS" or "M:SS")
-                clock_mins = 999
-                clock_match = re.match(r'(\d+):(\d+)', clock_str)
-                if clock_match:
-                    clock_mins = int(clock_match.group(1)) + int(clock_match.group(2)) / 60
-
-                # Determine if we're in the dangerous stretch
-                in_danger_zone = False
-                zone_label = ''
-                if sport == 'ncaab':  # Men's college: 2 halves, then OT periods
-                    # period 1 = 1st half, period 2 = 2nd half, period 3+ = OT
-                    if period == 2 and clock_mins <= 10 and sd <= TIGHT_GAME_MAX_DIFF:
-                        in_danger_zone = True
-                        zone_label = f'2nd half ({clock_str} remaining)'
-                    elif period >= 3 and sd <= TIGHT_GAME_MAX_DIFF:  # OT
-                        in_danger_zone = True
-                        ot_num = period - 2
-                        zone_label = f'OT{ot_num if ot_num > 1 else ""}'
-                else:  # NBA, NCAAW (4 quarters), OT
-                    if period >= 4 and sd <= TIGHT_GAME_MAX_DIFF:
-                        in_danger_zone = True
-                        if period == 4:
-                            zone_label = 'Q4'
-                        else:
-                            ot_num = period - 4
-                            zone_label = f'OT{ot_num if ot_num > 1 else ""}'
-
-                if in_danger_zone:
-                    return jsonify({
-                        'error': f'🛑 TIGHT GAME BLOCKED: {diff_label} in {zone_label}. '
-                                 f'Late close games swing wildly and can trigger stop-losses on both sides. '
-                                 f'Wait for the lead to grow, or use the force option to override.',
-                        'tight_game_blocked': True,
-                        'score_diff': sd,
-                        'period': period,
-                    }), 400
-
-        if fav_side == 'yes':
-            fav_order = kalshi_client.create_order(
-                ticker=ticker, side='yes', action='buy',
-                count=quantity, yes_price=yes_price
-            )
-        else:
-            fav_order = kalshi_client.create_order(
-                ticker=ticker, side='no', action='buy',
-                count=quantity, no_price=no_price
-            )
-        fav_order_id = fav_order['order']['order_id']
-
-        print(f'🎯 FAV-FIRST: {fav_side.upper()} posted at {fav_price}¢ '
-              f'(bid={live_yes_bid if fav_side=="yes" else live_no_bid}¢) — '
-              f'{dog_side.upper()} at {dog_price}¢ queued for after fill')
+        print(f'⚡ DUAL POSTED: YES {yes_price}¢ (bid={live_yes_bid}¢) + NO {no_price}¢ (bid={live_no_bid}¢) — both live simultaneously')
 
         # Subscribe WS to this ticker for real-time price updates
         if ws_manager.connected:
@@ -2591,18 +2332,11 @@ def create_bot():
             'yes_price':        yes_price,
             'no_price':         no_price,
             'quantity':         quantity,
-            'stop_loss_cents':  stop_loss_cents,
-            'flip_threshold':   flip_threshold,
             'profit_per':       profit_per,
             'game_phase':       game_phase,
-            'status':           'fav_posted',     # fav_posted → (yes_filled|no_filled) → completed | stopped
-            'fav_side':         fav_side,
-            'dog_side':         dog_side,
-            'fav_price':        fav_price,
-            'dog_price':        dog_price,
-            'fav_order_id':     fav_order_id,
-            'yes_order_id':     fav_order_id if fav_side == 'yes' else None,
-            'no_order_id':      fav_order_id if fav_side == 'no' else None,
+            'status':           'both_posted',
+            'yes_order_id':     yes_order_id,
+            'no_order_id':      no_order_id,
             'yes_fill_qty':     0,
             'no_fill_qty':      0,
             'created_at':       time.time(),
@@ -2620,18 +2354,18 @@ def create_bot():
             'spread_line':      _extract_spread_line(ticker),
         }
         save_state()
-        bot_log('BOT_CREATED', bot_id, {'fav_side': fav_side, 'fav_price': fav_price, 'dog_side': dog_side, 'dog_price': dog_price, 'profit_per': profit_per, 'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count})
+        bot_log('BOT_CREATED', bot_id, {'yes_price': yes_price, 'no_price': no_price, 'profit_per': profit_per, 'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count})
 
         return jsonify({
             'success':      True,
             'bot_id':       bot_id,
-            'fav_side':     fav_side,
-            'fav_order_id': fav_order_id,
+            'yes_order_id': yes_order_id,
+            'no_order_id':  no_order_id,
             'profit_per':   profit_per,
             'game_phase':   game_phase,
             'repeat_count': repeat_count,
-            'message':      f'[{game_phase.upper()}] FAV-FIRST: {fav_side.upper()} at {fav_price}¢ posted — '
-                            f'{dog_side.upper()} at {dog_price}¢ queued after fill → {profit_per}¢ profit/contract'
+            'message':      f'[{game_phase.upper()}] Both YES and NO orders posted simultaneously — '
+                            f'YES {yes_price}¢ + NO {no_price}¢ → {profit_per}¢ profit/contract'
                             + (f' (repeat {repeat_count}x)' if repeat_count > 0 else '')
         })
 
@@ -2898,7 +2632,7 @@ def _run_monitor():
         auto_reset_daily_pnl()
 
         actions = []
-        active_statuses = ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -2918,9 +2652,12 @@ def _run_monitor():
         for bot_id, bot in list(active_bots.items()):
             if bot['status'] not in active_statuses:
                 continue
+            # Middle bots are handled separately below — skip them here
+            if bot.get('type') == 'middle':
+                continue
             try:
                 ticker  = bot['ticker']
-                qty     = bot['quantity']
+                qty     = bot.get('quantity', bot.get('qty', 1))  # arb bots use 'quantity'
                 stop    = max(1, bot.get('stop_loss_cents', 5))  # enforce min 1¢
                 now     = time.time()
                 age_min = (now - bot.get('posted_at', now)) / 60.0
@@ -3098,6 +2835,22 @@ def _run_monitor():
                             continue
                     except Exception:
                         pass  # If API fails, proceed with normal monitoring
+
+                # ── BOTH_POSTED: both orders are live simultaneously ─────────
+                if bot.get('status') == 'both_posted':
+                    # Update live prices from WebSocket then fall through to
+                    # the normal fill-check / repost / timeout logic below.
+                    try:
+                        ws_p = ws_manager.get_price(ticker)
+                        if ws_p:
+                            bot['live_yes_bid'] = ws_p.get('yes_bid', 0)
+                            bot['live_no_bid']  = ws_p.get('no_bid', 0)
+                            bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
+                            bot['live_no_ask']  = ws_p.get('no_ask', 0)
+                            bot['last_price_update'] = now
+                    except Exception:
+                        pass
+                    # Don't continue — fall through to fill-check code below
 
                 # ── FAV-FIRST: favorite order posted, waiting for fill ────
                 if bot.get('status') == 'fav_posted':
@@ -3702,48 +3455,30 @@ def _run_monitor():
                             new_profit = 100 - new_yes - new_no
 
                             if new_profit >= target_width:
-                                # Favorite-first: post only the favorite side
-                                rep_fav_side = 'yes' if yes_is_fav else 'no'
-                                rep_dog_side = 'no' if yes_is_fav else 'yes'
-                                rep_fav_price = new_yes if yes_is_fav else new_no
-                                rep_dog_price = new_no if yes_is_fav else new_yes
-
+                                # Simultaneous dual order placement
                                 api_rate_limiter.wait()
-                                if rep_fav_side == 'yes':
-                                    fav_ord = kalshi_client.create_order(
-                                        ticker=ticker, side='yes', action='buy',
-                                        count=qty, yes_price=rep_fav_price)
-                                else:
-                                    fav_ord = kalshi_client.create_order(
-                                        ticker=ticker, side='no', action='buy',
-                                        count=qty, no_price=rep_fav_price)
-                                fav_ord_id = fav_ord['order']['order_id']
+                                yes_ord = kalshi_client.create_order(ticker=ticker, side='yes', action='buy', count=qty, yes_price=new_yes)
+                                api_rate_limiter.wait()
+                                no_ord  = kalshi_client.create_order(ticker=ticker, side='no', action='buy', count=qty, no_price=new_no)
 
                                 bot['yes_price']    = new_yes
                                 bot['no_price']     = new_no
                                 bot['profit_per']   = new_profit
-                                bot['fav_side']     = rep_fav_side
-                                bot['dog_side']     = rep_dog_side
-                                bot['fav_price']    = rep_fav_price
-                                bot['dog_price']    = rep_dog_price
-                                bot['fav_order_id'] = fav_ord_id
-                                bot['yes_order_id'] = fav_ord_id if rep_fav_side == 'yes' else None
-                                bot['no_order_id']  = fav_ord_id if rep_fav_side == 'no' else None
+                                bot['yes_order_id'] = yes_ord['order']['order_id']
+                                bot['no_order_id']  = no_ord['order']['order_id']
                                 bot['yes_fill_qty'] = 0
                                 bot['no_fill_qty']  = 0
-                                bot['status']       = 'fav_posted'
+                                bot['status']       = 'both_posted'
                                 bot['posted_at']    = time.time()
                                 bot['repost_count'] = 0
                                 bot['first_fill_at'] = None
-                                bot['first_leg']     = None
                                 if 'completed_at' in bot:
                                     del bot['completed_at']
 
                                 cycle = bot.get('repeats_done', 0)
                                 total = bot.get('repeat_count', 0)
                                 print(f'🔄 REPEAT ARB cycle {cycle + 1}/{total + 1}: '
-                                      f'{bot_id} FAV {rep_fav_side.upper()} {rep_fav_price}¢ posted — '
-                                      f'{rep_dog_side.upper()} {rep_dog_price}¢ queued → {new_profit}¢ profit '
+                                      f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ posted simultaneously → {new_profit}¢ profit '
                                       f'(waited {wait_age_min:.1f}m)')
                                 actions.append({
                                     'bot_id': bot_id, 'action': 'repeat_cycle',
@@ -3921,33 +3656,6 @@ def _run_monitor():
                 # NEVER go above the current bid. Repost AT the bid to stay competitive
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
-                    # Danger-zone guard: don't chase the market in tight late-game situations.
-                    # Same rules as deploy-block: NBA/NCAAW Q4+, NCAAB 2nd-half ≤10 min,
-                    # both using spread-adjusted margin for spread tickers.
-                    if _is_basketball(ticker):
-                        _gc = _get_game_context(ticker)
-                        if _gc:
-                            if _detect_market_type(ticker) == 'spread':
-                                _sd = _get_spread_effective_tightness(ticker)
-                                if _sd is None: _sd = _gc.get('score_diff', 999)
-                            else:
-                                _sd = _gc.get('score_diff', 999)
-                            _period = _gc.get('period', 0)
-                            _clock_str = _gc.get('clock', '')
-                            _sport_r = _detect_sport(ticker)
-                            _cmins = 999
-                            _cm = re.match(r'(\d+):(\d+)', _clock_str)
-                            if _cm: _cmins = int(_cm.group(1)) + int(_cm.group(2)) / 60
-                            _in_danger = False
-                            if _sport_r == 'ncaab':
-                                _in_danger = ((_period == 2 and _cmins <= 10 and _sd <= 5) or
-                                              (_period >= 3 and _sd <= 5))
-                            else:  # NBA, NCAAW (4 quarters)
-                                _in_danger = _period >= 4 and _sd <= 5
-                            if _in_danger:
-                                print(f'⛔ REPOST BLOCKED (danger zone): {bot_id} '
-                                      f'— {_sport_r} P{_period} {_clock_str}, margin={_sd:.1f}¢')
-                                continue
                     # Width-aware repost: identify fav (higher bid) and dog (lower bid).
                     # Dog posts at its current bid — fav is capped so that
                     # fav + dog = 100 - min_width, preserving target spread.
@@ -4010,61 +3718,38 @@ def _run_monitor():
                 # Applies to both YES-dog (when NO is fav) and NO-dog (when YES is fav).
                 # Chasing the dog away from the original price breaks the arb width.
 
-                # ── YES fully filled, NO still open — FLIP THRESHOLD check ──
+                # ── YES fully filled, NO still open — smart timeout ──
+                # Timeout is shorter when the underdog fills first (riskier situation).
+                # Fav fills first → 8 min (fav in, patient wait for underdog)
+                # Underdog fills first → 4 min (cheap leg in, fav bid moved on us)
                 if yes_filled >= qty and no_filled < qty:
                     bot['status'] = 'yes_filled'
                     if not bot.get('first_fill_at'):
                         bot['first_fill_at'] = now
                         bot['first_leg'] = 'yes'
 
-                    flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
-                    entry_yes = bot['yes_price']
-
-                    # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
-                    effective_trigger = max(entry_yes - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_yes - 10))
-                    # Only apply flip SL to favorite entries (entered at ≥ floor).
-                    # Underdog entries (below floor) ride to settlement — max loss is small.
-                    if entry_yes >= flip_thresh and yes_bid < effective_trigger:
-                        # Favorite has FLIPPED — bid < threshold = no longer favored, sell now
-                        if bot['status'] in ('stopped', 'completed', 'flipping'):
-                            print(f'⛔ SKIPPING duplicate FLIP SL YES for {bot_id} — already {bot["status"]}')
-                            continue
-                        if bot.get('_ws_flip_selling') or bot.get('_flip_done'):
-                            print(f'⚡ SKIPPING monitor FLIP YES for {bot_id} — WS real-time already handling / flip_done')
-                            continue
-                        print(f'🔄 FLIP THRESHOLD: {bot_id} YES bid {yes_bid}¢ < {effective_trigger}¢ (entry {entry_yes}¢) — favorite flipped, selling')
-                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'yes', 'entry': entry_yes, 'bid': yes_bid, 'threshold': effective_trigger, 'floor': flip_thresh, 'source': 'monitor'})
-                        # Mark as flipping BEFORE execute_sell so monitor can't re-enter during the 3-4s sell
-                        bot['status'] = 'flipping'
-                        sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'arb_flip_yes_{bot_id}')
+                    # YES is fav if its posted price >= NO price
+                    # Timeout: fav fills first → 20 min (underdog takes time, patient)
+                    #          underdog fills first → 10 min (fav may have moved, exit sooner)
+                    yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
+                    timeout_min = 20.0 if yes_is_fav else 10.0
+                    bot['timeout_min'] = timeout_min  # store so frontend can show countdown
+                    wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
+                    if phase == 'live' and wait_min >= timeout_min:
+                        # Timeout: cancel pending NO, sell filled YES at market
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                        except Exception:
+                            pass
+                        sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'timeout_exit_yes_{bot_id}')
                         if sold:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(bot['no_order_id'])
-                            except Exception:
-                                pass
-                            try:
-                                api_rate_limiter.wait()
-                                no_check = kalshi_client.get_order(bot['no_order_id'])
-                                no_ord_data = no_check.get('order', no_check) if isinstance(no_check, dict) else {}
-                                if no_ord_data.get('status', '') not in ('canceled', 'cancelled'):
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(bot['no_order_id'])
-                            except Exception:
-                                pass
-                            # Sell any partial NO fills before marking stopped
-                            no_partial = bot.get('no_fill_qty', 0)
-                            if no_partial > 0:
-                                print(f'🔄 FLIP YES: selling {no_partial}x partial NO fill on {bot_id}')
-                                execute_sell(ticker, 'no', no_partial, reason=f'flip_yes_partial_no_{bot_id}')
                             orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
-                            bot['_flip_done'] = True   # permanent guard — prevents any second flip on this bot
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', yes_bid)
-                            pnl_cents = (actual_sell - entry_yes) * yes_filled  # positive = profit, negative = loss
-                            verified = sell_info.get('verified_cleared', False)
+                            pnl_cents = (actual_sell - bot['yes_price']) * yes_filled
                             if pnl_cents >= 0:
                                 session_pnl['gross_profit_cents'] += pnl_cents
                                 session_pnl['completed_bots']     += 1
@@ -4073,127 +3758,56 @@ def _run_monitor():
                                 session_pnl['stopped_bots']     += 1
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
-                                'yes_price': entry_yes, 'no_price': bot['no_price'],
+                                'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                 'quantity': yes_filled,
                                 'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                                 'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                                'result': 'flip_yes', 'exit_bid': actual_sell,
-                                'verified_cleared': verified, 'timestamp': now,
+                                'result': 'timeout_exit_yes',
+                                'exit_bid': actual_sell, 'timestamp': now,
                                 'placed_at': bot.get('created_at', now),
                                 'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                                 'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
-                                'first_leg': bot.get('first_leg', 'yes'),
                                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
                                 'game_phase': bot.get('game_phase', 'live'),
-                                'flip_threshold': flip_thresh,
-                                'effective_trigger': effective_trigger,
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
                             }, bot)
-                            bot_log('ARB_FLIP_COMPLETED', bot_id, {
-                                'leg': 'yes', 'entry': entry_yes, 'actual_sell': actual_sell,
-                                'pnl_cents': pnl_cents, 'verified': verified, 'qty': yes_filled,
-                            })
-                            actions.append({'bot_id': bot_id, 'action': 'flip_yes',
-                                            'entry': entry_yes, 'exit_bid': actual_sell,
-                                            'pnl_cents': pnl_cents, 'verified': verified})
+                            bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'yes', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'yes_is_fav': yes_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
+                            actions.append({'bot_id': bot_id, 'action': 'timeout_exit_yes', 'pnl_cents': pnl_cents})
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
                         else:
                             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
-                            retries = bot['sl_retry_count']
-                            print(f'⚠ FLIP sell YES FAILED for {bot_id} — retry #{retries}')
-                            if retries >= 10:
-                                print(f'🔴 FORCE EXIT: {bot_id} — {retries} sell attempts failed')
-                                try:
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(bot['no_order_id'])
-                                except Exception:
-                                    pass
-                                orig_repeat_count_fe = bot.get('repeat_count', 0)
-                                bot['status'] = 'stopped'
-                                bot['repeat_count'] = 0
-                                bot['stopped_at'] = now
-                                loss = entry_yes * yes_filled
-                                session_pnl['gross_loss_cents'] += loss
-                                session_pnl['stopped_bots'] += 1
-                                _record_trade({
-                                    'bot_id': bot_id, 'ticker': ticker,
-                                    'yes_price': entry_yes, 'no_price': bot['no_price'],
-                                    'quantity': yes_filled, 'loss_cents': loss,
-                                    'result': 'force_exit_yes', 'timestamp': now,
-                                    'note': f'sell failed {retries}x — forced exit',
-                                    'game_phase': bot.get('game_phase', 'live'),
-                                    'repeats_done': bot.get('repeats_done', 0),
-                                    'repeat_count': orig_repeat_count_fe,
-                                }, bot)
-                                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
-                                actions.append({'bot_id': bot_id, 'action': 'force_exit_yes', 'retries': retries})
-                            else:
-                                actions.append({'bot_id': bot_id, 'action': 'flip_yes_RETRY', 'retry': retries})
+                            print(f'⚠ TIMEOUT sell YES FAILED for {bot_id}')
                     else:
-                        # Bid still above flip threshold (or underdog entry) — hold, no SL
-                        if entry_yes >= flip_thresh:
-                            actions.append({'bot_id': bot_id, 'action': 'holding_yes',
-                                           'bid': yes_bid, 'flip_threshold': flip_thresh,
-                                           'distance': yes_bid - flip_thresh})
+                        actions.append({'bot_id': bot_id, 'action': 'holding_yes_one_filled', 'wait_min': round(wait_min, 1)})
                     continue  # ← prevent fall-through to NO check
 
-                # ── NO fully filled, YES still open — FLIP THRESHOLD check ──
+                # ── NO fully filled, YES still open — smart timeout ──
                 if no_filled >= qty and yes_filled < qty:
                     bot['status'] = 'no_filled'
                     if not bot.get('first_fill_at'):
                         bot['first_fill_at'] = now
                         bot['first_leg'] = 'no'
 
-                    flip_thresh = bot.get('flip_threshold', FLIP_THRESHOLD_CENTS)
-                    entry_no = bot['no_price']
-
-                    # Dynamic trigger: max(entry-15, floor) but capped so room >= 10¢
-                    effective_trigger = max(entry_no - FLIP_ENTRY_MARGIN, min(flip_thresh, entry_no - 10))
-                    # Only apply flip SL to favorite entries (entered at ≥ floor).
-                    # Underdog entries ride to settlement.
-                    if entry_no >= flip_thresh and no_bid < effective_trigger:
-                        # Favorite has FLIPPED — sell now
-                        if bot['status'] in ('stopped', 'completed', 'flipping'):
-                            print(f'⛔ SKIPPING duplicate FLIP SL NO for {bot_id} — already {bot["status"]}')
-                            continue
-                        if bot.get('_ws_flip_selling') or bot.get('_flip_done'):
-                            print(f'⚡ SKIPPING monitor FLIP NO for {bot_id} — WS real-time already handling / flip_done')
-                            continue
-                        print(f'🔄 FLIP THRESHOLD: {bot_id} NO bid {no_bid}¢ < {effective_trigger}¢ (entry {entry_no}¢) — favorite flipped, selling')
-                        bot_log('ARB_FLIP_FIRED', bot_id, {'leg': 'no', 'entry': entry_no, 'bid': no_bid, 'threshold': effective_trigger, 'floor': flip_thresh, 'source': 'monitor'})
-                        # Mark as flipping BEFORE execute_sell so monitor can't re-enter during the 3-4s sell
-                        bot['status'] = 'flipping'
-                        sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'arb_flip_no_{bot_id}')
+                    # NO is fav if its posted price >= YES price
+                    no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
+                    timeout_min = 20.0 if no_is_fav else 10.0
+                    wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
+                    if phase == 'live' and wait_min >= timeout_min:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                        except Exception:
+                            pass
+                        sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'timeout_exit_no_{bot_id}')
                         if sold:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(bot['yes_order_id'])
-                            except Exception:
-                                pass
-                            try:
-                                api_rate_limiter.wait()
-                                yes_check = kalshi_client.get_order(bot['yes_order_id'])
-                                yes_ord_data = yes_check.get('order', yes_check) if isinstance(yes_check, dict) else {}
-                                if yes_ord_data.get('status', '') not in ('canceled', 'cancelled'):
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(bot['yes_order_id'])
-                            except Exception:
-                                pass
-                            # Sell any partial YES fills before marking stopped
-                            yes_partial = bot.get('yes_fill_qty', 0)
-                            if yes_partial > 0:
-                                print(f'🔄 FLIP NO: selling {yes_partial}x partial YES fill on {bot_id}')
-                                execute_sell(ticker, 'yes', yes_partial, reason=f'flip_no_partial_yes_{bot_id}')
                             orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
-                            bot['_flip_done'] = True   # permanent guard — prevents any second flip on this bot
                             bot['repeat_count'] = 0
                             bot['stopped_at'] = now
                             actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', no_bid)
-                            pnl_cents = (actual_sell - entry_no) * no_filled  # positive = profit, negative = loss
-                            verified = sell_info.get('verified_cleared', False)
+                            pnl_cents = (actual_sell - bot['no_price']) * no_filled
                             if pnl_cents >= 0:
                                 session_pnl['gross_profit_cents'] += pnl_cents
                                 session_pnl['completed_bots']     += 1
@@ -4202,70 +3816,29 @@ def _run_monitor():
                                 session_pnl['stopped_bots']     += 1
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
-                                'yes_price': bot['yes_price'], 'no_price': entry_no,
+                                'yes_price': bot['yes_price'], 'no_price': bot['no_price'],
                                 'quantity': no_filled,
                                 'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                                 'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                                'result': 'flip_no', 'exit_bid': actual_sell,
-                                'verified_cleared': verified, 'timestamp': now,
+                                'result': 'timeout_exit_no',
+                                'exit_bid': actual_sell, 'timestamp': now,
                                 'placed_at': bot.get('created_at', now),
                                 'team_label': ticker.split('-')[-1] if '-' in ticker else '',
                                 'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
-                                'first_leg': bot.get('first_leg', 'no'),
                                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
                                 'game_phase': bot.get('game_phase', 'live'),
-                                'flip_threshold': flip_thresh,
-                                'effective_trigger': effective_trigger,
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
                             }, bot)
-                            bot_log('ARB_FLIP_COMPLETED', bot_id, {
-                                'leg': 'no', 'entry': entry_no, 'actual_sell': actual_sell,
-                                'pnl_cents': pnl_cents, 'verified': verified, 'qty': no_filled,
-                            })
-                            actions.append({'bot_id': bot_id, 'action': 'flip_no',
-                                            'entry': entry_no, 'exit_bid': actual_sell,
-                                            'pnl_cents': pnl_cents, 'verified': verified})
+                            bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'no', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'no_is_fav': no_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
+                            actions.append({'bot_id': bot_id, 'action': 'timeout_exit_no', 'pnl_cents': pnl_cents})
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
                         else:
                             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
-                            retries = bot['sl_retry_count']
-                            print(f'⚠ FLIP sell NO FAILED for {bot_id} — retry #{retries}')
-                            if retries >= 10:
-                                print(f'🔴 FORCE EXIT: {bot_id} — {retries} sell attempts failed')
-                                try:
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(bot['yes_order_id'])
-                                except Exception:
-                                    pass
-                                orig_repeat_count_fe = bot.get('repeat_count', 0)
-                                bot['status'] = 'stopped'
-                                bot['repeat_count'] = 0
-                                bot['stopped_at'] = now
-                                loss = entry_no * no_filled
-                                session_pnl['gross_loss_cents'] += loss
-                                session_pnl['stopped_bots'] += 1
-                                _record_trade({
-                                    'bot_id': bot_id, 'ticker': ticker,
-                                    'yes_price': bot['yes_price'], 'no_price': entry_no,
-                                    'quantity': no_filled, 'loss_cents': loss,
-                                    'result': 'force_exit_no', 'timestamp': now,
-                                    'note': f'sell failed {retries}x — forced exit',
-                                    'game_phase': bot.get('game_phase', 'live'),
-                                    'repeats_done': bot.get('repeats_done', 0),
-                                    'repeat_count': orig_repeat_count_fe,
-                                }, bot)
-                                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss
-                                actions.append({'bot_id': bot_id, 'action': 'force_exit_no', 'retries': retries})
-                            else:
-                                actions.append({'bot_id': bot_id, 'action': 'flip_no_RETRY', 'retry': retries})
+                            print(f'⚠ TIMEOUT sell NO FAILED for {bot_id}')
                     else:
-                        # Bid still above flip threshold (or underdog entry) — hold
-                        if entry_no >= flip_thresh:
-                            actions.append({'bot_id': bot_id, 'action': 'holding_no',
-                                           'bid': no_bid, 'flip_threshold': flip_thresh,
-                                           'distance': no_bid - flip_thresh})
+                        actions.append({'bot_id': bot_id, 'action': 'holding_no_one_filled', 'wait_min': round(wait_min, 1)})
 
             except Exception as e:
                 print(f"Error monitoring bot {bot_id}: {e}")
@@ -4568,6 +4141,7 @@ def _run_monitor():
                         'bot_id': bot_id, 'type': 'middle',
                         'ticker_a': ticker_a, 'ticker_b': ticker_b,
                         'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                        'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
                         'target_price': bot.get('target_price'), 'qty': qty_s,
                         'leg_a_fill_price': fill_a, 'leg_b_fill_price': fill_b,
                         'leg_a_result': bot['leg_a_result'], 'leg_b_result': bot['leg_b_result'],
@@ -4885,6 +4459,7 @@ def history_stats():
     arb_losses = [t for t in arb_trades if t.get('result', '') in (
         'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
+        'timeout_exit_yes', 'timeout_exit_no',
     )]
 
     # ── Result type breakdown ──────────────────────────────────────
@@ -5796,8 +5371,13 @@ PNL_LOSS_RESULTS = (
     'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
     'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
     'stopped_loss', 'flipped', 'manual_stop',
+    'stopped_sl', 'loss',  # middle bot results
+    'timeout_exit_yes', 'timeout_exit_no',  # simultaneous dual-order timeout exits
 )
-PNL_WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
+PNL_WIN_RESULTS = (
+    'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
+    'middle_hit', 'arb_win',  # middle bot results
+)
 
 def _compute_pnl_bucket(trades, category=None):
     """Compute gross profit/loss/counts from a list of trade_history entries.

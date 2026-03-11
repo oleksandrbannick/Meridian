@@ -914,19 +914,9 @@
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
-                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Flip Floor</label>
-                            <input type="hidden" id="bot-stop-loss-cents" value="55">
-                            <div style="display:flex;gap:6px;">
-                                <button type="button" id="flip-floor-btn-55"
-                                    onclick="setFlipFloor(55)"
-                                    style="flex:1;padding:8px 0;background:#00aaff22;border:1px solid #00aaff88;border-radius:6px;color:#00aaff;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;">
-                                    55¢ ★
-                                </button>
-                                <button type="button" id="flip-floor-btn-60"
-                                    onclick="setFlipFloor(60)"
-                                    style="flex:1;padding:8px 0;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#8892a6;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;">
-                                    60¢
-                                </button>
+                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Exit Timer</label>
+                            <div style="padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#00aaff;font-size:12px;font-weight:700;text-align:center;" title="If one leg fills but other doesn't: fav fills → 20min exit; underdog fills → 10min exit">
+                                20 / 10 min
                             </div>
                         </div>
                         <div>
@@ -944,7 +934,8 @@
                         </div>
                     </div>
                     <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#8892a6;">🛡 Flip Protection:</strong> Sells only if bid drops to ≤ flip floor (favorite flipped). No stop-loss on normal dips.<br>
+                        <strong style="color:#8892a6;">⚡ Simultaneous:</strong> Both YES and NO limit orders post at the same time — pure volatility capture, no fav-first.<br>
+                        <strong style="color:#8892a6;">⏱ Exit:</strong> If one leg fills and other is still pending → fav fills = 20m timeout, underdog fills = 10m. Then cancel pending + market-sell filled leg.<br>
                         <strong style="color:#8892a6;">🔴 Live:</strong> Active — reposts stale orders. <strong style="color:#8892a6;">⏳ Pregame:</strong> Patient — orders wait for game start.
                     </div>
 
@@ -1313,6 +1304,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260310p"></script>
+    <script src="app.js?v=20260311b"></script>
 </body>
 </html>

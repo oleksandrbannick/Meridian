@@ -968,7 +968,7 @@ async function loadMarkets() {
 // ─── Live Price Refresh: update visible market prices from orderbook ─────────
 
 let priceRefreshRunning = false;
-let _botsAnchored = 0;  // bots with one leg filled (fav in, dog pending)
+let _botsAnchored = 0;  // bots with one leg filled, waiting for second
 let _botsActive   = 0;  // total active bot count
 let _botHealth    = { healthy: 0, holding: 0, dropping: 0, warning: 0, danger: 0, safe: 0 };
 
@@ -2055,18 +2055,14 @@ function extractSpreadLabel(market) {
     }
 
     // ── 4. Build label ─────────────────────────────────────────────────────
+    // Show the market's own team as the subject — "TeamCode -X" means this market is
+    // "TeamCode wins by over X". Showing it directly avoids two opposite markets
+    // producing the same normalized label.
     if (teamCode && line) {
-        // Determine favorite: the team whose YES is below 50¢ is favored
-        // YES = "team wins by over X" — if YES > 50¢, this team is expected to win big
-        const yesBid = market.yes_bid || market.yes_bid_dollars * 100 || 0;
-        // If yes_bid > 50, this team is the favorite covering this spread
-        const isFav = yesBid >= 50;
         if (otherTeam.length >= 2 && otherTeam.length <= 6) {
-            return isFav
-                ? `${teamCode} -${line} / ${otherTeam} +${line}`
-                : `${otherTeam} -${line} / ${teamCode} +${line}`;
+            return `${teamCode} -${line} / ${otherTeam} +${line}`;
         }
-        return isFav ? `${teamCode} -${line}` : `${teamCode} +${line}`;
+        return `${teamCode} -${line}`;
     }
 
     // Fallback to subtitle-based label
@@ -3561,27 +3557,21 @@ function applyPreset(width) {
 function updateBreakevenDisplay() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no  = parseInt(document.getElementById('bot-no-price')?.value)  || 0;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const width = 100 - yes - no;
-    const favEntry = Math.max(yes, no);
-    const effectiveTrigger = Math.max(favEntry - 15, Math.min(flipFloor, favEntry - 10));
-    const flipLoss = favEntry >= flipFloor ? favEntry - effectiveTrigger : 0;
     const el = document.getElementById('breakeven-display');
     if (!el) return;
     if (width <= 0) {
-        el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · No arb`;
-        el.style.color = '#8892a6';
-        return;
-    }
-    if (flipLoss <= 0) {
-        el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · ⛔ Blocked (fav below ${flipFloor}¢)`;
+        el.textContent = `No arb — total ≥ 100¢`;
         el.style.color = '#ff4444';
         return;
     }
-    const bePct = (flipLoss / (flipLoss + width) * 100).toFixed(1);
-    const ratio = Math.ceil(flipLoss / width);
-    el.textContent = `Flip: entry-15¢ floor ${flipFloor}¢ · BE: ${bePct}% (${ratio}:1)`;
-    el.style.color = parseFloat(bePct) >= 75 ? '#ff4444' : parseFloat(bePct) >= 50 ? '#ffaa00' : '#00aaff';
+    // Simultaneous system: exit on timeout (cancel pending + sell filled at market)
+    // Max theoretical loss if we exit YES at market: worst case sell at ~0
+    // More useful: just show the arb width and qty
+    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const profit = width * qty;
+    el.textContent = `Profit if both fill: +${profit}¢ ($${(profit/100).toFixed(2)}) · 20m/10m exit timer`;
+    el.style.color = width >= 10 ? '#00ff88' : width >= 5 ? '#ffaa00' : '#00aaff';
 }
 
 function highlightActivePreset() {
@@ -3739,61 +3729,50 @@ function updateAllWidthsPreview() {
     const preview = document.getElementById('all-widths-preview');
     if (!preview || !currentArbMarket) return;
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 60;
 
     let rows = '';
     let totalCost = 0;
-    let totalMaxLoss = 0;
     let totalProfit = 0;
     let validCount = 0;
 
     ALL_PRESET_WIDTHS.forEach(w => {
         const arb = calculateArbPrices(currentArbMarket, w);
-        const favPrice = Math.max(arb.targetYes, arb.targetNo);
-        const dogPrice = Math.min(arb.targetYes, arb.targetNo);
-        const profit = 100 - favPrice - dogPrice;
-        const isKnife = favPrice < MIN_FAV_ENTRY_FOR_BOT && profit < 25;
-        const isBelowFloor = favPrice < flipFloor;
-        const blocked = isKnife || isBelowFloor || profit <= 0;
-        const cost = blocked ? 0 : (favPrice + dogPrice) * qty;
-        const maxLoss = blocked ? 0 : (favPrice - flipFloor) * qty;  // loss if fav fills then stopped
+        const yesPrice = arb.targetYes;
+        const noPrice  = arb.targetNo;
+        const profit = 100 - yesPrice - noPrice;
+        const blocked = profit <= 0;
+        const cost = blocked ? 0 : (yesPrice + noPrice) * qty;
         const profitTotal = blocked ? 0 : profit * qty;
-        if (!blocked) { totalCost += cost; totalMaxLoss += maxLoss; totalProfit += profitTotal; validCount++; }
+        if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; }
 
         const statusColor = blocked ? '#ff4444' : '#00ff88';
-        const statusText  = blocked
-            ? (isKnife ? '⚠ knife' : isBelowFloor ? '⛔ floor' : '⛔ no arb')
-            : `✓ fav ${favPrice}¢`;
+        const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
         const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
-        rows += `<div style="display:grid;grid-template-columns:28px 1fr 38px 34px 50px 50px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
+        rows += `<div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
             <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
             <span style="color:${statusColor};font-size:10px;">${statusText}</span>
-            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : arb.targetYes + '¢'}</span>
-            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : arb.targetNo + '¢'}</span>
-            <span style="color:${blocked ? '#555' : '#ff6666'};font-size:10px;text-align:right;font-weight:600;">${blocked ? '—' : '-$' + (maxLoss / 100).toFixed(2)}</span>
+            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : yesPrice + '¢'}</span>
+            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : noPrice + '¢'}</span>
             <span style="color:${blocked ? '#555' : '#00ff88'};font-size:10px;text-align:right;font-weight:700;">${blocked ? '—' : '+$' + (profitTotal / 100).toFixed(2)}</span>
             <span style="color:${blocked ? '#555' : '#aab'};font-size:10px;text-align:right;">${blocked ? '—' : '$' + (cost / 100).toFixed(2)}</span>
         </div>`;
     });
 
-    const totalDollars   = (totalCost / 100).toFixed(2);
-    const maxLossDollars = (totalMaxLoss / 100).toFixed(2);
-    const profitDollars  = (totalProfit / 100).toFixed(2);
+    const totalDollars  = (totalCost / 100).toFixed(2);
+    const profitDollars = (totalProfit / 100).toFixed(2);
     preview.innerHTML = `
-        <div style="display:grid;grid-template-columns:28px 1fr 38px 34px 50px 50px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
+        <div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
             <span style="color:#555;font-size:9px;">W</span>
             <span style="color:#555;font-size:9px;">STATUS</span>
             <span style="color:#555;font-size:9px;text-align:center;">YES</span>
             <span style="color:#555;font-size:9px;text-align:center;">NO</span>
-            <span style="color:#ff6666;font-size:9px;text-align:right;">STOP</span>
             <span style="color:#00ff88;font-size:9px;text-align:right;">PROFIT</span>
             <span style="color:#555;font-size:9px;text-align:right;">COST</span>
         </div>
         ${rows}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;flex-wrap:wrap;gap:6px;">
-            <span style="color:#8892a6;font-size:11px;">${validCount} of ${ALL_PRESET_WIDTHS.length} valid · ${qty} contract${qty !== 1 ? 's' : ''} each</span>
-            <span style="color:#ff6666;font-size:11px;font-weight:700;">Stop: -$${maxLossDollars}</span>
-            <span style="color:#00ff88;font-size:12px;font-weight:800;">Profit: +$${profitDollars}</span>
+            <span style="color:#8892a6;font-size:11px;">${validCount} of ${ALL_PRESET_WIDTHS.length} valid · ${qty}× each</span>
+            <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} if all fill</span>
             <span style="color:#aab;font-size:11px;">Entry: $${totalDollars}</span>
         </div>`;
 }
@@ -3834,7 +3813,6 @@ async function createBot() {
     const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
-    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents').value) || 55;
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
@@ -3866,7 +3844,7 @@ async function createBot() {
 
     const totalCost = (yes_price + no_price) * quantity;
     const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: auto-detect${repeatMsg}\n\nConfirm order?`)) return;
+    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: auto-detect\n8-min timeout if one leg fills${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
@@ -3874,8 +3852,7 @@ async function createBot() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ticker: currentArbMarket.ticker,
-                yes_price, no_price, quantity, flip_threshold,
-                stop_loss_cents: 5,  // kept for backward compat, arb bots use flip_threshold
+                yes_price, no_price, quantity,
                 repeat_count, arb_width,
             }),
         });
@@ -3899,8 +3876,8 @@ async function createBot() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         ticker: currentArbMarket.ticker,
-                        yes_price, no_price, quantity, flip_threshold,
-                        stop_loss_cents: 5, repeat_count, arb_width,
+                        yes_price, no_price, quantity,
+                        repeat_count, arb_width,
                         force_tight: true,
                     }),
                 });
@@ -4024,7 +4001,6 @@ async function placeAllWidthsBots() {
                     no_price:  arb.targetNo,
                     quantity: qty,
                     arb_width: w,
-                    flip_threshold: flipFloor,
                     repeat_count: repeatCount,
                     game_phase: gamePhase,
                 }),
@@ -4078,15 +4054,37 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             hasLiveScore = true;
             const h = gs.home_score || 0, aw = gs.away_score || 0;
             liveScoreDiff = Math.abs(h - aw);
-            // NO wins if spread NOT covered → diff < spread
-            // Middle hit when BOTH NOs win
-            legAInRange = liveScoreDiff < (bot.spread_a || 99);
-            legBInRange = liveScoreDiff < (bot.spread_b || 99);
+
+            // Directional: determine which team is home/away from ticker_a
+            // Kalshi ticker format: SERIES-{DATE}{AWAY}{HOME}-{TEAMCODE}{SPREAD}
+            // e.g. KXNBASPREAD-26MAR10MEMPHI-MEM35 → away=MEM, home=PHI
+            let legAInRangeDir = null, legBInRangeDir = null;
+            const tParts = (bot.ticker_a || '').split('-');
+            if (tParts.length >= 3) {
+                const tACode = (tParts[2].match(/^([A-Z]+)/) || [])[1] || '';
+                const tGameSeg = tParts[1].replace(/^\d{2}[A-Z]{3}\d{2}/, ''); // e.g. "MEMPHI"
+                if (tACode && tGameSeg.includes(tACode)) {
+                    const teamAIsAway = tGameSeg.startsWith(tACode);
+                    const teamA_score = teamAIsAway ? aw : h;
+                    const teamB_score = teamAIsAway ? h : aw;
+                    const teamA_lead = teamA_score - teamB_score; // + = teamA winning
+                    // Leg A: NO "teamA wins by spread_a" → NO wins when teamA doesn't cover
+                    legAInRangeDir = teamA_lead < (bot.spread_a || 99);
+                    // Leg B: NO "teamB wins by spread_b" → NO wins when teamB doesn't cover
+                    legBInRangeDir = teamA_lead > -(bot.spread_b || 99);
+                }
+            }
+            legAInRange = legAInRangeDir !== null ? legAInRangeDir : liveScoreDiff < (bot.spread_a || 99);
+            legBInRange = legBInRangeDir !== null ? legBInRangeDir : liveScoreDiff < (bot.spread_b || 99);
+
             const bothIn = legAInRange && legBInRange;
-            const scoreColor = bothIn ? '#00ff88' : '#ffaa33';
-            const rangeLabel = bothIn ? '🎯 IN MIDDLE' : '↔ outside';
+            const scoreColor = bothIn ? '#00ff88' : (legAInRange || legBInRange) ? '#ffaa33' : '#ff5555';
+            const rangeLabel = bothIn ? '🎯 IN MIDDLE'
+                : legAInRange ? `✅ Leg A winning`
+                : legBInRange ? `✅ Leg B winning`
+                : '⛔ both losing';
             const periodStr = gs.period ? (gs.clock ? `${gs.clock} ` : '') + (gs.period >= 2 ? '2H' : '1H') : '';
-            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${h}–${aw}${periodStr ? ' · ' + periodStr : ''} · gap ${liveScoreDiff} · ${rangeLabel}</span>`;
+            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${h}–${aw}${periodStr ? ' · ' + periodStr : ''} · ${rangeLabel}</span>`;
         }
     }
 
@@ -4287,7 +4285,7 @@ async function loadBots() {
 
         let activeBotCount = 0;
         let filledLegs = 0;
-        let anchoredCount = 0;  // one leg filled, waiting for dog
+        let anchoredCount = 0;  // one leg filled, waiting for second
         let anchoredHealthBuckets = { waiting: 0, healthy: 0, holding: 0, dropping: 0, warning: 0, danger: 0, safe: 0 };
 
         // ══════════════════════════════════════════════════════════════
@@ -4465,13 +4463,21 @@ async function loadBots() {
             const ageMin      = bot.posted_at ? Math.floor((nowSec - bot.posted_at) / 60) : 0;
             const createdMin  = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : ageMin;
             const repostCount = bot.repost_count || 0;
-            const statusLabel = (bot.status || '').replace(/_/g, ' ').toUpperCase();
+            const statusLabel = {
+                both_posted:    '⚡ BOTH LIVE',
+                fav_posted:     '⏳ WAITING',     // legacy: one order posted
+                pending_fills:  '⏳ FILLING',
+                yes_filled:     '✓ YES FILLED',
+                no_filled:      '✓ NO FILLED',
+                waiting_repeat: '🔄 REPEATING',
+                flipping:       '⚡ EXITING',
+            }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
             const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
-            const flipThresh  = bot.flip_threshold || 60;
             const statusClass = {
-                fav_posted:     'monitoring',
+                both_posted:    'monitoring',
+                fav_posted:     'monitoring',   // keep for legacy
                 pending_fills:  'monitoring',
                 yes_filled:     'leg1_filled',
                 no_filled:      'leg1_filled',
@@ -4513,8 +4519,12 @@ async function loadBots() {
                         ? `<span style="color:#ffaa00;font-size:10px;">⏱ Repost in ${minsLeft}m</span>`
                         : `<span style="color:#ff6666;font-size:10px;">⏱ Repost due</span>`;
                 } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
-                    // One leg filled — dog order is sitting at fixed price, no resize
-                    timeoutInfo = `<span style="color:#00aaff;font-size:10px;">⏳ Waiting for dog fill</span>`;
+                    const filledAt = bot.first_fill_at || 0;
+                    const waitedMin = filledAt > 0 ? (Date.now()/1000 - filledAt) / 60 : 0;
+                    const toutMin = bot.timeout_min || 20;
+                    const minsLeft = Math.max(0, toutMin - waitedMin);
+                    const tColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
+                    timeoutInfo = `<span style="color:${tColor};font-size:10px;">⏳ Exit in ${minsLeft.toFixed(0)}m</span>`;
                 }
             } else if (phase === 'pregame') {
                 timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;
@@ -4537,7 +4547,15 @@ async function loadBots() {
             const firstLeg = bot.first_leg || '';
             const firstFillAt = bot.first_fill_at || 0;
             const fillAgeMin = firstFillAt > 0 ? Math.floor((Date.now()/1000 - firstFillAt) / 60) : 0;
-            if (bot.status === 'fav_posted') {
+            if (bot.status === 'both_posted') {
+                const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
+                const nBid = bot.live_no_bid  != null ? bot.live_no_bid  : '?';
+                stopLossInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:4px 8px;font-size:10px;color:#00aaff;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span><span style="color:#00aaff;">⚡ BOTH POSTED</span> — YES ${bot.yes_price}¢ + NO ${bot.no_price}¢ live simultaneously</span>
+                    <span style="color:#8892a6;">Bids: YES <strong style="color:#00ff88;">${yBid}¢</strong> · NO <strong style="color:#ff4444;">${nBid}¢</strong></span>
+                    <span style="color:#555;">${ageMin}m · ${bot.timeout_min || 20}-min exit if one fills</span>
+                </div>`;
+            } else if (bot.status === 'fav_posted') {
                 const favSide = (bot.fav_side || '?').toUpperCase();
                 const dogSide = (bot.dog_side || '?').toUpperCase();
                 const favPrice = bot.fav_price || '?';
@@ -4554,44 +4572,21 @@ async function loadBots() {
                     <span style="color:#555;">${dogSide} at ${dogPrice}¢ queued after fill</span>
                     <span style="color:#8892a6;">${ageMin}m ago</span>
                 </div>`;
-            } else if (bot.status === 'yes_filled') {
-                const entryYes = bot.yes_price || 0;
-                const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
-                const hasFlipSL = entryYes >= flipThresh;
-                if (hasFlipSL) {
-                    const effectiveTriggerYes = Math.max(entryYes - 15, Math.min(flipThresh, entryYes - 10));
-                    const distFromFlip = typeof yBid === 'number' ? yBid - effectiveTriggerYes : '?';
-                    const flipped = typeof distFromFlip === 'number' && distFromFlip <= 0;
-                    stopLossInfo = `<div style="background:${flipped ? '#ff444411' : '#00aaff11'};border:1px solid ${flipped ? '#ff444433' : '#00aaff33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${flipped ? '#ff6666' : '#00aaff'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                        <span>🛡 Sells YES if bid ≤ <strong>${effectiveTriggerYes}¢</strong> (entry-15¢, floor ${flipThresh}¢)</span>
-                        <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromFlip === 'number' && distFromFlip <= 5 ? '#ff4444' : '#00ff88'};">${distFromFlip}¢</strong> from flip</span>
-                        <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
-                    </div>`;
-                } else {
-                    stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
-                        <span>✅ Underdog entry (${entryYes}¢ < ${flipThresh}¢) — no SL, rides to settlement</span>
-                        <span style="color:#8892a6;margin-left:8px;">Filled ${fillAgeMin}m ago</span>
-                    </div>`;
-                }
-            } else if (bot.status === 'no_filled') {
-                const entryNo = bot.no_price || 0;
-                const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-                const effectiveTriggerNo = Math.max(entryNo - 15, Math.min(flipThresh, entryNo - 10));
-                const hasFlipSL = entryNo >= flipThresh;
-                if (hasFlipSL) {
-                    const distFromFlip = typeof nBid === 'number' ? nBid - effectiveTriggerNo : '?';
-                    const flipped = typeof distFromFlip === 'number' && distFromFlip <= 0;
-                    stopLossInfo = `<div style="background:${flipped ? '#ff444411' : '#00aaff11'};border:1px solid ${flipped ? '#ff444433' : '#00aaff33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${flipped ? '#ff6666' : '#00aaff'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                        <span>🛡 Sells NO if bid ≤ <strong>${effectiveTriggerNo}¢</strong> (entry-15¢, floor ${flipThresh}¢)</span>
-                        <span style="color:#8892a6;">Distance: <strong style="color:${typeof distFromFlip === 'number' && distFromFlip <= 5 ? '#ff4444' : '#00ff88'};">${distFromFlip}¢</strong> from flip</span>
-                        <span style="color:#8892a6;">Filled ${fillAgeMin}m ago</span>
-                    </div>`;
-                } else {
-                    stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
-                        <span>✅ Underdog entry (${entryNo}¢ < ${flipThresh}¢) — no SL, rides to settlement</span>
-                        <span style="color:#8892a6;margin-left:8px;">Filled ${fillAgeMin}m ago</span>
-                    </div>`;
-                }
+            } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
+                const filledSide = bot.status === 'yes_filled' ? 'YES' : 'NO';
+                const pendingSide = bot.status === 'yes_filled' ? 'NO' : 'YES';
+                const entryFilled = bot.status === 'yes_filled' ? (bot.yes_price || 0) : (bot.no_price || 0);
+                const liveBidFilled = bot.status === 'yes_filled' ? bot.live_yes_bid : bot.live_no_bid;
+                const toutMin = bot.timeout_min || 20;
+                const minsLeft = Math.max(0, toutMin - fillAgeMin);
+                const isFavFilled = entryFilled >= (bot.status === 'yes_filled' ? (bot.no_price || 0) : (bot.yes_price || 0));
+                const urgColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
+                const bidDisplay = liveBidFilled != null ? `${liveBidFilled}¢` : '?';
+                stopLossInfo = `<div style="background:${urgColor}11;border:1px solid ${urgColor}33;border-radius:5px;padding:4px 8px;font-size:10px;color:${urgColor};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>✓ <strong>${filledSide}</strong> filled ${fillAgeMin}m ago${isFavFilled ? ' (fav)' : ' (dog)'} @ ${entryFilled}¢</span>
+                    <span style="color:#8892a6;">Bid now: <strong style="color:#fff;">${bidDisplay}</strong></span>
+                    <span style="color:${urgColor};font-weight:700;">⏳ Exit ${pendingSide} in ${minsLeft}m if no fill</span>
+                </div>`;
             }
 
             // Net P&L so far (from previous completed cycles)
@@ -4618,55 +4613,33 @@ async function loadBots() {
                 // Both legs filled = arb locked in, guaranteed profit
                 healthColor = '#00ff88';
                 healthLabel = '✅ LOCKED';
+            } else if (bot.status === 'both_posted') {
+                // Both orders live simultaneously — waiting for fills
+                healthColor = '#00aaff';
+                healthLabel = '⚡ BOTH LIVE';
+                anchoredHealthKey = 'waiting';
             } else if (bot.status === 'fav_posted') {
                 // Fav order posted but not filled yet — always "waiting to fill"
                 healthColor = '#00aaff';
                 healthLabel = '⏳ WAITING TO FILL';
                 anchoredHealthKey = 'waiting';
             } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
-                // One leg filled — watch the filled side's bid vs flip threshold
-                const filledSide = bot.status === 'yes_filled' ? 'yes' : 'no';
-                const entryPrice = filledSide === 'yes' ? (bot.yes_price || 0) : (bot.no_price || 0);
-                const liveBid = filledSide === 'yes' ? bot.live_yes_bid : bot.live_no_bid;
-                const isUnderdog = entryPrice < flipThresh;
-
-                if (isUnderdog) {
-                    // Underdog entry — no SL, rides to settlement
-                    healthColor = '#00ff88'; healthLabel = '🛡 SAFE';
-                    anchoredHealthKey = 'safe';
-                } else if (liveBid != null && liveBid > 0) {
-                    const effectiveTriggerHealth = Math.max(entryPrice - 15, Math.min(flipThresh, entryPrice - 10));
-                    const distFromFlip = liveBid - effectiveTriggerHealth;
-                    if (distFromFlip <= 3) {
-                        // Within 3¢ of flip — DANGER, pulsing red
-                        healthColor = '#ff4444';
-                        healthAnim = 'animation: dangerPulse 1s ease-in-out infinite;';
-                        healthLabel = '🔴 DANGER';
-                        anchoredHealthKey = 'danger';
-                    } else if (distFromFlip <= 8) {
-                        // Within 8¢ of flip — WARNING, pulsing orange
-                        healthColor = '#ff8800';
-                        healthAnim = 'animation: warningPulse 1.5s ease-in-out infinite;';
-                        healthLabel = '🟠 WARNING';
-                        anchoredHealthKey = 'warning';
-                    } else if (liveBid < entryPrice - 5) {
-                        // Bid dropped 5+ cents below entry — losing ground
-                        healthColor = '#ffaa00';
-                        healthLabel = '🟡 DROPPING';
-                        anchoredHealthKey = 'dropping';
-                    } else if (liveBid > entryPrice) {
-                        // Bid is ABOVE entry — moved in our direction
-                        healthColor = '#00ff88';
-                        healthLabel = '💚 HEALTHY';
-                        anchoredHealthKey = 'healthy';
-                    } else {
-                        // Bid near entry, well above flip — normal hold
-                        healthColor = '#00aaff';
-                        healthLabel = '🔵 HOLDING';
-                        anchoredHealthKey = 'holding';
-                    }
+                // One leg filled — health is based on timeout proximity
+                const toutMin = bot.timeout_min || 20;
+                const minsLeftHealth = Math.max(0, toutMin - fillAgeMin);
+                if (minsLeftHealth <= 3) {
+                    healthColor = '#ff4444';
+                    healthAnim = 'animation: dangerPulse 1s ease-in-out infinite;';
+                    healthLabel = '🔴 TIMEOUT SOON';
+                    anchoredHealthKey = 'danger';
+                } else if (minsLeftHealth <= 7) {
+                    healthColor = '#ff8800';
+                    healthAnim = 'animation: warningPulse 1.5s ease-in-out infinite;';
+                    healthLabel = `🟠 ${Math.ceil(minsLeftHealth)}m LEFT`;
+                    anchoredHealthKey = 'warning';
                 } else {
-                    healthColor = '#8892a6'; healthLabel = '⬜ NO BID';
+                    healthColor = '#00aaff';
+                    healthLabel = '⚡ ONE FILLED';
                     anchoredHealthKey = 'holding';
                 }
             } else if (bot.status === 'pending_fills') {
@@ -4706,70 +4679,61 @@ async function loadBots() {
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;">
                     ${(() => {
-                        const isFav = bot.status === 'fav_posted';
+                        // Legacy fav_posted bots: YES may be queued
+                        const isFavPosted = bot.status === 'fav_posted';
                         const yesFav = bot.fav_side === 'yes';
-                        const noFav  = bot.fav_side === 'no';
-                        const yesIsPosted = !isFav || yesFav;
-                        const noIsPosted  = !isFav || noFav;
-                        const yesQueued = isFav && !yesFav;
-                        const noQueued  = isFav && !noFav;
-                        const yStarHtml = (yesFav && (isFav || bot.status === 'yes_filled' || bot.status === 'no_filled' || bot.status === 'pending_fills')) ? '<span title="Favorite" style="margin-left:3px;">⭐</span>' : '';
-                        const nStarHtml = (noFav && (isFav || bot.status === 'yes_filled' || bot.status === 'no_filled' || bot.status === 'pending_fills')) ? '<span title="Favorite" style="margin-left:3px;">⭐</span>' : '';
+                        const yesQueued = isFavPosted && !yesFav;
+                        const noQueued  = isFavPosted && yesFav;
+
                         // YES leg
-                        const yBarH = yesQueued ? 2 : 6;
-                        const yBarBg = yesQueued ? '#0a0e18' : '#1e2740';
                         const yFillColor = yFill >= qty ? '#00ff88' : (yesQueued ? '#00ff8820' : '#00ff8866');
                         const yLabelColor = yesQueued ? '#555' : '#8892a6';
                         const yPriceColor = yesQueued ? '#00ff8844' : '#00ff88';
-                        const yStatusTxt = yesQueued ? 'QUEUED' : (yFill >= qty ? `${yFill}/${qty} ✓ FILLED` : `${yFill}/${qty}`);
+                        const yStatusTxt = yesQueued ? 'QUEUED' : (yFill >= qty ? `${yFill}/${qty} ✓` : `${yFill}/${qty}`);
                         const yStatusColor = yesQueued ? '#555' : (yFill >= qty ? '#00ff88' : '#8892a6');
-                        const yBidLabel = 'Mkt bid';
                         // NO leg
-                        const nBarH = noQueued ? 2 : 6;
-                        const nBarBg = noQueued ? '#0a0e18' : '#1e2740';
                         const nFillColor = nFill >= qty ? '#ff4444' : (noQueued ? '#ff444420' : '#ff444466');
                         const nLabelColor = noQueued ? '#555' : '#8892a6';
                         const nPriceColor = noQueued ? '#ff444444' : '#ff4444';
-                        const nStatusTxt = noQueued ? 'QUEUED' : (nFill >= qty ? `${nFill}/${qty} ✓ FILLED` : `${nFill}/${qty}`);
+                        const nStatusTxt = noQueued ? 'QUEUED' : (nFill >= qty ? `${nFill}/${qty} ✓` : `${nFill}/${qty}`);
                         const nStatusColor = noQueued ? '#555' : (nFill >= qty ? '#ff4444' : '#8892a6');
-                        const nBidLabel = 'Mkt bid';
+
                         return `
-                    <div style="opacity:${yesQueued ? '0.45' : '1'};transition:opacity .5s;">
+                    <div style="opacity:${yesQueued ? '0.4' : '1'};transition:opacity .5s;">
                         <div style="display:flex;justify-content:space-between;color:${yLabelColor};margin-bottom:3px;">
-                            <span>YES @ <strong style="color:${yPriceColor};">${bot.yes_price || '?'}¢</strong>${yStarHtml}</span>
+                            <span>YES @ <strong style="color:${yPriceColor};">${bot.yes_price || '?'}¢</strong></span>
                             <span style="color:${yStatusColor};font-weight:${yFill >= qty ? '700' : '400'};">${yStatusTxt}</span>
                         </div>
-                        <div style="height:${yBarH}px;background:${yBarBg};border-radius:3px;overflow:hidden;transition:height .5s;${yFill >= qty ? 'box-shadow:0 0 8px #00ff8844;' : ''}">
+                        <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${yFill >= qty ? 'box-shadow:0 0 8px #00ff8844;' : ''}">
                             <div style="height:100%;width:${yPct}%;background:${yFillColor};border-radius:3px;transition:width .5s,background .5s;"></div>
                         </div>
-                        ` + (!yesQueued && bot.live_yes_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
-                            <span>${yBidLabel}: <strong style="color:#00ff8899;">${bot.live_yes_bid}¢</strong></span>
-                            <span>Mkt ask: <strong style="color:#00ff8899;">${bot.live_yes_ask || '?'}¢</strong></span>
-                        </div>` : '') + `
+                        ${!yesQueued && bot.live_yes_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
+                            <span>Bid: <strong style="color:#00ff8899;">${bot.live_yes_bid}¢</strong></span>
+                            <span>Ask: <strong style="color:#00ff8899;">${bot.live_yes_ask || '?'}¢</strong></span>
+                        </div>` : ''}
                     </div>
-                    <div style="opacity:${noQueued ? '0.45' : '1'};transition:opacity .5s;">
+                    <div style="opacity:${noQueued ? '0.4' : '1'};transition:opacity .5s;">
                         <div style="display:flex;justify-content:space-between;color:${nLabelColor};margin-bottom:3px;">
-                            <span>NO @ <strong style="color:${nPriceColor};">${bot.no_price || '?'}¢</strong>${nStarHtml}</span>
+                            <span>NO @ <strong style="color:${nPriceColor};">${bot.no_price || '?'}¢</strong></span>
                             <span style="color:${nStatusColor};font-weight:${nFill >= qty ? '700' : '400'};">${nStatusTxt}</span>
                         </div>
-                        <div style="height:${nBarH}px;background:${nBarBg};border-radius:3px;overflow:hidden;transition:height .5s;${nFill >= qty ? 'box-shadow:0 0 8px #ff444444;' : ''}">
+                        <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${nFill >= qty ? 'box-shadow:0 0 8px #ff444444;' : ''}">
                             <div style="height:100%;width:${nPct}%;background:${nFillColor};border-radius:3px;transition:width .5s,background .5s;"></div>
                         </div>
-                        ` + (!noQueued && bot.live_no_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
-                            <span>${nBidLabel}: <strong style="color:#ff444499;">${bot.live_no_bid}¢</strong></span>
-                            <span>Mkt ask: <strong style="color:#ff444499;">${bot.live_no_ask || '?'}¢</strong></span>
-                        </div>` : '') + `
+                        ${!noQueued && bot.live_no_bid != null ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#555;">
+                            <span>Bid: <strong style="color:#ff444499;">${bot.live_no_bid}¢</strong></span>
+                            <span>Ask: <strong style="color:#ff444499;">${bot.live_no_ask || '?'}¢</strong></span>
+                        </div>` : ''}
                     </div>`;
                     })()}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
                     <a href="#" onclick="navigateToMarket('${(bot.ticker||'').split('-').slice(0,-1).join('-')}');return false;" style="color:#555;text-decoration:none;" title="View in Markets tab">🎟 ${bot.ticker || '?'}</a>
                     <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
-                    <span>🛡 Flip: <strong style="color:#00aaff;">${flipThresh}¢</strong></span>
                     <span>Cost: <strong style="color:#8892a6;">$${((100 - profit) * qty / 100).toFixed(2)}</strong></span>
                     <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
+                    <span title="If one leg fills but other doesn't within timeout, exit at market">⏱ ${bot.timeout_min || 20}m exit</span>
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
-                    <span>🤖 On</span>
                 </div>
                 ${stopLossInfo}
                 ${waitRepeatInfo}`;
@@ -4954,6 +4918,12 @@ const botBuddyMessages = {
         `<strong>Working.</strong> Bid/ask on every anchor, every 2 seconds`,
         `<strong>All clear</strong> — just keeping the orders fresh`,
         `<strong>Watching.</strong> Market's moving but I'm right here`,
+    ],
+    both_posted: [
+        `<strong>⚡ Both sides live.</strong> YES and NO orders in the book simultaneously — waiting for fills`,
+        `<strong>Dual orders active</strong> — both legs posted, whichever fills first I'll hold for the other`,
+        `<strong>Simultaneous mode</strong> — YES and NO both resting in the orderbook right now`,
+        `<strong>Both live.</strong> Watching for fills — 8-min timeout kicks in if only one leg fills`,
     ],
     fav_posted: [
         `<strong>🎯 Fav posted.</strong> Liquid side is in the book, dog side queued for after fill`,
@@ -5173,13 +5143,18 @@ function buddyReactToEvent(action) {
         updateBotBuddyMsg('fav_posted', true);
     } else if (action.action === 'fav_stale_cancelled') {
         updateBotBuddyMsg('scanning', true);
-    } else if (action.action === 'holding_yes' || action.action === 'holding_no') {
+    } else if (action.action === 'holding_yes' || action.action === 'holding_no' ||
+               action.action === 'holding_yes_one_filled' || action.action === 'holding_no_one_filled') {
         // Don't override a stronger reaction, but set focused if not locked
         if (Date.now() >= buddyReactionLockedUntil) {
             setBuddyMood('focused');
             updateBotBuddyMsg('holding', true);
             lockThen(14000);
         }
+    } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
+        setBuddyMood('neutral');
+        updateBotBuddyMsg('stopped', true);
+        lockThen(8000);
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled', true);
@@ -5645,17 +5620,16 @@ function anchorScanNavigate(eventTicker) {
 async function quickBot(ticker, yesPrice, noPrice) {
     // Qty comes from the global controls bar (not the scan modal) — user sets it there before deploying
     const quantity        = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flip_threshold  = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
-    if (!confirm(`⚡ Place Dual-Arb Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nFlip floor: ${flip_threshold}¢\n\nConfirm?`)) return;
+    if (!confirm(`⚡ Place Dual-Arb Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n8-min timeout if one leg fills\n\nConfirm?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, stop_loss_cents: 5, flip_threshold }),
+            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity }),
         });
         const data = await resp.json();
         if (data.success) {
@@ -5669,7 +5643,7 @@ async function quickBot(ticker, yesPrice, noPrice) {
                 const retryResp = await fetch(`${API_BASE}/bot/create`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, stop_loss_cents: 5, flip_threshold, force_tight: true }),
+                    body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, force_tight: true }),
                 });
                 const retryData = await retryResp.json();
                 if (retryData.success) {
@@ -5770,49 +5744,46 @@ function showMiddlesResults(data) {
             <span style="font-size:12px;">Middles require spread lines for opposing teams in the same game.</span>
         </p>`;
     } else {
-        results.innerHTML = middles.slice(0, 60).map((m, idx) => {
+        // Sort: guaranteed arbs first, then by spread sum smallest first (tightest middle = easiest to catch)
+        const sorted = [...middles].sort((a, b) => {
+            if ((a.guaranteed_profit > 0) !== (b.guaranteed_profit > 0))
+                return b.guaranteed_profit > 0 ? 1 : -1;
+            return (a.spread_a + a.spread_b) - (b.spread_a + b.spread_b);
+        });
+        _middlesScanResults = sorted;  // update cache to sorted order
+
+        // Group by game_id
+        const gameGroups = new Map();
+        sorted.forEach((m, idx) => {
+            const gId = m.game_id || `${m.team_a}_${m.team_b}`;
+            if (!gameGroups.has(gId)) gameGroups.set(gId, []);
+            gameGroups.get(gId).push({ m, idx });
+        });
+
+        function buildMiddleCard(m, idx) {
             const isGuaranteed = m.guaranteed_profit > 0;
-            const borderColor = isGuaranteed ? '#00ff88' : '#ffaa00';
+            const borderColor = isGuaranteed ? '#00ff88' : '#aa66ff44';
             const guarLabel = isGuaranteed
                 ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ GUARANTEED ARB</span>`
-                : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">MIDDLE BET</span>`;
-            const liveTag = m.is_live
-                ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px;">🔴 LIVE</span>`
-                : '';
-            const mDateStr = m.game_date || '';
-            const mTimeStr = m.game_time || '';
-            const mDateTimeLabel = mDateStr ? `<span style="color:#6a7488;font-size:10px;margin-left:4px;">📅 ${mDateStr}${mTimeStr ? ' · ' + mTimeStr : ''}</span>` : '';
+                : `<span style="background:#aa66ff22;color:#aa66ff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">${m.spread_a}&${m.spread_b} middle</span>`;
             const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#556' };
             const speedColor = speedColors[m.catch_speed] || '#556';
-            const midWidth = m.middle_width % 1 === 0 ? m.middle_width : m.middle_width.toFixed(1);
-
-            // Shaved amounts
             const shaveA = m.no_a_bid - m.suggested_a;
             const shaveB = m.no_b_bid - m.suggested_b;
             const sugProfit = 100 - m.suggested_a - m.suggested_b;
             const sugBothWin = 200 - m.suggested_a - m.suggested_b;
-
-            const rowStyle = 'display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1a2030;';
-            const labelStyle = 'color:#8892a6;font-size:11px;';
-            const valStyle = 'font-size:11px;font-weight:700;';
-
-            return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:10px;border-left:3px solid ${borderColor};">
-                <!-- Header -->
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:12px 14px;margin-bottom:8px;border-left:3px solid ${borderColor};">
                 <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:10px;">
-                    <span style="color:#fff;font-weight:700;font-size:13px;">${m.team_a} vs ${m.team_b}</span>
-                    ${guarLabel}${liveTag}${mDateTimeLabel}
+                    ${guarLabel}
                     <span style="background:${speedColor}22;color:${speedColor};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;">${(m.catch_speed||'slow').toUpperCase()}</span>
                 </div>
-
                 <!-- Pricing table -->
                 <div style="background:#060a14;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;">
-                    <!-- Column headers -->
                     <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;padding-bottom:4px;border-bottom:1px solid #1a2030;margin-bottom:4px;">
                         <div style="color:#556;font-size:10px;font-weight:600;">LEG</div>
                         <div style="color:#556;font-size:10px;font-weight:600;text-align:center;">MARKET BID</div>
                         <div style="color:#ffaa00;font-size:10px;font-weight:600;text-align:center;">YOUR LIMIT</div>
                     </div>
-                    <!-- Leg A: reflected view — NO team_a by X → team_b +X -->
                     <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;border-bottom:1px solid #0d1220;">
                         <div>
                             <span style="color:#fff;font-weight:700;font-size:11px;">${m.team_b||'Opp'} +${m.spread_a||'?'}</span>
@@ -5826,7 +5797,6 @@ function showMiddlesResults(data) {
                             ${shaveA > 0 ? `<span style="color:#ff9944;font-size:9px;">-${shaveA}¢</span>` : ''}
                         </div>
                     </div>
-                    <!-- Leg B: reflected view — NO team_b by X → team_a +X -->
                     <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;">
                         <div>
                             <span style="color:#fff;font-weight:700;font-size:11px;">${m.team_a||'Opp'} +${m.spread_b||'?'}</span>
@@ -5841,7 +5811,6 @@ function showMiddlesResults(data) {
                         </div>
                     </div>
                 </div>
-
                 <!-- Profit summary -->
                 <div id="mid-summary-${idx}" style="background:#060a14;border-radius:6px;padding:7px 10px;margin-bottom:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px;text-align:center;">
                     <div>
@@ -5853,11 +5822,10 @@ function showMiddlesResults(data) {
                         <div style="color:${sugProfit >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;" id="mid-profit-${idx}">${sugProfit >= 0 ? '+' : ''}${sugProfit}¢</div>
                     </div>
                     <div>
-                        <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">BOTH WIN (±${midWidth}pts)</div>
+                        <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">BOTH WIN (${m.spread_a}&${m.spread_b} middle)</div>
                         <div style="color:#aa66ff;font-weight:800;" id="mid-both-${idx}">+${sugBothWin}¢</div>
                     </div>
                 </div>
-
                 <!-- Action row -->
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <span style="color:#8892a6;font-size:11px;">Qty:</span>
@@ -5865,11 +5833,31 @@ function showMiddlesResults(data) {
                         style="width:44px;padding:4px 6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:5px;color:#fff;font-size:12px;font-weight:600;text-align:center;">
                     <button onclick="deployMiddleBotFromCard(${idx})"
                             style="background:${isGuaranteed ? '#00ff88' : '#aa66ff'};color:${isGuaranteed ? '#000' : '#fff'};border:none;padding:5px 16px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
-                        📐 Deploy Middle Bot
+                        📐 Deploy
                     </button>
                 </div>
             </div>`;
-        }).join('');
+        }
+
+        let html = '';
+        for (const [gameId, entries] of gameGroups) {
+            const first = entries[0].m;
+            const hasLive = entries.some(e => e.m.is_live);
+            const hasGuar = entries.some(e => e.m.guaranteed_profit > 0);
+            const mDate = first.game_date ? ` · ${first.game_date}` : '';
+            const teamNames = `${first.team_a_name || first.team_a} vs ${first.team_b_name || first.team_b}`;
+            html += `<div style="margin-bottom:18px;">
+                <div style="display:flex;align-items:center;gap:6px;padding:6px 0;margin-bottom:6px;border-bottom:1px solid #1e2740;">
+                    <span style="color:#fff;font-weight:800;font-size:13px;">${teamNames}</span>
+                    ${hasLive ? '<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 LIVE</span>' : ''}
+                    ${hasGuar ? '<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ ARB</span>' : ''}
+                    <span style="color:#444;font-size:10px;">${mDate}</span>
+                    <span style="color:#444;font-size:10px;margin-left:auto;">${entries.length} middle${entries.length > 1 ? 's' : ''}</span>
+                </div>
+                ${entries.map(({ m, idx }) => buildMiddleCard(m, idx)).join('')}
+            </div>`;
+        }
+        results.innerHTML = html;
     }
     // modal is already shown by scanMiddles(); don't re-open here
 }
@@ -6124,8 +6112,11 @@ function openMiddleBotModal(middle) {
             const guar = middle.guaranteed_profit != null
                 ? middle.guaranteed_profit
                 : 100 - (middle.no_a_bid || 0) - (middle.no_b_bid || 0);
+            const spreadDesc = (middle.spread_a != null && middle.spread_b != null)
+                ? `${middle.spread_a} & ${middle.spread_b} spread middle`
+                : `${middle.middle_width}pt window`;
             winfoEl.innerHTML =
-                `<span style="color:#aa66ff;font-weight:700;font-size:13px;">↔ ${middle.middle_width} pt window</span>` +
+                `<span style="color:#aa66ff;font-weight:700;font-size:13px;">↔ ${spreadDesc}</span>` +
                 `&nbsp;&nbsp;<span style="color:${guar >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;">market floor ${guar >= 0 ? '+' : ''}${guar}¢ at current bids</span>`;
             winfoEl.style.display = 'block';
         } else {
@@ -6312,7 +6303,7 @@ function _buildAnchoredBadgeHTML() {
     // Left group: bot counts (waiting + anchored go together)
     const leftParts = [];
     if (h.waiting     > 0) leftParts.push(`<span style="color:#8892a6;font-weight:700;">⏳ ${h.waiting}</span>`);
-    if (_botsAnchored > 0) leftParts.push(`<span style="color:#00aaff;font-weight:700;">⚓ ${_botsAnchored}</span>`);
+    if (_botsAnchored > 0) leftParts.push(`<span style="color:#00aaff;font-weight:700;">⚡ ${_botsAnchored} filling</span>`);
     const dot = `<span style="color:#555;margin:0 3px;">·</span>`;
     const leftStr = leftParts.join(dot);
     // Right group: health statuses (only relevant to anchored bots)
@@ -6392,16 +6383,14 @@ async function loadHistoryStats() {
 
         // ── Result breakdown counts ──
         const rb = s.result_breakdown || {};
-        const completedN  = rb.completed || 0;
-        const flipN       = (rb.flip_yes || 0) + (rb.flip_no || 0);
-        const oldSlN      = (rb.stop_loss_yes || 0) + (rb.stop_loss_no || 0);
-        const settledWinN = (rb.settled_win_yes || 0) + (rb.settled_win_no || 0);
+        const completedN   = rb.completed || 0;
+        const timeoutN     = (rb.timeout_exit_yes || 0) + (rb.timeout_exit_no || 0);
+        const flipN        = (rb.flip_yes || 0) + (rb.flip_no || 0);  // legacy
+        const oldSlN       = (rb.stop_loss_yes || 0) + (rb.stop_loss_no || 0);  // legacy
+        const settledWinN  = (rb.settled_win_yes || 0) + (rb.settled_win_no || 0);
         const settledLossN = (rb.settled_loss_yes || 0) + (rb.settled_loss_no || 0);
-        const forceExitN  = (rb.force_exit_yes || 0) + (rb.force_exit_no || 0);
-        const totalResults = completedN + flipN + oldSlN + settledWinN + settledLossN + forceExitN;
-
-        // ── Flip stats ──
-        const fs = s.flip_stats || {};
+        const forceExitN   = (rb.force_exit_yes || 0) + (rb.force_exit_no || 0);
+        const totalResults = completedN + timeoutN + flipN + oldSlN + settledWinN + settledLossN + forceExitN;
 
         // Main stats grid
         panel.innerHTML = `
@@ -6445,8 +6434,12 @@ async function loadHistoryStats() {
                             <span style="color:#00ff88;font-size:11px;">✅ Completed (both filled)</span>
                             <span style="color:#00ff88;font-weight:700;font-size:12px;">${completedN} <span style="color:#555;font-weight:400;">(${Math.round(completedN/totalResults*100)}%)</span></span>
                         </div>` : ''}
+                        ${timeoutN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ff8800;font-size:11px;">⏱ Timeout exit</span>
+                            <span style="color:#ff8800;font-weight:700;font-size:12px;">${timeoutN} <span style="color:#555;font-weight:400;">(${Math.round(timeoutN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
                         ${flipN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#ff6666;font-size:11px;">🛡 Flip triggered</span>
+                            <span style="color:#ff6666;font-size:11px;">🔄 Flip triggered (legacy)</span>
                             <span style="color:#ff6666;font-weight:700;font-size:12px;">${flipN} <span style="color:#555;font-weight:400;">(${Math.round(flipN/totalResults*100)}%)</span></span>
                         </div>` : ''}
                         ${oldSlN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
@@ -6502,45 +6495,36 @@ async function loadHistoryStats() {
                     })()}
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🛡 Flip Analysis (entry-15¢, floor 55¢)</div>
-                    ${fs.total > 0 ? `
-                    <div style="display:flex;flex-direction:column;gap:5px;">
-                        <div style="display:flex;justify-content:space-between;">
-                            <span style="color:#8892a6;font-size:11px;">Total flips</span>
-                            <span style="color:#ff6666;font-weight:700;font-size:12px;">${fs.total}</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;">
-                            <span style="color:#8892a6;font-size:11px;">Avg loss per flip</span>
-                            <span style="color:#ff4444;font-weight:700;font-size:12px;">-${fs.avg_loss_cents}¢ ($${(fs.avg_loss_cents/100).toFixed(2)})</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;">
-                            <span style="color:#8892a6;font-size:11px;">Total flip losses</span>
-                            <span style="color:#ff4444;font-weight:700;font-size:12px;">-${fs.total_loss_cents}¢ ($${(fs.total_loss_cents/100).toFixed(2)})</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;">
-                            <span style="color:#8892a6;font-size:11px;">Avg entry at flip</span>
-                            <span style="color:#fff;font-weight:700;font-size:12px;">${fs.avg_entry_price}¢</span>
-                        </div>
-                        ${fs.avg_effective_trigger > 0 ? `<div style="display:flex;justify-content:space-between;">
-                            <span style="color:#8892a6;font-size:11px;">Avg effective trigger</span>
-                            <span style="color:#00aaff;font-weight:700;font-size:12px;">${fs.avg_effective_trigger}¢ <span style="color:#555;font-weight:400;font-size:10px;">(floor ${fs.avg_floor}¢)</span></span>
-                        </div>` : ''}
-                        ${fs.entry_bucket_breakdown && fs.entry_bucket_breakdown.length > 0 ? `
-                        <div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">
-                            <div style="color:#555;font-size:9px;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Loss by Entry Price</div>
-                            <table style="width:100%;font-size:10px;border-collapse:collapse;">
-                                <tr style="color:#555;"><td style="padding:2px 4px;">Entry</td><td style="padding:2px 4px;text-align:center;">Count</td><td style="padding:2px 4px;text-align:right;">Exp.</td><td style="padding:2px 4px;text-align:right;">Actual</td></tr>
-                                ${fs.entry_bucket_breakdown.map(b => {
-                                    const varColor = b.avg_actual_loss > b.expected_loss + 3 ? '#ff4444' : b.avg_actual_loss < b.expected_loss ? '#00ff88' : '#ffaa00';
-                                    return `<tr><td style="padding:2px 4px;color:#8892a6;">${b.range}</td><td style="padding:2px 4px;text-align:center;color:#fff;">${b.count}</td><td style="padding:2px 4px;text-align:right;color:#ffaa33;">${b.expected_loss}¢</td><td style="padding:2px 4px;text-align:right;font-weight:700;color:${varColor};">${b.avg_actual_loss}¢</td></tr>`;
-                                }).join('')}
-                            </table>
-                        </div>` : ''}
-                        <div style="margin-top:6px;padding-top:4px;border-top:1px solid #1e2740;">
-                            <span style="color:#555;font-size:9px;">Est. fills to recover: <strong style="color:#ffaa00;">${s.arb_avg_profit > 0 ? '~' + Math.ceil(fs.total_loss_cents / s.arb_avg_profit) : '?'}</strong></span>
-                            ${s.arb_avg_profit > 0 ? `<span style="color:#444;font-size:9px;"> (at ${s.arb_avg_profit}¢ avg profit/fill)</span>` : ''}
-                        </div>
-                    </div>` : '<div style="color:#00ff88;font-size:11px;">🎉 No flips yet — no favorites have collapsed</div>'}
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">⏱ Timeout Exits</div>
+                    ${timeoutN > 0 ? (() => {
+                        const txTrades = (s.result_breakdown_trades || []).filter(t => t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no');
+                        const txLoss = txTrades.reduce((a, t) => a + (t.loss_cents || 0), 0);
+                        const txProfit = txTrades.reduce((a, t) => a + (t.profit_cents || 0), 0);
+                        const txNet = txProfit - txLoss;
+                        const txNetColor = txNet >= 0 ? '#00ff88' : '#ff4444';
+                        const txYes = rb.timeout_exit_yes || 0;
+                        const txNo  = rb.timeout_exit_no  || 0;
+                        return `<div style="display:flex;flex-direction:column;gap:5px;">
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Total exits</span>
+                                <span style="color:#ff8800;font-weight:700;font-size:12px;">${timeoutN}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">YES exits / NO exits</span>
+                                <span style="color:#fff;font-weight:700;font-size:12px;">${txYes} / ${txNo}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Net P&L on exits</span>
+                                <span style="color:${txNetColor};font-weight:700;font-size:12px;">${txNet >= 0 ? '+' : ''}${txNet}¢</span>
+                            </div>
+                            <div style="margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;color:#555;font-size:9px;">
+                                Exit = cancel pending leg + sell filled leg at market. May be profit or loss depending on where market moved.
+                            </div>
+                        </div>`;
+                    })() : '<div style="color:#00ff88;font-size:11px;">✅ No timeout exits — all bots completed cleanly</div>'}
+                    ${flipN > 0 ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;color:#555;font-size:9px;">
+                        📜 Legacy: ${flipN} flip exits from old fav-first system. These used the entry-15¢ stop-loss mechanism.
+                    </div>` : ''}
                 </div>
             </div>
 
@@ -6592,7 +6576,7 @@ async function loadHistoryStats() {
             widthPanel.innerHTML = `
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
                     <div style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;font-weight:600;">🎯 Width Performance — Fill Rate vs Breakeven</div>
-                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit) from real data. System BE% = 15/(15+W) — theoretical assuming 15\u00a2 flip loss (55\u00a2 floor, entry \u226570\u00a2). Fill rate must exceed both to be profitable.</div>
+                    <div style="color:#555;font-size:10px;margin-bottom:10px;">Breakeven % = avg loss / (avg loss + avg profit) from real data. Fill rate must exceed BE% to be profitable. New system: exits via timeout (20/10 min) instead of flip stop-loss.</div>
                     <div style="overflow-x:auto;">
                     <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px;">
                         <tr style="border-bottom:1px solid #1e2740;">
@@ -6959,8 +6943,10 @@ async function loadTradeHistoryList() {
                 if (width) parts.push(`<span style="color:#8892a6;">Width: <strong style="color:#00aaff;">${width}¢</strong></span>`);
                 if (firstLeg) parts.push(`<span style="color:#8892a6;">1st: <strong style="color:#fff;">${firstLeg.toUpperCase()}</strong></span>`);
                 if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
-                if (t.flip_threshold) parts.push(`<span style="color:#8892a6;">Flip: <strong style="color:#00aaff;">${t.flip_threshold}¢</strong></span>`);
-                else if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
+                if (t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no') {
+                    const leg = t.result === 'timeout_exit_yes' ? 'YES' : 'NO';
+                    parts.push(`<span style="color:#8892a6;">Exit: <strong style="color:#ffaa00;">8-min timeout (${leg})</strong></span>`);
+                } else if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
                 if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
             }
@@ -7302,12 +7288,32 @@ async function loadMiddleHistory() {
             const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : isArbW ? '✅' : '⛔';
             const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : isArbW ? 'ARB WIN' : 'LOSS';
             const borderCol   = isPend ? '#ffaa0033' : net >= 0 ? '#00ff8822' : '#ff444422';
-            const l1 = t.leg1 || {};
-            const l2 = t.leg2 || {};
+            // Support both manual log format (leg1/leg2) and bot-automated format (ticker_a/b, team_a/b_name)
+            const isBot = !t.leg1 && (t.ticker_a || t.team_a_name);
+            const l1 = isBot ? {
+                title: t.team_a_name ? `NO ${t.team_b_name||''} +${t.spread_a||'?'}` : (t.ticker_a || ''),
+                ticker: t.ticker_a || '',
+                side: 'no',
+                price: t.leg_a_fill_price || t.target_price || '?',
+                qty: t.qty,
+                result: t.leg_a_result || null,
+            } : (t.leg1 || {});
+            const l2 = isBot ? {
+                title: t.team_b_name ? `NO ${t.team_a_name||''} +${t.spread_b||'?'}` : (t.ticker_b || ''),
+                ticker: t.ticker_b || '',
+                side: 'no',
+                price: t.leg_b_fill_price || t.target_price || '?',
+                qty: t.qty,
+                result: t.leg_b_result || null,
+            } : (t.leg2 || {});
             const l1Res = l1.result;
             const l2Res = l2.result;
             const l1Col = l1Res === 'win' ? '#00ff88' : l1Res === 'loss' ? '#ff4444' : '#8892a6';
             const l2Col = l2Res === 'win' ? '#00ff88' : l2Res === 'loss' ? '#ff4444' : '#8892a6';
+            // Header label: team names if bot trade, else generic
+            const matchupLabel = isBot && t.team_a_name && t.team_b_name
+                ? `${t.team_a_name} vs ${t.team_b_name}`
+                : 'Middle Opportunity';
             const arbW = t.arb_width || 0;
             const arbInfo = arbW >= 0
                 ? `<span style="color:#aa66ff;font-weight:700;">Window: +${arbW}¢</span>`
@@ -7318,7 +7324,7 @@ async function loadMiddleHistory() {
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                     <div style="display:flex;align-items:center;gap:8px;">
                         <span style="font-size:15px;">${statusIcon}</span>
-                        <span style="color:#aa66ff;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Middle Opportunity</span>
+                        <span style="color:#aa66ff;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${matchupLabel}</span>
                         <span style="color:#555;font-size:10px;">${dateStr}</span>
                     </div>
                     <div style="text-align:right;">
@@ -7329,20 +7335,20 @@ async function loadMiddleHistory() {
                 <!-- Side by side legs -->
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
                     <div style="background:#0a0e1a;border:1px solid ${l1Col}44;border-radius:8px;padding:10px;">
-                        <div style="color:#00ff88;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">LEG 1</div>
+                        <div style="color:#00ff88;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">LEG A</div>
                         <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l1.title || l1.ticker || '—'}</div>
                         <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
-                            <span style="color:${(l1.side||'yes')==='yes'?'#00ff88':'#ff4444'};font-weight:700;">${(l1.side||'yes').toUpperCase()}</span>
+                            <span style="color:${(l1.side||'no')==='yes'?'#00ff88':'#ff4444'};font-weight:700;">${(l1.side||'no').toUpperCase()}</span>
                             <span style="color:#fff;font-weight:700;">@ ${l1.price||'?'}¢</span>
                             <span style="color:#8892a6;">×${l1.qty||'?'}</span>
                         </div>
                         ${l1Res ? `<div style="margin-top:6px;color:${l1Col};font-size:10px;font-weight:700;text-transform:uppercase;">${l1Res === 'win' ? '✅ WON' : '⛔ LOST'}</div>` : ''}
                     </div>
                     <div style="background:#0a0e1a;border:1px solid ${l2Col}44;border-radius:8px;padding:10px;">
-                        <div style="color:#ff6688;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">LEG 2</div>
+                        <div style="color:#ff6688;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">LEG B</div>
                         <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l2.title || l2.ticker || '—'}</div>
                         <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
-                            <span style="color:${(l2.side||'yes')==='yes'?'#00ff88':'#ff4444'};font-weight:700;">${(l2.side||'yes').toUpperCase()}</span>
+                            <span style="color:${(l2.side||'no')==='yes'?'#00ff88':'#ff4444'};font-weight:700;">${(l2.side||'no').toUpperCase()}</span>
                             <span style="color:#fff;font-weight:700;">@ ${l2.price||'?'}¢</span>
                             <span style="color:#8892a6;">×${l2.qty||'?'}</span>
                         </div>
@@ -7646,53 +7652,31 @@ function generateBotRiskWarnings() {
     const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
     const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const flipFloor = parseInt(document.getElementById('bot-stop-loss-cents')?.value) || 55;
     const total = yes + no;
+    const width = 100 - total;
 
     const warnings = [];
     if (total >= 100) {
         warnings.push({ level: 'error', msg: `YES(${yes}¢) + NO(${no}¢) = ${total}¢ — this is NOT profitable. Total must be below 100¢.` });
     }
     if (total >= 97 && total < 100) {
-        warnings.push({ level: 'warn', msg: `Only ${100-total}¢ profit per contract — very thin margin. Consider wider spread.` });
+        warnings.push({ level: 'warn', msg: `Only ${width}¢ profit per contract — very thin margin. Consider wider spread.` });
     }
     if (yes > 90 || no > 90) {
-        warnings.push({ level: 'warn', msg: `Buying at ${Math.max(yes,no)}¢ is very expensive — limited upside, high risk if it drops.` });
+        warnings.push({ level: 'warn', msg: `Buying at ${Math.max(yes,no)}¢ is very expensive — limited upside, large dollar exposure.` });
     }
     if (yes < 5 || no < 5) {
         warnings.push({ level: 'warn', msg: `Buying at ${Math.min(yes,no)}¢ is very unlikely to fill — the market may not have liquidity there.` });
     }
-    // Info when all width is shaved from one side (underdog too low to shave)
     if (currentArbMarket) {
         const yesBid = getPrice(currentArbMarket, 'yes_bid');
         const noBid  = getPrice(currentArbMarket, 'no_bid');
         if (yesBid > 0 && noBid > 0) {
-            const favSide = yesBid >= noBid ? 'YES' : 'NO';
-            const dogSide = yesBid >= noBid ? 'NO' : 'YES';
-            const dogBid  = yesBid >= noBid ? noBid : yesBid;
-            const dogPrice = yesBid >= noBid ? no : yes;
-            if (dogBid <= 1 || dogPrice === dogBid) {
-                warnings.push({ level: 'info', msg: `${dogSide} at ${dogBid}¢ — all width shaved from ${favSide}. Deep dip-buy on the favorite.` });
+            const dogBid = Math.min(yesBid, noBid);
+            const dogSide = yesBid <= noBid ? 'YES' : 'NO';
+            if (dogBid <= 1) {
+                warnings.push({ level: 'info', msg: `${dogSide} has near-zero bids (${dogBid}¢) — underdog fill may take a long time or miss entirely.` });
             }
-        }
-    }
-    if (flipFloor < 25) {
-        warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is very low — only sells if favorite is nearly eliminated.` });
-    }
-    if (flipFloor > 60) {
-        warnings.push({ level: 'warn', msg: `Flip floor of ${flipFloor}¢ is aggressive — you'll sell on minor dips, not just flips.` });
-    }
-    // Breakeven warning for flip threshold
-    const favEntry = Math.max(yes, no);
-    const width = 100 - total;
-    if (favEntry >= flipFloor && width > 0) {
-        const flipLoss = favEntry - flipFloor;
-        const bePct = (flipLoss / (flipLoss + width) * 100).toFixed(1);
-        const ratio = Math.ceil(flipLoss / width);
-        if (parseFloat(bePct) >= 80) {
-            warnings.push({ level: 'error', msg: `Breakeven ${bePct}% — you need ${ratio} completions per flip. Very risky with this width.` });
-        } else if (parseFloat(bePct) >= 65) {
-            warnings.push({ level: 'warn', msg: `Breakeven ${bePct}% — ${ratio} completions needed per flip loss. Widening helps.` });
         }
     }
 

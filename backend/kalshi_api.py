@@ -126,7 +126,7 @@ class KalshiAPI:
             params['status'] = status
         if cursor:
             params['cursor'] = cursor
-        return self._make_request('GET', '/markets', params=params, authenticated=False)
+        return self._make_request('GET', '/markets', params=params, authenticated=True)
     
     def get_events_by_series(self, series_ticker: str, status: str = 'open', limit: int = 200) -> Dict:
         """Get events filtered by series_ticker"""

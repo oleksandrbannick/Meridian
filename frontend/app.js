@@ -2542,7 +2542,7 @@ function calculateArbPrices(market, width) {
     } else {
         // Determine which side is favorite (higher bid = more likely winner)
         const yesIsFav = effectiveYesBid >= effectiveNoBid;
-        let favShave = Math.floor(totalShave * 0.25);  // less shave on favorite — stays near bid, fills faster
+        let favShave = Math.floor(totalShave * 0.4);   // less shave on favorite — stays near bid, fills faster
         let dogShave = totalShave - favShave;           // more shave on underdog — deeper limit, fav fills first
 
         // Get the underdog's max shaveable room (can't go below 1¢)

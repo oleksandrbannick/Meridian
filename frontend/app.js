@@ -2542,8 +2542,8 @@ function calculateArbPrices(market, width) {
     } else {
         // Determine which side is favorite (higher bid = more likely winner)
         const yesIsFav = effectiveYesBid >= effectiveNoBid;
-        let favShave = Math.floor(totalShave * 0.6);   // more shave on favorite — wait for dip, lower flip risk
-        let dogShave = totalShave - favShave;           // less shave on underdog — fills fast after fav catches
+        let favShave = Math.floor(totalShave * 0.25);  // less shave on favorite — stays near bid, fills faster
+        let dogShave = totalShave - favShave;           // more shave on underdog — deeper limit, fav fills first
 
         // Get the underdog's max shaveable room (can't go below 1¢)
         const dogBid = yesIsFav ? effectiveNoBid : effectiveYesBid;
@@ -2553,7 +2553,7 @@ function calculateArbPrices(market, width) {
         if (dogShave > dogMaxShave) {
             const overflow = dogShave - dogMaxShave;
             dogShave = dogMaxShave;
-            favShave = favShave + overflow;  // favorite absorbs all remaining shave
+            favShave = favShave + overflow;  // favorite absorbs remaining only if dog is floored
         }
 
         if (yesIsFav) {

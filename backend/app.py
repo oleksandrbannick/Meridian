@@ -4817,8 +4817,13 @@ def history_stats():
     loss_durations = [t['fill_duration_s'] for t in arb_losses if t.get('fill_duration_s') is not None]
 
     total_arb = len(arb_wins) + len(arb_losses)
-    total_profit = sum(t.get('profit_cents', 0) for t in arb_wins)
-    total_loss = sum(t.get('loss_cents', 0) for t in arb_losses)
+    # Net across ALL arb trades: sum every profit_cents and every loss_cents
+    # (timeout exits can be profitable even though they're in arb_losses)
+    total_profit = sum(t.get('profit_cents', 0) for t in arb_trades)
+    total_loss   = sum(t.get('loss_cents',   0) for t in arb_trades)
+    # avg profit/loss still based on wins/loss buckets for meaningful averages
+    avg_profit_for_display = sum(t.get('profit_cents', 0) for t in arb_wins)
+    avg_loss_for_display   = sum(t.get('loss_cents',   0) for t in arb_losses)
 
     return jsonify({
         'arb_total': total_arb,
@@ -4826,8 +4831,8 @@ def history_stats():
         'arb_losses': len(arb_losses),
         'arb_fill_rate': round(len(arb_wins) / total_arb * 100, 1) if total_arb > 0 else 0,
         'arb_net_cents': total_profit - total_loss,
-        'arb_avg_profit': round(total_profit / len(arb_wins)) if arb_wins else 0,
-        'arb_avg_loss': round(total_loss / len(arb_losses)) if arb_losses else 0,
+        'arb_avg_profit': round(avg_profit_for_display / len(arb_wins)) if arb_wins else 0,
+        'arb_avg_loss': round(avg_loss_for_display / len(arb_losses)) if arb_losses else 0,
         'avg_fill_duration_s': round(sum(all_durations) / len(all_durations)) if all_durations else None,
         'avg_win_duration_s': round(sum(win_durations) / len(win_durations)) if win_durations else None,
         'avg_loss_duration_s': round(sum(loss_durations) / len(loss_durations)) if loss_durations else None,
@@ -5580,10 +5585,12 @@ def _compute_pnl_bucket(trades, category=None):
             completed += 1
             pnl = p
         elif result in PNL_LOSS_RESULTS:
+            p = t.get('profit_cents', 0)  # some exits (e.g. timeout) may be net positive
             l = t.get('loss_cents', 0)
-            gross_loss += l
+            gross_profit += p
+            gross_loss   += l
             stopped += 1
-            pnl = -l
+            pnl = p - l
         sport = t.get('sport', 'Other')
         sport_pnl[sport] = sport_pnl.get(sport, 0) + pnl
     net_cents = gross_profit - gross_loss

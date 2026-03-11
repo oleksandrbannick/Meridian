@@ -4523,23 +4523,33 @@ async function loadBots() {
                 healthLabel = '⏳ WAITING TO FILL';
                 anchoredHealthKey = 'waiting';
             } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
-                // One leg filled — health is based on timeout proximity
+                // One leg filled — color proportional to time remaining
+                // Green (plenty) → Blue (half) → Orange (getting close) → Red (urgent)
                 const toutMin = bot.timeout_min || 8;
                 const minsLeftHealth = Math.max(0, toutMin - fillAgeMin);
-                if (minsLeftHealth <= 3) {
+                const pctLeft = toutMin > 0 ? minsLeftHealth / toutMin : 0;
+                if (pctLeft <= 0.20) {
+                    // ≤20% time left — urgent, pulsing red
                     healthColor = '#ff4444';
-                    healthAnim = 'animation: dangerPulse 1s ease-in-out infinite;';
-                    healthLabel = '🔴 TIMEOUT SOON';
+                    healthAnim = 'animation: dangerPulse 0.8s ease-in-out infinite;';
+                    healthLabel = `🔴 ${Math.ceil(minsLeftHealth)}m LEFT`;
                     anchoredHealthKey = 'danger';
-                } else if (minsLeftHealth <= 7) {
+                } else if (pctLeft <= 0.45) {
+                    // 20-45% left — warning orange
                     healthColor = '#ff8800';
                     healthAnim = 'animation: warningPulse 1.5s ease-in-out infinite;';
                     healthLabel = `🟠 ${Math.ceil(minsLeftHealth)}m LEFT`;
                     anchoredHealthKey = 'warning';
-                } else {
+                } else if (pctLeft <= 0.70) {
+                    // 45-70% left — calm blue
                     healthColor = '#00aaff';
-                    healthLabel = '⚡ ONE FILLED';
+                    healthLabel = `🔵 ${Math.ceil(minsLeftHealth)}m`;
                     anchoredHealthKey = 'holding';
+                } else {
+                    // >70% left — green, plenty of time
+                    healthColor = '#00ff88';
+                    healthLabel = `🟢 ${Math.ceil(minsLeftHealth)}m`;
+                    anchoredHealthKey = 'healthy';
                 }
             } else if (bot.status === 'pending_fills') {
                 healthColor = '#00aaff'; healthLabel = '⏳ FILLING';
@@ -4995,10 +5005,11 @@ function setBuddyMoodFromFleet() {
     if (Date.now() < buddyReactionLockedUntil) return;
     const h = _botHealth;
     if (!h) return;
-    if (h.danger  > 0) { setBuddyMood('alert');   return; }
-    if (h.warning > 0) { setBuddyMood('worried');  return; }
-    if (h.dropping > 0){ setBuddyMood('worried');  return; }
-    if (h.holding > 0) { setBuddyMood('focused');  return; }
+    if (h.danger   > 0) { setBuddyMood('alert');   return; }
+    if (h.warning  > 0) { setBuddyMood('worried');  return; }
+    if (h.dropping > 0) { setBuddyMood('worried');  return; }
+    if (h.holding  > 0) { setBuddyMood('focused');  return; }  // blue = medium time left
+    if (h.healthy  > 0) { setBuddyMood('happy');    return; }  // green = plenty of time
     if (buddySessionPnl >= 0) { setBuddyMood('happy');   return; }
     setBuddyMood('neutral');
 }
@@ -5522,8 +5533,8 @@ function anchorScanNavigate(eventTicker) {
 }
 
 async function quickBot(ticker, yesPrice, noPrice) {
-    // Qty comes from the global controls bar (not the scan modal) — user sets it there before deploying
-    const quantity        = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    // Qty: prefer scan modal qty input; fall back to global controls bar
+    const quantity        = parseInt(document.getElementById('scan-qty')?.value) || parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
@@ -6309,7 +6320,7 @@ async function loadHistoryStats() {
                     <div style="color:#555;font-size:10px;margin-top:2px;">${s.arb_wins}W / ${s.arb_losses}L of ${s.arb_total}</div>
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&L</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${selectedHistoryDay ? `📅 ${selectedHistoryDay}` : 'Lifetime P&L'}</div>
                     <div style="color:${netColor};font-size:24px;font-weight:800;">${s.arb_net_cents >= 0 ? '+' : ''}$${netDollars}</div>
                     <div style="color:#555;font-size:10px;margin-top:2px;">Win: +${s.arb_avg_profit}¢ / Loss: -${s.arb_avg_loss}¢</div>
                 </div>

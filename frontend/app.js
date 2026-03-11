@@ -5044,16 +5044,21 @@ function buddyReactToEvent(action) {
         updateBotBuddyMsg('scanning', true);
     } else if (action.action === 'holding_yes' || action.action === 'holding_no' ||
                action.action === 'holding_yes_one_filled' || action.action === 'holding_no_one_filled') {
-        // Don't override a stronger reaction, but set focused if not locked
+        // No lock — fleet health (setBuddyMoodFromFleet) drives color so buddy
+        // can transition blue → orange → red as the timeout window shrinks
         if (Date.now() >= buddyReactionLockedUntil) {
-            setBuddyMood('focused');
             updateBotBuddyMsg('holding', true);
-            lockThen(14000);
         }
     } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
-        setBuddyMood('neutral');
-        updateBotBuddyMsg('stopped', true);
-        lockThen(8000);
+        const tPnl = action.pnl_cents || 0;
+        if (tPnl > 0) {
+            setBuddyMood('happy');
+            updateBotBuddyMsg('scanning', true);
+        } else {
+            setBuddyMood('neutral');
+            updateBotBuddyMsg('stopped', true);
+        }
+        lockThen(6000);
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled', true);
@@ -6199,10 +6204,14 @@ async function launchMiddleBot() {
 function _buildAnchoredBadgeHTML() {
     if (_botsActive === 0) return '';
     const h = _botHealth;
-    // Left group: bot counts (waiting + anchored go together)
+    // Left group: bot counts
     const leftParts = [];
-    if (h.waiting     > 0) leftParts.push(`<span style="color:#8892a6;font-weight:700;">⏳ ${h.waiting}</span>`);
-    if (_botsAnchored > 0) leftParts.push(`<span style="color:#00aaff;font-weight:700;">⚡ ${_botsAnchored} filling</span>`);
+    // Show "X/Y filling" when there are one-leg-filled bots
+    if (_botsAnchored > 0) {
+        leftParts.push(`<span style="color:#00aaff;font-weight:700;">⚡ ${_botsAnchored}/${_botsActive} filling</span>`);
+    } else if (h.waiting > 0) {
+        leftParts.push(`<span style="color:#8892a6;font-weight:700;">⏳ ${h.waiting} waiting</span>`);
+    }
     const dot = `<span style="color:#555;margin:0 3px;">·</span>`;
     const leftStr = leftParts.join(dot);
     // Right group: health statuses (only relevant to anchored bots)
@@ -6758,15 +6767,18 @@ async function loadTradeHistoryList() {
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
-            // Manual single-leg exits store profit_cents (may be +/-); other non-wins use loss_cents
+            const isTimeoutExit = t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no';
+            // Timeout exits can be profitable — use profit_cents - loss_cents for net P&L
+            // Manual single-leg exits store raw profit_cents (may be negative); other non-wins use loss_cents
             const pnl = isWin ? (t.profit_cents || 0)
+                      : isTimeoutExit ? ((t.profit_cents || 0) - (t.loss_cents || 0))
                       : (isManualExit && !t.loss_cents) ? (t.profit_cents || 0)
                       : -(t.loss_cents || 0);
             const isSettled = isSettledWin || isSettledLoss;
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
-            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isWin ? '✅' : (isManualExit ? '🔧' : '⛔')));
+            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isWin ? '✅' : (isTimeoutExit ? '⏱' : (isManualExit ? '🔧' : '⛔'))));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isTimeoutExit ? 'TIMEOUT EXIT' : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))));
             const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : (isWin ? '#00ff8822' : '#ff444422'));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
@@ -6836,7 +6848,9 @@ async function loadTradeHistoryList() {
                 if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
                 if (t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no') {
                     const leg = t.result === 'timeout_exit_yes' ? 'YES' : 'NO';
-                    parts.push(`<span style="color:#8892a6;">Exit: <strong style="color:#ffaa00;">8-min timeout (${leg})</strong></span>`);
+                    const tMin = t.timeout_min || (leg === 'YES' ? (t.yes_price >= t.no_price ? 20 : 10) : (t.no_price >= t.yes_price ? 20 : 10));
+                    const tLabel = tMin === 20 ? `${tMin}m (fav filled)` : `${tMin}m (dog filled)`;
+                    parts.push(`<span style="color:#8892a6;">Exit: <strong style="color:#ffaa00;">⏱ ${tLabel} (${leg})</strong></span>`);
                 } else if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
                 if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;

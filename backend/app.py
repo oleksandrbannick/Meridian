@@ -2024,6 +2024,56 @@ def _get_game_context(ticker: str) -> dict:
 
 _MONTH_ABBR = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
 
+def _parse_clock_seconds(clock_str):
+    """Parse 'MM:SS' countdown clock to total seconds remaining. Returns None if unparseable."""
+    try:
+        parts = clock_str.strip().split(':')
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+    except Exception:
+        pass
+    return None
+
+# Late-game bot blocking rules: don't open new bots when game is nearly over.
+# Keys are ticker series prefixes (matched by startswith).
+# final: total regular periods; block_period: period to start blocking in;
+# block_secs: block when clock (seconds remaining) <= this value; block_ot: block all OT.
+_LATE_GAME_RULES = {
+    'KXNBA':    {'final': 4, 'block_period': 4, 'block_secs': 300, 'block_ot': True, 'name': 'NBA Q4'},
+    'KXNCAAMB': {'final': 2, 'block_period': 2, 'block_secs': 300, 'block_ot': True, 'name': 'NCAAB 2nd Half'},
+    'KXNCAAWB': {'final': 2, 'block_period': 2, 'block_secs': 300, 'block_ot': True, 'name': 'NCAAWB 2nd Half'},
+    'KXNFL':    {'final': 4, 'block_period': 4, 'block_secs': 180, 'block_ot': True, 'name': 'NFL Q4'},
+    'KXNHL':    {'final': 3, 'block_period': 3, 'block_secs': 180, 'block_ot': True, 'name': 'NHL P3'},
+}
+
+def _is_late_game(ticker):
+    """Returns (blocked, reason_str). True if the game is in a late-game no-deploy window."""
+    series = ticker.split('-')[0].upper() if ticker else ''
+    # Match longest applicable prefix
+    rule = None
+    rule_key = ''
+    for prefix, r in _LATE_GAME_RULES.items():
+        if series.startswith(prefix) and len(prefix) > len(rule_key):
+            rule = r
+            rule_key = prefix
+    if not rule:
+        return False, ''
+    gc = _get_game_context(ticker)
+    if not gc:
+        return False, ''  # game not live or can't get context
+    period = gc.get('period', 0)
+    clock_str = gc.get('clock', '')
+    secs = _parse_clock_seconds(clock_str)
+    # Block all overtime periods
+    if rule.get('block_ot') and period > rule['final']:
+        return True, f"{rule['name']}: OT — too late to open new bots"
+    # Block final regulation period within the block window
+    if period == rule['block_period'] and secs is not None and secs <= rule['block_secs']:
+        mins_left = secs // 60
+        secs_left = secs % 60
+        return True, f"{rule['name']}: {mins_left}:{secs_left:02d} remaining — too late to open new bots"
+    return False, ''
+
 def _get_game_score_for_ticker(ticker: str) -> dict:
     """Get live game score info for a ticker (for bot list UI display).
     Returns {home_team, away_team, home_score, away_score, period, clock, status_detail, status} or {}."""
@@ -2258,6 +2308,13 @@ def create_bot():
             game_phase = manual_phase
         else:
             game_phase = 'live' if _is_game_live(ticker) else 'pregame'
+
+        # Late-game block: refuse new bots when game clock is nearly expired
+        if game_phase == 'live':
+            late_blocked, late_reason = _is_late_game(ticker)
+            if late_blocked:
+                return jsonify({'error': f'⏰ Late-game block — {late_reason}'}), 400
+
         repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times (N+1 total runs)
         arb_width      = int(data.get('arb_width', 0))         # remember target width for repeat
 
@@ -3426,6 +3483,15 @@ def _run_monitor():
                     # that still achieve the target width.
                     # We need: yes_bid + no_bid >= 100 - target_width
                     # (so we can shave from bids and still have room)
+                    # Also skip if late-game window
+                    if phase == 'live':
+                        late_blocked, late_reason = _is_late_game(ticker)
+                        if late_blocked:
+                            bot['status'] = 'completed'
+                            print(f'🚫 REPEAT BLOCKED (late game): {bot_id} — {late_reason}')
+                            actions.append({'bot_id': bot_id, 'action': 'repeat_late_game_block'})
+                            continue
+
                     bid_sum = fresh_yes_bid + fresh_no_bid
                     target_total = 100 - target_width
                     if bid_sum >= target_total and fresh_yes_bid > 0 and fresh_no_bid > 0:
@@ -3772,6 +3838,7 @@ def _run_monitor():
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
+                                'timeout_min': timeout_min,
                             }, bot)
                             bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'yes', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'yes_is_fav': yes_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_yes', 'pnl_cents': pnl_cents})
@@ -3830,6 +3897,7 @@ def _run_monitor():
                                 'game_context': _get_game_context(ticker),
                                 'repeats_done': bot.get('repeats_done', 0),
                                 'repeat_count': orig_repeat_count,
+                                'timeout_min': timeout_min,
                             }, bot)
                             bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'no', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'no_is_fav': no_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_no', 'pnl_cents': pnl_cents})

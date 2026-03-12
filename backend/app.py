@@ -3812,6 +3812,21 @@ def _run_monitor():
                 # NEVER go above the current bid. Repost AT the bid to stay competitive
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
+                    # ── Drift guard: don't repost into a drifted market ──
+                    if max(yes_bid, no_bid) >= 70:
+                        print(f'🚫 REPOST DRIFT GUARD: {bot_id} market at Y={yes_bid}¢ N={no_bid}¢ — too drifted, cancelling')
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['yes_order_id'])
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot['no_order_id'])
+                        except Exception:
+                            pass
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        actions.append({'bot_id': bot_id, 'action': 'repost_drift_guard', 'yes_bid': yes_bid, 'no_bid': no_bid})
+                        save_state()
+                        continue
                     # Width-aware repost: identify fav (higher bid) and dog (lower bid).
                     # Dog posts at its current bid — fav is capped so that
                     # fav + dog = 100 - min_width, preserving target spread.

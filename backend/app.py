@@ -830,28 +830,33 @@ def bot_log(event: str, bot_id: str = '', details: dict = None, level: str = 'IN
     print(f'📋 [{level}] {event} {bot_id}{det_str}')
 
 # ─── State Persistence ────────────────────────────────────────────────────────
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
+DATA_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
+TRADES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trades.jsonl')
 
 _save_lock = threading.Lock()
 
 def save_state():
-    """Persist active_bots and trade_history to disk so they survive restarts."""
+    """Persist active_bots and trade_history to disk so they survive restarts.
+    Uses atomic write (temp → rename) so a crash mid-write never corrupts data.json."""
     with _save_lock:
         try:
-            with open(DATA_FILE, 'w') as f:
+            tmp = DATA_FILE + '.tmp'
+            with open(tmp, 'w') as f:
                 json.dump({
                     'active_bots': active_bots,
                     'trade_history': trade_history[:2000],
                     'session_pnl': session_pnl,
                     'opening_lines': _opening_lines,
                 }, f, indent=2, default=str)
+            os.replace(tmp, DATA_FILE)  # atomic — no partial-write corruption
         except Exception as e:
             print(f'⚠ save_state: {e}')
 
 BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_backup.json')
 
 def load_state():
-    """Load persisted bots and history from disk."""
+    """Load persisted bots and history from disk.
+    Also merges trades.jsonl to recover any trades recorded after the last save_state()."""
     global active_bots, trade_history, session_pnl, _opening_lines
     try:
         if os.path.exists(DATA_FILE):
@@ -876,6 +881,38 @@ def load_state():
                     print(f'⚠ backup: {be}')
     except Exception as e:
         print(f'⚠ load_state: {e}')
+
+    # ── Merge trades.jsonl: recover trades written after last save_state ──
+    if os.path.exists(TRADES_FILE):
+        try:
+            existing_ids = set()
+            for t in trade_history:
+                tid = t.get('_trade_id') or f"{t.get('timestamp',0)}_{t.get('bot_id','')}"
+                existing_ids.add(tid)
+            recovered = 0
+            with open(TRADES_FILE, 'r') as _tf:
+                for line in _tf:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        t = json.loads(line)
+                        tid = t.get('_trade_id') or f"{t.get('timestamp',0)}_{t.get('bot_id','')}"
+                        if tid not in existing_ids:
+                            trade_history.append(t)
+                            existing_ids.add(tid)
+                            recovered += 1
+                    except Exception:
+                        pass
+            if recovered:
+                trade_history.sort(key=lambda t: t.get('timestamp', 0), reverse=True)
+                print(f'🔁 Recovered {recovered} trades from trades.jsonl (were missing from data.json)')
+            # Rewrite trades.jsonl from the merged list to prune duplicates/old entries
+            with open(TRADES_FILE, 'w') as _tf:
+                for t in trade_history[:2000]:
+                    _tf.write(json.dumps(t, default=str) + '\n')
+        except Exception as _jle:
+            print(f'⚠ trades.jsonl merge failed: {_jle}')
 
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
@@ -1844,9 +1881,18 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
 
 
 def _record_trade(record: dict, bot: dict = None):
-    """Insert an enriched trade record into trade_history."""
+    """Insert an enriched trade record into trade_history and immediately
+    append it to the crash-safe trades.jsonl log."""
     _enrich_trade_record(record, bot)
+    import uuid
+    record.setdefault('_trade_id', str(uuid.uuid4()))
     trade_history.insert(0, record)
+    # Crash-safe append — survives server crashes between save_state() calls
+    try:
+        with open(TRADES_FILE, 'a') as _tf:
+            _tf.write(json.dumps(record, default=str) + '\n')
+    except Exception as _te:
+        print(f'⚠ trades.jsonl append failed: {_te}')
 
 
 def _parse_ticker_teams(ticker: str):

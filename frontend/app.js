@@ -1,4 +1,4 @@
-// Meridian — Sports Trading Terminal
+ng // Meridian — Sports Trading Terminal
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 let allMarkets = [];
 let autoMonitorInterval = null;
@@ -4542,10 +4542,14 @@ async function loadBots() {
                 const isFavFilled = entryFilled >= (bot.status === 'yes_filled' ? (bot.no_price || 0) : (bot.yes_price || 0));
                 const urgColor = isHalftime ? '#818cf8' : minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
                 const bidDisplay = liveBidFilled != null ? `${liveBidFilled}¢` : '?';
-                const exitLine = isHalftime
+                const livePendingBid = bot.status === 'yes_filled' ? bot.live_no_bid : bot.live_yes_bid;
+                const gameOver = livePendingBid != null && livePendingBid < 5;
+                const exitLine = gameOver
+                    ? `<span style="color:#818cf8;font-weight:700;">⏳ Awaiting settlement — game ended, position held</span>`
+                    : isHalftime
                     ? `<span style="color:#818cf8;font-weight:700;">⏸ HALFTIME — timer paused, resets at 2nd half</span>`
                     : `<span style="color:${urgColor};font-weight:700;">⏳ Exit ${pendingSide} in ${minsLeft}m if no fill</span>`;
-                stopLossInfo = `<div style="background:${urgColor}11;border:1px solid ${urgColor}33;border-radius:5px;padding:4px 8px;font-size:10px;color:${urgColor};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                stopLossInfo = `<div style="background:${gameOver ? '#818cf811' : urgColor+'11'};border:1px solid ${gameOver ? '#818cf833' : urgColor+'33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${gameOver ? '#818cf8' : urgColor};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>✓ <strong>${filledSide}</strong> filled ${fillAgeMin}m ago${isFavFilled ? ' (fav)' : ' (dog)'} @ ${entryFilled}¢</span>
                     <span style="color:#8892a6;">Bid now: <strong style="color:#fff;">${bidDisplay}</strong></span>
                     ${exitLine}

@@ -3521,30 +3521,68 @@ def _run_monitor():
 
                     bid_sum = fresh_yes_bid + fresh_no_bid
                     target_total = 100 - target_width
-                    if bid_sum >= target_total and fresh_yes_bid > 0 and fresh_no_bid > 0:
-                        # Spread reopened — place new orders
+                    # Derive asks via market identity: YES ask + NO bid = 100
+                    fresh_yes_ask = 100 - fresh_no_bid
+                    fresh_no_ask  = 100 - fresh_yes_bid
+                    ask_sum = fresh_yes_ask + fresh_no_ask  # = 200 - bid_sum
+
+                    # Cancel any orphaned orders left over from previous timeout exits
+                    for orphan_id in list(bot.pop('orphaned_order_ids', [])):
                         try:
-                            total_shave = max(0, bid_sum - target_total)
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(orphan_id)
+                            print(f'✓ Late-cancel orphaned order {orphan_id} for {bot_id}')
+                        except Exception as _oc:
+                            print(f'⚠ Late-cancel still failed ({orphan_id}): {_oc}')
+
+                    # Use ask-side pricing when bids alone can't achieve the target width.
+                    # Ask-side: anchor to ask prices and shave down — orders land between bid
+                    # and ask, ahead of the top-of-book bid in queue priority.
+                    use_ask_side = bid_sum < target_total
+                    if (bid_sum >= target_total or (use_ask_side and ask_sum > target_total)) and fresh_yes_bid > 0 and fresh_no_bid > 0:
+                        # Spread available — place new orders
+                        try:
                             yes_is_fav = fresh_yes_bid >= fresh_no_bid
-                            fav_shave = total_shave * 4 // 10
-                            dog_shave = total_shave - fav_shave
 
-                            # If underdog can't absorb its share, push overflow to favorite
-                            dog_bid = fresh_no_bid if yes_is_fav else fresh_yes_bid
-                            dog_max_shave = max(0, dog_bid - 1)
-                            if dog_shave > dog_max_shave:
-                                overflow = dog_shave - dog_max_shave
-                                dog_shave = dog_max_shave
-                                fav_shave = fav_shave + overflow
-
-                            if yes_is_fav:
-                                new_yes = fresh_yes_bid - fav_shave
-                                new_no  = fresh_no_bid - dog_shave
+                            if use_ask_side:
+                                # ── Ask-side pricing ──
+                                ask_shave = max(0, ask_sum - target_total)
+                                fav_ask_shave = ask_shave * 4 // 10
+                                dog_ask_shave = ask_shave - fav_ask_shave
+                                max_yes_target = max(1, fresh_yes_ask - 1)
+                                max_no_target  = max(1, fresh_no_ask  - 1)
+                                if yes_is_fav:
+                                    new_yes = min(max_yes_target, fresh_yes_ask - fav_ask_shave)
+                                    new_no  = min(max_no_target,  fresh_no_ask  - dog_ask_shave)
+                                else:
+                                    new_yes = min(max_yes_target, fresh_yes_ask - dog_ask_shave)
+                                    new_no  = min(max_no_target,  fresh_no_ask  - fav_ask_shave)
+                                new_yes = max(1, new_yes)
+                                new_no  = max(1, new_no)
+                                # Ensure width is still met after capping
+                                if 100 - new_yes - new_no < target_width:
+                                    if yes_is_fav: new_yes = max(1, 100 - new_no - target_width)
+                                    else:          new_no  = max(1, 100 - new_yes - target_width)
                             else:
-                                new_yes = fresh_yes_bid - dog_shave
-                                new_no  = fresh_no_bid - fav_shave
-                            new_yes = max(1, min(new_yes, fresh_yes_bid))
-                            new_no  = max(1, min(new_no, fresh_no_bid))
+                                # ── Bid-side pricing ──
+                                total_shave = max(0, bid_sum - target_total)
+                                fav_shave = total_shave * 4 // 10
+                                dog_shave = total_shave - fav_shave
+                                dog_bid = fresh_no_bid if yes_is_fav else fresh_yes_bid
+                                dog_max_shave = max(0, dog_bid - 1)
+                                if dog_shave > dog_max_shave:
+                                    overflow = dog_shave - dog_max_shave
+                                    dog_shave = dog_max_shave
+                                    fav_shave = fav_shave + overflow
+                                if yes_is_fav:
+                                    new_yes = fresh_yes_bid - fav_shave
+                                    new_no  = fresh_no_bid - dog_shave
+                                else:
+                                    new_yes = fresh_yes_bid - dog_shave
+                                    new_no  = fresh_no_bid - fav_shave
+                                new_yes = max(1, min(new_yes, fresh_yes_bid))
+                                new_no  = max(1, min(new_no, fresh_no_bid))
+
                             new_profit = 100 - new_yes - new_no
 
                             if new_profit >= target_width:
@@ -3570,8 +3608,9 @@ def _run_monitor():
 
                                 cycle = bot.get('repeats_done', 0)
                                 total = bot.get('repeat_count', 0)
+                                pricing_mode = 'ask-side' if use_ask_side else 'bid-side'
                                 print(f'🔄 REPEAT ARB cycle {cycle + 1}/{total + 1}: '
-                                      f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ posted simultaneously → {new_profit}¢ profit '
+                                      f'{bot_id} YES {new_yes}¢ + NO {new_no}¢ posted ({pricing_mode}) → {new_profit}¢ profit '
                                       f'(waited {wait_age_min:.1f}m)')
                                 actions.append({
                                     'bot_id': bot_id, 'action': 'repeat_cycle',
@@ -3835,11 +3874,13 @@ def _run_monitor():
                         continue
                     if phase == 'live' and wait_min >= timeout_min:
                         # Timeout: cancel pending NO, sell filled YES at market
+                        old_no_order_id = bot.get('no_order_id')
                         try:
                             api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['no_order_id'])
-                        except Exception:
-                            pass
+                            kalshi_client.cancel_order(old_no_order_id)
+                        except Exception as _ce:
+                            print(f'⚠ Cancel NO order failed for {bot_id} ({old_no_order_id}): {_ce} — queued for retry')
+                            bot.setdefault('orphaned_order_ids', []).append(old_no_order_id)
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'timeout_exit_yes_{bot_id}')
                         if sold:
                             orig_repeat_count = bot.get('repeat_count', 0)
@@ -3886,6 +3927,8 @@ def _run_monitor():
                                     bot['waiting_repeat_since'] = now
                                     bot['first_fill_at'] = None
                                     bot['first_leg'] = None
+                                    bot['yes_fill_qty'] = 0
+                                    bot['no_fill_qty'] = 0
                                     print(f'🔄 TIMEOUT RETRY: {bot_id} re-entering waiting_repeat after timeout — cycle {repeats_done_now}/{orig_repeat_count}')
                                     actions.append({'bot_id': bot_id, 'action': 'timeout_retry', 'cycle': repeats_done_now})
                         else:
@@ -3911,11 +3954,13 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_no', 'wait_min': round(wait_min, 1)})
                         continue
                     if phase == 'live' and wait_min >= timeout_min:
+                        old_yes_order_id = bot.get('yes_order_id')
                         try:
                             api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['yes_order_id'])
-                        except Exception:
-                            pass
+                            kalshi_client.cancel_order(old_yes_order_id)
+                        except Exception as _ce:
+                            print(f'⚠ Cancel YES order failed for {bot_id} ({old_yes_order_id}): {_ce} — queued for retry')
+                            bot.setdefault('orphaned_order_ids', []).append(old_yes_order_id)
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'timeout_exit_no_{bot_id}')
                         if sold:
                             orig_repeat_count = bot.get('repeat_count', 0)
@@ -3962,6 +4007,8 @@ def _run_monitor():
                                     bot['waiting_repeat_since'] = now
                                     bot['first_fill_at'] = None
                                     bot['first_leg'] = None
+                                    bot['yes_fill_qty'] = 0
+                                    bot['no_fill_qty'] = 0
                                     print(f'🔄 TIMEOUT RETRY: {bot_id} re-entering waiting_repeat after timeout — cycle {repeats_done_now}/{orig_repeat_count}')
                                     actions.append({'bot_id': bot_id, 'action': 'timeout_retry', 'cycle': repeats_done_now})
                         else:

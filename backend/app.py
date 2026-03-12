@@ -832,18 +832,21 @@ def bot_log(event: str, bot_id: str = '', details: dict = None, level: str = 'IN
 # ─── State Persistence ────────────────────────────────────────────────────────
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data.json')
 
+_save_lock = threading.Lock()
+
 def save_state():
     """Persist active_bots and trade_history to disk so they survive restarts."""
-    try:
-        with open(DATA_FILE, 'w') as f:
-            json.dump({
-                'active_bots': active_bots,
-                'trade_history': trade_history[:2000],
-                'session_pnl': session_pnl,
-                'opening_lines': _opening_lines,
-            }, f, indent=2, default=str)
-    except Exception as e:
-        print(f'⚠ save_state: {e}')
+    with _save_lock:
+        try:
+            with open(DATA_FILE, 'w') as f:
+                json.dump({
+                    'active_bots': active_bots,
+                    'trade_history': trade_history[:2000],
+                    'session_pnl': session_pnl,
+                    'opening_lines': _opening_lines,
+                }, f, indent=2, default=str)
+        except Exception as e:
+            print(f'⚠ save_state: {e}')
 
 BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_backup.json')
 

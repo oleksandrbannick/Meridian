@@ -3562,10 +3562,11 @@ def _run_monitor():
                         continue
 
                     # ── Drift guard: don't repost into a drifted market ──
-                    # If one side is 70c+, the game has moved too far from 50/50.
-                    # Re-entering risks: underdog leg fills and keeps dropping to 0.
+                    # At 75c+, the partial-fill window shrinks (game may end before
+                    # both legs fill). Both legs DO fill in continuous moves but
+                    # gap-fills become more likely when a game ends suddenly.
                     drift_side = max(fresh_yes_bid, fresh_no_bid)
-                    if drift_side >= 70:
+                    if drift_side >= 75:
                         bot['status'] = 'drift_cancelled'
                         bot['drift_cancelled_at'] = now
                         bot['drift_yes_bid'] = fresh_yes_bid
@@ -3869,7 +3870,7 @@ def _run_monitor():
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
                     # ── Drift guard: don't repost into a drifted market ──
-                    if max(yes_bid, no_bid) >= 70:
+                    if max(yes_bid, no_bid) >= 75:
                         print(f'🚫 REPOST DRIFT GUARD: {bot_id} market at Y={yes_bid}¢ N={no_bid}¢ — too drifted, cancelling')
                         try:
                             api_rate_limiter.wait()

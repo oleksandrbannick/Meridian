@@ -1845,31 +1845,31 @@ function createMarketRow(market, label) {
 // Strong favorites are where the bot places limit orders to catch dips
 // marketTier: 'tight' | 'medium' | 'wide' | 'over100'
 //   tight   = bid/ask spread ≤ 3¢ both sides → full glow, solid border (best fills)
-//   medium  = spread ≤ 8¢ → moderate glow
-//   wide    = spread > 8¢ (broken/thin) → dim, ask-side pricing kicks in
-//   over100 = bid_sum > 100 → guaranteed arb in book → gold border highlight
+//   medium  = spread ≤ 8¢, bid_sum < 100 → moderate glow (normal arb market)
+//   wide    = spread > 8¢, bid_sum < 100 → dim dashed (thin/broken, ask-side pricing kicks in)
+//   over100 = bid_sum > 100 → muted/dark — paying >100c for 100c payout, NOT profitable for dual arb
 function getPriceButtonStyle(price, side, marketTier) {
     const yesBase = '#00ff88';
     const noBase  = '#ff4444';
     const color   = side === 'yes' ? yesBase : noBase;
 
     if (marketTier === 'over100') {
-        // Bid sum > 100 — immediate arb available, highlight in gold
-        return `background: rgba(255,190,0,0.18); color: #ffcc00; border: 2px solid #ffcc00;`;
+        // bid_sum > 100 → can't buy both profitably. Dim these out.
+        return `background: rgba(60,60,60,0.08); color: #444; border: 1px solid #2a2a2a;`;
     }
 
     if (marketTier === 'tight') {
-        // Tight spread both sides — best fill probability, full brightness
+        // Tight spread — best fill probability, full brightness
         return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.22); color: ${color}; border: 2px solid ${color};`;
     }
 
     if (marketTier === 'medium') {
-        // Normal market — moderate glow
+        // Normal arb market — moderate glow
         return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.10); color: ${color}cc; border: 1px solid ${color}66;`;
     }
 
-    // wide / broken / thin — dim, orange-tinted border to signal thin liquidity
-    return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.04); color: ${color}66; border: 1px dashed #ff880055;`;
+    // wide / thin — bid_sum well below 100, ask-side pricing territory. Slightly dim, dashed border.
+    return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.05); color: ${color}77; border: 1px dashed ${color}44;`;
 }
 
 // Extract team label from ticker suffix (e.g., KXNBAGAME-26FEB28HOUMIA-MIA -> "Miami")

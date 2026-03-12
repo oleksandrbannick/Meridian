@@ -3959,11 +3959,11 @@ def _run_monitor():
                         bot['first_leg'] = 'yes'
 
                     # YES is fav if its posted price >= NO price
-                    # Fav fills first → 8 min: fav locked in, patient wait for underdog
-                    # Dog fills first → 4 min: game already drifting against us, cut fast
-                    # (data shows ~3-4c/min drift when dog fills; 4min saves 53% of dog losses)
+                    # Fav fills first → 6 min: data shows fav-first exits avg -50c at 8min,
+                    #   same as dog-first; 8min wasn't helping, 6min cuts exposure sooner.
+                    # Dog fills first → 4 min: game drifting against us fast, cut early.
                     yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
-                    timeout_min = 8.0 if yes_is_fav else 4.0
+                    timeout_min = 6.0 if yes_is_fav else 4.0
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     # ── Halftime pause: reset timer so the bot gets a fresh window ──
@@ -4060,7 +4060,7 @@ def _run_monitor():
 
                     # NO filled first: fav=8min, dog=4min
                     no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
-                    timeout_min = 8.0 if no_is_fav else 4.0
+                    timeout_min = 6.0 if no_is_fav else 4.0
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     # ── Halftime pause: reset timer so the bot gets a fresh window ──
                     if _is_halftime(ticker):

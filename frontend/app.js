@@ -779,13 +779,13 @@ function getRecommendedPresets(tier, signalType) {
         return { tight: [6, 7, 8, 9], medium: [8, 9, 10, 11], wide: [10, 11, 12, 13] }[tier] || [8, 9, 10, 11];
     }
     if (signalType === 'drifting') {
-        return { tight: [10, 11, 12, 13], medium: [12, 13, 15, 16], wide: [14, 15, 17, 18] }[tier] || [12, 13, 15, 16];
+        return { tight: [10, 11, 12, 13], medium: [12, 13, 15, 16], wide: [14, 15, 16, 17] }[tier] || [12, 13, 15, 16];
     }
     if (signalType === 'runaway') {
-        return { tight: [14, 15, 16, 18], medium: [16, 17, 18, 20], wide: [17, 18, 19, 20] }[tier] || [16, 17, 18, 20];
+        return { tight: [14, 15, 16, 17], medium: [15, 16, 17, 17], wide: [16, 17, 17, 17] }[tier] || [15, 16, 17, 17];
     }
     // late_game / early / pregame → medium defaults
-    return { tight: [6, 7, 8, 9], medium: [8, 10, 11, 12], wide: [12, 13, 15, 18] }[tier] || [8, 10, 11, 12];
+    return { tight: [6, 7, 8, 9], medium: [8, 10, 11, 12], wide: [12, 13, 15, 15] }[tier] || [8, 10, 11, 12];
 }
 
 function isKalshiLive(market) {
@@ -3705,7 +3705,7 @@ function closeOrderbookModal() {
 }
 
 // Place both limit orders and register the bot
-const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18];
+const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
 function toggleAllWidths() {

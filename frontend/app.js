@@ -798,25 +798,25 @@ function isKalshiLive(market) {
         const hoursUntilExp = (expTime.getTime() - now) / (1000 * 60 * 60);
         
         // Window: game must be expected to end within N hours AND not ended > 30min ago
-        // Tennis/tournament markets settle end-of-day so use 20h window; others use 5h.
+        // Kalshi sets expected_expiration per-match (not end-of-day), so 4h covers the
+        // longest tennis match; 5h for team sports with potential OT.
         const isTennis = /KXATP|KXWTA/i.test(market.ticker || market.event_ticker || '');
-        const maxHours = isTennis ? 20.0 : 5.0;
+        const maxHours = isTennis ? 4.0 : 5.0;
         if (hoursUntilExp < -0.5 || hoursUntilExp > maxHours) return false;
         
-        // Check game date — must be today (or yesterday for late-night games)
+        // Check game date — must be today (or yesterday for late-night games).
+        // Tomorrow's games (diffDays=1 in the future) are NOT live.
         const ticker = market.event_ticker || '';
         const dateMatch = ticker.match(/(\d{2})([A-Z]{3})(\d{2})/);
         if (dateMatch) {
             const [, yr, mon, day] = dateMatch;
             const monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
             const gameDate = new Date(2000 + parseInt(yr), monthMap[mon] || 0, parseInt(day));
-            const today = new Date();
-            const diffDays = Math.abs(
-                (new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() -
-                 new Date(gameDate.getFullYear(), gameDate.getMonth(), gameDate.getDate()).getTime())
-                / (1000*60*60*24)
-            );
-            if (diffDays > 1) return false;
+            const todayMidnight = new Date();
+            todayMidnight.setHours(0, 0, 0, 0);
+            const diffDays = (gameDate.getTime() - todayMidnight.getTime()) / (1000*60*60*24);
+            // Allow today (0) and yesterday (-1) for late-night games; reject tomorrow (+1) and beyond
+            if (diffDays > 0 || diffDays < -1) return false;
         }
         
         // Check if game has already been resolved (result field set)

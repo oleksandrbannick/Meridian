@@ -2360,19 +2360,24 @@ def create_bot():
             live_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
             live_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
 
-            # Rule: NEVER place a limit buy more than 1¢ ABOVE the current bid.
-            # Allowing bid+1 enables scanner queue-jump (front of book) which is legitimate.
-            if yes_price > live_yes_bid + 1 and live_yes_bid > 0:
-                return jsonify({'error': f'YES price {yes_price}¢ is ABOVE current bid {live_yes_bid}¢ — market has moved. Refresh and retry.'}), 400
-            if no_price > live_no_bid + 1 and live_no_bid > 0:
-                return jsonify({'error': f'NO price {no_price}¢ is ABOVE current bid {live_no_bid}¢ — market has moved. Refresh and retry.'}), 400
+            # Derive live asks via market identity
+            live_yes_ask = 100 - live_no_bid if live_no_bid > 0 else 99
+            live_no_ask  = 100 - live_yes_bid if live_yes_bid > 0 else 99
+
+            # Ask-side pricing intentionally places orders BETWEEN bid and ask (above bid).
+            # Allow up to the ask price — anything at or above the ask would cross the spread
+            # and fill immediately as a taker (bad). Anything below ask is a resting limit (good).
+            if yes_price >= live_yes_ask and live_yes_ask > 0:
+                return jsonify({'error': f'YES price {yes_price}¢ is AT or ABOVE ask {live_yes_ask}¢ — would cross spread. Refresh and retry.'}), 400
+            if no_price >= live_no_ask and live_no_ask > 0:
+                return jsonify({'error': f'NO price {no_price}¢ is AT or ABOVE ask {live_no_ask}¢ — would cross spread. Refresh and retry.'}), 400
 
             # Also check the spread still makes sense
             live_total = live_yes_bid + live_no_bid
             if live_total >= 100:
                 return jsonify({'error': f'Market bids now total {live_total}¢ ≥ 100 — no arb exists. Refresh and retry.'}), 400
 
-            print(f'✅ Price validation (orderbook): YES {yes_price}¢ ≤ bid {live_yes_bid}¢, NO {no_price}¢ ≤ bid {live_no_bid}¢')
+            print(f'✅ Price validation: YES {yes_price}¢ (bid={live_yes_bid}¢ ask={live_yes_ask}¢), NO {no_price}¢ (bid={live_no_bid}¢ ask={live_no_ask}¢)')
 
             # Block deployment when either side has NO real bids.
             # A derived price (e.g. YES=87¢ from 100-1-12) isn't a real order —

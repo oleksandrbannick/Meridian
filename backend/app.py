@@ -1458,20 +1458,32 @@ def _execute_ws_completion(bot_id):
         ticker = bot['ticker']
         qty = bot['quantity']
 
-        try:
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+        # ── REPEAT check runs unconditionally — API call failures must not prevent it ──
+        repeats_done_now = bot.get('repeats_done', 0) + 1
+        bot['repeats_done'] = repeats_done_now
+        repeat_total = bot.get('repeat_count', 0)
+        will_repeat = repeats_done_now <= repeat_total
 
-            # Verify actual fill prices from the order data for accurate P&L
+        bot['completed_at'] = now
+        bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
+        if will_repeat:
+            bot['waiting_repeat_since'] = time.time()
+            bot['first_fill_at'] = None
+            bot['first_leg'] = None
+            print(f'🔄 WS REPEAT: {bot_id} entering waiting_repeat — cycle {repeats_done_now}/{repeat_total}')
+
+        # Record trade + P&L — wrapped separately so failures don't break repeat logic
+        try:
             actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
             actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
             real_yes = actual_yes if actual_yes else bot['yes_price']
             real_no  = actual_no  if actual_no  else bot['no_price']
-            verified_profit = (100 - real_yes - real_no) * qty
-            profit_cents = verified_profit
+            profit_cents = (100 - real_yes - real_no) * qty
 
             session_pnl['gross_profit_cents'] += profit_cents
             session_pnl['completed_bots']     += 1
+            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
+
             _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': real_yes, 'no_price': real_no,
@@ -1488,38 +1500,21 @@ def _execute_ws_completion(bot_id):
                 'flip_threshold': bot.get('flip_threshold', FLIP_THRESHOLD_CENTS),
                 'stop_loss_cents': bot.get('stop_loss_cents', 0),
                 'game_context': _get_game_context(ticker),
-                'repeats_done': bot.get('repeats_done', 0),
-                'repeat_count': bot.get('repeat_count', 0),
+                'repeats_done': repeats_done_now,
+                'repeat_count': repeat_total,
                 'fill_source': 'ws_realtime',
             }, bot)
             bot_log('ARB_COMPLETED', bot_id, {
-                'real_yes': real_yes, 'real_no': real_no,
-                'profit_cents': profit_cents,
+                'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents,
                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
-                'source': 'ws_realtime'
+                'source': 'ws_realtime', 'will_repeat': will_repeat,
             })
-
-            # Track cumulative P&L on the bot itself
-            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
-
-            print(f'⚡ WS INSTANT COMPLETED: {bot_id} profit={profit_cents}¢ '
-                  f'(YES={real_yes}¢ NO={real_no}¢) [INSTANT]')
-
-            # ── REPEAT ARB: if repeats remain, enter waiting_repeat ──
-            repeats_done_now = bot.get('repeats_done', 0) + 1
-            bot['repeats_done'] = repeats_done_now
-            repeat_total = bot.get('repeat_count', 0)
-
-            if repeats_done_now <= repeat_total:
-                bot['status'] = 'waiting_repeat'
-                bot['waiting_repeat_since'] = time.time()
-                print(f'🔄 WS REPEAT: {bot_id} entering waiting_repeat — '
-                      f'cycle {repeats_done_now}/{repeat_total}')
-
-            save_state()
-
+            print(f'⚡ WS COMPLETED: {bot_id} +{profit_cents}¢ (YES={real_yes}¢ NO={real_no}¢)'
+                  + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
         except Exception as err:
-            print(f'⚠ WS completion handling failed for {bot_id}: {err} — monitor will handle')
+            print(f'⚠ WS trade record failed for {bot_id}: {err} — repeat status already set, continuing')
+
+        save_state()
 
         bot.pop('_ws_fill_handling', None)
 
@@ -3678,63 +3673,69 @@ def _run_monitor():
 
                 # ── Both sides fully filled → profit locked at settlement ──
                 if yes_filled >= qty and no_filled >= qty:
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
-
-                    # Verify actual fill prices from the order data for accurate P&L
-                    actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
-                    actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
-                    real_yes = actual_yes if actual_yes else bot['yes_price']
-                    real_no  = actual_no  if actual_no  else bot['no_price']
-                    verified_profit = (100 - real_yes - real_no) * qty
-                    profit_cents = verified_profit
-
-                    session_pnl['gross_profit_cents'] += profit_cents
-                    session_pnl['completed_bots']     += 1
-                    _record_trade({
-                        'bot_id': bot_id, 'ticker': ticker,
-                        'yes_price': real_yes, 'no_price': real_no,
-                        'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
-                        'quantity': qty, 'profit_cents': profit_cents,
-                        'result': 'completed', 'timestamp': now,
-                        'verified_prices': actual_yes is not None and actual_no is not None,
-                        'placed_at': bot.get('created_at', now),
-                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
-                        'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
-                        'first_leg': bot.get('first_leg', ''),
-                        'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
-                        'game_phase': bot.get('game_phase', ''),
-                        'flip_threshold': bot.get('flip_threshold', FLIP_THRESHOLD_CENTS),
-                        'stop_loss_cents': bot.get('stop_loss_cents', 0),
-                        'game_context': _get_game_context(ticker),
-                        'repeats_done': bot.get('repeats_done', 0),
-                        'repeat_count': bot.get('repeat_count', 0),
-                    }, bot)
-                    actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
-                    bot_log('ARB_COMPLETED', bot_id, {'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents, 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None})
-
-                    # Track cumulative P&L on the bot itself
-                    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
-
-                    # ── REPEAT ARB: update bot in-place if repeats remain ──
+                    # ── REPEAT check runs unconditionally — API failures must NOT prevent it ──
                     repeats_done_now = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = repeats_done_now
                     repeat_total = bot.get('repeat_count', 0)
+                    will_repeat = repeats_done_now <= repeat_total
 
-                    if repeats_done_now <= repeat_total:
-                        # Don't try to repeat immediately — the spread likely
-                        # closed when our fills consumed liquidity.
-                        # Instead, enter waiting_repeat and let the monitor loop
-                        # check for spread reopening on subsequent cycles.
-                        bot['status'] = 'waiting_repeat'
+                    bot['completed_at'] = now
+                    bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
+                    if will_repeat:
                         bot['waiting_repeat_since'] = time.time()
+                        bot['first_fill_at'] = None
+                        bot['first_leg'] = None
                         print(f'🔄 REPEAT: {bot_id} entering waiting_repeat — '
                               f'cycle {repeats_done_now}/{repeat_total}, '
-                              f'watching for {bot.get("arb_width", bot["profit_per"])}¢ spread to reopen')
+                              f'watching for {bot.get("arb_width", bot.get("profit_per", 0))}¢ spread to reopen')
                         actions.append({
                             'bot_id': bot_id, 'action': 'waiting_repeat',
                             'cycle': repeats_done_now, 'total': repeat_total,
                         })
+
+                    # Record trade + P&L — wrapped separately so failures don't break repeat logic
+                    try:
+                        actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
+                        actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
+                        real_yes = actual_yes if actual_yes else bot['yes_price']
+                        real_no  = actual_no  if actual_no  else bot['no_price']
+                        profit_cents = (100 - real_yes - real_no) * qty
+
+                        session_pnl['gross_profit_cents'] += profit_cents
+                        session_pnl['completed_bots']     += 1
+                        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
+
+                        _record_trade({
+                            'bot_id': bot_id, 'ticker': ticker,
+                            'yes_price': real_yes, 'no_price': real_no,
+                            'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
+                            'quantity': qty, 'profit_cents': profit_cents,
+                            'result': 'completed', 'timestamp': now,
+                            'verified_prices': actual_yes is not None and actual_no is not None,
+                            'placed_at': bot.get('created_at', now),
+                            'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                            'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                            'first_leg': bot.get('first_leg', ''),
+                            'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                            'game_phase': bot.get('game_phase', ''),
+                            'flip_threshold': bot.get('flip_threshold', FLIP_THRESHOLD_CENTS),
+                            'stop_loss_cents': bot.get('stop_loss_cents', 0),
+                            'game_context': _get_game_context(ticker),
+                            'repeats_done': repeats_done_now,
+                            'repeat_count': repeat_total,
+                        }, bot)
+                        bot_log('ARB_COMPLETED', bot_id, {
+                            'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents,
+                            'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                            'will_repeat': will_repeat,
+                        })
+                        print(f'✅ MONITOR COMPLETED: {bot_id} +{profit_cents}¢ (YES={real_yes}¢ NO={real_no}¢)'
+                              + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
+                    except Exception as _rec_err:
+                        profit_cents = 0
+                        print(f'⚠ Monitor trade record failed for {bot_id}: {_rec_err} — repeat status already set, continuing')
+                    # Always fire completed action — even if trade record had an API error
+                    actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
 
                     continue
 

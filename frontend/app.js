@@ -80,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoLogin();
     loadLiveScores();
     liveScoresInterval = setInterval(loadLiveScores, 30000);
+    requestPushPermission();
 });
 
 // ─── TAB NAVIGATION ──────────────────────────────────────────────────────────
@@ -5008,6 +5009,68 @@ function updateBotBuddyMsg(state, force = false) {
     el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${dotAnim}"></span>${pool[idx]}`;
 }
 
+// ── Completion Sound ──────────────────────────────────────────────────
+function playArbCompleteSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // Three-note ascending chime: C5 → E5 → G5, then a high sparkle
+        const notes = [
+            { freq: 523.25, start: 0.00, dur: 0.18, gain: 0.38 },  // C5
+            { freq: 659.25, start: 0.12, dur: 0.18, gain: 0.36 },  // E5
+            { freq: 783.99, start: 0.24, dur: 0.28, gain: 0.34 },  // G5
+            { freq: 1046.5, start: 0.40, dur: 0.22, gain: 0.22 },  // C6 sparkle
+        ];
+        notes.forEach(({ freq, start, dur, gain }) => {
+            const osc = ctx.createOscillator();
+            const env = ctx.createGain();
+            osc.connect(env);
+            env.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+            env.gain.setValueAtTime(0, ctx.currentTime + start);
+            env.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.02);
+            env.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+            osc.start(ctx.currentTime + start);
+            osc.stop(ctx.currentTime + start + dur + 0.05);
+        });
+        // Short cash-register tick at the start
+        const bufSize = ctx.sampleRate * 0.04;
+        const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufSize * 0.15));
+        const noise = ctx.createBufferSource();
+        const noiseEnv = ctx.createGain();
+        noiseEnv.gain.setValueAtTime(0.12, ctx.currentTime);
+        noise.buffer = buf;
+        noise.connect(noiseEnv);
+        noiseEnv.connect(ctx.destination);
+        noise.start(ctx.currentTime);
+    } catch (e) { /* audio not supported */ }
+}
+
+// ── Push Notifications ────────────────────────────────────────────────
+let _pushPermission = Notification?.permission || 'default';
+
+function requestPushPermission() {
+    if (!('Notification' in window)) return;
+    if (_pushPermission === 'granted') return;
+    Notification.requestPermission().then(p => { _pushPermission = p; });
+}
+
+function sendPushNotification(title, body) {
+    if (!('Notification' in window) || _pushPermission !== 'granted') return;
+    try {
+        const n = new Notification(title, {
+            body,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: 'meridian-arb',
+            renotify: true,
+        });
+        setTimeout(() => n.close(), 8000);
+    } catch (e) { /* blocked or not supported */ }
+}
+
 // ── Confetti (fires on arb complete only) ────────────────────────────
 function triggerConfetti() {
     const container = document.getElementById('confetti-container');
@@ -5290,7 +5353,10 @@ async function monitorBots() {
                     console.log('Bot action:', action);
                     buddyReactToEvent(action);
                     if (action.action === 'completed') {
-                        showNotification(`✅ ARB COMPLETE! +${(action.profit_cents/100).toFixed(2)} profit locked`);
+                        const profitStr = `+$${(action.profit_cents/100).toFixed(2)}`;
+                        playArbCompleteSound();
+                        sendPushNotification('💰 ARB COMPLETE!', `${profitStr} profit locked — Meridian`);
+                        showNotification(`✅ ARB COMPLETE! ${profitStr} profit locked`);
                     } else if (action.action === 'repeat_spawned') {
                         showNotification(`🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`);
                     } else if (action.action === 'auto_phase_live') {

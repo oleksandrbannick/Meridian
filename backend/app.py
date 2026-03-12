@@ -2404,7 +2404,12 @@ def create_bot():
         if ws_manager.connected:
             ws_manager.add_ticker(ticker)
 
-        bot_id = f"{ticker}_{int(time.time())}"
+        # Use YES order ID suffix for uniqueness — multiple widths placed in parallel
+        # all land within the same second, making int(time.time()) collide and overwrite bots.
+        bot_id = f"{ticker}_{yes_order_id[-8:]}"
+        # Fallback: if somehow still collides, append timestamp millis
+        if bot_id in active_bots:
+            bot_id = f"{ticker}_{yes_order_id[-8:]}_{int(time.time() * 1000)}"
         active_bots[bot_id] = {
             'ticker':           ticker,
             'yes_price':        yes_price,
@@ -3873,14 +3878,28 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_yes', 'wait_min': round(wait_min, 1)})
                         continue
                     if phase == 'live' and wait_min >= timeout_min:
-                        # Timeout: cancel pending NO, sell filled YES at market
+                        # Timeout: cancel pending NO FIRST, then sell filled YES.
+                        # CRITICAL: do NOT proceed to sell if cancel fails — that would
+                        # leave the NO limit order live on Kalshi and orphan the position
+                        # if it fills later with no bot watching it.
                         old_no_order_id = bot.get('no_order_id')
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(old_no_order_id)
-                        except Exception as _ce:
-                            print(f'⚠ Cancel NO order failed for {bot_id} ({old_no_order_id}): {_ce} — queued for retry')
-                            bot.setdefault('orphaned_order_ids', []).append(old_no_order_id)
+                        cancel_ok = False
+                        for _attempt in range(3):
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(old_no_order_id)
+                                cancel_ok = True
+                                break
+                            except Exception as _ce:
+                                print(f'⚠ Cancel NO attempt {_attempt+1}/3 failed for {bot_id} ({old_no_order_id}): {_ce}')
+                                if _attempt < 2:
+                                    time.sleep(0.5)
+                        if not cancel_ok:
+                            # Can't cancel — do NOT sell. Keep bot in yes_filled and retry next cycle.
+                            print(f'🚫 ABORT timeout exit for {bot_id} — NO cancel failed 3x, will retry next cycle')
+                            bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
+                            actions.append({'bot_id': bot_id, 'action': 'timeout_cancel_failed_yes', 'order_id': old_no_order_id})
+                            continue
                         sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'timeout_exit_yes_{bot_id}')
                         if sold:
                             orig_repeat_count = bot.get('repeat_count', 0)
@@ -3954,13 +3973,25 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_no', 'wait_min': round(wait_min, 1)})
                         continue
                     if phase == 'live' and wait_min >= timeout_min:
+                        # Timeout: cancel pending YES FIRST, then sell filled NO.
+                        # CRITICAL: do NOT proceed to sell if cancel fails — same orphan risk.
                         old_yes_order_id = bot.get('yes_order_id')
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(old_yes_order_id)
-                        except Exception as _ce:
-                            print(f'⚠ Cancel YES order failed for {bot_id} ({old_yes_order_id}): {_ce} — queued for retry')
-                            bot.setdefault('orphaned_order_ids', []).append(old_yes_order_id)
+                        cancel_ok = False
+                        for _attempt in range(3):
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(old_yes_order_id)
+                                cancel_ok = True
+                                break
+                            except Exception as _ce:
+                                print(f'⚠ Cancel YES attempt {_attempt+1}/3 failed for {bot_id} ({old_yes_order_id}): {_ce}')
+                                if _attempt < 2:
+                                    time.sleep(0.5)
+                        if not cancel_ok:
+                            print(f'🚫 ABORT timeout exit for {bot_id} — YES cancel failed 3x, will retry next cycle')
+                            bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
+                            actions.append({'bot_id': bot_id, 'action': 'timeout_cancel_failed_no', 'order_id': old_yes_order_id})
+                            continue
                         sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'timeout_exit_no_{bot_id}')
                         if sold:
                             orig_repeat_count = bot.get('repeat_count', 0)

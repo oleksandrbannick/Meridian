@@ -4449,13 +4449,14 @@ async function loadBots() {
             const createdMin  = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : ageMin;
             const repostCount = bot.repost_count || 0;
             const statusLabel = {
-                both_posted:    '⚡ BOTH LIVE',
-                fav_posted:     '⏳ WAITING',     // legacy: one order posted
-                pending_fills:  '⏳ FILLING',
-                yes_filled:     '✓ YES FILLED',
-                no_filled:      '✓ NO FILLED',
-                waiting_repeat: '🔄 REPEATING',
-                flipping:       '⚡ EXITING',
+                both_posted:      '⚡ BOTH LIVE',
+                fav_posted:       '⏳ WAITING',     // legacy: one order posted
+                pending_fills:    '⏳ FILLING',
+                yes_filled:       '✓ YES FILLED',
+                no_filled:        '✓ NO FILLED',
+                waiting_repeat:   '🔄 REPEATING',
+                flipping:         '⚡ EXITING',
+                drift_cancelled:  '🚫 DRIFT GUARD',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
@@ -4522,6 +4523,15 @@ async function loadBots() {
             }
 
             // Waiting for repeat spread
+            let driftInfo = '';
+            if (bot.status === 'drift_cancelled') {
+                const driftY = bot.drift_yes_bid != null ? bot.drift_yes_bid : '?';
+                const driftN = bot.drift_no_bid  != null ? bot.drift_no_bid  : '?';
+                driftInfo = `<div style="background:#ff6b3511;border:1px solid #ff6b3533;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6b35;margin-top:6px;">
+                    🚫 Market drifted to ${driftY}¢ / ${driftN}¢ — repeat runs cancelled. Disappears in 5 min.
+                </div>`;
+            }
+
             let waitRepeatInfo = '';
             if (bot.status === 'waiting_repeat') {
                 const waitSince = bot.waiting_repeat_since || 0;
@@ -4603,7 +4613,10 @@ async function loadBots() {
             let healthLabel = '';
             let anchoredHealthKey = '';
 
-            if (bot.status === 'waiting_repeat') {
+            if (bot.status === 'drift_cancelled') {
+                healthColor = '#ff6b35';
+                healthLabel = '🚫 DRIFTED';
+            } else if (bot.status === 'waiting_repeat') {
                 // Waiting for spread to reopen — takes priority over old fill data
                 healthColor = '#818cf8';
                 healthLabel = '🔄 WAITING';
@@ -4744,7 +4757,8 @@ async function loadBots() {
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
                 </div>
                 ${stopLossInfo}
-                ${waitRepeatInfo}`;
+                ${waitRepeatInfo}
+                ${driftInfo}`;
             botsList.appendChild(item);
             });  // end groupBots.forEach
         });  // end sortedGameKeys.forEach

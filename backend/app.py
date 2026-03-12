@@ -2763,6 +2763,13 @@ def _run_monitor():
         # Auto-reset P&L if the date has changed
         auto_reset_daily_pnl()
 
+        # ── Drift-cancelled cleanup: after 5 min, move to completed so they drop off ──
+        _now = time.time()
+        for _bot_id, _bot in list(active_bots.items()):
+            if _bot.get('status') == 'drift_cancelled':
+                if _now - _bot.get('drift_cancelled_at', _now) >= 300:
+                    _bot['status'] = 'completed'
+
         actions = []
         active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout')
 
@@ -3559,7 +3566,10 @@ def _run_monitor():
                     # Re-entering risks: underdog leg fills and keeps dropping to 0.
                     drift_side = max(fresh_yes_bid, fresh_no_bid)
                     if drift_side >= 70:
-                        bot['status'] = 'completed'
+                        bot['status'] = 'drift_cancelled'
+                        bot['drift_cancelled_at'] = now
+                        bot['drift_yes_bid'] = fresh_yes_bid
+                        bot['drift_no_bid'] = fresh_no_bid
                         print(f'🚫 REPEAT DRIFT GUARD: {bot_id} market at Y={fresh_yes_bid}¢ N={fresh_no_bid}¢ — too drifted to repost safely')
                         actions.append({'bot_id': bot_id, 'action': 'repeat_drift_guard', 'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid})
                         continue
@@ -3868,7 +3878,10 @@ def _run_monitor():
                             kalshi_client.cancel_order(bot['no_order_id'])
                         except Exception:
                             pass
-                        bot['status'] = 'completed'
+                        bot['status'] = 'drift_cancelled'
+                        bot['drift_cancelled_at'] = now
+                        bot['drift_yes_bid'] = yes_bid
+                        bot['drift_no_bid'] = no_bid
                         bot['completed_at'] = now
                         actions.append({'bot_id': bot_id, 'action': 'repost_drift_guard', 'yes_bid': yes_bid, 'no_bid': no_bid})
                         save_state()

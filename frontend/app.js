@@ -1098,19 +1098,50 @@ function groupByEvent(markets) {
         games[gameId].markets.push(market);
     });
     
-    // Second pass: build titles using ALL markets in each group
+    // Second pass: merge orphan GAME-only groups into spread groups when Kalshi
+    // listed teams in different order between series (e.g. GAME=MONTIDHO, SPREAD=IDHOMONT).
+    // Detection: same date prefix + same letters in teams segment (anagram check).
+    const sortedChars = str => str.split('').sort().join('');
+    const dateOf = gid => gid.slice(0, 7);                          // "26MAR11"
+    const teamsOf = gid => gid.replace(/^\d{2}[A-Z]{3}\d{2}/, ''); // "IDHOMONT"
+    const gameIdList = Object.keys(games);
+    gameIdList.forEach(orphanId => {
+        const g = games[orphanId];
+        if (!g) return;
+        // Only consider groups where every market is a winner/game type
+        const allWinner = g.markets.every(m => {
+            const mt = m.market_type || '';
+            return mt === 'winner' || mt === '1h_winner' ||
+                   (m.ticker || '').toUpperCase().includes('GAME');
+        });
+        if (!allWinner) return;
+        const orphanDate  = dateOf(orphanId);
+        const orphanLetters = sortedChars(teamsOf(orphanId));
+        const target = gameIdList.find(gid => {
+            if (gid === orphanId || !games[gid]) return false;
+            return dateOf(gid) === orphanDate &&
+                   sortedChars(teamsOf(gid)) === orphanLetters;
+        });
+        if (target) {
+            console.log(`🔗 Merging orphan GAME group ${orphanId} → ${target}`);
+            games[target].markets.push(...g.markets);
+            delete games[orphanId];
+        }
+    });
+
+    // Third pass: build titles using ALL markets in each group
     // This ensures winner/spread market titles (which are cleaner) are preferred
     Object.values(games).forEach(g => {
         g.eventTitle = buildGameTitle(g.gameId, g.markets);
     });
-    
+
     console.log(`✅ Grouped into ${Object.keys(games).length} games`);
-    
+
     // Log game details
     Object.values(games).forEach(g => {
         console.log(`  🏀 ${g.eventTitle}: ${g.markets.length} markets (${g.sport})`);
     });
-    
+
     return games;
 }
 

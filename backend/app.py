@@ -3798,7 +3798,8 @@ def _run_monitor():
                     # Timeout: fav fills first → 8 min (underdog can be slower, but exit if market moves)
                     #          underdog fills first → 5 min (fav not filling = market moved against us, exit fast)
                     yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
-                    timeout_min = 8.0 if yes_is_fav else 5.0
+                    is_coin_flip = (bot.get('yes_price', 50) == bot.get('no_price', 50))
+                    timeout_min = 5.0 if is_coin_flip else (8.0 if yes_is_fav else 5.0)
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     if phase == 'live' and wait_min >= timeout_min:
@@ -3843,6 +3844,18 @@ def _run_monitor():
                             bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'yes', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'yes_is_fav': yes_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_yes', 'pnl_cents': pnl_cents})
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+                            # ── Auto-retry: if repeats remain, re-enter waiting_repeat ──
+                            if orig_repeat_count > 0:
+                                repeats_done_now = bot.get('repeats_done', 0) + 1
+                                bot['repeats_done'] = repeats_done_now
+                                if repeats_done_now <= orig_repeat_count:
+                                    bot['repeat_count'] = orig_repeat_count
+                                    bot['status'] = 'waiting_repeat'
+                                    bot['waiting_repeat_since'] = now
+                                    bot['first_fill_at'] = None
+                                    bot['first_leg'] = None
+                                    print(f'🔄 TIMEOUT RETRY: {bot_id} re-entering waiting_repeat after timeout — cycle {repeats_done_now}/{orig_repeat_count}')
+                                    actions.append({'bot_id': bot_id, 'action': 'timeout_retry', 'cycle': repeats_done_now})
                         else:
                             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
                             print(f'⚠ TIMEOUT sell YES FAILED for {bot_id}')
@@ -3859,7 +3872,8 @@ def _run_monitor():
 
                     # NO is fav if its posted price >= YES price
                     no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
-                    timeout_min = 8.0 if no_is_fav else 5.0
+                    is_coin_flip = (bot.get('yes_price', 50) == bot.get('no_price', 50))
+                    timeout_min = 5.0 if is_coin_flip else (8.0 if no_is_fav else 5.0)
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     if phase == 'live' and wait_min >= timeout_min:
                         try:
@@ -3902,6 +3916,18 @@ def _run_monitor():
                             bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'no', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'no_is_fav': no_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_no', 'pnl_cents': pnl_cents})
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+                            # ── Auto-retry: if repeats remain, re-enter waiting_repeat ──
+                            if orig_repeat_count > 0:
+                                repeats_done_now = bot.get('repeats_done', 0) + 1
+                                bot['repeats_done'] = repeats_done_now
+                                if repeats_done_now <= orig_repeat_count:
+                                    bot['repeat_count'] = orig_repeat_count
+                                    bot['status'] = 'waiting_repeat'
+                                    bot['waiting_repeat_since'] = now
+                                    bot['first_fill_at'] = None
+                                    bot['first_leg'] = None
+                                    print(f'🔄 TIMEOUT RETRY: {bot_id} re-entering waiting_repeat after timeout — cycle {repeats_done_now}/{orig_repeat_count}')
+                                    actions.append({'bot_id': bot_id, 'action': 'timeout_retry', 'cycle': repeats_done_now})
                         else:
                             bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
                             print(f'⚠ TIMEOUT sell NO FAILED for {bot_id}')
@@ -4614,7 +4640,7 @@ def history_stats():
         source = [t for t in trade_history if _trade_day_key(t) == date_filter]
     else:
         source = trade_history
-    arb_trades = [t for t in source if t.get('type') != 'watch']
+    arb_trades = [t for t in source if t.get('type') not in ('watch', 'middle')]
     watch_trades = [t for t in source if t.get('type') == 'watch']
 
     WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')

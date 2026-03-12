@@ -751,15 +751,18 @@ function getGameSignal(gameId, sport, markets) {
     if (lateAndTight) return { type: 'late_game', label: '⌛ LATE GAME', color: '#ff4444', glowAnim: '',
         description: `±${marginLabel} · ${phaseLabel} — Tight + late, running out of time for both legs to fill`, liq };
 
+    // Data: 10-14pt lead = 92% fill rate (rich bids, both sides active)
+    //       0-4pt = highest volatility, ask-side pricing kicks in for thin bids
     if (scoreDiff >= 20) return { type: 'runaway',  label: '🔴 RUNAWAY',   color: '#ff6644', glowAnim: '',
-        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Blowout, dog side dead`, liq };
-    if (effectiveMargin >= 12) return { type: 'drifting', label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: 'arbGlowGold',
-        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Big lead, dog fills getting harder`, liq };
-    if (effectiveMargin >= 5) return { type: 'lean',      label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGlow',
-        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Small lead, decent volatility`, liq };
+        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Large lead, dog leg may take time but historically fills`, liq };
+    if (effectiveMargin >= 12) return { type: 'drifting', label: '🟡 DRIFTING',  color: '#ffaa33', glowAnim: '',
+        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — ⚠ Dog may fill and keep dropping, fav trends up past your limit`, liq };
+    if (effectiveMargin >= 5) return { type: 'lean',      label: '🟢 LEAN',      color: '#4ade80', glowAnim: 'arbGrow',
+        description: `+${marginLabel} · ${phaseLabel} · Fav ${favPrice}¢ — Lead exists but game still volatile, decent fill chance`, liq };
 
     return { type: 'coin_flip', label: '🔵 COIN FLIP', color: '#60a5fa', glowAnim: 'arbGlowBlue',
-        description: `±${marginLabel} · ${phaseLabel} — Close game, both legs will bounce`, liq };
+
+        description: `±${marginLabel} · ${phaseLabel} — Prices bounce both ways, both legs can fill. Best opportunity`, liq };
 }
 
 function getRecommendedPresets(tier, signalType) {
@@ -1004,13 +1007,19 @@ async function refreshVisiblePrices() {
                 delete mkt.no_ask_dollars;
             }
 
+            // Compute market tier for button brightness
+            const lBidSum = (p.yes_bid || 0) + (p.no_bid || 0);
+            const lYesSp  = p.yes_ask > 0 && p.yes_bid > 0 ? p.yes_ask - p.yes_bid : 99;
+            const lNoSp   = p.no_ask  > 0 && p.no_bid  > 0 ? p.no_ask  - p.no_bid  : 99;
+            const lAvgSp  = (lYesSp + lNoSp) / 2;
+            const lTier   = lBidSum > 100 ? 'over100' : lAvgSp <= 3 ? 'tight' : lAvgSp <= 8 ? 'medium' : 'wide';
+
             // Find YES button for this ticker
             const yesBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="yes"]`);
             if (yesBtn) {
-                // Suppress phantom 100¢ ask when opposite side has no bids
                 const yesPrice = (p.yes_ask >= 99 && (p.no_bid || 0) <= 1) ? (p.yes_bid || 0) : (p.yes_ask > 0 ? p.yes_ask : 0);
                 const yesDisplay = yesPrice > 0 ? `${yesPrice}¢` : '—';
-                const newStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes') : 'background: #1a1f2e; color: #555;';
+                const newStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes', lTier) : 'background: #1a1f2e; color: #555;';
                 yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
                 yesBtn.innerHTML = yesDisplay;
                 if (mkt) yesBtn.onclick = () => openBotModal(mkt, 'yes', p.yes_ask);
@@ -1019,10 +1028,9 @@ async function refreshVisiblePrices() {
             // Find NO button for this ticker
             const noBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="no"]`);
             if (noBtn) {
-                // Suppress phantom 100¢ ask when opposite side has no bids
                 const noPrice = (p.no_ask >= 99 && (p.yes_bid || 0) <= 1) ? (p.no_bid || 0) : (p.no_ask > 0 ? p.no_ask : 0);
                 const noDisplay = noPrice > 0 ? `${noPrice}¢` : '—';
-                const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
+                const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no', lTier) : 'background: #1a1f2e; color: #555;';
                 noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
                 noBtn.innerHTML = noDisplay;
                 if (mkt) noBtn.onclick = () => handleManualMiddleNoClick(mkt);
@@ -1777,7 +1785,17 @@ function createMarketRow(market, label) {
     const yesPrice = (yesAsk >= 99 && noBid <= 1) ? yesBid : (yesAsk > 0 ? yesAsk : 0);
     const noPrice = (noAsk >= 99 && yesBid <= 1) ? noBid : (noAsk > 0 ? noAsk : 0);
 
-    const yesStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes') : 'background: #1a1f2e; color: #555;';
+    // Market tier for button brightness: bid_sum vs spread quality
+    const bidSum = (yesBid || 0) + (noBid || 0);
+    const yesSpread = yesAsk > 0 && yesBid > 0 ? yesAsk - yesBid : 99;
+    const noSpread  = noAsk  > 0 && noBid  > 0 ? noAsk  - noBid  : 99;
+    const avgSpread = (yesSpread + noSpread) / 2;
+    const mktTier = bidSum > 100 ? 'over100'
+                  : avgSpread <= 3 ? 'tight'
+                  : avgSpread <= 8 ? 'medium'
+                  : 'wide';
+
+    const yesStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes', mktTier) : 'background: #1a1f2e; color: #555;';
     
     const yesBtn = document.createElement('button');
     yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${yesStyle}`;
@@ -1790,7 +1808,7 @@ function createMarketRow(market, label) {
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
     
     // NO button
-    const noStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no') : 'background: #1a1f2e; color: #555;';
+    const noStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no', mktTier) : 'background: #1a1f2e; color: #555;';
     
     const noBtn = document.createElement('button');
     noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${noStyle}`;
@@ -1825,38 +1843,33 @@ function createMarketRow(market, label) {
 
 // Get button styling based on price — highlights ANCHOR zone (65-85¢) for volatility capture
 // Strong favorites are where the bot places limit orders to catch dips
-function getPriceButtonStyle(price, side) {
-    const isAnchor = price >= 65 && price <= 85;   // ← BEST for volatility capture
-    const isSettled = price > 85;                   // Very strong fav — less vol opportunity
-    const isMid = price >= 40 && price < 65;        // Coin-flip / volatile
-    const isUnderdog = price >= 20 && price < 40;   // Underdog side
-    const isLongShot = price < 20;                   // Deep underdog
-    
-    if (side === 'yes') {
-        if (isAnchor) {
-            return 'background: rgba(0, 255, 136, 0.2); color: #00ff88; border: 2px solid #00ff88;';
-        } else if (isSettled) {
-            return 'background: rgba(0, 255, 136, 0.12); color: #00ff88cc; border: 1px solid #00ff8866;';
-        } else if (isMid) {
-            return 'background: rgba(0, 255, 136, 0.08); color: #00ff88aa; border: 1px solid #00ff8844;';
-        } else if (isUnderdog) {
-            return 'background: rgba(0, 255, 136, 0.04); color: #00ff8866; border: 1px solid #00ff8833;';
-        } else {
-            return 'background: rgba(0, 255, 136, 0.02); color: #00ff8833; border: 1px solid #00ff8822;';
-        }
-    } else {
-        if (isAnchor) {
-            return 'background: rgba(255, 68, 68, 0.2); color: #ff4444; border: 2px solid #ff4444;';
-        } else if (isSettled) {
-            return 'background: rgba(255, 68, 68, 0.12); color: #ff4444cc; border: 1px solid #ff444466;';
-        } else if (isMid) {
-            return 'background: rgba(255, 68, 68, 0.08); color: #ff4444aa; border: 1px solid #ff444444;';
-        } else if (isUnderdog) {
-            return 'background: rgba(255, 68, 68, 0.04); color: #ff444466; border: 1px solid #ff444433;';
-        } else {
-            return 'background: rgba(255, 68, 68, 0.02); color: #ff444433; border: 1px solid #ff444422;';
-        }
+// marketTier: 'tight' | 'medium' | 'wide' | 'over100'
+//   tight   = bid/ask spread ≤ 3¢ both sides → full glow, solid border (best fills)
+//   medium  = spread ≤ 8¢ → moderate glow
+//   wide    = spread > 8¢ (broken/thin) → dim, ask-side pricing kicks in
+//   over100 = bid_sum > 100 → guaranteed arb in book → gold border highlight
+function getPriceButtonStyle(price, side, marketTier) {
+    const yesBase = '#00ff88';
+    const noBase  = '#ff4444';
+    const color   = side === 'yes' ? yesBase : noBase;
+
+    if (marketTier === 'over100') {
+        // Bid sum > 100 — immediate arb available, highlight in gold
+        return `background: rgba(255,190,0,0.18); color: #ffcc00; border: 2px solid #ffcc00;`;
     }
+
+    if (marketTier === 'tight') {
+        // Tight spread both sides — best fill probability, full brightness
+        return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.22); color: ${color}; border: 2px solid ${color};`;
+    }
+
+    if (marketTier === 'medium') {
+        // Normal market — moderate glow
+        return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.10); color: ${color}cc; border: 1px solid ${color}66;`;
+    }
+
+    // wide / broken / thin — dim, orange-tinted border to signal thin liquidity
+    return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.04); color: ${color}66; border: 1px dashed #ff880055;`;
 }
 
 // Extract team label from ticker suffix (e.g., KXNBAGAME-26FEB28HOUMIA-MIA -> "Miami")
@@ -2492,35 +2505,67 @@ function calculateArbPrices(market, width) {
         effectiveNoBid = 100 - effectiveYesBid - width;
     }
 
-    // ── Favorite anchoring logic ──
-    // The higher-priced side is the "favorite" (more liquid, fills faster).
-    // Shave LESS from favorite, MORE from underdog.
-    // NEVER post above the current bid — that overpays.
+    // ── Pricing mode selection ──
+    // BID-SIDE (normal): bid_sum >= targetTotal — shave down from bids, post below current best bid.
+    // ASK-SIDE (thin market): bid_sum < targetTotal — market too thin to reach width from bids alone.
+    //   Instead anchor to asks and shave DOWN from them, posting between bid and ask.
+    //   This puts us at the top of the buy queue for each side, improving fill probability.
     const bidSum = effectiveYesBid + effectiveNoBid;
-    const totalShave = bidSum - targetTotal;  // how much to shave off bids combined
+    const totalShave = bidSum - targetTotal;  // > 0 = normal market, <= 0 = thin market
 
+    const yesIsFav = effectiveYesBid >= effectiveNoBid;  // higher bid = more likely to win
     let targetYes, targetNo;
+    let usingAskSide = false;
 
-    if (totalShave <= 0) {
-        // Bids already sum below our target — just use the bids directly
-        // (profit is already >= requested width)
+    if (totalShave <= 0 && yesAsk > 0 && noAsk > 0) {
+        // ── ASK-SIDE PRICING ── thin market, anchor to asks and shave down
+        // Posts our buy orders between bid and ask — more aggressive, better fill probability.
+        // askSum = yesAsk + noAsk ≈ 200 - bidSum, so it's almost always > targetTotal.
+        const askSum = yesAsk + noAsk;
+        const askShave = Math.max(0, askSum - targetTotal);
+
+        let favAskShave = Math.floor(askShave * 0.4);  // shave less from fav (stays close to ask, fills faster)
+        let dogAskShave = askShave - favAskShave;
+
+        // Never post AT or ABOVE the ask (would cross spread and fill immediately at bad price)
+        // Cap each side so we stay at least 1¢ below the ask
+        const maxYesTarget = Math.max(1, yesAsk - 1);
+        const maxNoTarget  = Math.max(1, noAsk  - 1);
+
+        if (yesIsFav) {
+            targetYes = Math.min(maxYesTarget, yesAsk - favAskShave);
+            targetNo  = Math.min(maxNoTarget,  noAsk  - dogAskShave);
+        } else {
+            targetYes = Math.min(maxYesTarget, yesAsk - dogAskShave);
+            targetNo  = Math.min(maxNoTarget,  noAsk  - favAskShave);
+        }
+
+        // Ensure we still achieve the target width — adjust if needed
+        const askProfit = 100 - targetYes - targetNo;
+        if (askProfit < width) {
+            // Trim the fav side to restore width
+            if (yesIsFav) targetYes = Math.max(1, 100 - targetNo - width);
+            else           targetNo  = Math.max(1, 100 - targetYes - width);
+        }
+
+        usingAskSide = true;
+    } else if (totalShave <= 0) {
+        // Thin market but no ask data — just use bids directly
         targetYes = effectiveYesBid;
         targetNo  = effectiveNoBid;
     } else {
-        // Determine which side is favorite (higher bid = more likely winner)
-        const yesIsFav = effectiveYesBid >= effectiveNoBid;
+        // ── BID-SIDE PRICING ── normal market, shave down from best bids
         let favShave = Math.floor(totalShave * 0.4);   // less shave on favorite — stays near bid, fills faster
         let dogShave = totalShave - favShave;           // more shave on underdog — deeper limit, fav fills first
 
         // Get the underdog's max shaveable room (can't go below 1¢)
         const dogBid = yesIsFav ? effectiveNoBid : effectiveYesBid;
-        const dogMaxShave = Math.max(0, dogBid - 1);  // most we can shave off underdog
+        const dogMaxShave = Math.max(0, dogBid - 1);
 
-        // If underdog can't absorb its share, redistribute overflow to favorite
         if (dogShave > dogMaxShave) {
             const overflow = dogShave - dogMaxShave;
             dogShave = dogMaxShave;
-            favShave = favShave + overflow;  // favorite absorbs remaining only if dog is floored
+            favShave = favShave + overflow;
         }
 
         if (yesIsFav) {
@@ -2530,18 +2575,17 @@ function calculateArbPrices(market, width) {
             targetYes = effectiveYesBid - dogShave;
             targetNo  = effectiveNoBid - favShave;
         }
-    }
 
-    // If real bids exist, NEVER exceed them — that's overpaying
-    if (yesBid > 0) targetYes = Math.min(targetYes, yesBid);
-    if (noBid > 0)  targetNo  = Math.min(targetNo, noBid);
+        // NEVER exceed current bid — that overpays
+        if (yesBid > 0) targetYes = Math.min(targetYes, yesBid);
+        if (noBid > 0)  targetNo  = Math.min(targetNo, noBid);
+    }
 
     // Clamp to valid price range
     targetYes = Math.max(1, Math.min(targetYes, 98));
     targetNo  = Math.max(1, Math.min(targetNo, 98));
 
     // Enforce target width: if dog hit the 1¢ floor, push fav down to maintain width.
-    // e.g. YES bid=99, NO no-bids, width=14 → derived NO=-13 → clamped 1 → fav pushed to 85.
     let dogAtFloor = false;
     const actualProfit = 100 - targetYes - targetNo;
     if (actualProfit < width) {
@@ -2554,17 +2598,18 @@ function calculateArbPrices(market, width) {
     }
 
     // Detect when a side's shave was redistributed to the other side
-    const yesShaved = effectiveYesBid - targetYes;  // how much was shaved off YES
-    const noShaved  = effectiveNoBid  - targetNo;   // how much was shaved off NO
-    const yesUnshaved = totalShave > 0 && yesShaved <= 0;  // YES couldn't be shaved at all
-    const noUnshaved  = totalShave > 0 && noShaved  <= 0;  // NO couldn't be shaved at all
+    const yesShaved = effectiveYesBid - targetYes;
+    const noShaved  = effectiveNoBid  - targetNo;
+    const yesUnshaved = totalShave > 0 && yesShaved <= 0;
+    const noUnshaved  = totalShave > 0 && noShaved  <= 0;
 
     return {
         targetYes, targetNo,
         total:   targetYes + targetNo,
         profit:  100 - (targetYes + targetNo),
         yesBid, noBid, yesAsk, noAsk,
-        yesIsFav: effectiveYesBid >= effectiveNoBid,
+        yesIsFav,
+        usingAskSide,   // true when market is thin — priced from ask side
         // Flag when a side has no real liquidity
         yesNoLiquidity: yesBid <= 0,
         noNoLiquidity:  noBid <= 0,
@@ -3166,21 +3211,9 @@ function openBotModal(market, _side, _price) {
         });
     }
 
-    // ── Underdog warning banner ──
+    // Underdog warning removed — no longer relevant for dual arb strategy
     const warnEl = document.getElementById('modal-underdog-warning');
-    if (warnEl && ol) {
-        const bettingYes = (_side === 'yes');
-        const isUnderdogBet = bettingYes ? (ol.yes_price < 50) : (ol.yes_price > 50);
-        if (isUnderdogBet) {
-            const favPct = bettingYes ? (100 - ol.yes_price) : ol.yes_price;
-            warnEl.style.display = 'block';
-            warnEl.innerHTML = `⚠ <strong>Pre-game underdog</strong> — this team opened at ${bettingYes ? ol.yes_price : 100 - ol.yes_price}¢. The pre-game favorite was projected at ${favPct}¢. Make sure they're actually winning convincingly.`;
-        } else {
-            warnEl.style.display = 'none';
-        }
-    } else if (warnEl) {
-        warnEl.style.display = 'none';
-    }
+    if (warnEl) warnEl.style.display = 'none';
 
     // Ensure single-market layout: show market card, reset middle data
     const marketCard = document.getElementById('bot-market-card');
@@ -3883,35 +3916,31 @@ async function placeAllWidthsBots() {
 
     if (!confirm(orderLines.join('\n'))) return;
 
-    // ── Placement loop ─────────────────────────────────────────────────────────
+    // ── Parallel placement ──────────────────────────────────────────────────────
     const deployBtn = document.getElementById('deploy-btn');
     if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '⏳ Placing...'; }
 
     const results = { placed: 0, skipped: skipReasons.length, errors: 0 };
 
-    for (const { w, arb } of validWidths) {
-        try {
-            const resp = await fetch(`${API_BASE}/bot/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ticker: currentArbMarket.ticker,
-                    yes_price: arb.targetYes,
-                    no_price:  arb.targetNo,
-                    quantity: qty,
-                    arb_width: w,
-                    repeat_count: repeatCount,
-                    game_phase: gamePhase,
-                }),
-            });
-            const data = await resp.json();
-            if (data.bot_id || data.success !== false) { results.placed++; }
-            else { results.errors++; }
-        } catch (e) { results.errors++; }
-
-        // Small delay between requests to avoid rate limiting
-        await new Promise(r => setTimeout(r, 150));
-    }
+    const placements = validWidths.map(({ w, arb }) =>
+        fetch(`${API_BASE}/bot/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: currentArbMarket.ticker,
+                yes_price: arb.targetYes,
+                no_price:  arb.targetNo,
+                quantity: qty,
+                arb_width: w,
+                repeat_count: repeatCount,
+                game_phase: gamePhase,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => { if (data.bot_id || data.success !== false) results.placed++; else results.errors++; })
+        .catch(() => { results.errors++; })
+    );
+    await Promise.all(placements);
 
     if (deployBtn) { deployBtn.disabled = false; deployBtn.textContent = '⚡ Deploy All Widths'; }
 

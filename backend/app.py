@@ -3798,8 +3798,7 @@ def _run_monitor():
                     # Timeout: fav fills first → 8 min (underdog can be slower, but exit if market moves)
                     #          underdog fills first → 5 min (fav not filling = market moved against us, exit fast)
                     yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
-                    is_coin_flip = (bot.get('yes_price', 50) == bot.get('no_price', 50))
-                    timeout_min = 5.0 if is_coin_flip else (8.0 if yes_is_fav else 5.0)
+                    timeout_min = 8.0 if yes_is_fav else 8.0  # both legs get 8 min
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     if phase == 'live' and wait_min >= timeout_min:
@@ -3870,10 +3869,8 @@ def _run_monitor():
                         bot['first_fill_at'] = now
                         bot['first_leg'] = 'no'
 
-                    # NO is fav if its posted price >= YES price
-                    no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
-                    is_coin_flip = (bot.get('yes_price', 50) == bot.get('no_price', 50))
-                    timeout_min = 5.0 if is_coin_flip else (8.0 if no_is_fav else 5.0)
+                    # Both legs get 8 min timeout
+                    timeout_min = 8.0
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     if phase == 'live' and wait_min >= timeout_min:
                         try:
@@ -4843,10 +4840,11 @@ def history_stats():
     loss_durations = [t['fill_duration_s'] for t in arb_losses if t.get('fill_duration_s') is not None]
 
     total_arb = len(arb_wins) + len(arb_losses)
-    # Net across ALL arb trades: sum every profit_cents and every loss_cents
-    # (timeout exits can be profitable even though they're in arb_losses)
-    total_profit = sum(t.get('profit_cents', 0) for t in arb_trades)
-    total_loss   = sum(t.get('loss_cents',   0) for t in arb_trades)
+    # Use same PNL_WIN_RESULTS / PNL_LOSS_RESULTS logic as /api/pnl endpoint
+    # so Lifetime P&L card and Daily P&L card always show the same number
+    pnl_bucket = _compute_pnl_bucket(arb_trades)
+    total_profit = pnl_bucket['gross_profit_cents']
+    total_loss   = pnl_bucket['gross_loss_cents']
     # avg profit/loss still based on wins/loss buckets for meaningful averages
     avg_profit_for_display = sum(t.get('profit_cents', 0) for t in arb_wins)
     avg_loss_for_display   = sum(t.get('loss_cents',   0) for t in arb_losses)
@@ -5705,7 +5703,7 @@ def get_pnl_calendar():
 
     calendar_data = []
     for day in sorted(day_buckets.keys()):
-        bucket = _compute_pnl_bucket(day_buckets[day])
+        bucket = _compute_pnl_bucket(day_buckets[day], 'arb')
         calendar_data.append({
             'date':        day,
             'net_cents':   bucket['net_cents'],

@@ -1012,7 +1012,7 @@ async function refreshVisiblePrices() {
             const lYesSp  = p.yes_ask > 0 && p.yes_bid > 0 ? p.yes_ask - p.yes_bid : 99;
             const lNoSp   = p.no_ask  > 0 && p.no_bid  > 0 ? p.no_ask  - p.no_bid  : 99;
             const lAvgSp  = (lYesSp + lNoSp) / 2;
-            const lTier   = lBidSum > 100 ? 'over100' : lAvgSp <= 3 ? 'tight' : lAvgSp <= 8 ? 'medium' : 'wide';
+            const lTier   = lBidSum > 100 ? 'over100' : lAvgSp <= 3 ? 'tight' : 'medium';
 
             // Find YES button for this ticker
             const yesBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="yes"]`);
@@ -1792,8 +1792,7 @@ function createMarketRow(market, label) {
     const avgSpread = (yesSpread + noSpread) / 2;
     const mktTier = bidSum > 100 ? 'over100'
                   : avgSpread <= 3 ? 'tight'
-                  : avgSpread <= 8 ? 'medium'
-                  : 'wide';
+                  : 'medium';
 
     const yesStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes', mktTier) : 'background: #1a1f2e; color: #555;';
     
@@ -1843,11 +1842,10 @@ function createMarketRow(market, label) {
 
 // Get button styling based on price — highlights ANCHOR zone (65-85¢) for volatility capture
 // Strong favorites are where the bot places limit orders to catch dips
-// marketTier: 'tight' | 'medium' | 'wide' | 'over100'
+// marketTier: 'tight' | 'medium' | 'over100'
 //   tight   = bid/ask spread ≤ 3¢ both sides → full glow, solid border (best fills)
-//   medium  = spread ≤ 8¢, bid_sum < 100 → moderate glow (normal arb market)
-//   wide    = spread > 8¢, bid_sum < 100 → dim dashed (thin/broken, ask-side pricing kicks in)
-//   over100 = bid_sum > 100 → muted/dark — paying >100c for 100c payout, NOT profitable for dual arb
+//   medium  = spread > 3¢, bid_sum < 100 → moderate glow (normal / thin arb market)
+//   over100 = bid_sum > 100 → muted/dark — paying >100c for 100c payout, not profitable for dual arb
 function getPriceButtonStyle(price, side, marketTier) {
     const yesBase = '#00ff88';
     const noBase  = '#ff4444';
@@ -1863,13 +1861,8 @@ function getPriceButtonStyle(price, side, marketTier) {
         return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.22); color: ${color}; border: 2px solid ${color};`;
     }
 
-    if (marketTier === 'medium') {
-        // Normal arb market — moderate glow
-        return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.10); color: ${color}cc; border: 1px solid ${color}66;`;
-    }
-
-    // wide / thin — bid_sum well below 100, ask-side pricing territory. Slightly dim, dashed border.
-    return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.05); color: ${color}77; border: 1px dashed ${color}44;`;
+    // medium / wide / thin — all show same moderate glow
+    return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.10); color: ${color}cc; border: 1px solid ${color}66;`;
 }
 
 // Extract team label from ticker suffix (e.g., KXNBAGAME-26FEB28HOUMIA-MIA -> "Miami")
@@ -4141,12 +4134,12 @@ function _renderPnlDisplay(mode) {
             </span>
         `;
     } else {
-        const net      = pnl.net_dollars ?? 0;
+        const net      = (pnl.arb_net_cents || 0) / 100;
         const netColor = net >= 0 ? '#00ff88' : '#ff4444';
-        const gross    = (pnl.gross_profit_cents / 100).toFixed(2);
-        const loss     = (pnl.gross_loss_cents / 100).toFixed(2);
-        const wins     = pnl.completed_bots || 0;
-        const losses   = pnl.stopped_bots   || 0;
+        const gross    = ((pnl.arb_profit_cents || 0) / 100).toFixed(2);
+        const loss     = ((pnl.arb_loss_cents   || 0) / 100).toFixed(2);
+        const wins     = pnl.arb_wins   || 0;
+        const losses   = pnl.arb_losses || 0;
         const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
         el.innerHTML = `
             <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>

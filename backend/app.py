@@ -260,12 +260,15 @@ def get_markets():
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
             'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH'],
+            'golf': ['KXPGAH2H', 'KXTGLMATCH', 'KXPGATOP10', 'KXPGAMAKECUT',
+                     'KXPGAR1LEAD', 'KXPGAR2LEAD', 'KXPGAR3LEAD', 'KXPGATOP5'],
+            'nbl': ['KXNBLGAME'],
             'wbc': ['KXWBCGAME'],
-            'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
+            'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME', 'KXNBLGAME'],
         }
         # Series excluded from the default "all" fetch — low liquidity / bad pricing.
-        # Accessible via explicit sport filter (e.g. sport=intl) but not shown by default.
-        _EXCLUDE_FROM_ALL = {'KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'}
+        # Accessible via explicit sport filter (e.g. sport=intl / sport=nbl) but not shown by default.
+        _EXCLUDE_FROM_ALL = {'KXVTBGAME', 'KXBSLGAME', 'KXABAGAME', 'KXNBLGAME'}
 
         # Determine which series to fetch
         if sport_filter and sport_filter.lower() != 'all':
@@ -5587,8 +5590,11 @@ def scan_arb_opportunities():
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
             'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH'],
+            'golf': ['KXPGAH2H', 'KXTGLMATCH', 'KXPGATOP10', 'KXPGAMAKECUT',
+                     'KXPGAR1LEAD', 'KXPGAR2LEAD', 'KXPGAR3LEAD', 'KXPGATOP5'],
+            'nbl': ['KXNBLGAME'],
             'wbc': ['KXWBCGAME'],
-            'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
+            'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME', 'KXNBLGAME'],
         }
 
         if sport_filter and sport_filter.lower() not in ('', 'all'):

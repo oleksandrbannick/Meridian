@@ -372,9 +372,11 @@ function applyFilters() {
                 case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
                 case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
                 case 'tennis': return et.includes('KXATP') || et.includes('KXWTA');
+                case 'golf':  return et.includes('KXPGA') || et.includes('KXTGL') || et.includes('KXGOLF');
+                case 'nbl':   return et.includes('KXNBL');
                 case 'wbc':   return et.includes('KXWBC');
-                case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXWBC') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA');
+                case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA') || et.includes('KXNBL');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXPGA') && !et.includes('KXTGL') && !et.includes('KXGOLF') && !et.includes('KXNBL') && !et.includes('KXWBC') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA');
                 default: return true;
             }
         });
@@ -1175,6 +1177,8 @@ function detectSport(eventTicker) {
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
     if (upper.includes('KXATP') || upper.includes('KXWTA')) return 'Tennis';
+    if (upper.includes('KXPGA') || upper.includes('KXTGL') || upper.includes('KXGOLF')) return 'Golf';
+    if (upper.includes('KXNBL')) return 'NBL';
     if (upper.includes('KXWBC')) return 'WBC';
     if (upper.includes('KXVTB')) return 'VTB';
     if (upper.includes('KXBSL')) return 'BSL';
@@ -1189,7 +1193,7 @@ function getSportEmoji(sport) {
         'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 
         'MLS': '⚽', 'NCAAB': '🎓', 'NCAAW': '🎓', 'NCAAF': '🎓',
         'EPL': '⚽', 'UCL': '⚽',
-        'Tennis': '🎾', 'Esports': '🎮',
+        'Tennis': '🎾', 'Golf': '⛳', 'NBL': '🏀', 'Esports': '🎮',
         'WBC': '⚾', 'VTB': '🏀', 'BSL': '🏀', 'ABA': '🏀',
         'Sports': '🏆'
     };

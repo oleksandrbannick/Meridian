@@ -3508,6 +3508,16 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'repeat_game_over'})
                         continue
 
+                    # ── Drift guard: don't repost into a drifted market ──
+                    # If one side is 70c+, the game has moved too far from 50/50.
+                    # Re-entering risks: underdog leg fills and keeps dropping to 0.
+                    drift_side = max(fresh_yes_bid, fresh_no_bid)
+                    if drift_side >= 70:
+                        bot['status'] = 'completed'
+                        print(f'🚫 REPEAT DRIFT GUARD: {bot_id} market at Y={fresh_yes_bid}¢ N={fresh_no_bid}¢ — too drifted to repost safely')
+                        actions.append({'bot_id': bot_id, 'action': 'repeat_drift_guard', 'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid})
+                        continue
+
                     # Also bail if either side has no bids at all
                     if fresh_yes_bid == 0 or fresh_no_bid == 0:
                         # Don't burn API calls — skip this cycle, will timeout naturally

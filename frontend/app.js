@@ -2499,18 +2499,22 @@ function calculateArbPrices(market, width) {
     }
 
     // ── Pricing mode selection ──
-    // BID-SIDE (normal): bid_sum >= targetTotal — shave down from bids, post below current best bid.
-    // ASK-SIDE (thin market): bid_sum < targetTotal — market too thin to reach width from bids alone.
-    //   Instead anchor to asks and shave DOWN from them, posting between bid and ask.
-    //   This puts us at the top of the buy queue for each side, improving fill probability.
+    // ASK-SIDE: use whenever bid/ask spread > 1¢ on either side — post between bid and ask,
+    //   putting us closer to the front of the queue. For wide widths the price may still fall
+    //   below the bid (unavoidable math), but we always start from the ask and shave down.
+    // BID-SIDE: only when spreads are 1¢ (no room between bid/ask), just match the bid.
     const bidSum = effectiveYesBid + effectiveNoBid;
-    const totalShave = bidSum - targetTotal;  // > 0 = normal market, <= 0 = thin market
+    const totalShave = bidSum - targetTotal;
+
+    const yesSpreadAmt = yesAsk > 0 && yesBid > 0 ? yesAsk - yesBid : 0;
+    const noSpreadAmt  = noAsk  > 0 && noBid  > 0 ? noAsk  - noBid  : 0;
+    const hasRoomBetweenBidAsk = yesAsk > 0 && noAsk > 0 && (yesSpreadAmt > 1 || noSpreadAmt > 1);
 
     const yesIsFav = effectiveYesBid >= effectiveNoBid;  // higher bid = more likely to win
     let targetYes, targetNo;
     let usingAskSide = false;
 
-    if (totalShave <= 0 && yesAsk > 0 && noAsk > 0) {
+    if (hasRoomBetweenBidAsk) {
         // ── ASK-SIDE PRICING ── thin market, anchor to asks and shave down
         // Posts our buy orders between bid and ask — more aggressive, better fill probability.
         // askSum = yesAsk + noAsk ≈ 200 - bidSum, so it's almost always > targetTotal.
@@ -2542,12 +2546,8 @@ function calculateArbPrices(market, width) {
         }
 
         usingAskSide = true;
-    } else if (totalShave <= 0) {
-        // Thin market but no ask data — just use bids directly
-        targetYes = effectiveYesBid;
-        targetNo  = effectiveNoBid;
     } else {
-        // ── BID-SIDE PRICING ── normal market, shave down from best bids
+        // ── BID-SIDE PRICING ── spreads are 1¢ (tight) or no ask data, shave from bids
         let favShave = Math.floor(totalShave * 0.4);   // less shave on favorite — stays near bid, fills faster
         let dogShave = totalShave - favShave;           // more shave on underdog — deeper limit, fav fills first
 

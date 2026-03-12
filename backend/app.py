@@ -3910,7 +3910,7 @@ def _run_monitor():
                                 'repeat_count': orig_repeat_count,
                                 'timeout_min': timeout_min,
                             }, bot)
-                            bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'no', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'no_is_fav': no_is_fav, 'exit': actual_sell, 'pnl': pnl_cents})
+                            bot_log('TIMEOUT_EXIT', bot_id, {'leg': 'no', 'wait_min': round(wait_min, 1), 'timeout_min': timeout_min, 'exit': actual_sell, 'pnl': pnl_cents})
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_no', 'pnl_cents': pnl_cents})
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
                             # ── Auto-retry: if repeats remain, re-enter waiting_repeat ──

@@ -263,14 +263,17 @@ def get_markets():
             'wbc': ['KXWBCGAME'],
             'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'],
         }
-        
+        # Series excluded from the default "all" fetch — low liquidity / bad pricing.
+        # Accessible via explicit sport filter (e.g. sport=intl) but not shown by default.
+        _EXCLUDE_FROM_ALL = {'KXVTBGAME', 'KXBSLGAME', 'KXABAGAME'}
+
         # Determine which series to fetch
         if sport_filter and sport_filter.lower() != 'all':
             series_to_fetch = SPORTS_SERIES.get(sport_filter.lower(), [])
         else:
             series_to_fetch = []
             for sport_series in SPORTS_SERIES.values():
-                series_to_fetch.extend(sport_series)
+                series_to_fetch.extend(s for s in sport_series if s not in _EXCLUDE_FROM_ALL)
         
         # Fetch markets from each series in parallel
         # Use 6 workers to stay under Kalshi's 10 req/s rate limit,
@@ -5606,7 +5609,9 @@ def scan_arb_opportunities():
                 'KXEPLGAME','KXEPLSPREAD','KXEPLTOTAL','KXEPLGOAL',
                 'KXUCLGAME','KXUCLSPREAD','KXUCLTOTAL','KXUCLGOAL',
                 'KXATPMATCH','KXWTAMATCH',
-                'KXWBCGAME','KXVTBGAME','KXBSLGAME','KXABAGAME',
+                'KXWBCGAME',
+                # KXVTBGAME, KXBSLGAME, KXABAGAME excluded — near-zero liquidity,
+                # bids sum nowhere near 100c, creates false arb signals
             ]
             series_to_fetch = ALL_SCAN_SERIES
 

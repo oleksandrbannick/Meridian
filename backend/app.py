@@ -1086,12 +1086,20 @@ class KalshiWSManager:
             if ticker:
                 yb = msg.get('yes_bid', 0)
                 ya = msg.get('yes_ask', 0)
+                nb = msg.get('no_bid', 0)
+                na = msg.get('no_ask', 0)
+                # Market identity: YES ask + NO bid = 100, YES bid + NO ask = 100.
+                # Kalshi WS only sends yes_bid / yes_ask — derive the NO side (and fill
+                # in any missing ask when only the opposite bid is available).
+                if nb == 0 and ya > 0: nb = 100 - ya
+                if ya == 0 and nb > 0: ya = 100 - nb
+                if na == 0 and yb > 0: na = 100 - yb
+                if yb == 0 and na > 0: yb = 100 - na
                 self.ticker_cache[ticker] = {
                     'yes_bid': yb,
                     'yes_ask': ya,
-                    # Only compute implied prices when real liquidity exists on the opposite side
-                    'no_bid': (100 - ya) if ya > 0 else 0,
-                    'no_ask': (100 - yb) if yb > 0 else 0,
+                    'no_bid':  nb,
+                    'no_ask':  na,
                     'price': msg.get('price', 0),
                     'volume': msg.get('volume', 0),
                     'ts': msg.get('ts', 0),
@@ -1100,7 +1108,7 @@ class KalshiWSManager:
                 # ── Real-time flip threshold check on every WS tick ──
                 try:
                     yes_bid_rt = yb
-                    no_bid_rt  = (100 - ya) if ya > 0 else 0
+                    no_bid_rt  = nb if nb > 0 else ((100 - ya) if ya > 0 else 0)
                     _ws_realtime_flip_check(ticker, yes_bid_rt, no_bid_rt)
                 except Exception as flip_err:
                     print(f'⚠ WS real-time flip check error: {flip_err}')
@@ -2038,6 +2046,19 @@ def _parse_clock_seconds(clock_str):
 # Keys are ticker series prefixes (matched by startswith).
 # final: total regular periods; block_period: period to start blocking in;
 # block_secs: block when clock (seconds remaining) <= this value; block_ot: block all OT.
+def _is_halftime(ticker: str) -> bool:
+    """Return True if the ESPN game data indicates we're currently at halftime/intermission.
+    During halftime, price movement stalls — clocks should be paused, not exited."""
+    try:
+        score_info = _get_game_score_for_ticker(ticker)
+        if not score_info:
+            return False
+        detail = score_info.get('status_detail', '').lower()
+        return 'half' in detail or 'intermission' in detail
+    except Exception:
+        return False
+
+
 _LATE_GAME_RULES = {
     'KXNBA':    {'final': 4, 'block_period': 4, 'block_secs': 300, 'block_ot': True, 'name': 'NBA Q4'},
     'KXNCAAMB': {'final': 2, 'block_period': 2, 'block_secs': 300, 'block_ot': True, 'name': 'NCAAB 2nd Half'},
@@ -3439,10 +3460,16 @@ def _run_monitor():
                     target_width = bot.get('arb_width', bot.get('profit_per', 5))
                     wait_age_min = (now - bot.get('waiting_repeat_since', now)) / 60.0
 
-                    # Give up after 5 minutes of waiting
-                    if wait_age_min > 5:
+                    # Pause the wait timer during halftime — spread won't reopen until play resumes
+                    if _is_halftime(ticker):
+                        bot['waiting_repeat_since'] = now  # reset so we wait a full window post-halftime
+                        actions.append({'bot_id': bot_id, 'action': 'repeat_halftime_pause'})
+                        continue
+
+                    # Give up after 20 minutes of waiting (was 5 — too short, halftime is ~15 min)
+                    if wait_age_min > 20:
                         bot['status'] = 'completed'
-                        print(f'⏰ REPEAT TIMEOUT: {bot_id} waited {wait_age_min:.1f}m — giving up on repeat')
+                        print(f'⏰ REPEAT TIMEOUT: {bot_id} waited {wait_age_min:.1f}m — giving up on repeat (20 min limit)')
                         actions.append({'bot_id': bot_id, 'action': 'repeat_timeout'})
                         continue
 
@@ -3801,6 +3828,11 @@ def _run_monitor():
                     timeout_min = 8.0 if yes_is_fav else 8.0  # both legs get 8 min
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
+                    # ── Halftime pause: reset timer so the bot gets a fresh window ──
+                    if _is_halftime(ticker):
+                        bot['first_fill_at'] = now  # restart the clock from halftime end
+                        actions.append({'bot_id': bot_id, 'action': 'holding_halftime_yes', 'wait_min': round(wait_min, 1)})
+                        continue
                     if phase == 'live' and wait_min >= timeout_min:
                         # Timeout: cancel pending NO, sell filled YES at market
                         try:
@@ -3847,6 +3879,7 @@ def _run_monitor():
                             if orig_repeat_count > 0:
                                 repeats_done_now = bot.get('repeats_done', 0) + 1
                                 bot['repeats_done'] = repeats_done_now
+                                bot['timeout_exits_count'] = bot.get('timeout_exits_count', 0) + 1
                                 if repeats_done_now <= orig_repeat_count:
                                     bot['repeat_count'] = orig_repeat_count
                                     bot['status'] = 'waiting_repeat'
@@ -3872,6 +3905,11 @@ def _run_monitor():
                     # Both legs get 8 min timeout
                     timeout_min = 8.0
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
+                    # ── Halftime pause: reset timer so the bot gets a fresh window ──
+                    if _is_halftime(ticker):
+                        bot['first_fill_at'] = now
+                        actions.append({'bot_id': bot_id, 'action': 'holding_halftime_no', 'wait_min': round(wait_min, 1)})
+                        continue
                     if phase == 'live' and wait_min >= timeout_min:
                         try:
                             api_rate_limiter.wait()
@@ -3917,6 +3955,7 @@ def _run_monitor():
                             if orig_repeat_count > 0:
                                 repeats_done_now = bot.get('repeats_done', 0) + 1
                                 bot['repeats_done'] = repeats_done_now
+                                bot['timeout_exits_count'] = bot.get('timeout_exits_count', 0) + 1
                                 if repeats_done_now <= orig_repeat_count:
                                     bot['repeat_count'] = orig_repeat_count
                                     bot['status'] = 'waiting_repeat'

@@ -2472,10 +2472,12 @@ let modalRefreshInterval = null;
  * If the resulting NO price < 1¢, push YES down until NO is valid.
  */
 function calculateArbPrices(market, width) {
-    const yesBid = getPrice(market, 'yes_bid');
-    const noBid  = getPrice(market, 'no_bid');
-    const yesAsk = getPrice(market, 'yes_ask');
-    const noAsk  = getPrice(market, 'no_ask');
+    const yesBid = getPrice(market, 'yes_bid') || 0;
+    const noBid  = getPrice(market, 'no_bid')  || 0;
+    // Market identity: YES ask + NO bid = 100, YES bid + NO ask = 100.
+    // Derive any missing ask using the opposite side's bid when the ask isn't cached.
+    const yesAsk = (getPrice(market, 'yes_ask') || 0) || (noBid  > 0 ? 100 - noBid  : 0);
+    const noAsk  = (getPrice(market, 'no_ask')  || 0) || (yesBid > 0 ? 100 - yesBid : 0);
 
     const targetTotal = 100 - width;          // e.g. width=5 → 95¢ total
 
@@ -3340,37 +3342,62 @@ function recalcArbPrices() {
     if (yesHint) {
         if (arb.yesNoLiquidity) {
             if (arb.dogAtFloor && !yesIsFav) {
-                // YES is dog, hit 1¢ floor — fav (NO) absorbed the overflow
                 yesHint.textContent = 'at floor — extra → fav';
                 yesHint.style.color = '#ffaa00';
             } else {
                 yesHint.textContent = 'no bids — derived from width';
                 yesHint.style.color = '#ff4444';
             }
+        } else if (arb.usingAskSide) {
+            const diffFromAsk = arb.yesAsk - arb.targetYes;
+            const diffFromBid = arb.targetYes - arb.yesBid;
+            const role = yesIsFav ? '★ fav' : 'underdog';
+            if (arb.targetYes > arb.yesBid) {
+                yesHint.textContent = `between spread (ask−${diffFromAsk}) · ${role}`;
+            } else if (arb.targetYes === arb.yesBid) {
+                yesHint.textContent = `= bid — wide width, no room · ${role}`;
+            } else {
+                yesHint.textContent = `below bid by ${-diffFromBid}¢ — width too wide · ${role}`;
+            }
+            yesHint.style.color = arb.targetYes > arb.yesBid ? (yesIsFav ? '#00ff88' : '#8892a6') : '#ffaa00';
         } else if (arb.dogAtFloor && yesIsFav) {
-            // YES is fav, pushed down to absorb dog's overflow
             const diff = arb.yesBid - arb.targetYes;
             yesHint.textContent = `bid−${diff} (★ fav, dog at floor)`;
             yesHint.style.color = '#ffaa00';
         } else {
             const diff = arb.yesBid - arb.targetYes;
             const role = yesIsFav ? '★ fav' : 'underdog';
-            yesHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
-            yesHint.style.color = yesIsFav ? '#00ff88' : '#8892a6';
+            if (diff < 0) {
+                yesHint.textContent = `${Math.abs(diff)}¢ above bid — width too narrow · ${role}`;
+                yesHint.style.color = '#00aaff';
+            } else {
+                yesHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
+                yesHint.style.color = yesIsFav ? '#00ff88' : '#8892a6';
+            }
         }
     }
     if (noHint) {
         if (arb.noNoLiquidity) {
             if (arb.dogAtFloor && yesIsFav) {
-                // NO is dog (no bids), hit 1¢ floor — fav (YES) absorbed the overflow
                 noHint.textContent = 'at floor — extra → fav';
                 noHint.style.color = '#ffaa00';
             } else {
                 noHint.textContent = 'no bids — derived from width';
                 noHint.style.color = '#ff4444';
             }
+        } else if (arb.usingAskSide) {
+            const diffFromAsk = arb.noAsk - arb.targetNo;
+            const diffFromBid = arb.targetNo - arb.noBid;
+            const role = !yesIsFav ? '★ fav' : 'underdog';
+            if (arb.targetNo > arb.noBid) {
+                noHint.textContent = `between spread (ask−${diffFromAsk}) · ${role}`;
+            } else if (arb.targetNo === arb.noBid) {
+                noHint.textContent = `= bid — wide width, no room · ${role}`;
+            } else {
+                noHint.textContent = `below bid by ${-diffFromBid}¢ — width too wide · ${role}`;
+            }
+            noHint.style.color = arb.targetNo > arb.noBid ? (!yesIsFav ? '#00ff88' : '#8892a6') : '#ffaa00';
         } else if (arb.dogAtFloor && !yesIsFav) {
-            // NO is fav, pushed down to absorb dog's overflow
             const diff = arb.noBid - arb.targetNo;
             noHint.textContent = `bid−${diff} (★ fav, dog at floor)`;
             noHint.style.color = '#ffaa00';
@@ -3380,11 +3407,16 @@ function recalcArbPrices() {
         } else {
             const diff = arb.noBid - arb.targetNo;
             const role = !yesIsFav ? '★ fav' : 'underdog';
-            noHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
-            noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
+            if (diff < 0) {
+                noHint.textContent = `${Math.abs(diff)}¢ above bid — width too narrow · ${role}`;
+                noHint.style.color = '#00aaff';
+            } else {
+                noHint.textContent = diff === 0 ? `= bid (${role})` : `bid−${diff} (${role})`;
+                noHint.style.color = !yesIsFav ? '#00ff88' : '#8892a6';
+            }
         }
     }
-    if (yesHint && arb.yesUnshaved && !arb.dogAtFloor) {
+    if (!arb.usingAskSide && yesHint && arb.yesUnshaved && !arb.dogAtFloor) {
         yesHint.textContent = '= bid (width → fav)';
         yesHint.style.color = '#00aaff';
     }
@@ -4431,6 +4463,8 @@ async function loadBots() {
             }
 
             // Timeout / next-action info for LIVE bots
+            const botGs = gameScores[gameKey] || {};
+            const isHalftime = (botGs.status_detail || '').toLowerCase().includes('half');
             let timeoutInfo = '';
             if (phase === 'live') {
                 const repostAt  = 3;
@@ -4440,12 +4474,16 @@ async function loadBots() {
                         ? `<span style="color:#ffaa00;font-size:10px;">⏱ Repost in ${minsLeft}m</span>`
                         : `<span style="color:#ff6666;font-size:10px;">⏱ Repost due</span>`;
                 } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
-                    const filledAt = bot.first_fill_at || 0;
-                    const waitedMin = filledAt > 0 ? (Date.now()/1000 - filledAt) / 60 : 0;
-                    const toutMin = bot.timeout_min || 8;
-                    const minsLeft = Math.max(0, toutMin - waitedMin);
-                    const tColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
-                    timeoutInfo = `<span style="color:${tColor};font-size:10px;">⏳ Exit in ${minsLeft.toFixed(0)}m</span>`;
+                    if (isHalftime) {
+                        timeoutInfo = `<span style="color:#818cf8;font-size:10px;">⏸ HALFTIME — timer paused</span>`;
+                    } else {
+                        const filledAt = bot.first_fill_at || 0;
+                        const waitedMin = filledAt > 0 ? (Date.now()/1000 - filledAt) / 60 : 0;
+                        const toutMin = bot.timeout_min || 8;
+                        const minsLeft = Math.max(0, toutMin - waitedMin);
+                        const tColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
+                        timeoutInfo = `<span style="color:${tColor};font-size:10px;">⏳ Exit in ${minsLeft.toFixed(0)}m</span>`;
+                    }
                 }
             } else if (phase === 'pregame') {
                 timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;
@@ -4501,12 +4539,15 @@ async function loadBots() {
                 const toutMin = bot.timeout_min || 8;
                 const minsLeft = Math.max(0, toutMin - fillAgeMin);
                 const isFavFilled = entryFilled >= (bot.status === 'yes_filled' ? (bot.no_price || 0) : (bot.yes_price || 0));
-                const urgColor = minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
+                const urgColor = isHalftime ? '#818cf8' : minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
                 const bidDisplay = liveBidFilled != null ? `${liveBidFilled}¢` : '?';
+                const exitLine = isHalftime
+                    ? `<span style="color:#818cf8;font-weight:700;">⏸ HALFTIME — timer paused, resets at 2nd half</span>`
+                    : `<span style="color:${urgColor};font-weight:700;">⏳ Exit ${pendingSide} in ${minsLeft}m if no fill</span>`;
                 stopLossInfo = `<div style="background:${urgColor}11;border:1px solid ${urgColor}33;border-radius:5px;padding:4px 8px;font-size:10px;color:${urgColor};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>✓ <strong>${filledSide}</strong> filled ${fillAgeMin}m ago${isFavFilled ? ' (fav)' : ' (dog)'} @ ${entryFilled}¢</span>
                     <span style="color:#8892a6;">Bid now: <strong style="color:#fff;">${bidDisplay}</strong></span>
-                    <span style="color:${urgColor};font-weight:700;">⏳ Exit ${pendingSide} in ${minsLeft}m if no fill</span>
+                    ${exitLine}
                 </div>`;
             }
 

@@ -3697,20 +3697,28 @@ function updateProfitPreview() {
 
 function applyPreset(width) {
     toggleWidth(width);
-    // Also update slider/display to last-clicked width for single-deploy
+    // Update slider/display to last-clicked width for single-deploy
     const widthSlider = document.getElementById('bot-arb-width');
     if (widthSlider) { widthSlider.value = width; }
     document.getElementById('width-display').textContent = `${width}¢`;
     recalcArbPrices();
-    // Sync old preset button styles with selection state
+    _syncPresetStyles();
+}
+
+function _syncPresetStyles() {
     document.querySelectorAll('.arb-preset-btn').forEach(btn => {
         const w = parseInt(btn.dataset.width);
+        const label = btn.querySelector('div');
         if (_selectedWidths.has(w)) {
-            btn.style.border = '2px solid #00ff88';
-            btn.style.background = '#00ff8822';
+            btn.style.border = '2px solid #ffd700';
+            btn.style.background = '#ffd70022';
+            btn.style.boxShadow = '0 0 8px #ffd70044';
+            if (label) label.style.color = '#ffd700';
         } else {
             btn.style.border = '2px solid #1e274066';
             btn.style.background = '#0a0e1a';
+            btn.style.boxShadow = 'none';
+            if (label) label.style.color = '#00ff88';
         }
     });
 }
@@ -3736,25 +3744,7 @@ function updateBreakevenDisplay() {
 }
 
 function highlightActivePreset() {
-    const width = parseInt(document.getElementById('bot-arb-width').value) || 10;
-    document.querySelectorAll('.arb-preset-btn').forEach(btn => {
-        const bw = parseInt(btn.dataset.width);
-        const isRec = btn.dataset.recommended === 'true';
-        if (bw === width) {
-            btn.style.borderColor = '#00ff88';
-            btn.style.background = 'rgba(0,255,136,0.12)';
-            btn.style.color = '#00ff88';
-        } else if (isRec) {
-            // Recommended but not active — subtle highlight
-            btn.style.borderColor = '#00ff8844';
-            btn.style.background = 'rgba(0,255,136,0.05)';
-            btn.style.color = '#8892a6';
-        } else {
-            btn.style.borderColor = '#333';
-            btn.style.background = 'rgba(255,255,255,0.03)';
-            btn.style.color = '#8892a6';
-        }
-    });
+    _syncPresetStyles();
 }
 
 // Close modal
@@ -3851,25 +3841,15 @@ function closeOrderbookModal() {
 }
 
 // Place both limit orders and register the bot
-const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
 // ── Multi-width selector state ──
 let _selectedWidths = new Set();
 
 function initWidthSelector() {
-    const grid = document.getElementById('width-selector-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
-    ALL_PRESET_WIDTHS.forEach(w => {
-        const btn = document.createElement('button');
-        btn.id = `width-btn-${w}`;
-        btn.textContent = `${w}¢`;
-        btn.style.cssText = 'min-width:40px;padding:6px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;border:1.5px solid #2a3550;background:#0a0e1a;color:#8892a6;';
-        btn.onclick = () => toggleWidth(w);
-        grid.appendChild(btn);
-    });
-    _updateWidthBtnStyles();
+    // Width selector is now the preset buttons themselves — just sync styles
+    _syncPresetStyles();
 }
 
 function toggleWidth(w) {
@@ -3878,58 +3858,47 @@ function toggleWidth(w) {
     } else {
         _selectedWidths.add(w);
     }
-    _updateWidthBtnStyles();
+    _syncPresetStyles();
     _updateDeployButton();
     updateAllWidthsPreview();
 }
 
 function selectAllWidths() {
     ALL_PRESET_WIDTHS.forEach(w => _selectedWidths.add(w));
-    _updateWidthBtnStyles();
+    _syncPresetStyles();
     _updateDeployButton();
     updateAllWidthsPreview();
 }
 
 function clearSelectedWidths() {
     _selectedWidths.clear();
-    _updateWidthBtnStyles();
+    _syncPresetStyles();
     _updateDeployButton();
     updateAllWidthsPreview();
 }
 
 function _updateWidthBtnStyles() {
-    ALL_PRESET_WIDTHS.forEach(w => {
-        const btn = document.getElementById(`width-btn-${w}`);
-        if (!btn) return;
-        const on = _selectedWidths.has(w);
-        btn.style.background = on ? '#818cf8' : '#0a0e1a';
-        btn.style.color = on ? '#fff' : '#8892a6';
-        btn.style.borderColor = on ? '#818cf8' : '#2a3550';
-        btn.style.boxShadow = on ? '0 0 8px #818cf844' : 'none';
-    });
+    // Deprecated — use _syncPresetStyles instead
+    _syncPresetStyles();
 }
 
 function _updateDeployButton() {
     const deployBtn = document.getElementById('deploy-btn');
     if (!deployBtn) return;
     const count = _selectedWidths.size;
-    const panel = document.getElementById('all-widths-panel');
     if (count > 1) {
         deployBtn.textContent = `⚡ Deploy ${count} Widths`;
         deployBtn.style.background = 'linear-gradient(135deg,#818cf8 0%,#6366f1 100%)';
         deployBtn.style.color = '#fff';
-        if (panel) panel.style.display = 'block';
     } else if (count === 1) {
         const w = [..._selectedWidths][0];
         deployBtn.textContent = `⚡ Deploy ${w}¢ Width`;
         deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
         deployBtn.style.color = '#000';
-        if (panel) panel.style.display = 'block';
     } else {
         deployBtn.textContent = '⚡ Deploy Arb Bot';
         deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
         deployBtn.style.color = '#000';
-        if (panel) panel.style.display = 'none';
     }
 }
 

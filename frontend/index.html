@@ -822,64 +822,31 @@
                     </div>
                     <!-- Preset Strategy Table -->
                     <div style="margin-bottom:16px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#8892a6;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">⚡ Quick Presets</span>
-                            <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;">Breakeven: 33%</span>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                            <span style="color:#8892a6;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">⚡ Widths</span>
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <div style="display:flex;gap:4px;">
+                                    <button onclick="selectAllWidths()" style="background:#818cf822;color:#818cf8;border:1px solid #818cf844;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;">ALL</button>
+                                    <button onclick="clearSelectedWidths()" style="background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;">CLEAR</button>
+                                </div>
+                                <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;"></span>
+                            </div>
                         </div>
                         <div id="preset-recommendation" style="display:none;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff8866;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;"></div>
-                        <div style="color:#556;font-size:9px;margin-bottom:8px;line-height:1.4;">Tight = fast fills, small profit · Medium = balanced · Wide = patient, max profit · <span style="color:#ffaa33;">★ = recommended</span></div>
-                        <div style="color:#8892a6;font-size:9px;font-weight:600;margin-bottom:3px;">TIGHT — liquid markets, fast games</div>
+                        <div style="color:#556;font-size:9px;margin-bottom:8px;line-height:1.4;">Tap to select · tap again to deselect · deploy places bots at all selected widths</div>
                         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;" id="preset-grid">
-                            <button onclick="applyPreset(5)" class="arb-preset-btn" data-width="5"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div>
-                            </button>
-                            <button onclick="applyPreset(6)" class="arb-preset-btn" data-width="6"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div>
-                            </button>
-                            <button onclick="applyPreset(7)" class="arb-preset-btn" data-width="7"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">7¢</div>
-                            </button>
-                            <button onclick="applyPreset(8)" class="arb-preset-btn" data-width="8"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div>
-                            </button>
-                        </div>
-                        <div style="color:#8892a6;font-size:9px;font-weight:600;margin-top:8px;margin-bottom:3px;">MEDIUM — most games, default choice</div>
-                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;">
-                            <button onclick="applyPreset(9)" class="arb-preset-btn" data-width="9"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">9¢</div>
-                            </button>
-                            <button onclick="applyPreset(10)" class="arb-preset-btn" data-width="10"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div>
-                            </button>
-                            <button onclick="applyPreset(11)" class="arb-preset-btn" data-width="11"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">11¢</div>
-                            </button>
-                            <button onclick="applyPreset(12)" class="arb-preset-btn" data-width="12"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div>
-                            </button>
-                        </div>
-                        <div style="color:#8892a6;font-size:9px;font-weight:600;margin-top:8px;margin-bottom:3px;">WIDE — slow markets, big spreads</div>
-                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;">
-                            <button onclick="applyPreset(13)" class="arb-preset-btn" data-width="13"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">13¢</div>
-                            </button>
-                            <button onclick="applyPreset(14)" class="arb-preset-btn" data-width="14"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">14¢</div>
-                            </button>
-                            <button onclick="applyPreset(15)" class="arb-preset-btn" data-width="15"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
-                            </button>
+                            <button onclick="applyPreset(5)" class="arb-preset-btn" data-width="5" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div></button>
+                            <button onclick="applyPreset(6)" class="arb-preset-btn" data-width="6" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div></button>
+                            <button onclick="applyPreset(7)" class="arb-preset-btn" data-width="7" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">7¢</div></button>
+                            <button onclick="applyPreset(8)" class="arb-preset-btn" data-width="8" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div></button>
+                            <button onclick="applyPreset(9)" class="arb-preset-btn" data-width="9" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">9¢</div></button>
+                            <button onclick="applyPreset(10)" class="arb-preset-btn" data-width="10" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div></button>
+                            <button onclick="applyPreset(11)" class="arb-preset-btn" data-width="11" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">11¢</div></button>
+                            <button onclick="applyPreset(12)" class="arb-preset-btn" data-width="12" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div></button>
+                            <button onclick="applyPreset(13)" class="arb-preset-btn" data-width="13" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">13¢</div></button>
+                            <button onclick="applyPreset(14)" class="arb-preset-btn" data-width="14" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">14¢</div></button>
+                            <button onclick="applyPreset(15)" class="arb-preset-btn" data-width="15" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div></button>
+                            <button onclick="applyPreset(16)" class="arb-preset-btn" data-width="16" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">16¢</div></button>
                         </div>
                     </div>
                     <!-- YES / NO Price Inputs -->
@@ -940,22 +907,8 @@
                         <strong style="color:#8892a6;">🔴 Live:</strong> Active — reposts stale orders. <strong style="color:#8892a6;">⏳ Pregame:</strong> Patient — orders wait for game start.
                     </div>
 
-                    <!-- ── Width Selector ── -->
-                    <div style="margin-bottom:16px;border:1px solid #2a2a4a;border-radius:8px;overflow:hidden;">
-                        <div style="padding:10px 14px;background:#0a0a1a;">
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                                <span style="font-size:13px;font-weight:700;color:#818cf8;">Width Select</span>
-                                <div style="display:flex;gap:6px;">
-                                    <button onclick="selectAllWidths()" style="background:#818cf822;color:#818cf8;border:1px solid #818cf844;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;">ALL</button>
-                                    <button onclick="clearSelectedWidths()" style="background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;">CLEAR</button>
-                                </div>
-                            </div>
-                            <div id="width-selector-grid" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
-                        </div>
-                        <div id="all-widths-panel" style="display:none;padding:12px 14px;background:#07071a;border-top:1px solid #2a2a4a;">
-                            <div id="all-widths-preview" style="font-size:11px;"></div>
-                        </div>
-                    </div>
+                    <!-- All-widths stats preview (shown inline when multiple selected) -->
+                    <div id="all-widths-preview" style="margin-bottom:16px;font-size:11px;"></div>
 
                     <!-- Action buttons -->
                     <div style="display:flex;gap:10px;">
@@ -1311,6 +1264,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260313f"></script>
+    <script src="app.js?v=20260313g"></script>
 </body>
 </html>

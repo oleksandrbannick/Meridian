@@ -38,7 +38,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''OK:'', d.get\\(''status'',''?''\\)\\)\")",
       "Bash(bash /Applications/Programs/Meridian/backend/restart.sh)",
       "Bash(curl -s http://localhost:5001/)",
-      "Bash(python3 -c \"import json; d=json.load\\(open\\(''/Applications/Programs/Meridian/backend/data.json''\\)\\); print\\(''trades:'', len\\(d.get\\(''trade_history'', []\\)\\)\\)\")"
+      "Bash(python3 -c \"import json; d=json.load\\(open\\(''/Applications/Programs/Meridian/backend/data.json''\\)\\); print\\(''trades:'', len\\(d.get\\(''trade_history'', []\\)\\)\\)\")",
+      "Bash(kill 14651)"
     ],
     "additionalDirectories": [
       "/Users/Sasha/.claude/projects/-Applications-Programs-Meridian"

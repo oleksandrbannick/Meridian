@@ -93,6 +93,8 @@ class KalshiAPI:
                 response = requests.delete(url, headers=headers, timeout=timeout)
             elif method.upper() == 'PUT':
                 response = requests.put(url, headers=headers, json=data, timeout=timeout)
+            elif method.upper() == 'PATCH':
+                response = requests.patch(url, headers=headers, json=data, timeout=timeout)
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
@@ -209,6 +211,23 @@ class KalshiAPI:
     def cancel_order(self, order_id: str) -> Dict:
         """Cancel an order"""
         return self._make_request('DELETE', f'/portfolio/orders/{order_id}', authenticated=True)
+
+    def amend_order(self, order_id: str, ticker: str, side: str, count: int,
+                    yes_price: Optional[int] = None, no_price: Optional[int] = None) -> Dict:
+        """Amend a resting limit order's price (and optionally count).
+        Kalshi POST /portfolio/orders/{order_id}/amend  (March 2026+)
+        Requires: ticker, side ('yes'/'no'), count, and exactly one of yes_price/no_price (cents).
+        """
+        data: Dict[str, Any] = {
+            'ticker': ticker,
+            'side': side,
+            'count': count,
+        }
+        if yes_price is not None:
+            data['yes_price'] = yes_price
+        if no_price is not None:
+            data['no_price'] = no_price
+        return self._make_request('POST', f'/portfolio/orders/{order_id}/amend', data=data, authenticated=True)
 
     def get_order(self, order_id: str) -> Dict:
         """Get a specific order's current status (fill count, remaining, status)"""

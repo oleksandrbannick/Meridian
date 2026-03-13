@@ -372,11 +372,11 @@ function applyFilters() {
                 case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
                 case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
                 case 'tennis': return et.includes('KXATP') || et.includes('KXWTA');
-                case 'golf':  return et.includes('KXPGA') || et.includes('KXTGL') || et.includes('KXGOLF');
+                case 'golf':  return et.includes('KXPGA') || et.includes('KXTGL') || et.includes('KXGOLF') || et.includes('KXLIV');
                 case 'nbl':   return et.includes('KXNBL');
                 case 'wbc':   return et.includes('KXWBC');
-                case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA') || et.includes('KXNBL');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXPGA') && !et.includes('KXTGL') && !et.includes('KXGOLF') && !et.includes('KXNBL') && !et.includes('KXWBC') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA');
+                case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA') || et.includes('KXNBL') || et.includes('KXKBL') || et.includes('KXCBA') || et.includes('KXEUROLEAGUE') || et.includes('KXBBL') || et.includes('KXGBL') || et.includes('KXACB') || et.includes('KXJBLEAGUE') || et.includes('KXLNBELITE');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXPGA') && !et.includes('KXTGL') && !et.includes('KXGOLF') && !et.includes('KXLIV') && !et.includes('KXNBL') && !et.includes('KXWBC') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA') && !et.includes('KXKBL') && !et.includes('KXCBA') && !et.includes('KXEUROLEAGUE') && !et.includes('KXBBL') && !et.includes('KXGBL') && !et.includes('KXACB') && !et.includes('KXJBLEAGUE') && !et.includes('KXLNBELITE');
                 default: return true;
             }
         });
@@ -856,6 +856,7 @@ async function autoLogin() {
             }
 
             await loadBalance();
+            startBalancePoll();  // live balance updates every 15s via WS cache
             await loadBots();
             await loadPnL();
             loadOpeningLines(); // fire-and-forget, non-blocking
@@ -1177,12 +1178,28 @@ function detectSport(eventTicker) {
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
     if (upper.includes('KXATP') || upper.includes('KXWTA')) return 'Tennis';
-    if (upper.includes('KXPGA') || upper.includes('KXTGL') || upper.includes('KXGOLF')) return 'Golf';
+    if (upper.includes('KXPGA') || upper.includes('KXTGL') || upper.includes('KXGOLF') || upper.includes('KXLIV')) return 'Golf';
     if (upper.includes('KXNBL')) return 'NBL';
     if (upper.includes('KXWBC')) return 'WBC';
     if (upper.includes('KXVTB')) return 'VTB';
     if (upper.includes('KXBSL')) return 'BSL';
     if (upper.includes('KXABA')) return 'ABA';
+    if (upper.includes('KXKBL')) return 'KBL';
+    if (upper.includes('KXCBA')) return 'CBA';
+    if (upper.includes('KXEUROLEAGUE')) return 'EuroLeague';
+    if (upper.includes('KXBBL')) return 'BBL';
+    if (upper.includes('KXGBL')) return 'GBL';
+    if (upper.includes('KXACB')) return 'ACB';
+    if (upper.includes('KXJBLEAGUE')) return 'JBLeague';
+    if (upper.includes('KXLNBELITE')) return 'LNBElite';
+    if (upper.includes('KXUFC')) return 'UFC';
+    if (upper.includes('KXBUNDESLIGA')) return 'Bundesliga';
+    if (upper.includes('KXLALIGA')) return 'LaLiga';
+    if (upper.includes('KXLIGAMX')) return 'LigaMX';
+    if (upper.includes('KXLIGUE1')) return 'Ligue1';
+    if (upper.includes('KXSERIEA')) return 'SerieA';
+    if (upper.includes('KXF1')) return 'F1';
+    if (upper.includes('KXIPL')) return 'Cricket';
     if (upper.includes('KXLOL') || upper.includes('KXDOTA') || upper.includes('KXCS')) return 'Esports';
     return 'Sports';
 }
@@ -1195,6 +1212,10 @@ function getSportEmoji(sport) {
         'EPL': '⚽', 'UCL': '⚽',
         'Tennis': '🎾', 'Golf': '⛳', 'NBL': '🏀', 'Esports': '🎮',
         'WBC': '⚾', 'VTB': '🏀', 'BSL': '🏀', 'ABA': '🏀',
+        'KBL': '🏀', 'CBA': '🏀', 'EuroLeague': '🏀', 'BBL': '🏀',
+        'GBL': '🏀', 'ACB': '🏀', 'JBLeague': '🏀', 'LNBElite': '🏀',
+        'UFC': '🥊', 'Bundesliga': '⚽', 'LaLiga': '⚽', 'LigaMX': '⚽',
+        'Ligue1': '⚽', 'SerieA': '⚽', 'F1': '🏎️', 'Cricket': '🏏',
         'Sports': '🏆'
     };
     return emojis[sport] || '🏆';
@@ -1215,6 +1236,15 @@ function buildGameTitle(gameId, marketOrMarkets) {
     
     for (const market of sorted) {
         const title = market.title || '';
+        
+        // Golf H2H: "Will X beat Y in the 2026 THE PLAYERS Championship?" -> "X vs Y"
+        const beatMatch = title.match(/^Will\s+(.+?)\s+beat\s+(.+?)\s+in\s+/i);
+        if (beatMatch) {
+            return `${beatMatch[1].trim()} vs ${beatMatch[2].trim()}`;
+        }
+        
+        // Golf winner: "Will X win the LIV Golf Singapore?" -> "LIV Golf Singapore"
+        const winTournament = title.match(/win\s+the\s+(.+?)(?:\s*\?|$)/i);
         
         // Tennis: "Will X win the Y vs Z : Round Of N match?" -> "Y vs Z"
         const tennisMatch = title.match(/win the\s+(.+?)\s+vs\.?\s+(.+?)\s*(?::|\?)/i);
@@ -1237,6 +1267,27 @@ function buildGameTitle(gameId, marketOrMarkets) {
         const inGameMatch = title.match(/in(?:\s+the)?\s+(.+?)\s+(?:at|vs\.?)\s+(.+?)(?:\s+game|\s*\?|$)/i);
         if (inGameMatch) {
             return `${inGameMatch[1].trim()} vs ${inGameMatch[2].trim()}`;
+        }
+        
+        // Golf Tournament: "THE PLAYERS Championship: Will X finish top 10?" -> "THE PLAYERS Championship"
+        const tourneyPrefix = title.match(/^(.+?):\s+Will\s+/i);
+        if (tourneyPrefix) {
+            return tourneyPrefix[1].trim();
+        }
+        
+        // Golf: "Will X win the LIV Golf Singapore?" → "LIV Golf Singapore"
+        if (winTournament && !tennisMatch) {
+            const name = winTournament[1].trim().replace(/\?$/, '').trim();
+            // Only use if it looks like a tournament name (more than just a player name)
+            if (name.split(' ').length >= 2) {
+                return name;
+            }
+        }
+        
+        // Golf lead: "Will X lead at the end of round N in the Y?" → "Y"
+        const roundLead = title.match(/in\s+the\s+(.+?)(?:\s*\?|$)/i);
+        if (roundLead && title.toLowerCase().includes('lead')) {
+            return roundLead[1].trim().replace(/\?$/, '');
         }
     }
     
@@ -3981,7 +4032,7 @@ async function placeAllWidthsBots() {
     const deployBtn = document.getElementById('deploy-btn');
     if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '⏳ Placing...'; }
 
-    const results = { placed: 0, skipped: skipReasons.length, errors: 0 };
+    const results = { placed: 0, skipped: skipReasons.length, errors: 0, errorMessages: [] };
 
     const placements = validWidths.map(({ w, arb }) =>
         fetch(`${API_BASE}/bot/create`, {
@@ -3998,8 +4049,16 @@ async function placeAllWidthsBots() {
             }),
         })
         .then(r => r.json())
-        .then(data => { if (data.bot_id || data.success !== false) results.placed++; else results.errors++; })
-        .catch(() => { results.errors++; })
+        .then(data => {
+            if (data.bot_id) {
+                results.placed++;
+            } else {
+                results.errors++;
+                const msg = data.error || data.message || 'Unknown error';
+                if (!results.errorMessages.includes(msg)) results.errorMessages.push(msg);
+            }
+        })
+        .catch(err => { results.errors++; results.errorMessages.push('Network error'); })
     );
     await Promise.all(placements);
 
@@ -4008,7 +4067,18 @@ async function placeAllWidthsBots() {
     // ── Close modal + reload first, then show notification ────────────────────
     closeModal();
     await loadBots();
-    showNotification(`⚡ All widths: ${results.placed} placed · ${results.skipped} skipped · ${results.errors} errors`);
+
+    const total = validWidths.length;
+    let notifMsg;
+    if (results.placed === total) {
+        notifMsg = `⚡ All ${results.placed} widths placed successfully`;
+    } else if (results.placed === 0) {
+        const errDetail = results.errorMessages.length ? ` — ${results.errorMessages[0]}` : '';
+        notifMsg = `❌ 0 of ${total} placed · ${results.errors} failed${errDetail}`;
+    } else {
+        notifMsg = `⚡ ${results.placed}/${total} placed · ${results.errors} failed · ${results.skipped} skipped`;
+    }
+    showNotification(notifMsg);
 }
 
 let botsTabMode = 'arb';  // 'arb' | 'middle'
@@ -4458,9 +4528,12 @@ async function loadBots() {
                 pending_fills:    '⏳ FILLING',
                 yes_filled:       '✓ YES FILLED',
                 no_filled:        '✓ NO FILLED',
-                waiting_repeat:   '🔄 REPEATING',
-                flipping:         '⚡ EXITING',
-                drift_cancelled:  '🚫 DRIFT GUARD',
+                amending_no:      '🔧 AMENDING NO',
+                amending_yes:     '🔧 AMENDING YES',
+                waiting_repeat:       '🔄 REPEATING',
+                flipping:             '⚡ EXITING',
+                drift_cancelled:      '🚫 DRIFT GUARD',
+                awaiting_settlement:  '⏳ AWAITING SETTLEMENT',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
@@ -4471,15 +4544,17 @@ async function loadBots() {
                 pending_fills:  'monitoring',
                 yes_filled:     'leg1_filled',
                 no_filled:      'leg1_filled',
+                amending_no:    'leg1_filled',
+                amending_yes:   'leg1_filled',
                 waiting_repeat: 'monitoring',
             }[bot.status] || 'monitoring';
 
             activeBotCount++;
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
-            // Anchored = status explicitly transitioned to yes_filled or no_filled
-            // (avoids double-counting fav_posted bots whose fill qty updated before status transition)
-            if (bot.status === 'yes_filled' || bot.status === 'no_filled') anchoredCount++;
+            // Anchored = status explicitly transitioned to yes_filled or no_filled (or amending)
+            if (bot.status === 'yes_filled' || bot.status === 'no_filled' ||
+                bot.status === 'amending_no' || bot.status === 'amending_yes') anchoredCount++;
 
             const displayName = formatBotDisplayName(bot.ticker, bot.spread_line);
             const botScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
@@ -4531,8 +4606,8 @@ async function loadBots() {
             if (bot.status === 'drift_cancelled') {
                 const driftY = bot.drift_yes_bid != null ? bot.drift_yes_bid : '?';
                 const driftN = bot.drift_no_bid  != null ? bot.drift_no_bid  : '?';
-                driftInfo = `<div style="background:#ff6b3511;border:1px solid #ff6b3533;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff6b35;margin-top:6px;">
-                    🚫 Market drifted to ${driftY}¢ / ${driftN}¢ — repeat runs cancelled. Disappears in 5 min.
+                driftInfo = `<div style="background:#ff8c0011;border:1px solid #ff8c0033;border-radius:5px;padding:4px 8px;font-size:10px;color:#ff8c00;margin-top:6px;">
+                    👁 Market drifted to ${driftY}¢ / ${driftN}¢ — watching for recovery (auto-resumes if prices come back below 80¢, otherwise closes in 5 min).
                 </div>`;
             }
 
@@ -4577,19 +4652,24 @@ async function loadBots() {
                     <span style="color:#555;">${dogSide} at ${dogPrice}¢ queued after fill</span>
                     <span style="color:#8892a6;">${ageMin}m ago</span>
                 </div>`;
-            } else if (bot.status === 'yes_filled' || bot.status === 'no_filled') {
-                const filledSide = bot.status === 'yes_filled' ? 'YES' : 'NO';
-                const pendingSide = bot.status === 'yes_filled' ? 'NO' : 'YES';
-                const entryFilled = bot.status === 'yes_filled' ? (bot.yes_price || 0) : (bot.no_price || 0);
-                const liveBidFilled = bot.status === 'yes_filled' ? bot.live_yes_bid : bot.live_no_bid;
+            } else if (bot.status === 'yes_filled' || bot.status === 'no_filled' ||
+                       bot.status === 'amending_no' || bot.status === 'amending_yes') {
+                const isAmending = bot.status === 'amending_no' || bot.status === 'amending_yes';
+                const filledSide = (bot.status === 'yes_filled' || bot.status === 'amending_no') ? 'YES' : 'NO';
+                const pendingSide = (bot.status === 'yes_filled' || bot.status === 'amending_no') ? 'NO' : 'YES';
+                const entryFilled = (bot.status === 'yes_filled' || bot.status === 'amending_no') ? (bot.yes_price || 0) : (bot.no_price || 0);
+                const liveBidFilled = (bot.status === 'yes_filled' || bot.status === 'amending_no') ? bot.live_yes_bid : bot.live_no_bid;
                 const toutMin = bot.timeout_min || 8;
                 const minsLeft = Math.max(0, toutMin - fillAgeMin);
-                const isFavFilled = entryFilled >= (bot.status === 'yes_filled' ? (bot.no_price || 0) : (bot.yes_price || 0));
-                const urgColor = isHalftime ? '#818cf8' : minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
+                const isFavFilled = entryFilled >= ((bot.status === 'yes_filled' || bot.status === 'amending_no') ? (bot.no_price || 0) : (bot.yes_price || 0));
+                const urgColor = isAmending ? '#ff8800' : isHalftime ? '#818cf8' : minsLeft <= 3 ? '#ff4444' : minsLeft <= 7 ? '#ff8800' : '#00aaff';
                 const bidDisplay = liveBidFilled != null ? `${liveBidFilled}¢` : '?';
-                const livePendingBid = bot.status === 'yes_filled' ? bot.live_no_bid : bot.live_yes_bid;
+                const livePendingBid = (bot.status === 'yes_filled' || bot.status === 'amending_no') ? bot.live_no_bid : bot.live_yes_bid;
                 const gameOver = livePendingBid != null && livePendingBid < 5;
-                const exitLine = gameOver
+                const amendPrice = bot.amend_price;
+                const exitLine = isAmending
+                    ? `<span style="color:#ff8800;font-weight:700;">🔧 AMENDING ${pendingSide} order → ${amendPrice != null ? amendPrice + '¢' : '?¢'} (completing arb…)</span>`
+                    : gameOver
                     ? `<span style="color:#818cf8;font-weight:700;">⏳ Awaiting settlement — game ended, position held</span>`
                     : isHalftime
                     ? `<span style="color:#818cf8;font-weight:700;">⏸ HALFTIME — timer paused, resets at 2nd half</span>`
@@ -4598,6 +4678,16 @@ async function loadBots() {
                     <span>✓ <strong>${filledSide}</strong> filled ${fillAgeMin}m ago${isFavFilled ? ' (fav)' : ' (dog)'} @ ${entryFilled}¢</span>
                     <span style="color:#8892a6;">Bid now: <strong style="color:#fff;">${bidDisplay}</strong></span>
                     ${exitLine}
+                </div>`;
+            } else if (bot.status === 'awaiting_settlement') {
+                const heldY = bot.awaiting_qty_yes || 0;
+                const heldN = bot.awaiting_qty_no  || 0;
+                const awaitMin = bot.awaiting_since ? Math.round((Date.now()/1000 - bot.awaiting_since) / 60) : 0;
+                const heldDesc = [heldY > 0 ? `YES ×${heldY}` : '', heldN > 0 ? `NO ×${heldN}` : ''].filter(Boolean).join(' · ') || 'contracts held';
+                stopLossInfo = `<div style="background:#818cf811;border:1px solid #818cf844;border-radius:5px;padding:6px 10px;font-size:10px;color:#818cf8;margin-top:6px;">
+                    ⏳ <strong>AWAITING SETTLEMENT</strong> — market closed, position held on Kalshi<br>
+                    <span style="color:#aaa;">${heldDesc}</span> <span style="color:#555;">· waiting ${awaitMin}m</span>
+                    <br><span style="color:#555;font-size:9px;">Will auto-resolve when Kalshi settles the market</span>
                 </div>`;
             }
 
@@ -4618,8 +4708,11 @@ async function loadBots() {
             let anchoredHealthKey = '';
 
             if (bot.status === 'drift_cancelled') {
-                healthColor = '#ff6b35';
-                healthLabel = '🚫 DRIFTED';
+                healthColor = '#ff8c00';
+                healthLabel = '👁 WATCHING';
+            } else if (bot.status === 'awaiting_settlement') {
+                healthColor = '#818cf8';
+                healthLabel = '⏳ SETTLING';
             } else if (bot.status === 'waiting_repeat') {
                 // Waiting for spread to reopen — takes priority over old fill data
                 healthColor = '#818cf8';
@@ -4832,6 +4925,15 @@ async function cancelBot(botId) {
         
         const data = await response.json();
         if (data.success) {
+            // Awaiting settlement — bot stays alive, don't delete
+            if (data.awaiting_settlement) {
+                const heldY = data.held_yes || 0;
+                const heldN = data.held_no  || 0;
+                alert(`⏳ Bot set to AWAITING SETTLEMENT\n\nPositions still held on Kalshi:\n${heldY > 0 ? `  YES: ${heldY} contracts\n` : ''}${heldN > 0 ? `  NO: ${heldN} contracts\n` : ''}\nThe bot will stay supervised and settle automatically.`);
+                loadBots();
+                return;
+            }
+
             // Show feedback about what happened
             const parts = [];
             if (data.sold_positions?.length) {
@@ -5066,38 +5168,46 @@ function updateBotBuddyMsg(state, force = false) {
 function playArbCompleteSound() {
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        // Three-note ascending chime: C5 → E5 → G5, then a high sparkle
-        const notes = [
-            { freq: 523.25, start: 0.00, dur: 0.18, gain: 0.38 },  // C5
-            { freq: 659.25, start: 0.12, dur: 0.18, gain: 0.36 },  // E5
-            { freq: 783.99, start: 0.24, dur: 0.28, gain: 0.34 },  // G5
-            { freq: 1046.5, start: 0.40, dur: 0.22, gain: 0.22 },  // C6 sparkle
-        ];
-        notes.forEach(({ freq, start, dur, gain }) => {
-            const osc = ctx.createOscillator();
-            const env = ctx.createGain();
-            osc.connect(env);
-            env.connect(ctx.destination);
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-            env.gain.setValueAtTime(0, ctx.currentTime + start);
-            env.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.02);
-            env.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
-            osc.start(ctx.currentTime + start);
-            osc.stop(ctx.currentTime + start + dur + 0.05);
-        });
-        // Short cash-register tick at the start
-        const bufSize = ctx.sampleRate * 0.04;
-        const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
-        const data = buf.getChannelData(0);
-        for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufSize * 0.15));
-        const noise = ctx.createBufferSource();
-        const noiseEnv = ctx.createGain();
-        noiseEnv.gain.setValueAtTime(0.12, ctx.currentTime);
-        noise.buffer = buf;
-        noise.connect(noiseEnv);
-        noiseEnv.connect(ctx.destination);
-        noise.start(ctx.currentTime);
+        const play = () => {
+            // Three-note ascending chime: C5 → E5 → G5, then a high sparkle
+            const notes = [
+                { freq: 523.25, start: 0.00, dur: 0.18, gain: 0.38 },  // C5
+                { freq: 659.25, start: 0.12, dur: 0.18, gain: 0.36 },  // E5
+                { freq: 783.99, start: 0.24, dur: 0.28, gain: 0.34 },  // G5
+                { freq: 1046.5, start: 0.40, dur: 0.22, gain: 0.22 },  // C6 sparkle
+            ];
+            notes.forEach(({ freq, start, dur, gain }) => {
+                const osc = ctx.createOscillator();
+                const env = ctx.createGain();
+                osc.connect(env);
+                env.connect(ctx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                env.gain.setValueAtTime(0, ctx.currentTime + start);
+                env.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.02);
+                env.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+                osc.start(ctx.currentTime + start);
+                osc.stop(ctx.currentTime + start + dur + 0.05);
+            });
+            // Short cash-register tick at the start
+            const bufSize = ctx.sampleRate * 0.04;
+            const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+            const data = buf.getChannelData(0);
+            for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufSize * 0.15));
+            const noise = ctx.createBufferSource();
+            const noiseEnv = ctx.createGain();
+            noiseEnv.gain.setValueAtTime(0.12, ctx.currentTime);
+            noise.buffer = buf;
+            noise.connect(noiseEnv);
+            noiseEnv.connect(ctx.destination);
+            noise.start(ctx.currentTime);
+        };
+        // Resume AudioContext if browser suspended it (requires prior user gesture)
+        if (ctx.state === 'suspended') {
+            ctx.resume().then(play).catch(() => {});
+        } else {
+            play();
+        }
     } catch (e) { /* audio not supported */ }
 }
 
@@ -5240,15 +5350,11 @@ function buddyReactToEvent(action) {
             updateBotBuddyMsg('holding', true);
         }
     } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
-        const tPnl = action.pnl_cents || 0;
-        if (tPnl > 0) {
-            setBuddyMood('happy');
-            updateBotBuddyMsg('scanning', true);
-        } else {
-            setBuddyMood('neutral');
-            updateBotBuddyMsg('stopped', true);
-        }
-        lockThen(6000);
+        // Timeout exits ARE completed arbs (both legs filled) — celebrate!
+        setBuddyMood('celebrating');
+        updateBotBuddyMsg('celebrating', true);
+        triggerConfetti();
+        lockThen(12000);
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled', true);
@@ -5405,8 +5511,9 @@ async function monitorBots() {
                 data.actions.forEach(action => {
                     console.log('Bot action:', action);
                     buddyReactToEvent(action);
-                    if (action.action === 'completed') {
-                        const profitStr = `+$${(action.profit_cents/100).toFixed(2)}`;
+                    if (action.action === 'completed' || action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
+                        const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
+                        const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;
                         playArbCompleteSound();
                         sendPushNotification('💰 ARB COMPLETE!', `${profitStr} profit locked — Meridian`);
                         showNotification(`✅ ARB COMPLETE! ${profitStr} profit locked`);
@@ -5439,24 +5546,30 @@ async function monitorBots() {
     }
 }
 
-// Load balance
-async function loadBalance() {
+// Load balance — uses WS cache for fast updates (falls back to REST)
+let _balancePollInterval = null;
+
+async function loadBalance(useCached = false) {
     try {
-        const response = await fetch(`${API_BASE}/balance`);
+        // Always use the WS-backed cache for fast live balance — falls back gracefully
+        const url = `${API_BASE}/ws/balance`;
+        const response = await fetch(url);
         const data = await response.json();
         
         if (!data.error && data.balance !== undefined) {
             document.getElementById('balance-display').style.display = 'flex';
-            // API returns dollars, not cents - use directly
             document.getElementById('balance-amount').textContent = `$${data.balance.toFixed(2)}`;
             document.getElementById('portfolio-value').textContent = `$${(data.portfolio_value || 0).toFixed(2)}`;
-            console.log('Balance loaded:', data);
-        } else {
-            console.log('Balance not loaded:', data.error);
         }
     } catch (error) {
         console.log('Balance fetch error:', error);
     }
+}
+
+function startBalancePoll() {
+    if (_balancePollInterval) clearInterval(_balancePollInterval);
+    // Poll the WS-backed cache every 5s for live balance updates
+    _balancePollInterval = setInterval(() => loadBalance(true), 5000);
 }
 
 // ─── Upgrade #3: Multi-Market Arb Scanner ─────────────────────────────────────
@@ -6960,19 +7073,28 @@ async function loadTradeHistoryList() {
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
-            const isTimeoutExit = t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no';
-            // Timeout exits can be profitable — use profit_cents - loss_cents for net P&L
-            // Manual single-leg exits store raw profit_cents (may be negative); other non-wins use loss_cents
-            const pnl = isWin ? (t.profit_cents || 0)
-                      : isTimeoutExit ? ((t.profit_cents || 0) - (t.loss_cents || 0))
-                      : (isManualExit && !t.loss_cents) ? (t.profit_cents || 0)
-                      : -(t.loss_cents || 0);
+            // Timeout amend: both legs completed via amend after one leg timed out
+            const isTimeoutExit = t.exit_via === 'timeout_amend' || t.exit_via === 'amend_fallback'
+                                || t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no';
+            // P&L: for timeout amend trades, recalculate from leg prices to fix stale 0-profit records
+            let pnl;
+            if (isTimeoutExit && t.yes_price && t.no_price) {
+                // Always derive from actual leg prices: profit = (100 - yes - no) × qty
+                pnl = (100 - (t.yes_price || 0) - (t.no_price || 0)) * (t.quantity || 1);
+            } else if (isWin || isTimeoutExit) {
+                pnl = (t.profit_cents || 0);
+            } else if (isManualExit && !t.loss_cents) {
+                pnl = (t.profit_cents || 0);
+            } else {
+                pnl = -(t.loss_cents || 0);
+            }
             const isSettled = isSettledWin || isSettledLoss;
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
-            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isWin ? '✅' : (isTimeoutExit ? '⏱' : (isManualExit ? '🔧' : '⛔'))));
+            const timeoutLabel = isTimeoutExit ? (pnl > 0 ? 'TIMEOUT WIN' : (pnl < 0 ? 'TIMEOUT LOSS' : 'TIMEOUT EXIT')) : '';
+            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isTimeoutExit ? (pnl >= 0 ? '⏱' : '⏱') : (isWin ? '✅' : (isManualExit ? '🔧' : '⛔'))));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isTimeoutExit ? 'TIMEOUT EXIT' : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))));
-            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : (isWin ? '#00ff8822' : '#ff444422'));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isTimeoutExit ? timeoutLabel : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))));
+            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : ((isWin || isTimeoutExit) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
             // Display name
@@ -7034,17 +7156,35 @@ async function loadTradeHistoryList() {
                 if (t.take_profit_cents) wParts.push(`<span style="color:#8892a6;">TP: <strong style="color:#00ff88;">${t.take_profit_cents}¢</strong></span>`);
                 if (phase) wParts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 if (wParts.length > 0) analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${wParts.join('')}</div>`;
+            } else if (isTimeoutExit) {
+                // Timeout amend exit — always show detailed leg info
+                const parts = [];
+                const leg = (t.first_leg || (t.result === 'timeout_exit_yes' ? 'yes' : 'no')).toUpperCase();
+                const otherLeg = leg === 'YES' ? 'NO' : 'YES';
+                const firstFillPrice = leg === 'YES' ? (t.original_yes || t.yes_price || 0) : (t.original_no || t.no_price || 0);
+                const exitFillPrice = leg === 'YES' ? (t.no_price || 0) : (t.yes_price || 0);
+                const originalPending = leg === 'YES' ? (t.original_no || 0) : (t.original_yes || 0);
+                const totalCost = (t.yes_price || 0) + (t.no_price || 0);
+                const tMin = t.timeout_min || '?';
+                const isFav = firstFillPrice >= originalPending;
+                const arbPnl = (100 - totalCost) * (t.quantity || 1);
+                
+                // First leg info
+                parts.push(`<span style="color:#8892a6;"><strong style="color:${leg==='YES'?'#00ff88':'#ff4444'}">${leg}</strong> filled @ <strong style="color:#fff">${firstFillPrice}¢</strong> <span style="color:#ffaa00">(${isFav ? 'fav' : 'dog'})</span></span>`);
+                // Exit leg info — what price did the amend complete at
+                parts.push(`<span style="color:#8892a6;"><strong style="color:${otherLeg==='YES'?'#00ff88':'#ff4444'}">${otherLeg}</strong> exit @ <strong style="color:#ffaa00">${exitFillPrice}¢</strong>${originalPending ? ` <span style="color:#555">(was ${originalPending}¢)</span>` : ''}</span>`);
+                // Total cost and result
+                parts.push(`<span style="color:#8892a6;">Total: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'}">${totalCost}¢</strong>/100¢</span>`);
+                if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
+                parts.push(`<span style="color:#8892a6;">⏱ ${tMin}m timeout</span>`);
+                if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
             } else if (width || firstLeg || durStr || phase) {
                 const parts = [];
                 if (width) parts.push(`<span style="color:#8892a6;">Width: <strong style="color:#00aaff;">${width}¢</strong></span>`);
                 if (firstLeg) parts.push(`<span style="color:#8892a6;">1st: <strong style="color:#fff;">${firstLeg.toUpperCase()}</strong></span>`);
                 if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
-                if (t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no') {
-                    const leg = t.result === 'timeout_exit_yes' ? 'YES' : 'NO';
-                    const tMin = t.timeout_min || (leg === 'YES' ? (t.yes_price >= t.no_price ? 20 : 10) : (t.no_price >= t.yes_price ? 20 : 10));
-                    const tLabel = tMin === 20 ? `${tMin}m (fav filled)` : `${tMin}m (dog filled)`;
-                    parts.push(`<span style="color:#8892a6;">Exit: <strong style="color:#ffaa00;">⏱ ${tLabel} (${leg})</strong></span>`);
-                } else if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
+                if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
                 if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
             }
@@ -7068,9 +7208,9 @@ async function loadTradeHistoryList() {
                             <span style="color:#8892a6;">${date}</span>
                         </div>
                         <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;flex-wrap:wrap;">
-                            ${t.type === 'watch' && t.entry_price ? `<span style="color:${(t.side||'yes')==='yes'?'#00ff88':'#ff4444'};">${(t.side||'YES').toUpperCase()} Entry ${t.entry_price}¢</span>` : ''}
-                            ${t.type !== 'watch' && t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢</span>` : ''}
-                            ${t.type !== 'watch' && t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢</span>` : ''}
+                            ${t.type === 'watch' && t.entry_price ? `<span style="color:${(t.side||'yes')==='yes'?'#00ff88':'#ff4444'};">${(t.side||'YES').toUpperCase()} Entry ${t.entry_price}¢${t.sell_price ? ` <span style="color:#ffaa00;">→ exit ${t.sell_price}¢</span>` : ''}</span>` : ''}
+                            ${t.type !== 'watch' && t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢${(t.sell_price_yes || (t.result==='manual_exit_yes' && t.sell_price)) ? ` <span style="color:#ffaa00;">→ ${t.sell_price_yes || t.sell_price}¢</span>` : ''}</span>` : ''}
+                            ${t.type !== 'watch' && t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢${(t.sell_price_no || (t.result==='manual_exit_no' && t.sell_price)) ? ` <span style="color:#ffaa00;">→ ${t.sell_price_no || t.sell_price}¢</span>` : ''}</span>` : ''}
                             ${t.exit_bid ? `<span style="color:#ffaa00;">Exit ${t.exit_bid}¢</span>` : ''}
                             <span style="color:#8892a6;">×${t.quantity || 1}</span>
                             ${t.type !== 'watch' ? `<span style="color:#555;">Cost $${(((t.yes_price||0) + (t.no_price||0)) * (t.quantity||1) / 100).toFixed(2)}</span>` : `<span style="color:#555;">Cost $${((t.entry_price||0) * (t.quantity||1) / 100).toFixed(2)}</span>`}

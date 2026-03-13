@@ -3631,6 +3631,11 @@ function onPriceManualChange() {
 function updateProfitPreview() {
     const previewEl = document.getElementById('profit-preview');
     if (!previewEl) return;
+    // When multiple widths selected, show per-width breakdown instead
+    if (_selectedWidths.size > 1) {
+        updateAllWidthsPreview();
+        return;
+    }
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
@@ -3903,7 +3908,7 @@ function _updateDeployButton() {
 }
 
 function updateAllWidthsPreview() {
-    const preview = document.getElementById('all-widths-preview');
+    const preview = document.getElementById('profit-preview');
     if (!preview || !currentArbMarket) return;
     const selectedArr = [..._selectedWidths].sort((a, b) => a - b);
     if (selectedArr.length === 0) {

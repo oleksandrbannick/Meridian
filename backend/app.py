@@ -2004,6 +2004,7 @@ def _refresh_espn_cache():
                             'score_diff': abs(home_score - away_score),
                             'team_score': team_own_score,   # THIS team's score
                             'opp_score': team_opp_score,    # opponent's score
+                            'espn_sport': sport,            # e.g. 'nba','atp','wta' — for cross-sport filtering
                         }
                         # Also store under Kalshi code if different
                         kalshi_code = _ESPN_TO_KALSHI.get(abbr_upper)
@@ -2524,15 +2525,29 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     info = _espn_cache['data']
     if not info:
         return {}
+    # Determine allowed ESPN sports for this ticker to prevent cross-sport collisions
+    # e.g. tennis ticker "TRUHOU" should NOT match NBA Houston ("HOU")
+    ticker_sport = _detect_sport(ticker)
+    _SPORT_TO_ESPN = {
+        'nba': {'nba'}, 'ncaab': {'ncaab'}, 'ncaaw': {'ncaaw'}, 'nfl': {'nfl'},
+        'nhl': {'nhl'}, 'mlb': {'mlb'}, 'mls': {'mls'}, 'epl': {'epl'}, 'ucl': {'ucl'},
+        'tennis': {'atp', 'wta'},
+    }
+    allowed_espn_sports = _SPORT_TO_ESPN.get(ticker_sport)  # None = allow all (unknown sport)
+
     candidates = _get_all_ticker_team_candidates(ticker)
     if not candidates:
         t1, t2 = _parse_ticker_teams(ticker)
         candidates = [c for c in [t1, t2] if c]
-    # Find any candidate that has score data
+    # Find any candidate that has score data AND matches the correct sport
     for code in candidates:
         espn_code = _KALSHI_TO_ESPN.get(code, code)
         entry = info.get(code) or info.get(espn_code)
         if entry and (entry.get('status') in ('in', 'post')):
+            # Cross-sport guard: reject if ESPN entry is from a different sport
+            entry_sport = entry.get('espn_sport', '')
+            if allowed_espn_sports and entry_sport and entry_sport not in allowed_espn_sports:
+                continue  # e.g. tennis ticker matched NBA "HOU" — skip
             return {
                 'home_score': entry.get('home_score', 0),
                 'away_score': entry.get('away_score', 0),
@@ -4076,11 +4091,11 @@ def _run_monitor():
                         continue
 
                     # ── Drift guard: don't repost into a drifted market ──
-                    # At 75c+, the partial-fill window shrinks (game may end before
+                    # At 85c+, the partial-fill window shrinks (game may end before
                     # both legs fill). Both legs DO fill in continuous moves but
                     # gap-fills become more likely when a game ends suddenly.
                     drift_side = max(fresh_yes_bid, fresh_no_bid)
-                    if drift_side >= 80:
+                    if drift_side >= 85:
                         bot['status'] = 'drift_cancelled'
                         bot['drift_cancelled_at'] = now
                         bot['drift_yes_bid'] = fresh_yes_bid
@@ -4396,7 +4411,7 @@ def _run_monitor():
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
                     # ── Drift guard: don't repost into a drifted market ──
-                    if max(yes_bid, no_bid) >= 80:
+                    if max(yes_bid, no_bid) >= 85:
                         print(f'🚫 REPOST DRIFT GUARD: {bot_id} market at Y={yes_bid}¢ N={no_bid}¢ — too drifted, cancelling')
                         try:
                             api_rate_limiter.wait()

@@ -3655,7 +3655,7 @@ function updateProfitPreview() {
            </div>`
         : '';
 
-    document.getElementById('profit-preview').innerHTML = `
+    previewEl.innerHTML = `
         <div style="border:1px solid ${borderColor}33;border-radius:10px;background:${bgColor};overflow:hidden;">
             <!-- Settlement equation -->
             <div style="padding:12px 16px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:13px;border-bottom:1px solid ${borderColor}22;">
@@ -3929,63 +3929,6 @@ function _updateDeployButton() {
         deployBtn.style.color = '#000';
         if (panel) panel.style.display = 'none';
     }
-}
-
-function updateAllWidthsPreview() {
-    const preview = document.getElementById('all-widths-preview');
-    if (!preview || !currentArbMarket) return;
-    const selectedArr = [..._selectedWidths].sort((a, b) => a - b);
-    if (selectedArr.length === 0) {
-        preview.innerHTML = '';
-        return;
-    }
-    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-
-    let rows = '';
-    let totalCost = 0;
-    let totalProfit = 0;
-    let validCount = 0;
-
-    selectedArr.forEach(w => {
-        const arb = calculateArbPrices(currentArbMarket, w);
-        const yesPrice = arb.targetYes;
-        const noPrice  = arb.targetNo;
-        const profit = 100 - yesPrice - noPrice;
-        const blocked = profit <= 0;
-        const cost = blocked ? 0 : (yesPrice + noPrice) * qty;
-        const profitTotal = blocked ? 0 : profit * qty;
-        if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; }
-
-        const statusColor = blocked ? '#ff4444' : '#00ff88';
-        const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
-        const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
-        rows += `<div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
-            <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
-            <span style="color:${statusColor};font-size:10px;">${statusText}</span>
-            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : yesPrice + '¢'}</span>
-            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : noPrice + '¢'}</span>
-            <span style="color:${blocked ? '#555' : '#00ff88'};font-size:10px;text-align:right;font-weight:700;">${blocked ? '—' : '+$' + (profitTotal / 100).toFixed(2)}</span>
-            <span style="color:${blocked ? '#555' : '#aab'};font-size:10px;text-align:right;">${blocked ? '—' : '$' + (cost / 100).toFixed(2)}</span>
-        </div>`;
-    });
-
-    const totalDollars  = (totalCost / 100).toFixed(2);
-    const profitDollars = (totalProfit / 100).toFixed(2);
-    preview.innerHTML = `
-        <div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
-            <span style="color:#555;font-size:9px;">W</span>
-            <span style="color:#555;font-size:9px;">STATUS</span>
-            <span style="color:#555;font-size:9px;text-align:center;">YES</span>
-            <span style="color:#555;font-size:9px;text-align:center;">NO</span>
-            <span style="color:#00ff88;font-size:9px;text-align:right;">PROFIT</span>
-            <span style="color:#555;font-size:9px;text-align:right;">COST</span>
-        </div>
-        ${rows}
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;flex-wrap:wrap;gap:6px;">
-            <span style="color:#8892a6;font-size:11px;">${validCount} of ${selectedArr.length} valid · ${qty}× each</span>
-            <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} max profit</span>
-            <span style="color:#aab;font-size:11px;">Entry: $${totalDollars}</span>
-        </div>`;
 }
 
 async function createBot() {
@@ -5141,7 +5084,7 @@ async function cancelBot(botId) {
     }
 }
 
-// Emergency exit — cancel/sell ALL bots for a game group
+// Emergency exit — cancel/sell ALL bots for a game group (bulk endpoint)
 async function emergencyExitGame(gameKey) {
     const bots = window._lastBotsData || {};
     const botIds = Object.keys(bots).filter(id => {
@@ -5152,19 +5095,25 @@ async function emergencyExitGame(gameKey) {
         return gk === gameKey && !['stopped','completed'].includes(bot.status);
     });
     if (!botIds.length) { showNotification('No active bots found for this game.'); return; }
-    if (!confirm(`🚨 EMERGENCY EXIT\n\nThis will cancel and market-sell ALL ${botIds.length} active bot(s) for this game.\n\nFilled positions will be sold at market price — this cannot be undone.\n\nContinue?`)) return;
+    if (!confirm(`🚨 EMERGENCY EXIT\n\nThis will cancel and amend-exit ALL ${botIds.length} active bot(s) for this game.\n\nFilled positions will be amended to close. This cannot be undone.\n\nContinue?`)) return;
 
     showNotification(`🚨 Exiting ${botIds.length} bot(s)...`);
-    let ok = 0, fail = 0;
-    for (const botId of botIds) {
-        try {
-            const resp = await fetch(`${API_BASE}/bot/cancel/${botId}`, { method: 'DELETE' });
-            const data = await resp.json();
-            if (data.success) ok++; else fail++;
-        } catch { fail++; }
+    try {
+        const resp = await fetch(`${API_BASE}/bot/cancel-bulk`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({bot_ids: botIds})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`🚨 Emergency exit: ${data.ok} cancelled · ${data.fail} failed`);
+            if (data.fail > 0) alert(`⚠️ ${data.fail} bot(s) failed to cancel. Check your positions on Kalshi.`);
+        } else {
+            showNotification(`🚨 Emergency exit failed: ${data.error || 'unknown error'}`);
+        }
+    } catch (e) {
+        showNotification(`🚨 Emergency exit error: ${e.message}`);
     }
-    showNotification(`🚨 Emergency exit: ${ok} cancelled · ${fail} failed`);
-    if (fail > 0) alert(`⚠️ ${fail} bot(s) failed to cancel. Check your positions on Kalshi.`);
     await loadBots();
 }
 
@@ -6869,6 +6818,8 @@ async function loadHistoryStats() {
         // ── Result breakdown counts ──
         const rb = s.result_breakdown || {};
         const completedN   = rb.completed || 0;
+        const amendedN     = (s.amended_stats || {}).total || 0;
+        const filledN      = completedN - amendedN;  // natural fills (both legs)
         const timeoutN     = (rb.timeout_exit_yes || 0) + (rb.timeout_exit_no || 0);
         const flipN        = (rb.flip_yes || 0) + (rb.flip_no || 0);  // legacy
         const oldSlN       = (rb.stop_loss_yes || 0) + (rb.stop_loss_no || 0);  // legacy
@@ -6915,12 +6866,16 @@ async function loadHistoryStats() {
                     <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">📊 How Trades End</div>
                     ${totalResults > 0 ? `
                     <div style="display:flex;flex-direction:column;gap:4px;">
-                        ${completedN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#00ff88;font-size:11px;">✅ Completed (both filled)</span>
-                            <span style="color:#00ff88;font-weight:700;font-size:12px;">${completedN} <span style="color:#555;font-weight:400;">(${Math.round(completedN/totalResults*100)}%)</span></span>
+                        ${filledN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#00ff88;font-size:11px;">✅ Filled (both legs natural)</span>
+                            <span style="color:#00ff88;font-weight:700;font-size:12px;">${filledN} <span style="color:#555;font-weight:400;">(${Math.round(filledN/totalResults*100)}%)</span></span>
+                        </div>` : ''}
+                        ${amendedN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#ff8800;font-size:11px;">🔧 Amended (timeout → force fill)</span>
+                            <span style="color:#ff8800;font-weight:700;font-size:12px;">${amendedN} <span style="color:#555;font-weight:400;">(${Math.round(amendedN/totalResults*100)}%)</span></span>
                         </div>` : ''}
                         ${timeoutN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#ff8800;font-size:11px;">⏱ Timeout exit</span>
+                            <span style="color:#ff8800;font-size:11px;">⏱ Timeout exit (legacy)</span>
                             <span style="color:#ff8800;font-weight:700;font-size:12px;">${timeoutN} <span style="color:#555;font-weight:400;">(${Math.round(timeoutN/totalResults*100)}%)</span></span>
                         </div>` : ''}
                         ${flipN > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
@@ -6980,36 +6935,45 @@ async function loadHistoryStats() {
                     })()}
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">⏱ Timeout Exits</div>
-                    ${timeoutN > 0 ? (() => {
-                        const tx = s.timeout_stats || {};
-                        const txProfit = tx.total_profit_cents || 0;
-                        const txLoss   = tx.total_loss_cents   || 0;
-                        const txNet    = tx.net_cents != null ? tx.net_cents : (txProfit - txLoss);
-                        const txNetColor = txNet >= 0 ? '#00ff88' : '#ff4444';
-                        const txYes = tx.yes_n ?? (rb.timeout_exit_yes || 0);
-                        const txNo  = tx.no_n  ?? (rb.timeout_exit_no  || 0);
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:600;">🔧 Amended Arbs</div>
+                    ${(() => {
+                        const am = s.amended_stats || {};
+                        if (!am.total) return '<div style="color:#00ff88;font-size:11px;">✅ No amended arbs — all completed cleanly</div>';
+                        const amNet = am.net_cents || 0;
+                        const amNetColor = amNet >= 0 ? '#00ff88' : '#ff4444';
+                        const profColor = am.gross_profit_cents > 0 ? '#00ff88' : '#555';
+                        const lossColor = am.gross_loss_cents > 0 ? '#ff4444' : '#555';
                         return `<div style="display:flex;flex-direction:column;gap:5px;">
                             <div style="display:flex;justify-content:space-between;">
-                                <span style="color:#8892a6;font-size:11px;">Total exits</span>
-                                <span style="color:#ff8800;font-weight:700;font-size:12px;">${timeoutN}</span>
+                                <span style="color:#8892a6;font-size:11px;">Total amended</span>
+                                <span style="color:#ff8800;font-weight:700;font-size:12px;">${am.total}</span>
                             </div>
                             <div style="display:flex;justify-content:space-between;">
-                                <span style="color:#8892a6;font-size:11px;">YES exits / NO exits</span>
-                                <span style="color:#fff;font-weight:700;font-size:12px;">${txYes} / ${txNo}</span>
+                                <span style="color:#8892a6;font-size:11px;">Profitable</span>
+                                <span style="color:#00ff88;font-weight:700;font-size:12px;">${am.profitable_n} <span style="color:#555;font-weight:400;font-size:10px;">(avg +${am.avg_profit_cents}¢)</span></span>
                             </div>
                             <div style="display:flex;justify-content:space-between;">
-                                <span style="color:#8892a6;font-size:11px;">Net P&L on exits</span>
-                                <span style="color:${txNetColor};font-weight:700;font-size:12px;">${txNet >= 0 ? '+' : ''}${txNet}¢</span>
+                                <span style="color:#8892a6;font-size:11px;">Losing</span>
+                                <span style="color:#ff4444;font-weight:700;font-size:12px;">${am.losing_n} <span style="color:#555;font-weight:400;font-size:10px;">(avg -${am.avg_loss_cents}¢)</span></span>
                             </div>
-                            <div style="margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;color:#555;font-size:9px;">
-                                Exit = cancel pending leg + sell filled leg at market. May be profit or loss depending on where market moved.
+                            <div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;">
+                                <span style="color:#8892a6;font-size:11px;">Gross +</span>
+                                <span style="color:${profColor};font-weight:700;font-size:12px;">+${am.gross_profit_cents}¢</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;">Gross −</span>
+                                <span style="color:${lossColor};font-weight:700;font-size:12px;">-${am.gross_loss_cents}¢</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#8892a6;font-size:11px;font-weight:600;">Net</span>
+                                <span style="color:${amNetColor};font-weight:800;font-size:13px;">${amNet >= 0 ? '+' : ''}${amNet}¢ ($${(amNet/100).toFixed(2)})</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;">
+                                <span style="color:#555;font-size:10px;">YES first / NO first</span>
+                                <span style="color:#555;font-weight:600;font-size:10px;">${am.yes_first_n} / ${am.no_first_n}</span>
                             </div>
                         </div>`;
-                    })() : '<div style="color:#00ff88;font-size:11px;">✅ No timeout exits — all bots completed cleanly</div>'}
-                    ${flipN > 0 ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;color:#555;font-size:9px;">
-                        📜 Legacy: ${flipN} flip exits from old fav-first system. These used the entry-15¢ stop-loss mechanism.
-                    </div>` : ''}
+                    })()}
                 </div>
             </div>
 
@@ -7362,10 +7326,10 @@ async function loadTradeHistoryList() {
             }
             const isSettled = isSettledWin || isSettledLoss;
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
-            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : ((isWin || isTimeoutExit) ? '✅' : (isManualExit ? '🔧' : '⛔')));
+            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (pnl >= 0 ? '✅' : '⛔'));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : ((isWin || isTimeoutExit) ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))));
-            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : ((isWin || isTimeoutExit) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))));
+            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : (isTimeoutExit ? (pnl >= 0 ? '#ffaa0022' : '#ff880033') : ((isWin) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422')));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
             // Display name
@@ -7427,35 +7391,22 @@ async function loadTradeHistoryList() {
                 if (t.take_profit_cents) wParts.push(`<span style="color:#8892a6;">TP: <strong style="color:#00ff88;">${t.take_profit_cents}¢</strong></span>`);
                 if (phase) wParts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 if (wParts.length > 0) analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${wParts.join('')}</div>`;
-            } else if (isTimeoutExit) {
-                // Timeout amend exit — always show detailed leg info
+            } else if (t.yes_price || t.no_price) {
+                // Unified arb detail row — same format for all arbs (clean fills and amended)
                 const parts = [];
-                const leg = (t.first_leg || (t.result === 'timeout_exit_yes' ? 'yes' : 'no')).toUpperCase();
+                const leg = (t.first_leg || 'yes').toUpperCase();
                 const otherLeg = leg === 'YES' ? 'NO' : 'YES';
                 const firstFillPrice = leg === 'YES' ? (t.original_yes || t.yes_price || 0) : (t.original_no || t.no_price || 0);
-                const exitFillPrice = leg === 'YES' ? (t.no_price || 0) : (t.yes_price || 0);
+                const secondFillPrice = leg === 'YES' ? (t.no_price || 0) : (t.yes_price || 0);
                 const originalPending = leg === 'YES' ? (t.original_no || 0) : (t.original_yes || 0);
                 const totalCost = (t.yes_price || 0) + (t.no_price || 0);
-                const tMin = t.timeout_min || '?';
-                const isFav = firstFillPrice >= originalPending;
-                const arbPnl = (100 - totalCost) * (t.quantity || 1);
+                const isFav = firstFillPrice >= secondFillPrice;
                 
-                // First leg info
-                parts.push(`<span style="color:#8892a6;"><strong style="color:${leg==='YES'?'#00ff88':'#ff4444'}">${leg}</strong> filled @ <strong style="color:#fff">${firstFillPrice}¢</strong> <span style="color:#ffaa00">(${isFav ? 'fav' : 'dog'})</span></span>`);
-                // Exit leg info — what price did the amend complete at
-                parts.push(`<span style="color:#8892a6;"><strong style="color:${otherLeg==='YES'?'#00ff88':'#ff4444'}">${otherLeg}</strong> exit @ <strong style="color:#ffaa00">${exitFillPrice}¢</strong>${originalPending ? ` <span style="color:#555">(was ${originalPending}¢)</span>` : ''}</span>`);
-                // Total cost and result
+                parts.push(`<span style="color:#8892a6;"><strong style="color:${leg==='YES'?'#00ff88':'#ff4444'}">${leg}</strong> @ <strong style="color:#fff">${firstFillPrice}¢</strong> <span style="color:#ffaa00">(${isFav ? 'fav' : 'dog'})</span></span>`);
+                parts.push(`<span style="color:#8892a6;"><strong style="color:${otherLeg==='YES'?'#00ff88':'#ff4444'}">${otherLeg}</strong> @ <strong style="color:#fff">${secondFillPrice}¢</strong>${isTimeoutExit && originalPending && originalPending !== secondFillPrice ? ` <span style="color:#555">(was ${originalPending}¢)</span>` : ''}</span>`);
                 parts.push(`<span style="color:#8892a6;">Total: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'}">${totalCost}¢</strong>/100¢</span>`);
                 if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
-                parts.push(`<span style="color:#8892a6;">⏱ ${tMin}m timeout</span>`);
-                if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
-                analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
-            } else if (width || firstLeg || durStr || phase) {
-                const parts = [];
-                if (width) parts.push(`<span style="color:#8892a6;">Width: <strong style="color:#00aaff;">${width}¢</strong></span>`);
-                if (firstLeg) parts.push(`<span style="color:#8892a6;">1st: <strong style="color:#fff;">${firstLeg.toUpperCase()}</strong></span>`);
-                if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
-                if (slSetting) parts.push(`<span style="color:#8892a6;">SL: <strong style="color:#ff4444;">${slSetting}¢</strong></span>`);
+                if (isTimeoutExit && t.timeout_min) parts.push(`<span style="color:#8892a6;">⏱ ${t.timeout_min}m timeout</span>`);
                 if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${parts.join('')}</div>`;
             }

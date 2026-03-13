@@ -2390,6 +2390,37 @@ def _is_halftime(ticker: str) -> bool:
         return False
 
 
+def _is_game_ending(ticker: str) -> bool:
+    """Return True if ESPN says the game is over (status='post') or in the final 60 seconds.
+    Used to auto-exit bots — cancel unfilled, amend one-leg-filled."""
+    try:
+        score_info = _get_game_score_for_ticker(ticker)
+        if not score_info:
+            return False
+        status = score_info.get('status', '')
+        if status == 'post':
+            return True
+        # Check if we're in the final 60 seconds of the last period
+        if status == 'in':
+            series = ticker.split('-')[0].upper() if ticker else ''
+            rule = None
+            for prefix, r in _LATE_GAME_RULES.items():
+                if series.startswith(prefix):
+                    if rule is None or len(prefix) > len(rule[0]):
+                        rule = (prefix, r)
+            if rule:
+                r = rule[1]
+                period = score_info.get('period', 0)
+                clock = score_info.get('clock', '')
+                secs = _parse_clock_seconds(clock)
+                # Final period with ≤60s remaining
+                if period >= r['block_period'] and secs is not None and secs <= 60:
+                    return True
+        return False
+    except Exception:
+        return False
+
+
 _LATE_GAME_RULES = {
     # block_secs: only block the FINAL minute of each sport — just enough to avoid
     # getting stuck with a losing leg in the last seconds.  Volatility happens ALL
@@ -5476,6 +5507,37 @@ def _compute_completed_stats(arb_wins):
     }
 
 
+def _compute_amended_stats(arb_trades):
+    """Breakdown of timeout-amended arb trades into profitable vs losing."""
+    amended = [t for t in arb_trades if t.get('exit_via') == 'timeout_amend']
+    if not amended:
+        return {'total': 0}
+    profitable = []
+    losing = []
+    for t in amended:
+        p = t.get('profit_cents', 0) or 0
+        l = t.get('loss_cents', 0) or 0
+        net = p - l
+        if net >= 0:
+            profitable.append(t)
+        else:
+            losing.append(t)
+    gross_profit = sum((t.get('profit_cents', 0) or 0) for t in amended)
+    gross_loss = sum((t.get('loss_cents', 0) or 0) for t in amended)
+    return {
+        'total': len(amended),
+        'profitable_n': len(profitable),
+        'losing_n': len(losing),
+        'gross_profit_cents': gross_profit,
+        'gross_loss_cents': gross_loss,
+        'net_cents': gross_profit - gross_loss,
+        'avg_profit_cents': round(sum((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) for t in profitable) / len(profitable)) if profitable else 0,
+        'avg_loss_cents': round(sum((t.get('loss_cents', 0) or 0) - (t.get('profit_cents', 0) or 0) for t in losing) / len(losing)) if losing else 0,
+        'yes_first_n': sum(1 for t in amended if t.get('first_leg') == 'yes'),
+        'no_first_n': sum(1 for t in amended if t.get('first_leg') == 'no'),
+    }
+
+
 @app.route('/api/bot/history/stats', methods=['GET'])
 def history_stats():
     """Compute analytics from trade history for the optimization dashboard."""
@@ -5499,11 +5561,23 @@ def history_stats():
     watch_trades = [t for t in source if t.get('type') == 'watch']
 
     WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
-    arb_wins = [t for t in arb_trades if t.get('result', '') in WIN_RESULTS]
-    arb_losses = [t for t in arb_trades if t.get('result', '') in (
+    LOSS_RESULTS = (
         'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
-    )]
+    )
+
+    def _is_win(t):
+        """Amended arbs that lost money are losses, not wins."""
+        r = t.get('result', '')
+        if r not in WIN_RESULTS:
+            return False
+        if t.get('exit_via') == 'timeout_amend':
+            return (t.get('profit_cents', 0) or 0) >= (t.get('loss_cents', 0) or 0)
+        return True
+
+    arb_wins = [t for t in arb_trades if _is_win(t)]
+    arb_losses = [t for t in arb_trades if t.get('result', '') in LOSS_RESULTS
+                  or (t.get('result', '') in WIN_RESULTS and not _is_win(t))]
 
     # ── Result type breakdown ──────────────────────────────────────
     result_counts = {}
@@ -5601,14 +5675,16 @@ def history_stats():
         if w not in width_stats:
             width_stats[w] = {'wins': 0, 'losses': 0, 'total_profit': 0,
                               'total_loss': 0, 'fill_durations': [],
-                              'flips': 0, 'settled_losses': 0}
-        if t['result'] in WIN_RESULTS:
+                              'flips': 0, 'settled_losses': 0, 'amended_losses': 0}
+        if _is_win(t):
             width_stats[w]['wins'] += 1
             width_stats[w]['total_profit'] += t.get('profit_cents', 0)
         else:
             width_stats[w]['losses'] += 1
             width_stats[w]['total_loss'] += t.get('loss_cents', 0)
-            if t['result'].startswith('flip_'):
+            if t.get('exit_via') == 'timeout_amend':
+                width_stats[w]['amended_losses'] += 1
+            elif t['result'].startswith('flip_'):
                 width_stats[w]['flips'] += 1
             elif t['result'].startswith('settled_loss'):
                 width_stats[w]['settled_losses'] += 1
@@ -5638,6 +5714,7 @@ def history_stats():
             'edge': edge,
             'ratio': ratio,
             'flips': s['flips'], 'settled_losses': s['settled_losses'],
+            'amended_losses': s['amended_losses'],
         })
 
     # Phase breakdown
@@ -5646,7 +5723,7 @@ def history_stats():
         p = t.get('game_phase', 'live')
         if p not in phase_stats:
             phase_stats[p] = {'wins': 0, 'losses': 0}
-        if t['result'] in WIN_RESULTS:
+        if _is_win(t):
             phase_stats[p]['wins'] += 1
         else:
             phase_stats[p]['losses'] += 1
@@ -5661,7 +5738,7 @@ def history_stats():
         q_key = f'Q{period}' if period <= 4 else 'OT'
         if q_key not in quarter_stats:
             quarter_stats[q_key] = {'wins': 0, 'losses': 0}
-        if t['result'] in WIN_RESULTS:
+        if _is_win(t):
             quarter_stats[q_key]['wins'] += 1
         else:
             quarter_stats[q_key]['losses'] += 1
@@ -5679,7 +5756,7 @@ def history_stats():
             bucket = 'mid_6_15'
         else:
             bucket = 'blowout_16plus'
-        if t['result'] in WIN_RESULTS:
+        if _is_win(t):
             margin_stats[bucket]['wins'] += 1
         else:
             margin_stats[bucket]['losses'] += 1
@@ -5689,7 +5766,7 @@ def history_stats():
     for t in arb_trades:
         fl = t.get('first_leg', '')
         if fl in first_leg_stats:
-            if t['result'] in WIN_RESULTS:
+            if _is_win(t):
                 first_leg_stats[fl]['wins'] += 1
             else:
                 first_leg_stats[fl]['losses'] += 1
@@ -5739,7 +5816,8 @@ def history_stats():
             'avg_effective_trigger': flip_avg_effective_trigger,
             'entry_bucket_breakdown': entry_bucket_breakdown,
         },
-        'completed_stats': _compute_completed_stats(arb_wins),
+        'completed_stats': _compute_completed_stats([t for t in arb_wins if t.get('exit_via') != 'timeout_amend']),
+        'amended_stats': _compute_amended_stats(arb_trades),
         'phase_stats': phase_stats,
         'quarter_stats': quarter_stats,
         'margin_stats': margin_stats,
@@ -6320,6 +6398,36 @@ def cancel_bot(bot_id):
         monitor_lock.release()
 
 
+@app.route('/api/bot/cancel-bulk', methods=['POST'])
+def cancel_bulk():
+    """Cancel multiple bots in one request — calls cancel_bot sequentially.
+    Each cancel_bot call acquires its own lock, but since we're sequential
+    there's no contention between them (only with monitor loop).
+    Expects JSON body: {"bot_ids": ["id1", "id2", ...]}"""
+    data = request.get_json(force=True, silent=True) or {}
+    bot_ids = data.get('bot_ids', [])
+    if not bot_ids or not isinstance(bot_ids, list):
+        return jsonify({'error': 'bot_ids array required'}), 400
+
+    results = []
+    for bot_id in bot_ids:
+        try:
+            resp = cancel_bot(bot_id)
+            # cancel_bot returns jsonify(result) or (jsonify(error), status_code)
+            if isinstance(resp, tuple):
+                resp_data = resp[0].get_json()
+                results.append({'bot_id': bot_id, 'success': resp_data.get('success', False), **resp_data})
+            else:
+                resp_data = resp.get_json()
+                results.append({'bot_id': bot_id, 'success': resp_data.get('success', False), **resp_data})
+        except Exception as e:
+            results.append({'bot_id': bot_id, 'success': False, 'error': str(e)})
+
+    ok = sum(1 for r in results if r.get('success'))
+    fail = len(results) - ok
+    return jsonify({'success': True, 'results': results, 'ok': ok, 'fail': fail})
+
+
 @app.route('/api/bot/scan', methods=['GET'])
 def scan_arb_opportunities():
     """
@@ -6611,15 +6719,21 @@ def _compute_pnl_bucket(trades, category=None):
         result = t.get('result', '')
         pnl = 0
         if result in PNL_WIN_RESULTS:
-            p = t.get('profit_cents', 0)
+            p = t.get('profit_cents', 0) or 0
+            l = t.get('loss_cents', 0) or 0
             if p < 0:
                 # Negative profit on a "win" result = actually a loss stored wrong
                 gross_loss += abs(p)
                 pnl = -abs(p)
             else:
                 gross_profit += p
-                pnl = p
-            completed += 1
+                gross_loss += l
+                pnl = p - l
+            # Amended arbs that lost money count as losses, not wins
+            if pnl < 0:
+                stopped += 1
+            else:
+                completed += 1
         elif result in PNL_LOSS_RESULTS:
             p = t.get('profit_cents', 0)  # some exits (e.g. timeout) may be net positive
             l = t.get('loss_cents', 0)

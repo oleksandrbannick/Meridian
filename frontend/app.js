@@ -3880,21 +3880,21 @@ function toggleWidth(w) {
     }
     _updateWidthBtnStyles();
     _updateDeployButton();
-    updateProfitPreview();
+    updateAllWidthsPreview();
 }
 
 function selectAllWidths() {
     ALL_PRESET_WIDTHS.forEach(w => _selectedWidths.add(w));
     _updateWidthBtnStyles();
     _updateDeployButton();
-    updateProfitPreview();
+    updateAllWidthsPreview();
 }
 
 function clearSelectedWidths() {
     _selectedWidths.clear();
     _updateWidthBtnStyles();
     _updateDeployButton();
-    updateProfitPreview();
+    updateAllWidthsPreview();
 }
 
 function _updateWidthBtnStyles() {
@@ -3931,6 +3931,63 @@ function _updateDeployButton() {
         deployBtn.style.color = '#000';
         if (panel) panel.style.display = 'none';
     }
+}
+
+function updateAllWidthsPreview() {
+    const preview = document.getElementById('all-widths-preview');
+    if (!preview || !currentArbMarket) return;
+    const selectedArr = [..._selectedWidths].sort((a, b) => a - b);
+    if (selectedArr.length === 0) {
+        preview.innerHTML = '';
+        return;
+    }
+    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+
+    let rows = '';
+    let totalCost = 0;
+    let totalProfit = 0;
+    let validCount = 0;
+
+    selectedArr.forEach(w => {
+        const arb = calculateArbPrices(currentArbMarket, w);
+        const yesPrice = arb.targetYes;
+        const noPrice  = arb.targetNo;
+        const profit = 100 - yesPrice - noPrice;
+        const blocked = profit <= 0;
+        const cost = blocked ? 0 : (yesPrice + noPrice) * qty;
+        const profitTotal = blocked ? 0 : profit * qty;
+        if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; }
+
+        const statusColor = blocked ? '#ff4444' : '#00ff88';
+        const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
+        const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
+        rows += `<div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
+            <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
+            <span style="color:${statusColor};font-size:10px;">${statusText}</span>
+            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : yesPrice + '¢'}</span>
+            <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : noPrice + '¢'}</span>
+            <span style="color:${blocked ? '#555' : '#00ff88'};font-size:10px;text-align:right;font-weight:700;">${blocked ? '—' : '+$' + (profitTotal / 100).toFixed(2)}</span>
+            <span style="color:${blocked ? '#555' : '#aab'};font-size:10px;text-align:right;">${blocked ? '—' : '$' + (cost / 100).toFixed(2)}</span>
+        </div>`;
+    });
+
+    const totalDollars  = (totalCost / 100).toFixed(2);
+    const profitDollars = (totalProfit / 100).toFixed(2);
+    preview.innerHTML = `
+        <div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
+            <span style="color:#555;font-size:9px;">W</span>
+            <span style="color:#555;font-size:9px;">STATUS</span>
+            <span style="color:#555;font-size:9px;text-align:center;">YES</span>
+            <span style="color:#555;font-size:9px;text-align:center;">NO</span>
+            <span style="color:#00ff88;font-size:9px;text-align:right;">PROFIT</span>
+            <span style="color:#555;font-size:9px;text-align:right;">COST</span>
+        </div>
+        ${rows}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;flex-wrap:wrap;gap:6px;">
+            <span style="color:#8892a6;font-size:11px;">${validCount} of ${selectedArr.length} valid · ${qty}× each</span>
+            <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} max profit</span>
+            <span style="color:#aab;font-size:11px;">Entry: $${totalDollars}</span>
+        </div>`;
 }
 
 async function createBot() {

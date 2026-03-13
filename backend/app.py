@@ -3771,6 +3771,19 @@ def _run_monitor():
                             except Exception as rp_err:
                                 print(f'⚠ Fav repost failed for {bot_id}: {rp_err}')
 
+                        # Game ending: cancel unfilled bot immediately
+                        elif phase == 'live' and _is_game_ending(ticker):
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(fav_order_id)
+                            except Exception:
+                                pass
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            bot_log('GAME_ENDING_CANCEL', bot_id, {'fav_side': fav_side})
+                            print(f'🏁 GAME ENDING: {bot_id} unfilled — cancelled')
+                            actions.append({'bot_id': bot_id, 'action': 'game_ending_cancel'})
+
                         # Cancel unfilled favorite after STALE_CANCEL_MINUTES if live
                         elif phase == 'live' and age_min >= STALE_CANCEL_MINUTES:
                             try:
@@ -4567,6 +4580,10 @@ def _run_monitor():
                         bot['first_fill_at'] = now  # restart the clock from halftime end
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_yes', 'wait_min': round(wait_min, 1)})
                         continue
+                    # Game ending: force immediate timeout
+                    if phase == 'live' and _is_game_ending(ticker) and wait_min >= 0.5:
+                        print(f'🏁 GAME ENDING: {bot_id} YES filled, forcing timeout (waited {wait_min:.1f}m)')
+                        wait_min = timeout_min  # force timeout path
                     if phase == 'live' and wait_min >= timeout_min:
                         # ── Guard: WS handler may have already completed this bot ──
                         if bot.get('_trade_recorded') or bot.get('status') in ('completed', 'stopped', 'waiting_repeat'):
@@ -4698,6 +4715,10 @@ def _run_monitor():
                         bot['first_fill_at'] = now
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_no', 'wait_min': round(wait_min, 1)})
                         continue
+                    # Game ending: force immediate timeout
+                    if phase == 'live' and _is_game_ending(ticker) and wait_min >= 0.5:
+                        print(f'🏁 GAME ENDING: {bot_id} NO filled, forcing timeout (waited {wait_min:.1f}m)')
+                        wait_min = timeout_min  # force timeout path
                     if phase == 'live' and wait_min >= timeout_min:
                         # ── Guard: WS handler may have already completed this bot ──
                         if bot.get('_trade_recorded') or bot.get('status') in ('completed', 'stopped', 'waiting_repeat'):

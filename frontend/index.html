@@ -911,7 +911,7 @@
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
-                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); if(_selectedWidths && _selectedWidths.size > 0) updateAllWidthsPreview();"
+                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); updateAllWidthsPreview();"
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
@@ -1311,6 +1311,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260313e"></script>
+    <script src="app.js?v=20260313f"></script>
 </body>
 </html>

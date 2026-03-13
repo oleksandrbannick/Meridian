@@ -39,7 +39,11 @@
       "Bash(bash /Applications/Programs/Meridian/backend/restart.sh)",
       "Bash(curl -s http://localhost:5001/)",
       "Bash(python3 -c \"import json; d=json.load\\(open\\(''/Applications/Programs/Meridian/backend/data.json''\\)\\); print\\(''trades:'', len\\(d.get\\(''trade_history'', []\\)\\)\\)\")",
-      "Bash(kill 14651)"
+      "Bash(kill 14651)",
+      "Bash(node --check /Applications/Programs/Meridian/frontend/app.js)",
+      "Read(//^[[:space:]]*\\\\/\\\\*/, /\\\\*\\\\/**)",
+      "Read(//^[[:space:]]*\\\\/\\\\/.*\\\\{/,/^[[:space:]]*\\\\/\\\\/.*\\\\}/**)",
+      "Bash(git add:*)"
     ],
     "additionalDirectories": [
       "/Users/Sasha/.claude/projects/-Applications-Programs-Meridian"

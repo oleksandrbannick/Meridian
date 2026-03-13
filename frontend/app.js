@@ -14,6 +14,67 @@ let boxScoreCache = {}; // {espnGameId: {players: {...}, ts: Date.now()}}
 let expandedSections = new Set(); // Track which collapsibles are open across re-renders
 let priceRefreshInterval = null; // Interval for live price updates on main screen
 
+// ─── Team Logo Utility ───────────────────────────────────────────────────────
+// ESPN CDN logos for major sports. Returns <img> HTML or colored letter badge fallback.
+const _ESPN_LOGO_SPORTS = {
+    // NBA team abbrevs that match ESPN's CDN path
+    'nba': new Set(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND',
+        'LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS']),
+    'nfl': new Set(['ARI','ATL','BAL','BUF','CAR','CHI','CIN','CLE','DAL','DEN','DET','GB',
+        'HOU','IND','JAX','KC','LV','LAC','LAR','MIA','MIN','NE','NO','NYG','NYJ','PHI','PIT','SEA','SF','TB','TEN','WAS']),
+    'nhl': new Set(['ANA','ARI','BOS','BUF','CAR','CBJ','CGY','CHI','COL','DAL','DET','EDM',
+        'FLA','LAK','MIN','MTL','NJD','NSH','NYI','NYR','OTT','PHI','PIT','SEA','SJS','STL','TBL','TOR','UTA','VAN','VGK','WPG','WSH']),
+    'mlb': new Set(['ARI','ATL','BAL','BOS','CHC','CHW','CIN','CLE','COL','DET','HOU','KC',
+        'LAA','LAD','MIA','MIL','MIN','NYM','NYY','OAK','PHI','PIT','SD','SEA','SF','STL','TB','TEX','TOR','WAS']),
+};
+// ESPN CDN paths per sport
+const _ESPN_LOGO_PATH = {
+    'nba': 'nba/500',
+    'nfl': 'nfl/500',
+    'nhl': 'nhl/500',
+    'mlb': 'mlb/500',
+};
+// Map Kalshi codes to ESPN codes where they differ
+const _LOGO_CODE_MAP = {
+    'GSW': 'gs', 'NOP': 'no', 'SAS': 'sa', 'NYK': 'ny', 'OKC': 'okc',
+    'PHX': 'phx', 'LAL': 'lal', 'LAC': 'lac', 'TBL': 'tb', 'VGK': 'vgs',
+    'NJD': 'nj', 'NYR': 'nyr', 'NYI': 'nyi', 'SJS': 'sj', 'CGY': 'cgy',
+    'LAR': 'lar', 'NYG': 'nyg', 'NYJ': 'nyj', 'CHW': 'chw', 'LAA': 'laa',
+    'LAD': 'lad', 'NYM': 'nym', 'NYY': 'nyy',
+};
+
+function getTeamLogoHtml(code, size = 20) {
+    if (!code) return '';
+    const upper = code.toUpperCase();
+    // Detect sport from ticker context or guess from code membership
+    let sport = '';
+    for (const [s, codes] of Object.entries(_ESPN_LOGO_SPORTS)) {
+        if (codes.has(upper)) { sport = s; break; }
+    }
+    if (sport) {
+        const espnCode = _LOGO_CODE_MAP[upper] || upper.toLowerCase();
+        const path = _ESPN_LOGO_PATH[sport];
+        return `<img src="https://a.espncdn.com/i/teamlogos/${path}/${espnCode}.png"
+                     alt="${upper}" width="${size}" height="${size}"
+                     style="vertical-align:middle;border-radius:${size > 16 ? 4 : 2}px;"
+                     onerror="this.style.display='none'">`;
+    }
+    // Fallback: colored letter badge for NCAA and others
+    const colors = ['#818cf8','#00ff88','#ff6633','#ffaa00','#ff4488','#33aaff','#aa66ff','#ff8844'];
+    const colorIdx = upper.charCodeAt(0) % colors.length;
+    const bg = colors[colorIdx];
+    return `<span style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:${size > 16 ? 4 : 2}px;background:${bg}22;color:${bg};font-size:${Math.max(8,size-8)}px;font-weight:800;vertical-align:middle;">${upper.slice(0,2)}</span>`;
+}
+
+function getTeamCodeFromTicker(ticker) {
+    if (!ticker) return '';
+    const parts = ticker.split('-');
+    if (parts.length < 3) return '';
+    const suffix = parts[parts.length - 1];
+    // Strip trailing digits (spread tiers like OKC24 → OKC)
+    return (suffix.match(/^([A-Z]+)/i) || ['', ''])[1].toUpperCase();
+}
+
 // ─── Box Score: live player stats from ESPN ──────────────────────────────────
 async function fetchBoxScore(sport, espnGameId) {
     if (!espnGameId) return null;
@@ -320,11 +381,6 @@ function parseESPNGame(event, sport) {
 // Live scores bar removed — live data shown inline on game cards via liveGames lookup
 
 // ─── SPORT FILTER ─────────────────────────────────────────────────────────────
-
-function toggleFeatureGuide() {
-    const guide = document.getElementById('feature-guide');
-    if (guide) guide.style.display = guide.style.display === 'none' ? 'block' : 'none';
-}
 
 function filterBySport(sport) {
     // Toggle live sub-filter
@@ -1520,10 +1576,12 @@ function buildScoreboard(gameScore) {
         // Tennis: show full last name instead of 3-letter code
         const awayLabel = isTennis ? (awayName || awayAbbr) : awayAbbr;
         const homeLabel = isTennis ? (homeName || homeAbbr) : homeAbbr;
+        const awayLg = !isTennis ? getTeamLogoHtml(awayAbbr, 20) : '';
+        const homeLg = !isTennis ? getTeamLogoHtml(homeAbbr, 20) : '';
         wrap.innerHTML = `
-            <span style="color:#8892a6;font-size:13px;font-weight:600;">${awayLabel}</span>
+            ${awayLg} <span style="color:#8892a6;font-size:13px;font-weight:600;">${awayLabel}</span>
             <span style="color:#4a5568;font-size:12px;">vs</span>
-            <span style="color:#8892a6;font-size:13px;font-weight:600;">${homeLabel}</span>
+            ${homeLg} <span style="color:#8892a6;font-size:13px;font-weight:600;">${homeLabel}</span>
             <span style="color:#2a3447;margin:0 6px;">│</span>
             <span style="color:#6a7488;font-size:12px;">🕐 ${timeStr || 'Scheduled'}</span>`;
         return wrap;
@@ -1550,11 +1608,11 @@ function buildScoreboard(gameScore) {
         } else {
             // ── Final: show final score ──
             wrap.innerHTML = `
-                <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
+                ${getTeamLogoHtml(awayAbbr, 22)} <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
                 <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${awayScore}</span>
                 <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
                 <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${homeScore}</span>
-                <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
+                ${getTeamLogoHtml(homeAbbr, 22)} <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
                 <span style="color:#2a3447;margin:0 6px;">│</span>
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">${periodLabel || 'Final'}</span>`;
         }
@@ -1587,11 +1645,11 @@ function buildScoreboard(gameScore) {
     } else {
         wrap.innerHTML = `
             <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
-            <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
+            ${getTeamLogoHtml(awayAbbr, 26)} <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
             <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${awayScore}</span>
             <span style="color:#4a5568;font-size:18px;margin:0 2px;">–</span>
             <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${homeScore}</span>
-            <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
+            ${getTeamLogoHtml(homeAbbr, 26)} <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
             <span style="color:#2a3447;margin:0 6px;">│</span>
             <span style="color:#00ff88;font-size:12px;font-weight:600;">${clockDisplay}</span>`;
     }
@@ -2588,34 +2646,6 @@ function setupSearch() {
 }
 
 // Load recently closed games
-async function loadRecentGames() {
-    const grid = document.getElementById('markets-grid');
-    grid.innerHTML = '<p style="color: #00ff88; grid-column: 1 / -1;">Loading recently closed games...</p>';
-    
-    try {
-        const response = await fetch(`${API_BASE}/markets?status=closed&limit=500`);
-        const data = await response.json();
-        
-        if (data.error) {
-            grid.innerHTML = `<p style="color: #ff4444; grid-column: 1 / -1;">Error: ${data.error}</p>`;
-            return;
-        }
-        
-        allMarkets = data.markets || data;
-        console.log(`Loaded ${allMarkets.length} closed markets`);
-
-        if (allMarkets.length === 0) {
-            grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">No closed markets found</p>';
-            return;
-        }
-
-        applyFilters();
-    } catch (error) {
-        console.error('Error loading closed markets:', error);
-        grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Network error loading closed markets</p>';
-    }
-}
-
 // ─── Dual Arb Bot Logic ───────────────────────────────────────────────────────
 
 let currentArbMarket = null;
@@ -3377,6 +3407,7 @@ function openBotModal(market, _side, _price) {
     _currentMiddleData = null;
 
     document.getElementById('bot-modal').classList.add('show');
+    initWidthSelector();
 
     // ── Auto-refresh market prices every 3s using ORDERBOOK (real-time) ──
     if (modalRefreshInterval) clearInterval(modalRefreshInterval);
@@ -3662,31 +3693,24 @@ function updateProfitPreview() {
 
 // --- Arb Preset Helpers ---
 
-function setFlipFloor(val) {
-    document.getElementById('bot-stop-loss-cents').value = val;
-    const btn55 = document.getElementById('flip-floor-btn-55');
-    const btn60 = document.getElementById('flip-floor-btn-60');
-    if (!btn55 || !btn60) return;
-    if (val === 55) {
-        btn55.style.background = '#00aaff22'; btn55.style.borderColor = '#00aaff88'; btn55.style.color = '#00aaff';
-        btn55.textContent = '55¢ ★';
-        btn60.style.background = '#0a0e1a';   btn60.style.borderColor = '#1e2740';   btn60.style.color = '#8892a6';
-        btn60.textContent = '60¢';
-    } else {
-        btn60.style.background = '#00aaff22'; btn60.style.borderColor = '#00aaff88'; btn60.style.color = '#00aaff';
-        btn60.textContent = '60¢ ★';
-        btn55.style.background = '#0a0e1a';   btn55.style.borderColor = '#1e2740';   btn55.style.color = '#8892a6';
-        btn55.textContent = '55¢';
-    }
-    updateProfitPreview();
-    updateBreakevenDisplay();
-}
-
 function applyPreset(width) {
+    toggleWidth(width);
+    // Also update slider/display to last-clicked width for single-deploy
     const widthSlider = document.getElementById('bot-arb-width');
     if (widthSlider) { widthSlider.value = width; }
     document.getElementById('width-display').textContent = `${width}¢`;
     recalcArbPrices();
+    // Sync old preset button styles with selection state
+    document.querySelectorAll('.arb-preset-btn').forEach(btn => {
+        const w = parseInt(btn.dataset.width);
+        if (_selectedWidths.has(w)) {
+            btn.style.border = '2px solid #00ff88';
+            btn.style.background = '#00ff8822';
+        } else {
+            btn.style.border = '2px solid #1e274066';
+            btn.style.background = '#0a0e1a';
+        }
+    });
 }
 
 function updateBreakevenDisplay() {
@@ -3742,17 +3766,8 @@ function closeModal() {
     const marketCard = document.getElementById('bot-market-card');
     if (marketCard) marketCard.style.display = '';
     _currentMiddleData = null;
-    // Reset all-widths toggle
-    const cb = document.getElementById('all-widths-toggle');
-    if (cb && cb.checked) {
-        cb.checked = false;
-        document.getElementById('all-widths-panel').style.display = 'none';
-        document.getElementById('all-widths-slider').style.background = '#1e2740';
-        document.getElementById('all-widths-knob').style.transform = 'translateX(0)';
-        document.getElementById('all-widths-knob').style.background = '#555';
-        const deployBtn = document.getElementById('deploy-btn');
-        if (deployBtn) { deployBtn.textContent = '⚡ Deploy Arb Bot'; deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)'; deployBtn.style.color = '#000'; }
-    }
+    // Reset width selector
+    clearSelectedWidths();
 }
 
 // View orderbook for a market
@@ -3837,32 +3852,93 @@ function closeOrderbookModal() {
 const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
-function toggleAllWidths() {
-    const cb = document.getElementById('all-widths-toggle');
-    const panel = document.getElementById('all-widths-panel');
-    const slider = document.getElementById('all-widths-slider');
-    const knob = document.getElementById('all-widths-knob');
-    const deployBtn = document.getElementById('deploy-btn');
-    // Toggle (clicking the row also fires this — prevent double-toggle from the checkbox's own change)
-    const nowOn = !cb.checked;
-    cb.checked = nowOn;
-    panel.style.display = nowOn ? 'block' : 'none';
-    slider.style.background = nowOn ? '#818cf8' : '#1e2740';
-    knob.style.background = nowOn ? '#fff' : '#555';
-    knob.style.transform = nowOn ? 'translateX(16px)' : 'translateX(0)';
-    if (deployBtn) {
-        deployBtn.textContent = nowOn ? '⚡ Deploy All Widths' : '⚡ Deploy Arb Bot';
-        deployBtn.style.background = nowOn
-            ? 'linear-gradient(135deg,#818cf8 0%,#6366f1 100%)'
-            : 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
-        deployBtn.style.color = nowOn ? '#fff' : '#000';
+// ── Multi-width selector state ──
+let _selectedWidths = new Set();
+
+function initWidthSelector() {
+    const grid = document.getElementById('width-selector-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    ALL_PRESET_WIDTHS.forEach(w => {
+        const btn = document.createElement('button');
+        btn.id = `width-btn-${w}`;
+        btn.textContent = `${w}¢`;
+        btn.style.cssText = 'min-width:40px;padding:6px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;border:1.5px solid #2a3550;background:#0a0e1a;color:#8892a6;';
+        btn.onclick = () => toggleWidth(w);
+        grid.appendChild(btn);
+    });
+    _updateWidthBtnStyles();
+}
+
+function toggleWidth(w) {
+    if (_selectedWidths.has(w)) {
+        _selectedWidths.delete(w);
+    } else {
+        _selectedWidths.add(w);
     }
-    if (nowOn) updateAllWidthsPreview();
+    _updateWidthBtnStyles();
+    _updateDeployButton();
+    updateAllWidthsPreview();
+}
+
+function selectAllWidths() {
+    ALL_PRESET_WIDTHS.forEach(w => _selectedWidths.add(w));
+    _updateWidthBtnStyles();
+    _updateDeployButton();
+    updateAllWidthsPreview();
+}
+
+function clearSelectedWidths() {
+    _selectedWidths.clear();
+    _updateWidthBtnStyles();
+    _updateDeployButton();
+    updateAllWidthsPreview();
+}
+
+function _updateWidthBtnStyles() {
+    ALL_PRESET_WIDTHS.forEach(w => {
+        const btn = document.getElementById(`width-btn-${w}`);
+        if (!btn) return;
+        const on = _selectedWidths.has(w);
+        btn.style.background = on ? '#818cf8' : '#0a0e1a';
+        btn.style.color = on ? '#fff' : '#8892a6';
+        btn.style.borderColor = on ? '#818cf8' : '#2a3550';
+        btn.style.boxShadow = on ? '0 0 8px #818cf844' : 'none';
+    });
+}
+
+function _updateDeployButton() {
+    const deployBtn = document.getElementById('deploy-btn');
+    if (!deployBtn) return;
+    const count = _selectedWidths.size;
+    const panel = document.getElementById('all-widths-panel');
+    if (count > 1) {
+        deployBtn.textContent = `⚡ Deploy ${count} Widths`;
+        deployBtn.style.background = 'linear-gradient(135deg,#818cf8 0%,#6366f1 100%)';
+        deployBtn.style.color = '#fff';
+        if (panel) panel.style.display = 'block';
+    } else if (count === 1) {
+        const w = [..._selectedWidths][0];
+        deployBtn.textContent = `⚡ Deploy ${w}¢ Width`;
+        deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
+        deployBtn.style.color = '#000';
+        if (panel) panel.style.display = 'block';
+    } else {
+        deployBtn.textContent = '⚡ Deploy Arb Bot';
+        deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
+        deployBtn.style.color = '#000';
+        if (panel) panel.style.display = 'none';
+    }
 }
 
 function updateAllWidthsPreview() {
     const preview = document.getElementById('all-widths-preview');
     if (!preview || !currentArbMarket) return;
+    const selectedArr = [..._selectedWidths].sort((a, b) => a - b);
+    if (selectedArr.length === 0) {
+        preview.innerHTML = '';
+        return;
+    }
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
 
     let rows = '';
@@ -3870,7 +3946,7 @@ function updateAllWidthsPreview() {
     let totalProfit = 0;
     let validCount = 0;
 
-    ALL_PRESET_WIDTHS.forEach(w => {
+    selectedArr.forEach(w => {
         const arb = calculateArbPrices(currentArbMarket, w);
         const yesPrice = arb.targetYes;
         const noPrice  = arb.targetNo;
@@ -3906,7 +3982,7 @@ function updateAllWidthsPreview() {
         </div>
         ${rows}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;flex-wrap:wrap;gap:6px;">
-            <span style="color:#8892a6;font-size:11px;">${validCount} of ${ALL_PRESET_WIDTHS.length} valid · ${qty}× each</span>
+            <span style="color:#8892a6;font-size:11px;">${validCount} of ${selectedArr.length} valid · ${qty}× each</span>
             <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} max profit</span>
             <span style="color:#aab;font-size:11px;">Entry: $${totalDollars}</span>
         </div>`;
@@ -3915,9 +3991,17 @@ function updateAllWidthsPreview() {
 async function createBot() {
     if (!currentArbMarket) { alert('No market selected'); return; }
 
-    // If "place all widths" is on, delegate to the multi-bot handler
-    if (document.getElementById('all-widths-toggle')?.checked) {
-        return placeAllWidthsBots();
+    // If multiple widths selected, delegate to multi-bot handler
+    if (_selectedWidths.size > 1) {
+        return placeSelectedWidthsBots();
+    }
+    // If exactly one width selected, use that width instead of the manual input
+    if (_selectedWidths.size === 1) {
+        const selW = [..._selectedWidths][0];
+        const selArb = calculateArbPrices(currentArbMarket, selW);
+        document.getElementById('bot-yes-price').value = selArb.targetYes;
+        document.getElementById('bot-no-price').value = selArb.targetNo;
+        document.getElementById('bot-arb-width').value = selW;
     }
 
     // ── Fetch fresh prices from ORDERBOOK right before submitting ──
@@ -4024,8 +4108,10 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
     }
 }
 
-async function placeAllWidthsBots() {
+async function placeSelectedWidthsBots() {
     if (!currentArbMarket) return;
+    const selectedArr = [..._selectedWidths].sort((a, b) => a - b);
+    if (selectedArr.length === 0) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
@@ -4067,7 +4153,7 @@ async function placeAllWidthsBots() {
     const skipReasons = [];
     let totalCostCents = 0;
 
-    for (const w of ALL_PRESET_WIDTHS) {
+    for (const w of selectedArr) {
         const arb      = calculateArbPrices(currentArbMarket, w);
         const yesPrice = arb.targetYes;
         const noPrice  = arb.targetNo;
@@ -4081,13 +4167,13 @@ async function placeAllWidthsBots() {
     }
 
     if (validWidths.length === 0) {
-        alert(`⚡ Deploy ALL Widths — ${currentArbMarket.ticker}\n\nNo valid widths to deploy (all skipped).\n\n${skipReasons.join('\n')}`);
+        alert(`⚡ Deploy ${selectedArr.length} Widths — ${currentArbMarket.ticker}\n\nNo valid widths to deploy (all skipped).\n\n${skipReasons.join('\n')}`);
         return;
     }
 
     // Build order table string
     const pad = (s, n) => String(s).padStart(n);
-    let orderLines = [`⚡ Deploy ALL Widths — ${currentArbMarket.ticker}`, ''];
+    let orderLines = [`⚡ Deploy ${validWidths.length} Widths — ${currentArbMarket.ticker}`, ''];
     orderLines.push('  WIDTH   YES    NO    PROFIT   COST');
     orderLines.push('  ─────────────────────────────────');
     for (const { w, arb, yesPrice, noPrice, profit } of validWidths) {
@@ -4140,7 +4226,7 @@ async function placeAllWidthsBots() {
     );
     await Promise.all(placements);
 
-    if (deployBtn) { deployBtn.disabled = false; deployBtn.textContent = '⚡ Deploy All Widths'; }
+    if (deployBtn) { deployBtn.disabled = false; _updateDeployButton(); }
 
     // ── Close modal + reload first, then show notification ────────────────────
     closeModal();
@@ -4856,6 +4942,7 @@ async function loadBots() {
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        ${getTeamLogoHtml(getTeamCodeFromTicker(bot.ticker), 18)}
                         <a href="#" onclick="navigateToMarket('${botEventPrefix}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${displayName}</a>
                         ${botScoreBadge}
                         <span class="bot-status ${statusClass}">${statusLabel}</span>
@@ -5740,6 +5827,7 @@ function startBalancePoll() {
 
 let _scanModalSport    = 'all';
 let _middlesModalSport = 'all';
+let _middlesModalPhase = 'all';      // 'all' | 'live' | 'pregame'
 let _scanMode          = 'instarb';  // 'instarb' | 'anchor'
 let _anchorSignalFilter = 'all';     // 'all' | 'lock' | 'anchor' | 'lean'
 let _middlesScanResults = [];        // cached last scan so card callbacks can look up full data
@@ -5752,6 +5840,11 @@ function setScanSport(sport) {
 function setMiddlesSport(sport) {
     _middlesModalSport = sport;
     document.querySelectorAll('.mid-sport-pill').forEach(el => el.classList.toggle('active', el.dataset.sport === sport));
+}
+
+function setMiddlesPhase(phase) {
+    _middlesModalPhase = phase;
+    document.querySelectorAll('.mid-phase-pill').forEach(el => el.classList.toggle('active', el.dataset.phase === phase));
 }
 
 function setScanMode(mode) {
@@ -6064,9 +6157,12 @@ async function scanMiddles() {
     if (results)  results.innerHTML = '<p style="color:#8892a6;text-align:center;padding:32px;font-size:13px;">Fetching spread markets across all sports — this takes a few seconds...</p>';
 
     const t0 = Date.now();
-    const sportParam = (_middlesModalSport && _middlesModalSport !== 'all') ? `?sport=${_middlesModalSport}` : '';
+    const params = new URLSearchParams();
+    if (_middlesModalSport && _middlesModalSport !== 'all') params.set('sport', _middlesModalSport);
+    if (_middlesModalPhase && _middlesModalPhase !== 'all') params.set('phase', _middlesModalPhase);
+    const qs = params.toString() ? `?${params.toString()}` : '';
     try {
-        const resp = await fetch(`${API_BASE}/scan/middles${sportParam}`);
+        const resp = await fetch(`${API_BASE}/scan/middles${qs}`);
         const data = await resp.json();
         const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
         if (data.error) {
@@ -6202,13 +6298,25 @@ function showMiddlesResults(data) {
             const hasGuar = entries.some(e => e.m.guaranteed_profit > 0);
             const mDate = first.game_date ? ` · ${first.game_date}` : '';
             const teamNames = `${first.team_a_name || first.team_a} vs ${first.team_b_name || first.team_b}`;
+            // Score badge for live games
+            let scoreBadge = '';
+            if (hasLive && first.score_home != null) {
+                const sd = first.score_diff || 0;
+                scoreBadge = `<span style="background:#1a2540;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">${first.score_home}-${first.score_away}</span>
+                              <span style="color:#555;font-size:9px;">${first.score_detail || ''}</span>`;
+            }
+            // Use ticker_a from first entry to build a clickable link
+            const viewTicker = first.ticker_a || '';
+            const viewBtn = viewTicker ? `<button onclick="closeMiddlesModal(); openMarketByTicker('${viewTicker}')" style="background:#1e2740;color:#818cf8;border:1px solid #818cf844;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;margin-left:auto;">View Market</button>` : '';
             html += `<div style="margin-bottom:18px;">
                 <div style="display:flex;align-items:center;gap:6px;padding:6px 0;margin-bottom:6px;border-bottom:1px solid #1e2740;">
                     <span style="color:#fff;font-weight:800;font-size:13px;">${teamNames}</span>
                     ${hasLive ? '<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 LIVE</span>' : ''}
+                    ${scoreBadge}
                     ${hasGuar ? '<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ ARB</span>' : ''}
                     <span style="color:#444;font-size:10px;">${mDate}</span>
-                    <span style="color:#444;font-size:10px;margin-left:auto;">${entries.length} middle${entries.length > 1 ? 's' : ''}</span>
+                    ${viewBtn}
+                    <span style="color:#444;font-size:10px;">${entries.length} middle${entries.length > 1 ? 's' : ''}</span>
                 </div>
                 ${entries.map(({ m, idx }) => buildMiddleCard(m, idx)).join('')}
             </div>`;
@@ -6289,6 +6397,23 @@ async function deployMiddleBotFromCard(idx) {
 
 function closeMiddlesModal() {
     document.getElementById('middles-modal')?.classList.remove('show');
+}
+
+function openMarketByTicker(ticker) {
+    // Find the market in allMarkets by ticker (exact or event_ticker match)
+    const eventTicker = ticker.split('-').slice(0, 2).join('-');  // e.g. KXNBASPREAD-26MAR13OKCCHI
+    let market = allMarkets.find(m => m.ticker === ticker);
+    if (!market) market = allMarkets.find(m => m.event_ticker === eventTicker || (m.ticker && m.ticker.startsWith(eventTicker)));
+    if (!market) {
+        // Not in current view — search by the game portion of the ticker
+        const gamePart = ticker.split('-')[1] || '';
+        market = allMarkets.find(m => m.ticker && m.ticker.includes(gamePart));
+    }
+    if (market) {
+        openBotModal(market);
+    } else {
+        showNotification('Market not loaded — try switching to the correct sport tab first.');
+    }
 }
 
 // ─── Middle Bot Modal ─────────────────────────────────────────────────────────
@@ -8039,49 +8164,3 @@ async function confirmWatchPosition() {
 
 // ─── RISK WARNINGS ────────────────────────────────────────────────────────────
 
-function generateBotRiskWarnings() {
-    const yes = parseInt(document.getElementById('bot-yes-price')?.value) || 0;
-    const no = parseInt(document.getElementById('bot-no-price')?.value) || 0;
-    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const total = yes + no;
-    const width = 100 - total;
-
-    const warnings = [];
-    if (total >= 100) {
-        warnings.push({ level: 'error', msg: `YES(${yes}¢) + NO(${no}¢) = ${total}¢ — this is NOT profitable. Total must be below 100¢.` });
-    }
-    if (total >= 97 && total < 100) {
-        warnings.push({ level: 'warn', msg: `Only ${width}¢ profit per contract — very thin margin. Consider wider spread.` });
-    }
-    if (yes > 90 || no > 90) {
-        warnings.push({ level: 'warn', msg: `Buying at ${Math.max(yes,no)}¢ is very expensive — limited upside, large dollar exposure.` });
-    }
-    if (yes < 5 || no < 5) {
-        warnings.push({ level: 'warn', msg: `Buying at ${Math.min(yes,no)}¢ is very unlikely to fill — the market may not have liquidity there.` });
-    }
-    if (currentArbMarket) {
-        const yesBid = getPrice(currentArbMarket, 'yes_bid');
-        const noBid  = getPrice(currentArbMarket, 'no_bid');
-        if (yesBid > 0 && noBid > 0) {
-            const dogBid = Math.min(yesBid, noBid);
-            const dogSide = yesBid <= noBid ? 'YES' : 'NO';
-            if (dogBid <= 1) {
-                warnings.push({ level: 'info', msg: `${dogSide} has near-zero bids (${dogBid}¢) — underdog fill may take a long time or miss entirely.` });
-            }
-        }
-    }
-
-    const el = document.getElementById('bot-risk-warnings');
-    if (!el) return;
-    if (warnings.length === 0) {
-        el.innerHTML = '';
-        return;
-    }
-    el.innerHTML = warnings.map(w => {
-        const color = w.level === 'error' ? '#ff4444' : w.level === 'info' ? '#00aaff' : '#ffaa00';
-        const bg = w.level === 'error' ? '#ff444415' : w.level === 'info' ? '#00aaff15' : '#ffaa0015';
-        const border = w.level === 'error' ? '#ff444444' : w.level === 'info' ? '#00aaff44' : '#ffaa0044';
-        const icon = w.level === 'info' ? 'ℹ️' : '⚠️';
-        return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:${color};display:flex;align-items:center;gap:8px;"><span style="font-size:14px;">${icon}</span>${w.msg}</div>`;
-    }).join('');
-}

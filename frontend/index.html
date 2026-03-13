@@ -85,6 +85,9 @@
         .scan-sport-pill:hover, .mid-sport-pill:hover, .anchor-signal-pill:hover, .middle-arb-pill:hover { border-color: #ffaa00; color: #ffaa00; }
         .scan-sport-pill.active  { background: #00ff88; color: #000; border-color: #00ff88; }
         .mid-sport-pill.active   { background: #ffaa00; color: #000; border-color: #ffaa00; }
+        .mid-phase-pill { padding:3px 10px; border-radius:12px; border:1px solid #2a3550; background:#1a1f35; color:#8892a6; font-size:11px; font-weight:600; cursor:pointer; transition:all .15s; }
+        .mid-phase-pill:hover { border-color:#ff6633; color:#ff6633; }
+        .mid-phase-pill.active { background:#ff6633; color:#fff; border-color:#ff6633; }
         .anchor-signal-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
         .middle-arb-pill.active  { background: #aa66ff; color: #fff; border-color: #aa66ff; }
         .scan-mode-pill { padding:10px 16px; font-size:12px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; flex:1; min-height:44px; touch-action:manipulation; -webkit-tap-highlight-color:transparent; user-select:none; }
@@ -877,10 +880,6 @@
                                 style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
                                 <div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div>
                             </button>
-                            <button onclick="applyPreset(18)" class="arb-preset-btn" data-width="18"
-                                style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;">
-                                <div style="font-weight:800;font-size:14px;color:#00ff88;">18¢</div>
-                            </button>
                         </div>
                     </div>
                     <!-- YES / NO Price Inputs -->
@@ -912,7 +911,7 @@
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
-                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); if(document.getElementById('all-widths-toggle')?.checked) updateAllWidthsPreview();"
+                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); if(_selectedWidths && _selectedWidths.size > 0) updateAllWidthsPreview();"
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
                         </div>
                         <div>
@@ -941,23 +940,19 @@
                         <strong style="color:#8892a6;">🔴 Live:</strong> Active — reposts stale orders. <strong style="color:#8892a6;">⏳ Pregame:</strong> Patient — orders wait for game start.
                     </div>
 
-                    <!-- ── All Widths Toggle ── -->
+                    <!-- ── Width Selector ── -->
                     <div style="margin-bottom:16px;border:1px solid #2a2a4a;border-radius:8px;overflow:hidden;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0a0a1a;cursor:pointer;" onclick="toggleAllWidths()">
-                            <div style="display:flex;align-items:center;gap:10px;">
-                                <span style="font-size:13px;font-weight:700;color:#818cf8;">⚡ Place All Widths</span>
-                                <span style="background:#818cf822;color:#818cf8;border-radius:4px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.05em;">EXPERIMENTAL</span>
+                        <div style="padding:10px 14px;background:#0a0a1a;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                                <span style="font-size:13px;font-weight:700;color:#818cf8;">Width Select</span>
+                                <div style="display:flex;gap:6px;">
+                                    <button onclick="selectAllWidths()" style="background:#818cf822;color:#818cf8;border:1px solid #818cf844;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;">ALL</button>
+                                    <button onclick="clearSelectedWidths()" style="background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;">CLEAR</button>
+                                </div>
                             </div>
-                            <label style="position:relative;display:inline-block;width:36px;height:20px;pointer-events:none;">
-                                <input type="checkbox" id="all-widths-toggle" style="opacity:0;width:0;height:0;" onchange="toggleAllWidths()">
-                                <span id="all-widths-slider" style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#1e2740;border-radius:20px;transition:.2s;"></span>
-                                <span id="all-widths-knob" style="position:absolute;content:'';height:14px;width:14px;left:3px;bottom:3px;background:#555;border-radius:50%;transition:.2s;"></span>
-                            </label>
+                            <div id="width-selector-grid" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
                         </div>
                         <div id="all-widths-panel" style="display:none;padding:12px 14px;background:#07071a;border-top:1px solid #2a2a4a;">
-                            <div style="background:rgba(255,170,0,0.08);border:1px solid #ffaa0044;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:10px;color:#ffaa00;line-height:1.5;">
-                                ⚡ <strong>Deploy all widths</strong> — places all width bots simultaneously using the quantity below. Widths with no profit margin are skipped automatically.
-                            </div>
                             <div id="all-widths-preview" style="font-size:11px;"></div>
                         </div>
                     </div>
@@ -1141,6 +1136,12 @@
                 <button class="mid-sport-pill"        data-sport="nfl"   onclick="setMiddlesSport('nfl')">🏈 NFL</button>
                 <button class="mid-sport-pill"        data-sport="soccer" onclick="setMiddlesSport('soccer')">⚽ Soccer</button>
             </div>
+            <!-- Phase toggle -->
+            <div style="display:flex;gap:4px;margin-bottom:8px;">
+                <button class="mid-phase-pill active" data-phase="all"     onclick="setMiddlesPhase('all')">All</button>
+                <button class="mid-phase-pill"        data-phase="live"    onclick="setMiddlesPhase('live')">🔴 Live</button>
+                <button class="mid-phase-pill"        data-phase="pregame" onclick="setMiddlesPhase('pregame')">⏳ Pregame</button>
+            </div>
             <!-- Status bar -->
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:7px 10px;background:#0a0e1a;border-radius:7px;border:1px solid #1e2740;">
                 <span id="middles-status" style="font-size:11px;color:#8892a6;">Press Scan to search for middles</span>
@@ -1310,6 +1311,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260312e"></script>
+    <script src="app.js?v=20260313b"></script>
 </body>
 </html>

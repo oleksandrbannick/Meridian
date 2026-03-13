@@ -549,18 +549,6 @@ def _parse_fill_count(order_data):
     return 0
 
 
-def _parse_order_price_cents(order_data, side='yes'):
-    """Parse order price from Kalshi order object, returning integer cents.
-    Handles old format (yes_price int cents) and new FP format (yes_price_dollars string like '0.28').
-    """
-    dollar_key = f'{side}_price_dollars'
-    cent_key   = f'{side}_price'
-    d = order_data.get(dollar_key)
-    if d is not None:
-        return int(round(float(d) * 100))
-    return order_data.get(cent_key, 0)
-
-
 @app.route('/api/orderbook/<ticker>', methods=['GET'])
 def get_orderbook(ticker):
     """Get orderbook for a market"""
@@ -1530,6 +1518,12 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
 ws_fill_lock = threading.Lock()
 
+# ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
+# This ensures the frontend sees 'completed' / 'timeout_exit' actions even when
+# the WS handler wins the race against the REST monitor loop.
+_pending_ws_actions = []
+_pending_ws_actions_lock = threading.Lock()
+
 
 def _ws_realtime_fill_handler(ticker, order_id, side, count):
     """
@@ -1860,6 +1854,16 @@ def _execute_ws_completion(bot_id):
             })
             print(f'⚡ WS COMPLETED: {bot_id} +{profit_cents}¢ (YES={real_yes}¢ NO={real_no}¢)'
                   + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
+            # Queue action so frontend gets confetti/sound/notification
+            with _pending_ws_actions_lock:
+                _pending_ws_actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
+                if will_repeat:
+                    _pending_ws_actions.append({
+                        'bot_id': bot_id, 'action': 'repeat_spawned',
+                        'repeat_num': repeats_done_now, 'repeat_total': repeat_total,
+                        'yes_price': bot.get('yes_price', 0), 'no_price': bot.get('no_price', 0),
+                        'profit_per': 100 - bot.get('yes_price', 0) - bot.get('no_price', 0),
+                    })
         except Exception as err:
             print(f'⚠ WS trade record failed for {bot_id}: {err} — repeat status already set, continuing')
 
@@ -2090,11 +2094,6 @@ def _detect_sport(ticker: str) -> str:
     return 'unknown'
 
 
-def _is_basketball(ticker: str) -> bool:
-    """Check if a ticker is for a basketball sport (NBA, NCAAB, NCAAW, intl)."""
-    return _detect_sport(ticker) in ('nba', 'ncaab', 'ncaaw', 'intl_basketball')
-
-
 def _detect_market_type(ticker: str) -> str:
     """Detect market type from ticker prefix: 'spread', 'total', 'moneyline', 'prop', etc."""
     prefix = ticker.split('-')[0].upper() if ticker else ''
@@ -2320,40 +2319,6 @@ def _is_game_live(ticker: str) -> bool:
     return False
 
 
-def _get_spread_effective_tightness(ticker: str):
-    """For spread tickers, return how close the actual lead is to the spread line.
-    e.g. BOS -7.5, BOS leads by 9 → abs(9 - 7.5) = 1.5  (barely covering)
-    e.g. BOS -7.5, BOS leads by 5 → abs(5 - 7.5) = 2.5  (not covering by 2.5)
-    e.g. BOS -7.5, BOS leads by 15 → abs(15 - 7.5) = 7.5 (comfortable)
-    Returns None if unable to compute (falls back to raw score_diff)."""
-    if _detect_market_type(ticker) != 'spread':
-        return None
-    # Parse spread team from suffix (e.g. 'KXNBASPREAD-26MAR07UTAMIL-UTA1' → 'UTA')
-    parts = ticker.split('-')
-    if len(parts) < 3:
-        return None
-    code_match = re.match(r'^([A-Z]+)', parts[-1])
-    if not code_match:
-        return None
-    spread_team = code_match.group(1)
-    # Get spread value from Kalshi market title
-    spread_line = _extract_spread_line(ticker)  # e.g. 'UTA -3.5'
-    if not spread_line:
-        return None
-    sp_match = re.search(r'([\d.]+)$', spread_line.strip())
-    if not sp_match:
-        return None
-    spread_pts = float(sp_match.group(1))
-    # Look up spread team in fresh ESPN cache
-    info = _espn_cache.get('data', {})
-    espn_code = _KALSHI_TO_ESPN.get(spread_team, spread_team)
-    entry = info.get(spread_team) or info.get(espn_code)
-    if not entry or entry.get('status') != 'in':
-        return None
-    actual_lead = entry.get('team_score', 0) - entry.get('opp_score', 0)
-    return abs(actual_lead - spread_pts)
-
-
 def _get_game_context(ticker: str) -> dict:
     """Get live game context (quarter, score diff, clock) for blocking decisions.
     Always force-refreshes ESPN cache (bypasses TTL) so blocking uses fresh data.
@@ -2493,9 +2458,9 @@ _SPORT_TIMEOUTS: dict = {
     'KXATP':    (5.0, 3.5),   # ATP: ~1 serve cycle recovery window
     'KXWTA':    (5.0, 3.5),   # WTA: ~1 serve cycle recovery window
     # Golf — multi-hour rounds, very slow/thin orderbooks
-    'KXPGA':    (18.0, 12.0), # PGA Golf
-    'KXLIV':    (18.0, 12.0), # LIV Golf
-    'KXTGL':    (12.0, 9.0),  # TGL Match (shorter format)
+    'KXPGA':    (30.0, 20.0), # PGA Golf — 4h+ rounds, thin books
+    'KXLIV':    (30.0, 20.0), # LIV Golf — same as PGA
+    'KXTGL':    (15.0, 10.0), # TGL Match (shorter format but still slow)
     # International Basketball — lower liquidity, wider spreads
     'KXVTB':    (8.0, 5.5),   # Russian VTB
     'KXBSL':    (8.0, 5.5),   # Turkey BSL
@@ -3334,7 +3299,10 @@ def _run_monitor():
                     # Still drifted after 5 min — give up
                     _bot['status'] = 'completed'
 
-        actions = []
+        # Drain any WS-queued actions (completions, repeats) so the frontend sees them
+        with _pending_ws_actions_lock:
+            actions = list(_pending_ws_actions)
+            _pending_ws_actions.clear()
         active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
@@ -6850,7 +6818,8 @@ def scan_middles():
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
 
         sport_filter = request.args.get('sport', '')
-        print(f'🔍 scan_middles sport={sport_filter!r}', flush=True)
+        phase_filter = request.args.get('phase', 'all')  # 'all', 'live', 'pregame'
+        print(f'🔍 scan_middles sport={sport_filter!r} phase={phase_filter!r}', flush=True)
 
         # Fetch all spread markets
         SPREAD_SERIES = {
@@ -7091,6 +7060,46 @@ def scan_middles():
                                 'game_date': game_date,
                                 'game_time': game_time,
                             })
+
+        # ── Enrich with live game scores ──────────────────────────────
+        _refresh_espn_cache()
+        espn_data = _espn_cache.get('data', {})
+        for m in middles:
+            if m['is_live'] and espn_data:
+                # Try to get score from ESPN using team codes
+                for code in [m['team_a'], m['team_b']]:
+                    espn_code = _KALSHI_TO_ESPN.get(code, code)
+                    entry = espn_data.get(code) or espn_data.get(espn_code)
+                    if entry and entry.get('status') in ('in', 'post'):
+                        m['score_home'] = entry.get('home_score', 0)
+                        m['score_away'] = entry.get('away_score', 0)
+                        m['score_diff'] = abs(entry.get('home_score', 0) - entry.get('away_score', 0))
+                        m['score_detail'] = entry.get('status_detail', '')
+                        m['home_team'] = entry.get('home_team', '')
+                        m['away_team'] = entry.get('away_team', '')
+                        break
+
+        # ── Phase filter ──────────────────────────────────────────────
+        if phase_filter == 'live':
+            middles = [m for m in middles if m['is_live']]
+            # For live: filter out middles where the score diff is way outside the middle range
+            # and where either NO bid is too cheap (one team running away)
+            filtered = []
+            for m in middles:
+                # Both NO legs should be reasonably priced (>= 35c)
+                # If one side is < 35c, that team is heavily favored = not a real middle
+                if m['no_a_bid'] < 35 or m['no_b_bid'] < 35:
+                    continue
+                # If we have score data, check score diff vs middle width
+                sd = m.get('score_diff')
+                if sd is not None:
+                    # If score diff already exceeds both spreads, the middle is blown
+                    if sd > m['spread_a'] and sd > m['spread_b']:
+                        continue
+                filtered.append(m)
+            middles = filtered
+        elif phase_filter == 'pregame':
+            middles = [m for m in middles if not m['is_live']]
 
         # Sort: guaranteed arbs first, then by catch_score
         middles.sort(key=lambda x: (x['guaranteed_profit'] > 0, x['catch_score']), reverse=True)

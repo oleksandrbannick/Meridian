@@ -7217,6 +7217,7 @@ async function loadTradeHistoryList() {
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
             // Timeout amend: both legs completed via amend after one leg timed out
+            // Still detect for detailed analytics display, but result label is just 'FILLED'
             const isTimeoutExit = t.exit_via === 'timeout_amend' || t.exit_via === 'amend_fallback'
                                 || t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no';
             // P&L: for timeout amend trades, recalculate from leg prices to fix stale 0-profit records
@@ -7233,10 +7234,9 @@ async function loadTradeHistoryList() {
             }
             const isSettled = isSettledWin || isSettledLoss;
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
-            const timeoutLabel = isTimeoutExit ? (pnl > 0 ? 'TIMEOUT WIN' : (pnl < 0 ? 'TIMEOUT LOSS' : 'TIMEOUT EXIT')) : '';
-            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (isTimeoutExit ? (pnl >= 0 ? '⏱' : '⏱') : (isWin ? '✅' : (isManualExit ? '🔧' : '⛔'))));
+            const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : ((isWin || isTimeoutExit) ? '✅' : (isManualExit ? '🔧' : '⛔')));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isTimeoutExit ? timeoutLabel : (isManualExit ? 'MANUAL EXIT' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : ((isWin || isTimeoutExit) ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))));
             const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : ((isWin || isTimeoutExit) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             

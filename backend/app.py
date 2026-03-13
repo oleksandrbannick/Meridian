@@ -1104,25 +1104,31 @@ def load_state():
         except Exception as _jle:
             print(f'⚠ trades.jsonl merge failed: {_jle}')
 
-    # ── Deduplicate: remove 'completed' entries that duplicate a 'timeout_exit' ──
-    # Before the WS-amend guard fix, both WS handler and monitor could record
-    # the same arb completion — one as 'completed', one as 'timeout_exit_*'.
-    # Remove the 'completed' copy if same bot_id within 30s.
-    _timeout_set = [(t.get('bot_id',''), t.get('timestamp',0))
-                    for t in trade_history if t.get('result','').startswith('timeout_exit')]
+    # ── Deduplicate: remove duplicate trades for the same bot_id within 60s ──
+    # Multiple paths (WS handler, monitor REST, monitor timeout amend) can record
+    # the same arb completion. Keep the FIRST entry (earliest timestamp) per bot_id
+    # within any 60-second window, remove all others.
+    # Also convert legacy 'timeout_exit_*' results to 'completed' since amend
+    # completes the arb — the old result type is vestigial.
+    _seen_bots = {}  # bot_id → timestamp of kept entry
     _remove_idx = set()
-    for i, ct in enumerate(trade_history):
-        if ct.get('result') != 'completed':
+    for i, t in enumerate(trade_history):
+        bid = t.get('bot_id', '')
+        ts = t.get('timestamp', 0)
+        if not bid:
             continue
-        cb = ct.get('bot_id', '')
-        cts = ct.get('timestamp', 0)
-        for tb, tts in _timeout_set:
-            if tb == cb and abs(cts - tts) < 30:
-                _remove_idx.add(i)
-                break
+        # Convert legacy timeout_exit_* to completed
+        if t.get('result', '').startswith('timeout_exit'):
+            t['result'] = 'completed'
+            if not t.get('exit_via'):
+                t['exit_via'] = 'timeout_amend'
+        if bid in _seen_bots and abs(ts - _seen_bots[bid]) < 60:
+            _remove_idx.add(i)
+        else:
+            _seen_bots[bid] = ts
     if _remove_idx:
         trade_history = [t for i, t in enumerate(trade_history) if i not in _remove_idx]
-        print(f'🧹 Deduped: removed {len(_remove_idx)} duplicate completed+timeout_exit entries')
+        print(f'🧹 Deduped: removed {len(_remove_idx)} duplicate trade entries')
         save_state()  # persist cleaned data immediately
 
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
@@ -1790,6 +1796,12 @@ def _execute_ws_completion(bot_id):
             bot.pop('_ws_fill_handling', None)
             return
 
+        # ── Guard: if monitor already recorded a trade for this cycle, skip ──
+        if bot.get('_trade_recorded'):
+            print(f'⚡ WS COMPLETION SKIP: {bot_id} — trade already recorded by monitor')
+            bot.pop('_ws_fill_handling', None)
+            return
+
         now = time.time()
         ticker = bot['ticker']
         qty = bot['quantity']
@@ -1840,6 +1852,7 @@ def _execute_ws_completion(bot_id):
                 'repeat_count': repeat_total,
                 'fill_source': 'ws_realtime',
             }, bot)
+            bot['_trade_recorded'] = True  # Prevent monitor from double-recording
             bot_log('ARB_COMPLETED', bot_id, {
                 'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents,
                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
@@ -3383,29 +3396,34 @@ def _run_monitor():
 
                             if yes_f >= qty and no_f >= qty:
                                 # Both legs filled — true completion, profit locked
-                                actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
-                                actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
-                                real_yes = actual_yes if actual_yes else bot['yes_price']
-                                real_no  = actual_no  if actual_no  else bot['no_price']
-                                profit_cents = (100 - real_yes - real_no) * qty
-                                bot['status'] = 'completed'
-                                bot['completed_at'] = now
-                                orig_repeat_count = bot.get('repeat_count', 0)
-                                bot['repeat_count'] = 0
-                                session_pnl['gross_profit_cents'] += profit_cents
-                                session_pnl['completed_bots'] += 1
-                                _record_trade({
-                                    'bot_id': bot_id, 'ticker': ticker,
-                                    'yes_price': real_yes, 'no_price': real_no,
-                                    'quantity': qty, 'profit_cents': profit_cents,
-                                    'result': 'completed', 'timestamp': now,
-                                    'note': f'market {mkt_status} — both legs filled',
-                                    'game_phase': bot.get('game_phase', ''),
-                                    'repeats_done': bot.get('repeats_done', 0),
-                                    'repeat_count': orig_repeat_count,
-                                }, bot)
-                                bot_log('SETTLEMENT_COMPLETE', bot_id, {'profit_cents': profit_cents, 'real_yes': real_yes, 'real_no': real_no, 'market_status': mkt_status})
-                                print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
+                                if bot.get('_trade_recorded'):
+                                    bot['status'] = 'completed'
+                                    print(f'⚡ SETTLEMENT SKIP: {bot_id} — trade already recorded')
+                                else:
+                                    actual_yes = get_actual_fill_price(bot['yes_order_id'], 'yes')
+                                    actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
+                                    real_yes = actual_yes if actual_yes else bot['yes_price']
+                                    real_no  = actual_no  if actual_no  else bot['no_price']
+                                    profit_cents = (100 - real_yes - real_no) * qty
+                                    bot['status'] = 'completed'
+                                    bot['completed_at'] = now
+                                    orig_repeat_count = bot.get('repeat_count', 0)
+                                    bot['repeat_count'] = 0
+                                    session_pnl['gross_profit_cents'] += profit_cents
+                                    session_pnl['completed_bots'] += 1
+                                    bot['_trade_recorded'] = True
+                                    _record_trade({
+                                        'bot_id': bot_id, 'ticker': ticker,
+                                        'yes_price': real_yes, 'no_price': real_no,
+                                        'quantity': qty, 'profit_cents': profit_cents,
+                                        'result': 'completed', 'timestamp': now,
+                                        'note': f'market {mkt_status} — both legs filled',
+                                        'game_phase': bot.get('game_phase', ''),
+                                        'repeats_done': bot.get('repeats_done', 0),
+                                        'repeat_count': orig_repeat_count,
+                                    }, bot)
+                                    bot_log('SETTLEMENT_COMPLETE', bot_id, {'profit_cents': profit_cents, 'real_yes': real_yes, 'real_no': real_no, 'market_status': mkt_status})
+                                    print(f'🏁 SETTLED COMPLETE: {bot_id} — both legs filled, +{profit_cents}¢')
                             elif yes_f >= qty and no_f < qty:
                                 # YES filled, NO never filled — check settlement result
                                 if bot.get('no_order_id'):
@@ -4235,6 +4253,7 @@ def _run_monitor():
                                 bot['posted_at']    = time.time()
                                 bot['repost_count'] = 0
                                 bot['first_fill_at'] = None
+                                bot.pop('_trade_recorded', None)
                                 if 'completed_at' in bot:
                                     del bot['completed_at']
 
@@ -4309,6 +4328,12 @@ def _run_monitor():
 
                 # ── Both sides fully filled → profit locked at settlement ──
                 if yes_filled >= qty and no_filled >= qty:
+                    # ── Guard: WS or timeout may have already recorded this trade ──
+                    if bot.get('_trade_recorded'):
+                        if bot['status'] not in ('stopped', 'completed', 'waiting_repeat'):
+                            bot['status'] = 'completed'
+                        print(f'⚡ MONITOR SKIP: {bot_id} — trade already recorded')
+                        continue
                     # ── REPEAT check runs unconditionally — API failures must NOT prevent it ──
                     repeats_done_now = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = repeats_done_now
@@ -4359,7 +4384,9 @@ def _run_monitor():
                             'game_context': _get_game_context(ticker),
                             'repeats_done': repeats_done_now,
                             'repeat_count': repeat_total,
+                            'fill_source': 'monitor_rest',
                         }, bot)
+                        bot['_trade_recorded'] = True  # Prevent WS/timeout from double-recording
                         bot_log('ARB_COMPLETED', bot_id, {
                             'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents,
                             'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
@@ -4542,6 +4569,9 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_yes', 'wait_min': round(wait_min, 1)})
                         continue
                     if phase == 'live' and wait_min >= timeout_min:
+                        # ── Guard: WS handler may have already completed this bot ──
+                        if bot.get('_trade_recorded') or bot.get('status') in ('completed', 'stopped', 'waiting_repeat'):
+                            continue
                         # Timeout: cancel pending NO FIRST, then sell filled YES.
                         # CRITICAL: do NOT proceed to sell if cancel fails — that would
                         # leave the NO limit order live on Kalshi and orphan the position
@@ -4568,6 +4598,13 @@ def _run_monitor():
                             )
 
                         if sold:
+                            # ── Guard: WS handler may have already completed this bot ──
+                            if bot.get('_trade_recorded'):
+                                print(f'⚡ TIMEOUT SKIP: {bot_id} — WS handler already recorded trade')
+                                bot['status'] = 'stopped'
+                                bot['stopped_at'] = now
+                                save_state()
+                                continue
                             # Both legs have now filled — this is a completed arb.
                             no_fill = sell_info.get('actual_fill_price') or amend_price_no
                             bot['no_price'] = no_fill  # Update so bot card shows actual fill price
@@ -4582,6 +4619,7 @@ def _run_monitor():
                                 session_pnl['gross_loss_cents'] += abs(pnl_cents)
                             session_pnl['completed_bots'] += 1
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+                            bot['_trade_recorded'] = True  # Prevent WS from double-recording
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': bot['yes_price'], 'no_price': no_fill,
@@ -4589,7 +4627,7 @@ def _run_monitor():
                                 'quantity': yes_filled,
                                 'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                                 'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                                'result': 'timeout_exit_yes',
+                                'result': 'completed',
                                 'exit_via': 'timeout_amend',
                                 'first_leg': 'yes',
                                 'timeout_min': timeout_min,
@@ -4662,6 +4700,9 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'holding_halftime_no', 'wait_min': round(wait_min, 1)})
                         continue
                     if phase == 'live' and wait_min >= timeout_min:
+                        # ── Guard: WS handler may have already completed this bot ──
+                        if bot.get('_trade_recorded') or bot.get('status') in ('completed', 'stopped', 'waiting_repeat'):
+                            continue
                         # Timeout: cancel pending YES FIRST, then sell filled NO.
                         # CRITICAL: do NOT proceed to sell if cancel fails — same orphan risk.
                         old_yes_order_id = bot.get('yes_order_id')
@@ -4684,6 +4725,13 @@ def _run_monitor():
                             )
 
                         if sold:
+                            # ── Guard: WS handler may have already completed this bot ──
+                            if bot.get('_trade_recorded'):
+                                print(f'⚡ TIMEOUT SKIP: {bot_id} — WS handler already recorded trade')
+                                bot['status'] = 'stopped'
+                                bot['stopped_at'] = now
+                                save_state()
+                                continue
                             # Both legs have now filled — this is a completed arb.
                             yes_fill = sell_info.get('actual_fill_price') or amend_price_yes
                             bot['yes_price'] = yes_fill  # Update so bot card shows actual fill price
@@ -4698,6 +4746,7 @@ def _run_monitor():
                                 session_pnl['gross_loss_cents'] += abs(pnl_cents)
                             session_pnl['completed_bots'] += 1
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+                            bot['_trade_recorded'] = True  # Prevent WS from double-recording
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker,
                                 'yes_price': yes_fill, 'no_price': bot['no_price'],
@@ -4705,7 +4754,7 @@ def _run_monitor():
                                 'quantity': no_filled,
                                 'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                                 'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                                'result': 'timeout_exit_no',
+                                'result': 'completed',
                                 'exit_via': 'timeout_amend',
                                 'first_leg': 'no',
                                 'timeout_min': timeout_min,
@@ -5486,7 +5535,6 @@ def history_stats():
     arb_losses = [t for t in arb_trades if t.get('result', '') in (
         'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
-        'timeout_exit_yes', 'timeout_exit_no',
     )]
 
     # ── Result type breakdown ──────────────────────────────────────
@@ -5495,12 +5543,15 @@ def history_stats():
         r = t.get('result', 'unknown')
         result_counts[r] = result_counts.get(r, 0) + 1
 
-    # ── Timeout exit aggregates ────────────────────────────────────
-    timeout_trades = [t for t in arb_trades if t.get('result', '') in ('timeout_exit_yes', 'timeout_exit_no')]
+    # ── Timeout exit aggregates (legacy timeout_exit_* + new completed with exit_via) ──
+    timeout_trades = [t for t in arb_trades if t.get('result', '') in ('timeout_exit_yes', 'timeout_exit_no')
+                      or t.get('exit_via') == 'timeout_amend']
     timeout_total_profit = sum(t.get('profit_cents', 0) for t in timeout_trades)
     timeout_total_loss   = sum(t.get('loss_cents',   0) for t in timeout_trades)
-    timeout_yes_n  = sum(1 for t in timeout_trades if t.get('result') == 'timeout_exit_yes')
-    timeout_no_n   = sum(1 for t in timeout_trades if t.get('result') == 'timeout_exit_no')
+    timeout_yes_n  = sum(1 for t in timeout_trades if t.get('result') == 'timeout_exit_yes'
+                        or (t.get('exit_via') == 'timeout_amend' and t.get('first_leg') == 'yes'))
+    timeout_no_n   = sum(1 for t in timeout_trades if t.get('result') == 'timeout_exit_no'
+                        or (t.get('exit_via') == 'timeout_amend' and t.get('first_leg') == 'no'))
 
     # ── Flip analysis ──────────────────────────────────────────────
     flip_trades = [t for t in arb_trades if t.get('result', '').startswith('flip_')]
@@ -6571,7 +6622,7 @@ PNL_LOSS_RESULTS = (
     'stopped_loss', 'flipped', 'manual_stop',
     'manual_exit_yes', 'manual_exit_no',  # manual exits that aren't wins
     'stopped_sl', 'loss',  # middle bot results
-    'timeout_exit_yes', 'timeout_exit_no',  # simultaneous dual-order timeout exits
+    # timeout_exit_* removed — amend completes the arb, recorded as 'completed' now
 )
 PNL_WIN_RESULTS = (
     'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',

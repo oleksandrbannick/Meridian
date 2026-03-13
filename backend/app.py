@@ -1762,6 +1762,13 @@ def _execute_ws_completion(bot_id):
                 bot.pop('_ws_fill_handling', None)
             return
 
+        # ── Guard: if monitor is amending this bot, let the monitor record the trade ──
+        # Without this, BOTH WS handler and monitor record a trade → double-count PnL.
+        if bot.get('status') in ('amending_yes', 'amending_no'):
+            print(f'⚡ WS COMPLETION SKIP: {bot_id} is {bot["status"]} — monitor will record trade')
+            bot.pop('_ws_fill_handling', None)
+            return
+
         now = time.time()
         ticker = bot['ticker']
         qty = bot['quantity']
@@ -4542,6 +4549,7 @@ def _run_monitor():
                         if sold:
                             # Both legs have now filled — this is a completed arb.
                             no_fill = sell_info.get('actual_fill_price') or amend_price_no
+                            bot['no_price'] = no_fill  # Update so bot card shows actual fill price
                             orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
                             bot['repeat_count'] = 0
@@ -4657,6 +4665,7 @@ def _run_monitor():
                         if sold:
                             # Both legs have now filled — this is a completed arb.
                             yes_fill = sell_info.get('actual_fill_price') or amend_price_yes
+                            bot['yes_price'] = yes_fill  # Update so bot card shows actual fill price
                             orig_repeat_count = bot.get('repeat_count', 0)
                             bot['status'] = 'stopped'
                             bot['repeat_count'] = 0

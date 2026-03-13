@@ -769,25 +769,28 @@ function getGameSignal(gameId, sport, markets) {
 }
 
 function getRecommendedPresets(tier, signalType) {
-    // coin_flip = close game, prices bouncing both ways → tighter widths catch fills quickly
-    // lean = small lead, still volatile → medium widths
-    // drifting = bigger lead, dog filling slower → wider widths
-    // runaway = blowout, dog side dead → widest (warn user)
-    // late_game/early/pregame → medium defaults
+    // With amend system, all widths complete cleanly.
+    // Tighter = more fills, lower profit per trade
+    // Wider = fewer fills, higher profit per trade
+    // Just recommend a sensible range based on market conditions.
     if (signalType === 'coin_flip') {
-        return { tight: [5, 6, 7, 8], medium: [7, 8, 9, 10], wide: [8, 10, 11, 12] }[tier] || [7, 8, 9, 10];
+        // Close game — both legs fill fast, tight widths work great
+        return [5, 6, 7, 8];
     }
     if (signalType === 'lean') {
-        return { tight: [6, 7, 8, 9], medium: [8, 9, 10, 11], wide: [10, 11, 12, 13] }[tier] || [8, 9, 10, 11];
+        // Small lead — still good fill rate
+        return [6, 7, 8, 9];
     }
     if (signalType === 'drifting') {
-        return { tight: [10, 11, 12, 13], medium: [12, 13, 15, 16], wide: [14, 15, 16, 17] }[tier] || [12, 13, 15, 16];
+        // Lead building — need wider to compensate for slower dog fills
+        return [8, 9, 10, 11];
     }
     if (signalType === 'runaway') {
-        return { tight: [14, 15, 16, 17], medium: [15, 16, 17, 17], wide: [16, 17, 17, 17] }[tier] || [15, 16, 17, 17];
+        // Blowout — dog side barely fills, go wide or skip
+        return [10, 11, 12, 13];
     }
-    // late_game / early / pregame → medium defaults
-    return { tight: [6, 7, 8, 9], medium: [8, 10, 11, 12], wide: [12, 13, 15, 15] }[tier] || [8, 10, 11, 12];
+    // Default (early/pregame/late/unknown)
+    return [7, 8, 9, 10];
 }
 
 function isKalshiLive(market) {
@@ -3702,7 +3705,7 @@ function updateBreakevenDisplay() {
     // More useful: just show the arb width and qty
     const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const profit = width * qty;
-    el.textContent = `Profit if both fill: +${profit}¢ ($${(profit/100).toFixed(2)}) · 20m/10m exit timer`;
+    el.textContent = `Profit if both fill: +${profit}¢ ($${(profit/100).toFixed(2)}) · auto exit via amend`;
     el.style.color = width >= 10 ? '#00ff88' : width >= 5 ? '#ffaa00' : '#00aaff';
 }
 

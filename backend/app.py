@@ -2490,8 +2490,8 @@ _SPORT_TIMEOUTS: dict = {
     'KXBUNDESLIGA': (10.0, 7.0),  # Bundesliga
     'KXLIGUE1':     (10.0, 7.0),  # Ligue 1
     # Tennis — fast-moving markets, arbs complete quickly; dog drops fast
-    'KXATP':    (4.0, 2.5),   # ATP: quick exit when dog fills
-    'KXWTA':    (4.0, 2.5),   # WTA: quick exit when dog fills
+    'KXATP':    (5.0, 3.5),   # ATP: ~1 serve cycle recovery window
+    'KXWTA':    (5.0, 3.5),   # WTA: ~1 serve cycle recovery window
     # Golf — multi-hour rounds, very slow/thin orderbooks
     'KXPGA':    (18.0, 12.0), # PGA Golf
     'KXLIV':    (18.0, 12.0), # LIV Golf

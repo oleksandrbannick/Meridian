@@ -1104,6 +1104,27 @@ def load_state():
         except Exception as _jle:
             print(f'⚠ trades.jsonl merge failed: {_jle}')
 
+    # ── Deduplicate: remove 'completed' entries that duplicate a 'timeout_exit' ──
+    # Before the WS-amend guard fix, both WS handler and monitor could record
+    # the same arb completion — one as 'completed', one as 'timeout_exit_*'.
+    # Remove the 'completed' copy if same bot_id within 30s.
+    _timeout_set = [(t.get('bot_id',''), t.get('timestamp',0))
+                    for t in trade_history if t.get('result','').startswith('timeout_exit')]
+    _remove_idx = set()
+    for i, ct in enumerate(trade_history):
+        if ct.get('result') != 'completed':
+            continue
+        cb = ct.get('bot_id', '')
+        cts = ct.get('timestamp', 0)
+        for tb, tts in _timeout_set:
+            if tb == cb and abs(cts - tts) < 30:
+                _remove_idx.add(i)
+                break
+    if _remove_idx:
+        trade_history = [t for i, t in enumerate(trade_history) if i not in _remove_idx]
+        print(f'🧹 Deduped: removed {len(_remove_idx)} duplicate completed+timeout_exit entries')
+        save_state()  # persist cleaned data immediately
+
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
     """Token bucket — keeps us under Kalshi's ~10 req/sec API limit."""
@@ -2455,9 +2476,9 @@ _SPORT_TIMEOUTS: dict = {
     'KXSERIEA':     (10.0, 7.0),  # Serie A
     'KXBUNDESLIGA': (10.0, 7.0),  # Bundesliga
     'KXLIGUE1':     (10.0, 7.0),  # Ligue 1
-    # Tennis — sets/matches can last hours, fills are sparse
-    'KXATP':    (10.0, 7.0),  # ATP
-    'KXWTA':    (10.0, 7.0),  # WTA
+    # Tennis — fast-moving markets, arbs complete quickly; dog drops fast
+    'KXATP':    (4.0, 2.5),   # ATP: quick exit when dog fills
+    'KXWTA':    (4.0, 2.5),   # WTA: quick exit when dog fills
     # Golf — multi-hour rounds, very slow/thin orderbooks
     'KXPGA':    (18.0, 12.0), # PGA Golf
     'KXLIV':    (18.0, 12.0), # LIV Golf

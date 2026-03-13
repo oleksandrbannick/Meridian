@@ -3629,6 +3629,8 @@ function onPriceManualChange() {
 
 /** Render the premium profit/cost preview */
 function updateProfitPreview() {
+    const previewEl = document.getElementById('profit-preview');
+    if (!previewEl) return;
     const yes    = parseInt(document.getElementById('bot-yes-price').value) || 0;
     const no     = parseInt(document.getElementById('bot-no-price').value)  || 0;
     const qty    = parseInt(document.getElementById('bot-quantity').value)  || 1;
@@ -3878,21 +3880,21 @@ function toggleWidth(w) {
     }
     _updateWidthBtnStyles();
     _updateDeployButton();
-    updateAllWidthsPreview();
+    updateProfitPreview();
 }
 
 function selectAllWidths() {
     ALL_PRESET_WIDTHS.forEach(w => _selectedWidths.add(w));
     _updateWidthBtnStyles();
     _updateDeployButton();
-    updateAllWidthsPreview();
+    updateProfitPreview();
 }
 
 function clearSelectedWidths() {
     _selectedWidths.clear();
     _updateWidthBtnStyles();
     _updateDeployButton();
-    updateAllWidthsPreview();
+    updateProfitPreview();
 }
 
 function _updateWidthBtnStyles() {

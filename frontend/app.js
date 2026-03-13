@@ -799,16 +799,37 @@ function isKalshiLive(market) {
         const now = Date.now();
         const hoursUntilExp = (expTime.getTime() - now) / (1000 * 60 * 60);
         
-        // Window: game must be expected to end within N hours AND not ended > 30min ago
-        // Kalshi sets expected_expiration per-match (not end-of-day), so 4h covers the
-        // longest tennis match; 5h for team sports with potential OT.
-        const isTennis = /KXATP|KXWTA/i.test(market.ticker || market.event_ticker || '');
-        const maxHours = isTennis ? 4.0 : 5.0;
-        if (hoursUntilExp < -0.5 || hoursUntilExp > maxHours) return false;
+        // Check if game has already been resolved (result field set)
+        if (market.result && market.result !== '') return false;
+        
+        // Golf / multi-day events: tournaments span 3-4 days.
+        // If the market is active and expires within 5 days, treat as live.
+        const ticker = market.event_ticker || market.ticker || '';
+        const isGolf = /KXPGA|KXTGL|KXLIV|KXGOLF/i.test(ticker);
+        if (isGolf) {
+            // Active + expires within 5 days + already opened
+            const openStr = market.open_time;
+            const isOpen = openStr ? new Date(openStr).getTime() <= now : true;
+            return isOpen && hoursUntilExp > -0.5 && hoursUntilExp < 120;
+        }
+        
+        // Tennis: estimate match start from expected_expiration minus ~2.5h match duration.
+        // Only count as "live" if the estimated start has passed.
+        const isTennis = /KXATP|KXWTA/i.test(ticker);
+        if (isTennis) {
+            // estimated start = expiration - 2.5h (generous for a tennis match)
+            const estStartMs = expTime.getTime() - (2.5 * 60 * 60 * 1000);
+            const hasStarted = now >= estStartMs;
+            // Must have started AND not ended more than 30min ago AND expires within a sane window (today)
+            if (!hasStarted) return false;
+            if (hoursUntilExp < -0.5 || hoursUntilExp > 4.0) return false;
+        } else {
+            const maxHours = 5.0;
+            if (hoursUntilExp < -0.5 || hoursUntilExp > maxHours) return false;
+        }
         
         // Check game date — must be today (or yesterday for late-night games).
         // Tomorrow's games (diffDays=1 in the future) are NOT live.
-        const ticker = market.event_ticker || '';
         const dateMatch = ticker.match(/(\d{2})([A-Z]{3})(\d{2})/);
         if (dateMatch) {
             const [, yr, mon, day] = dateMatch;
@@ -820,9 +841,6 @@ function isKalshiLive(market) {
             // Allow today (0) and yesterday (-1) for late-night games; reject tomorrow (+1) and beyond
             if (diffDays > 0 || diffDays < -1) return false;
         }
-        
-        // Check if game has already been resolved (result field set)
-        if (market.result && market.result !== '') return false;
         
         return true;
     } catch (e) {
@@ -1158,8 +1176,24 @@ function extractGameId(eventTicker) {
     // Remove the series prefix (KXNBAGAME-, KXNBASPREAD-, etc.)
     const parts = eventTicker.split('-');
     if (parts.length >= 2) {
+        const prefix = parts[0].toUpperCase();
+        const segment = parts[1];
+        
+        // Golf: group by tournament code, not H2H matchup
+        // KXLIVH2H-LIGS26JNIEAANC  → tournament = LIGS26
+        // KXLIVTOP10-LIGS26        → tournament = LIGS26
+        // KXPGAH2H-THPC26ASCORHEN  → tournament = THPC26
+        // KXPGATOP10-THPC26        → tournament = THPC26
+        const isGolf = /KXPGA|KXTGL|KXLIV|KXGOLF/.test(prefix);
+        if (isGolf) {
+            // Tournament code is letters+year digits at the start of segment
+            // e.g. LIGS26, THPC26, TGLM26 — typically 4-6 chars + 2-digit year
+            const tourneyMatch = segment.match(/^([A-Z]+\d{2})/i);
+            if (tourneyMatch) return tourneyMatch[1];
+        }
+        
         // The game ID is the second part (date + teams)
-        return parts[1]; // e.g., "26FEB28TORWAS"
+        return segment; // e.g., "26FEB28TORWAS"
     }
     return eventTicker;
 }
@@ -1414,7 +1448,13 @@ function parseTeamNames(gameId) {
     // Remove date prefix: 26FEB28TORWAS -> TORWAS
     const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
     
-    if (!cleaned || cleaned.length < 2) return gameId;
+    if (!cleaned || cleaned.length < 2) {
+        // Golf tournament codes like LIGS26, THPC26 — return readable placeholder
+        // buildGameTitle will replace this with the real tournament name from market titles
+        const tourneyMatch = gameId.match(/^([A-Z]+)\d{2}$/i);
+        if (tourneyMatch) return 'Golf Tournament';
+        return gameId;
+    }
     
     // Try all possible split points (variable-length team codes: 2-5 chars each)
     // Try longest codes first for best match
@@ -1439,6 +1479,11 @@ function parseTeamNames(gameId) {
             return `${name1} vs ${name2}`;
         }
     }
+    
+    // Golf tournament codes (e.g. LIGS26, THPC26) won't match any team split
+    // Return placeholder — buildGameTitle will extract the real name from market titles
+    const tourneyCode = gameId.match(/^([A-Z]+\d{2})$/i);
+    if (tourneyCode) return 'Golf Tournament';
     
     return gameId;
 }
@@ -1606,7 +1651,7 @@ function displayEventRow(eventData, container) {
         badgeWrap.appendChild(dateBadge);
     }
     
-    // Tennis round badge
+    // Tennis round badge + estimated start time
     if (sport === 'Tennis' && eventData.markets.length > 0) {
         const roundMatch = (eventData.markets[0].title || '').match(/(Round\s+Of\s+\d+|Quarterfinal|Semifinal|Final)/i);
         if (roundMatch) {
@@ -1614,6 +1659,32 @@ function displayEventRow(eventData, container) {
             roundBadge.style.cssText = 'background: #1a2a3a; color: #60a5fa; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600;';
             roundBadge.textContent = roundMatch[1].replace('Round Of ', 'R');
             badgeWrap.appendChild(roundBadge);
+        }
+        // Show estimated start time from expected_expiration - 2.5h
+        const expStr = eventData.markets[0].expected_expiration_time;
+        if (expStr) {
+            const expTime = new Date(expStr);
+            const estStart = new Date(expTime.getTime() - (2.5 * 60 * 60 * 1000));
+            const nowMs = Date.now();
+            const timeBadge = document.createElement('span');
+            if (nowMs < estStart.getTime()) {
+                // Match hasn't started — show estimated start time
+                const hrs = estStart.getHours();
+                const mins = estStart.getMinutes();
+                const ampm = hrs >= 12 ? 'PM' : 'AM';
+                const h12 = hrs % 12 || 12;
+                const timeStr = `${h12}:${String(mins).padStart(2,'0')} ${ampm}`;
+                timeBadge.style.cssText = 'background:#1a1a2e;color:#8892a6;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:600;';
+                timeBadge.textContent = `⏰ ~${timeStr}`;
+                timeBadge.title = 'Estimated start time (from Kalshi expiration)';
+            } else {
+                // Match has likely started — show LIVE if no ESPN score
+                if (!liveScore && kalshiLive) {
+                    timeBadge.style.cssText = 'background:#ff333322;color:#ff4444;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;';
+                    timeBadge.innerHTML = '<span style="animation:pulse 1.5s infinite;">●</span> LIVE';
+                }
+            }
+            if (timeBadge.textContent || timeBadge.innerHTML) badgeWrap.appendChild(timeBadge);
         }
     }
     // Signal badge — shows anchor/swing/early/pregame context
@@ -2610,8 +2681,8 @@ function calculateArbPrices(market, width) {
         const askSum = yesAsk + noAsk;
         const askShave = Math.max(0, askSum - targetTotal);
 
-        let favAskShave = Math.floor(askShave * 0.4);  // shave less from fav (stays close to ask, fills faster)
-        let dogAskShave = askShave - favAskShave;
+        let favAskShave = Math.floor(askShave * 0.6);  // shave more from fav (liquid side absorbs it)
+        let dogAskShave = askShave - favAskShave;        // shave less from dog (keep it close to bid, fills easier)
 
         // Never post AT or ABOVE the ask (would cross spread and fill immediately at bad price)
         // Cap each side so we stay at least 1¢ below the ask
@@ -2637,8 +2708,8 @@ function calculateArbPrices(market, width) {
         usingAskSide = true;
     } else {
         // ── BID-SIDE PRICING ── spreads are 1¢ (tight) or no ask data, shave from bids
-        let favShave = Math.floor(totalShave * 0.4);   // less shave on favorite — stays near bid, fills faster
-        let dogShave = totalShave - favShave;           // more shave on underdog — deeper limit, fav fills first
+        let favShave = Math.floor(totalShave * 0.6);   // more shave on favorite — liquid side absorbs it
+        let dogShave = totalShave - favShave;           // less shave on underdog — keep it close to bid for fills
 
         // Get the underdog's max shaveable room (can't go below 1¢)
         const dogBid = yesIsFav ? effectiveNoBid : effectiveYesBid;
@@ -3833,7 +3904,7 @@ function updateAllWidthsPreview() {
         ${rows}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;flex-wrap:wrap;gap:6px;">
             <span style="color:#8892a6;font-size:11px;">${validCount} of ${ALL_PRESET_WIDTHS.length} valid · ${qty}× each</span>
-            <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} if all fill</span>
+            <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} max profit</span>
             <span style="color:#aab;font-size:11px;">Entry: $${totalDollars}</span>
         </div>`;
 }
@@ -3918,34 +3989,6 @@ async function createBot() {
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
-        } else if (data.tight_game_blocked) {
-            // Tight game guardrail — offer force override
-            const forceIt = confirm(`${data.error}\n\n⚠️ Click OK to FORCE deploy anyway (not recommended).`);
-            if (forceIt) {
-                // Retry with force_tight flag
-                const retryResp = await fetch(`${API_BASE}/bot/create`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ticker: currentArbMarket.ticker,
-                        yes_price, no_price, quantity,
-                        repeat_count, arb_width,
-                        force_tight: true,
-                    }),
-                });
-                const retryData = await retryResp.json();
-                if (retryData.success) {
-                    const profit = 100 - yes_price - no_price;
-                    const cycles = repeat_count > 0 ? repeat_count + 1 : 1;
-                    const cycleNote = cycles > 1 ? ` × ${cycles} cycles` : '';
-                    showNotification(`⚠️ Force deployed (tight game): ${quantity} contracts | ${profit}¢ width${cycleNote}`);
-                    closeModal();
-                    loadBots();
-                    if (!autoMonitorInterval) toggleAutoMonitor();
-                } else {
-                    alert('Error: ' + retryData.error);
-                }
-            }
         } else {
             alert('Error: ' + data.error);
         }
@@ -3983,6 +4026,38 @@ async function placeAllWidthsBots() {
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
+
+    // ── Fetch fresh orderbook prices before computing widths ───────────────────
+    try {
+        const obResp = await fetch(`${API_BASE}/orderbook/${currentArbMarket.ticker}`);
+        if (obResp.ok) {
+            const obData = await obResp.json();
+            if (!obData.error) {
+                const ob = obData.orderbook || obData;
+                const yesLevels = (ob.yes || []).slice().reverse();
+                const noLevels  = (ob.no  || []).slice().reverse();
+                const bestYesBid = yesLevels.length ? parseOrderLevel(yesLevels[0]).price : 0;
+                const bestNoBid  = noLevels.length  ? parseOrderLevel(noLevels[0]).price  : 0;
+                currentArbMarket.yes_bid = bestYesBid;
+                currentArbMarket.no_bid  = bestNoBid;
+                currentArbMarket.yes_ask = bestNoBid > 0 ? (100 - bestNoBid) : 0;
+                currentArbMarket.no_ask  = bestYesBid > 0 ? (100 - bestYesBid) : 0;
+                delete currentArbMarket.yes_bid_dollars;
+                delete currentArbMarket.no_bid_dollars;
+                delete currentArbMarket.yes_ask_dollars;
+                delete currentArbMarket.no_ask_dollars;
+            }
+        }
+    } catch (_) { /* proceed with cached prices */ }
+
+    // ── Phantom-arb guardrail: block if one side has no real bids ──────────────
+    const realYesBid = currentArbMarket?.yes_bid || 0;
+    const realNoBid  = currentArbMarket?.no_bid  || 0;
+    if (realYesBid <= 0 || realNoBid <= 0) {
+        const missingSide = realYesBid <= 0 ? 'YES' : 'NO';
+        alert(`⚠️ No real ${missingSide} bids in the orderbook.\n\nThe ${missingSide} price is derived (calculated), not from a real order. Nobody is there to fill it. This arb is phantom.`);
+        return;
+    }
 
     // ── Pre-scan: build detailed confirmation ──────────────────────────────────
     const validWidths = [];
@@ -4067,6 +4142,7 @@ async function placeAllWidthsBots() {
     // ── Close modal + reload first, then show notification ────────────────────
     closeModal();
     await loadBots();
+    if (!autoMonitorInterval) toggleAutoMonitor();
 
     const total = validWidths.length;
     let notifMsg;
@@ -4667,8 +4743,9 @@ async function loadBots() {
                 const livePendingBid = (bot.status === 'yes_filled' || bot.status === 'amending_no') ? bot.live_no_bid : bot.live_yes_bid;
                 const gameOver = livePendingBid != null && livePendingBid < 5;
                 const amendPrice = bot.amend_price;
+                const originalPendingPrice = pendingSide === 'YES' ? (bot.yes_price || 0) : (bot.no_price || 0);
                 const exitLine = isAmending
-                    ? `<span style="color:#ff8800;font-weight:700;">🔧 AMENDING ${pendingSide} order → ${amendPrice != null ? amendPrice + '¢' : '?¢'} (completing arb…)</span>`
+                    ? `<span style="color:#ff8800;font-weight:700;">🔧 ${pendingSide} posted ${originalPendingPrice}¢ → amend ${amendPrice != null ? amendPrice + '¢' : '?¢'} (completing arb…)</span>`
                     : gameOver
                     ? `<span style="color:#818cf8;font-weight:700;">⏳ Awaiting settlement — game ended, position held</span>`
                     : isHalftime
@@ -5030,101 +5107,114 @@ function toggleAutoMonitor() {
 // Bot buddy messages — rotates through fun status messages with personality
 const botBuddyMessages = {
     idle: [
-        `<strong>Idle</strong> — Hit Auto-Monitor and I'll never sleep on you`,
-        `<strong>Sleeping...</strong> Wake me up and I'll watch your bots 24/7`,
-        `<strong>Standing by</strong> — Bots aren't being watched right now`,
-        `<strong>Nothing to do...</strong> I get bored easily 🥱`,
-        `<strong>Waiting</strong> — I'm fast once you turn me on, I promise`,
-        `<strong>Ready when you are</strong> — just hit the monitor button`,
+        `<strong>Offline.</strong> Hit Auto-Monitor and I'll run the whole show`,
+        `<strong>Sleeping...</strong> Wake me up — these arbs won't catch themselves 🥱`,
+        `<strong>Standing by</strong> — your bots aren't being watched right now`,
+        `<strong>Nothing to do...</strong> I live for this, just press the button`,
+        `<strong>Bench mode.</strong> Put me in coach, I'm ready`,
+        `<strong>Idle.</strong> One click and I'm on every orderbook simultaneously`,
     ],
     scanning: [
-        `<strong>On it.</strong> Checking fills every 2 seconds, nothing slips past me`,
-        `<strong>Locked in</strong> — order books under surveillance 🔍`,
-        `<strong>Patrolling</strong> — repost logic + flip protection running`,
-        `<strong>Steady.</strong> Watching spreads, queuing reposts, checking for flips`,
+        `<strong>On it.</strong> Checking fills every 2 seconds — nothing slips past me`,
+        `<strong>Locked in</strong> — WebSocket + REST double-watching everything 🔍`,
+        `<strong>Patrolling</strong> — DriftGuard, amend retries, repost logic all active`,
+        `<strong>Steady.</strong> Watching spreads, queuing reposts, tracking timeouts`,
         `<strong>Eyes open.</strong> I'll catch the fill before you even look up`,
-        `<strong>Working.</strong> Bid/ask on every anchor, every 2 seconds`,
-        `<strong>All clear</strong> — just keeping the orders fresh`,
-        `<strong>Watching.</strong> Market's moving but I'm right here`,
+        `<strong>Working.</strong> Every anchor, every bot, every 2 seconds`,
+        `<strong>All systems green</strong> — keeping your orders fresh and alive`,
+        `<strong>Meridian active.</strong> Markets are moving — I'm right here`,
     ],
     both_posted: [
-        `<strong>⚡ Both sides live.</strong> YES and NO orders in the book simultaneously — waiting for fills`,
-        `<strong>Dual orders active</strong> — both legs posted, whichever fills first I'll hold for the other`,
-        `<strong>Simultaneous mode</strong> — YES and NO both resting in the orderbook right now`,
-        `<strong>Both live.</strong> Watching for fills — 8-min timeout kicks in if only one leg fills`,
+        `<strong>⚡ Both sides live.</strong> YES and NO resting simultaneously — first fill starts the clock`,
+        `<strong>Dual orders active</strong> — both legs posted, whichever fills first I'll guard the other`,
+        `<strong>Simultaneous mode</strong> — YES and NO both in the book, timeout starts on first fill`,
+        `<strong>Two orders out.</strong> Waiting for fills — I've got the timer ready`,
     ],
     fav_posted: [
-        `<strong>🎯 Fav posted.</strong> Liquid side is in the book, dog side queued for after fill`,
-        `<strong>Sequencing active</strong> — higher-bid side posted first, waiting for bite`,
-        `<strong>Fav-first running</strong> — watching for fill, then I'll post the underdog`,
-        `<strong>Waiting on the fill</strong> — fav order's live, the arb clock is ticking`,
+        `<strong>🎯 Fav posted.</strong> Liquid side is in the book — dog queued for after fill`,
+        `<strong>Sequencing.</strong> Higher-bid side out first, waiting for the bite`,
+        `<strong>Fav-first mode</strong> — watching for fill, then I post the underdog instantly`,
+        `<strong>Waiting on the fav</strong> — order's live, arb clock starts on fill`,
     ],
     fav_filled: [
-        `<strong>Fav filled!</strong> Posting the dog side now — almost there 🔒`,
-        `<strong>Phase 2.</strong> Liquid side got eaten — underdog going in right now`,
-        `<strong>One leg in.</strong> Fav filled, posting the other side. Don't touch it`,
-        `<strong>Halfway there.</strong> Dog order going up — sit tight`,
+        `<strong>Fav filled!</strong> Posting the dog side now — almost locked 🔒`,
+        `<strong>Phase 2.</strong> Liquid side eaten — underdog going in right now`,
+        `<strong>One leg in.</strong> Fav filled, deploying the other side. Don't touch anything`,
+        `<strong>Halfway there.</strong> Dog order going up — sit tight, I've got this`,
     ],
     filled: [
-        `<strong>Leg filled.</strong> Holding until the other side fills or the game settles`,
-        `<strong>One side in.</strong> No panic — arb isn't complete until both legs fill`,
-        `<strong>In position.</strong> Waiting on the other leg. Flip protection is active`,
-        `<strong>Anchored.</strong> One leg in, watching the flip floor`,
+        `<strong>Leg filled!</strong> Holding for the other side — timeout clock running`,
+        `<strong>One side in.</strong> No panic — arb completes naturally or via amend exit`,
+        `<strong>In position.</strong> Waiting on the other leg — amend exit is the backstop`,
+        `<strong>Anchored.</strong> One leg locked, watching for the other side to fill`,
+    ],
+    amending: [
+        `<strong>🔧 Amending order.</strong> Moving the price to match the current bid — filling the arb`,
+        `<strong>Price adjustment.</strong> Amending the pending leg to complete the arb`,
+        `<strong>Completing the arb.</strong> Amended price sent — waiting for Kalshi to fill it`,
+        `<strong>🔧 Working on it.</strong> Amend submitted, polling for fill confirmation`,
+    ],
+    timeout_retry: [
+        `<strong>⏳ Retrying amend.</strong> Didn't fill yet — adjusting to the new bid and trying again`,
+        `<strong>Still on it.</strong> Amend retry in progress — I'll keep going until it fills`,
+        `<strong>Persistence mode.</strong> Order being re-amended to fresh bid — arb must complete`,
+        `<strong>Not giving up.</strong> Re-amending with updated price — this will fill`,
     ],
     completed: [
         `<strong>LET'S GO!</strong> Both legs filled — profit locked at settlement 🎉`,
         `<strong>That's a W.</strong> Clean arb, clean profit. Love to see it 💰`,
         `<strong>Locked in!</strong> Dual fill confirmed — collecting at settlement`,
         `<strong>We ate.</strong> Both sides filled, profit secured. Easy money 😎`,
-        `<strong>Arb complete!</strong> Settlement will close this out green. Nice trade`,
+        `<strong>Arb complete!</strong> Settlement will close this out. Nice trade`,
     ],
     celebrating: [
         `<strong>LET'S GO!</strong> Profit locked — love when a plan comes together 🎉`,
-        `<strong>We won!</strong> Another one in the books 💰`,
+        `<strong>That's money.</strong> Another one in the books 💰`,
         `<strong>Nailed it.</strong> Clean fill, clean profit. You're welcome 😎`,
-        `<strong>Bag secured.</strong> That's what the strategy is for`,
+        `<strong>Bag secured.</strong> That's what we built Meridian for`,
+        `<strong>Cash.</strong> Settlement incoming — this one's a wrap 🏆`,
     ],
     flip_triggered: [
-        `<strong>Flip fired.</strong> Bid dropped below the floor — sold to cut exposure 🛡️`,
-        `<strong>Flip protection triggered.</strong> The fav isn't favored anymore — exited`,
-        `<strong>Floor hit.</strong> Thesis broke, I got out before it got worse`,
-        `<strong>Sold on flip.</strong> That's what the floor is there for — capital protected`,
+        `<strong>Timeout amend.</strong> Timer ran out — amending to fill and complete the arb 🛡️`,
+        `<strong>Amend exit.</strong> Couldn't fill naturally — completing via bid amend`,
+        `<strong>Clock expired.</strong> Moving to amend exit — this arb will still complete`,
+        `<strong>Timeout path.</strong> Amending the pending leg to settle the arb cleanly`,
     ],
     stop_loss: [
-        `<strong>Stop-loss fired.</strong> Straight bet hit the limit — exiting to protect capital`,
-        `<strong>SL triggered.</strong> Price crossed the line — sold. That's the plan`,
-        `<strong>Out.</strong> Position stopped. Risk managed, move on`,
+        `<strong>Stop-loss fired.</strong> Hit the limit — exiting to protect the bag`,
+        `<strong>SL triggered.</strong> Price crossed the line — sold. That's discipline`,
+        `<strong>Out.</strong> Position stopped. Risk managed, next trade`,
     ],
     take_profit: [
         `<strong>Cha-ching!</strong> Take-profit hit — locking those gains 🎯`,
-        `<strong>Target reached.</strong> Sold for profit. Discipline pays`,
-        `<strong>TP triggered.</strong> That's why we set targets — got out at the top`,
+        `<strong>Target hit.</strong> Sold for profit. Discipline pays`,
+        `<strong>TP triggered.</strong> That's why we set targets — secured at the top`,
     ],
     watching: [
-        `<strong>Eyes on it</strong> — monitoring your position vs SL/TP`,
-        `<strong>Position active</strong> — price vs levels, I'm watching`,
+        `<strong>Eyes on it</strong> — monitoring your position vs SL/TP levels`,
+        `<strong>Position active</strong> — watching price movement, I'll react if needed`,
     ],
     near_flip: [
-        `<strong>⚠️ Getting close...</strong> A position is creeping toward the flip floor`,
-        `<strong>Heads up.</strong> Bid drifting toward the threshold — not there yet`,
-        `<strong>Watch this one.</strong> Approaching the floor, flip protection on standby`,
+        `<strong>⚠️ Getting close...</strong> Timeout approaching — amend exit may kick in soon`,
+        `<strong>Heads up.</strong> Timer winding down — watching for fill before amend`,
+        `<strong>Watch this one.</strong> Close to timeout — will amend to complete if needed`,
     ],
     holding: [
-        `<strong>Holding steady</strong> — bid is above the floor, no reason to sell yet`,
-        `<strong>Riding it out</strong> — this is normal volatility. Not every dip is a flip`,
-        `<strong>Diamond hands (the smart kind)</strong> — only a real flip triggers the exit`,
-        `<strong>Sitting tight.</strong> It's moving around but we're still well above the floor`,
-        `<strong>No action needed.</strong> Bid's healthy, flip protection hasn't fired`,
+        `<strong>Holding steady</strong> — one leg filled, waiting for the other side`,
+        `<strong>Riding it out</strong> — this is normal. Bid moves, arb stays on track`,
+        `<strong>Patient mode.</strong> Timeout amend is the safety net — no rush`,
+        `<strong>Sitting tight.</strong> Both orders are working, just need the fill`,
+        `<strong>All good.</strong> Plenty of time left — watching for the second leg`,
     ],
     profitable: [
-        `<strong>Looking good!</strong> Session is in the green — keep it going 📈`,
-        `<strong>Making money!</strong> Strategy is working today 💪`,
-        `<strong>Green session.</strong> Let's keep it that way`,
+        `<strong>Looking good!</strong> Session is in the green — let's keep it going 📈`,
+        `<strong>Making money.</strong> Strategy is working — Meridian doing its thing 💪`,
+        `<strong>Green session.</strong> Stay disciplined, stay profitable`,
     ],
     losing: [
-        `<strong>Rough patch.</strong> Session is red, but that's trading. Stick to the plan`,
-        `<strong>Down but not out.</strong> Risk is managed, we'll bounce back`,
-        `<strong>Temporary.</strong> Red days happen. Stay disciplined`,
+        `<strong>Rough patch.</strong> Session is red but risk is managed — stick to the plan`,
+        `<strong>Down but not out.</strong> Every red session ends. Stay disciplined`,
+        `<strong>Temporary.</strong> Red days happen — the edge is long-term`,
     ],
 };
 
@@ -5143,15 +5233,20 @@ let buddyReactionLockedUntil = 0;  // timestamp — P&L/fleet mood won't overrid
 let lastBuddyMsgTime = 0;          // for background message cooldown
 let lastBuddyMsgState = '';
 
-// force=true skips the cooldown (use for event-driven updates)
+// force=true skips the background cooldown (use for event-driven updates)
+// Even forced messages have a 4s minimum display time so text doesn't flicker
+let lastForcedMsgTime = 0;
 function updateBotBuddyMsg(state, force = false) {
     const el = document.getElementById('bot-buddy-msg');
     if (!el) return;
     const now = Date.now();
-    // Background state messages (scanning, holding, etc.) only refresh every 18s to stop flickering
+    // Background state messages (scanning, holding, etc.) only refresh every 18s
     if (!force && state === lastBuddyMsgState && now - lastBuddyMsgTime < 18000) return;
+    // Even forced messages must display for at least 4s before being replaced by another force
+    if (force && now - lastForcedMsgTime < 4000) return;
     lastBuddyMsgState = state;
     lastBuddyMsgTime = now;
+    if (force) lastForcedMsgTime = now;
 
     const pool = botBuddyMessages[state] || botBuddyMessages.idle;
     let idx = Math.floor(Math.random() * pool.length);
@@ -5159,9 +5254,16 @@ function updateBotBuddyMsg(state, force = false) {
     lastBuddyMsgIdx = idx;
     const dotColor = state === 'idle' ? '#555' :
                      state === 'stop_loss' || state === 'near_sl' || state === 'losing' ? '#ffaa33' :
+                     state === 'amending' || state === 'timeout_retry' ? '#ff8800' :
                      state === 'celebrating' || state === 'take_profit' ? '#ffdd00' : '#00ff88';
     const dotAnim = state === 'idle' ? 'animation:none;' : '';
-    el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${dotAnim}"></span>${pool[idx]}`;
+    // Fade transition so text doesn't snap
+    el.style.transition = 'opacity 0.25s';
+    el.style.opacity = '0';
+    setTimeout(() => {
+        el.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor};${dotAnim}"></span>${pool[idx]}`;
+        el.style.opacity = '1';
+    }, 250);
 }
 
 // ── Completion Sound ──────────────────────────────────────────────────
@@ -5202,13 +5304,61 @@ function playArbCompleteSound() {
             noiseEnv.connect(ctx.destination);
             noise.start(ctx.currentTime);
         };
-        // Resume AudioContext if browser suspended it (requires prior user gesture)
         if (ctx.state === 'suspended') {
             ctx.resume().then(play).catch(() => {});
         } else {
             play();
         }
     } catch (e) { /* audio not supported */ }
+}
+
+// Softer two-tone chime for amend exits (completed but via timeout amend)
+function playAmendCompleteSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const play = () => {
+            // Two-note muted chime: D5 → A5 (resolved but understated)
+            const notes = [
+                { freq: 587.33, start: 0.00, dur: 0.22, gain: 0.25 },  // D5
+                { freq: 880.00, start: 0.15, dur: 0.30, gain: 0.20 },  // A5
+            ];
+            notes.forEach(({ freq, start, dur, gain }) => {
+                const osc = ctx.createOscillator();
+                const env = ctx.createGain();
+                osc.connect(env);
+                env.connect(ctx.destination);
+                osc.type = 'triangle';  // softer waveform
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                env.gain.setValueAtTime(0, ctx.currentTime + start);
+                env.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.03);
+                env.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+                osc.start(ctx.currentTime + start);
+                osc.stop(ctx.currentTime + start + dur + 0.05);
+            });
+        };
+        if (ctx.state === 'suspended') {
+            ctx.resume().then(play).catch(() => {});
+        } else {
+            play();
+        }
+    } catch (e) { /* audio not supported */ }
+}
+
+// Subtle amber flash for amend exits (not confetti)
+function triggerAmendFlash() {
+    const flash = document.createElement('div');
+    flash.style.cssText = `position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;
+        background:radial-gradient(ellipse at center,rgba(255,170,0,0.15) 0%,rgba(255,136,0,0.05) 50%,transparent 80%);
+        pointer-events:none;animation:amendFlashAnim 1.2s ease-out forwards;`;
+    // Inject keyframes if not already present
+    if (!document.getElementById('amend-flash-style')) {
+        const style = document.createElement('style');
+        style.id = 'amend-flash-style';
+        style.textContent = `@keyframes amendFlashAnim { 0%{opacity:1} 100%{opacity:0} }`;
+        document.head.appendChild(style);
+    }
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 1300);
 }
 
 // ── Push Notifications ────────────────────────────────────────────────
@@ -5350,11 +5500,16 @@ function buddyReactToEvent(action) {
             updateBotBuddyMsg('holding', true);
         }
     } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
-        // Timeout exits ARE completed arbs (both legs filled) — celebrate!
-        setBuddyMood('celebrating');
-        updateBotBuddyMsg('celebrating', true);
-        triggerConfetti();
-        lockThen(12000);
+        // Timeout amend exits complete the arb but aren't natural fills — softer celebration
+        setBuddyMood('happy');
+        updateBotBuddyMsg('flip_triggered', true);
+        triggerAmendFlash();
+        lockThen(8000);
+    } else if (action.action === 'timeout_amend_retry') {
+        // Amend didn't fill — retrying next cycle
+        setBuddyMood('focused');
+        updateBotBuddyMsg('timeout_retry', true);
+        lockThen(6000);
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
         updateBotBuddyMsg('filled', true);
@@ -5511,12 +5666,18 @@ async function monitorBots() {
                 data.actions.forEach(action => {
                     console.log('Bot action:', action);
                     buddyReactToEvent(action);
-                    if (action.action === 'completed' || action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
+                    if (action.action === 'completed') {
                         const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
                         const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;
                         playArbCompleteSound();
                         sendPushNotification('💰 ARB COMPLETE!', `${profitStr} profit locked — Meridian`);
                         showNotification(`✅ ARB COMPLETE! ${profitStr} profit locked`);
+                    } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
+                        const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
+                        const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;
+                        playAmendCompleteSound();
+                        sendPushNotification('🔧 AMEND EXIT', `${profitStr} — arb completed via amend`);
+                        showNotification(`🔧 AMEND EXIT: ${profitStr} — arb completed via timeout amend`);
                     } else if (action.action === 'repeat_spawned') {
                         showNotification(`🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`);
                     } else if (action.action === 'auto_phase_live') {
@@ -5847,24 +6008,6 @@ async function quickBot(ticker, yesPrice, noPrice) {
             showNotification(`✅ ARB deployed: ${quantity} contracts | ${profitPer}¢ width | YES ${yesPrice}¢ → NO ${noPrice}¢ queued`);
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
-        } else if (data.tight_game_blocked) {
-            const forceIt = confirm(`${data.error}\n\n⚠️ Click OK to FORCE deploy anyway (not recommended).`);
-            if (forceIt) {
-                const retryResp = await fetch(`${API_BASE}/bot/create`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, force_tight: true }),
-                });
-                const retryData = await retryResp.json();
-                if (retryData.success) {
-                    const profitPer = 100 - yesPrice - noPrice;
-                    showNotification(`⚠️ Force deployed (tight game): ${quantity} contracts | ${profitPer}¢ width | YES ${yesPrice}¢ → NO ${noPrice}¢`);
-                    loadBots();
-                    if (!autoMonitorInterval) toggleAutoMonitor();
-                } else {
-                    showNotification(`❌ Error: ${retryData.error}`);
-                }
-            }
         } else {
             showNotification(`❌ Error: ${data.error}`);
         }

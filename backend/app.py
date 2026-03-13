@@ -2424,13 +2424,53 @@ def _is_late_game(ticker):
 
 # Sport-specific standard timeouts (fav, dog) in minutes.
 # College games (NCAAB/NCAAWB) move slower → need longer fill windows.
+# Sports without live game clocks (golf, tennis, UFC, F1, cricket) get generous windows.
 _SPORT_TIMEOUTS: dict = {
-    'KXNCAAMB': (8.0, 5.0),   # NCAAB: slower game clock
+    # US Basketball
+    'KXNCAAMB': (8.0, 5.0),   # NCAAB: slower game clock, longer halves
     'KXNCAAWB': (8.0, 5.0),   # NCAAW: slower game clock
-    'KXNBA':    (6.0, 4.0),   # NBA
+    'KXNBA':    (6.0, 4.0),   # NBA: fast pace, tight windows
+    # US Football
     'KXNFL':    (6.0, 4.0),   # NFL
-    'KXNHL':    (5.0, 3.5),   # NHL
-    'KXMLB':    (5.0, 3.5),   # MLB
+    'KXNCAAF':  (8.0, 5.0),   # College Football: longer play clock
+    # Ice Hockey
+    'KXNHL':    (5.0, 3.5),   # NHL: fast, continuous play
+    # Baseball
+    'KXMLB':    (5.0, 3.5),   # MLB: pitch-by-pitch, fills fast
+    'KXWBC':    (5.0, 3.5),   # WBC: same baseball format
+    # Soccer — 90-min games, slow scoring, orderbooks move slowly
+    'KXEPL':    (10.0, 7.0),  # EPL
+    'KXUCL':    (10.0, 7.0),  # UCL
+    'KXMLS':    (10.0, 7.0),  # MLS
+    'KXLALIGA':     (10.0, 7.0),  # La Liga
+    'KXLIGAMX':     (10.0, 7.0),  # Liga MX
+    'KXSERIEA':     (10.0, 7.0),  # Serie A
+    'KXBUNDESLIGA': (10.0, 7.0),  # Bundesliga
+    'KXLIGUE1':     (10.0, 7.0),  # Ligue 1
+    # Tennis — sets/matches can last hours, fills are sparse
+    'KXATP':    (10.0, 7.0),  # ATP
+    'KXWTA':    (10.0, 7.0),  # WTA
+    # Golf — multi-hour rounds, very slow/thin orderbooks
+    'KXPGA':    (18.0, 12.0), # PGA Golf
+    'KXLIV':    (18.0, 12.0), # LIV Golf
+    'KXTGL':    (12.0, 9.0),  # TGL Match (shorter format)
+    # International Basketball — lower liquidity, wider spreads
+    'KXVTB':    (8.0, 5.5),   # Russian VTB
+    'KXBSL':    (8.0, 5.5),   # Turkey BSL
+    'KXABA':    (8.0, 5.5),   # Adriatic ABA
+    'KXNBL':    (8.0, 5.5),   # Australian NBL
+    'KXKBL':    (8.0, 5.5),   # Korean KBL
+    'KXCBA':    (8.0, 5.5),   # Chinese CBA
+    'KXEUROLEAGUE': (8.0, 5.5),  # EuroLeague
+    'KXBBL':    (8.0, 5.5),   # German BBL
+    'KXGBL':    (8.0, 5.5),   # Greek GBL
+    'KXACB':    (8.0, 5.5),   # Spanish ACB
+    'KXJBLEAGUE':   (8.0, 5.5),  # Japan B League
+    'KXLNBELITE':   (8.0, 5.5),  # France LNB Elite
+    # Combat / Racing / Cricket — event-based, variable duration
+    'KXUFC':    (6.0, 4.0),   # UFC: fast finishes possible
+    'KXF1':     (8.0, 5.0),   # F1: race-long, moderate fills
+    'KXIPL':    (10.0, 7.0),  # Cricket/IPL: long matches
 }
 
 def _late_game_timeout_min(ticker, yes_is_fav: bool) -> float:
@@ -2452,9 +2492,15 @@ def _late_game_timeout_min(ticker, yes_is_fav: bool) -> float:
             is_final_period = (period == rule['block_period']) or (period > rule['final'])
             if is_final_period and secs is not None and secs <= 300:  # last 5 minutes
                 return 2.0  # tight window — force quick completion
-    # Sport-aware standard timeouts
+    # Sport-aware standard timeouts (prefix match — longest wins)
     sport_key = rule_key or series
-    fav_t, dog_t = _SPORT_TIMEOUTS.get(sport_key, (6.0, 4.0))
+    best_t = None
+    best_len = 0
+    for sp_prefix, sp_vals in _SPORT_TIMEOUTS.items():
+        if sport_key.startswith(sp_prefix) and len(sp_prefix) > best_len:
+            best_t = sp_vals
+            best_len = len(sp_prefix)
+    fav_t, dog_t = best_t if best_t else (6.0, 4.0)
     return fav_t if yes_is_fav else dog_t
 
 def _get_game_score_for_ticker(ticker: str) -> dict:
@@ -2797,8 +2843,8 @@ def create_bot():
             'arb_width':        arb_width if arb_width > 0 else profit_per,
             'live_yes_bid':     live_yes_bid,
             'live_no_bid':      live_no_bid,
-            'live_yes_ask':     0,
-            'live_no_ask':      0,
+            'live_yes_ask':     live_yes_ask,
+            'live_no_ask':      live_no_ask,
             'last_price_update': time.time(),
             'market_type':      _detect_market_type(ticker),
             'spread_line':      _extract_spread_line(ticker),
@@ -4522,10 +4568,23 @@ def _run_monitor():
                                 'yes_is_fav': yes_is_fav,
                             })
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_yes', 'pnl_cents': pnl_cents})
-                            # ── Stop after timeout exit (no auto-retry) ──
+                            # ── Continue repeating if cycles remain (DriftGuard will block bad spreads) ──
                             bot['timeout_exits_count'] = bot.get('timeout_exits_count', 0) + 1
-                            bot['repeat_count'] = 0   # prevent re-entering waiting_repeat
-                            print(f'🛑 TIMEOUT STOP: {bot_id} stopping after timeout exit (no repeat)')
+                            repeats_done_now = bot.get('repeats_done', 0) + 1
+                            bot['repeats_done'] = repeats_done_now
+                            repeat_total = orig_repeat_count
+                            will_repeat = repeats_done_now <= repeat_total
+                            if will_repeat:
+                                bot['status'] = 'waiting_repeat'
+                                bot['waiting_repeat_since'] = time.time()
+                                bot['first_fill_at'] = None
+                                bot['first_leg'] = None
+                                bot['sl_retry_count'] = 0
+                                print(f'🔄 TIMEOUT REPEAT: {bot_id} arb completed via amend — entering waiting_repeat cycle {repeats_done_now}/{repeat_total}')
+                                actions.append({'bot_id': bot_id, 'action': 'waiting_repeat', 'cycle': repeats_done_now, 'total': repeat_total})
+                            else:
+                                bot['repeat_count'] = 0
+                                print(f'🛑 TIMEOUT DONE: {bot_id} arb completed via amend — no more repeats ({repeats_done_now}/{repeat_total})')
                         else:
                             # execute_net_via_amend returned False — amend didn't fill yet
                             err_info = sell_info
@@ -4624,10 +4683,23 @@ def _run_monitor():
                                 'no_is_fav': no_is_fav,
                             })
                             actions.append({'bot_id': bot_id, 'action': 'timeout_exit_no', 'pnl_cents': pnl_cents})
-                            # ── Stop after timeout exit (no auto-retry) ──
+                            # ── Continue repeating if cycles remain (DriftGuard will block bad spreads) ──
                             bot['timeout_exits_count'] = bot.get('timeout_exits_count', 0) + 1
-                            bot['repeat_count'] = 0   # prevent re-entering waiting_repeat
-                            print(f'🛑 TIMEOUT STOP: {bot_id} stopping after timeout exit (no repeat)')
+                            repeats_done_now = bot.get('repeats_done', 0) + 1
+                            bot['repeats_done'] = repeats_done_now
+                            repeat_total = orig_repeat_count
+                            will_repeat = repeats_done_now <= repeat_total
+                            if will_repeat:
+                                bot['status'] = 'waiting_repeat'
+                                bot['waiting_repeat_since'] = time.time()
+                                bot['first_fill_at'] = None
+                                bot['first_leg'] = None
+                                bot['sl_retry_count'] = 0
+                                print(f'🔄 TIMEOUT REPEAT: {bot_id} arb completed via amend — entering waiting_repeat cycle {repeats_done_now}/{repeat_total}')
+                                actions.append({'bot_id': bot_id, 'action': 'waiting_repeat', 'cycle': repeats_done_now, 'total': repeat_total})
+                            else:
+                                bot['repeat_count'] = 0
+                                print(f'🛑 TIMEOUT DONE: {bot_id} arb completed via amend — no more repeats ({repeats_done_now}/{repeat_total})')
                         else:
                             # execute_net_via_amend returned False — amend didn't fill yet
                             err_info = sell_info
@@ -5348,8 +5420,19 @@ def history_stats():
     date_filter = request.args.get('date', '').strip()
     if date_filter:
         source = [t for t in trade_history if _trade_day_key(t) == date_filter]
+        # Apply per-day reset for the filtered day
+        day_reset = _pnl_reset_for_day(date_filter)
+        if day_reset > 0:
+            source = [t for t in source if (t.get('timestamp') or 0) >= day_reset]
     else:
-        source = trade_history
+        # Lifetime: apply per-day resets so stats match the calendar/pnl endpoints
+        source = []
+        for t in trade_history:
+            day = _trade_day_key(t)
+            day_reset = _pnl_reset_for_day(day)
+            if day_reset > 0 and (t.get('timestamp') or 0) < day_reset:
+                continue
+            source.append(t)
     arb_trades = [t for t in source if t.get('type') not in ('watch', 'middle')]
     watch_trades = [t for t in source if t.get('type') == 'watch']
 

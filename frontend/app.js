@@ -3525,15 +3525,14 @@ async function placeStraightBet() {
     const side = currentStraightSide;
     const price = parseInt(document.getElementById('straight-price').value);
     const qty = parseInt(document.getElementById('straight-qty').value) || 1;
-    const addWatch = document.getElementById('straight-add-watch').checked;
-    const sl = parseInt(document.getElementById('straight-sl').value) || 5;
+    const sl = parseInt(document.getElementById('straight-sl').value) || 0;
     const tp = parseInt(document.getElementById('straight-tp').value) || 0;
 
     if (!price || price < 1 || price > 99) { alert('Price must be 1-99¢'); return; }
 
     const cost = (price * qty / 100).toFixed(2);
     const profit = ((100 - price) * qty / 100).toFixed(2);
-    const watchNote = addWatch ? `\n🛑 Auto stop-loss: -${sl}¢${tp > 0 ? ` · Take-profit: +${tp}¢` : ''}` : '';
+    const watchNote = sl > 0 ? `\n🛑 Auto stop-loss: -${sl}¢${tp > 0 ? ` · Take-profit: +${tp}¢` : ''}` : (tp > 0 ? `\n📈 Take-profit: +${tp}¢` : '');
 
     if (!confirm(`💰 Place Limit Order\n\n${side.toUpperCase()} on: ${currentArbMarket.ticker}\nPrice: ${price}¢ × ${qty} contracts\nCost: $${cost}\nPays: $${(qty).toFixed(2)} if ${side} wins (+$${profit})${watchNote}\n\nConfirm?`)) return;
 
@@ -3546,7 +3545,7 @@ async function placeStraightBet() {
                 side,
                 price,
                 quantity: qty,
-                add_watch: addWatch,
+                add_watch: true,
                 stop_loss_cents: sl,
                 take_profit_cents: tp,
                 fair_value_cents: side === 'yes' ? currentFairYesCents : currentFairNoCents,
@@ -3558,7 +3557,7 @@ async function placeStraightBet() {
             showNotification(`✅ ${side.toUpperCase()} limit order placed: ${qty}× at ${price}¢ — cost $${cost}`);
             closeModal();
             loadBots();
-            if (addWatch && !autoMonitorInterval) toggleAutoMonitor();
+            if (!autoMonitorInterval) toggleAutoMonitor();
         } else {
             alert('Error: ' + data.error);
         }
@@ -5007,6 +5006,9 @@ function _renderPnlDisplay(mode) {
         const loss  = ((pnl.mid_loss_cents   || 0) / 100).toFixed(2);
         const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
         const unrealizedBadge = unrealizedCount > 0 ? `<span style="color:#00aaff;font-size:10px;font-weight:600;">+ $${unrealized.toFixed(2)} locked (${unrealizedCount} settling)</span>` : '';
+        const atRisk = (pnl.mid_at_risk_cents || 0) / 100;
+        const atRiskCount = pnl.mid_at_risk_count || 0;
+        const atRiskBadge = atRiskCount > 0 ? `<span style="color:#ffaa00;font-size:10px;font-weight:600;">$${atRisk.toFixed(2)} at risk (${atRiskCount} open)</span>` : '';
         el.innerHTML = `
             <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Middles Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
             <span style="color:${color};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${color}44;">${totalNet >= 0 ? '+' : ''}$${totalNet.toFixed(2)}</span>
@@ -5017,6 +5019,7 @@ function _renderPnlDisplay(mode) {
                 <span style="color:#555;margin:0 6px;">|</span>
                 <span style="color:#aa66ff;font-weight:700;">${wins}W</span><span style="color:#444;"> / </span><span style="color:#ff5555;font-weight:700;">${losses}L</span>
                 ${unrealizedBadge ? `<span style="color:#555;margin:0 6px;">|</span>${unrealizedBadge}` : ''}
+                ${atRiskBadge ? `<span style="color:#555;margin:0 6px;">|</span>${atRiskBadge}` : ''}
             </span>
         `;
     } else {
@@ -8357,19 +8360,18 @@ function renderPnLCalendar(panel, days) {
 function selectHistoryDay(dateStr) {
     // Toggle: clicking same day deselects, clicking null clears
     selectedHistoryDay = (dateStr && dateStr !== selectedHistoryDay) ? dateStr : null;
-    loadPnLCalendar();
-    loadHistoryStats();
-    loadTradeHistoryList();
+    // Reload current history mode
+    setHistoryMode(historyViewMode);
 }
 
 function calendarPrevMonth() {
     calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1);
-    loadPnLCalendar();
+    setHistoryMode(historyViewMode);
 }
 
 function calendarNextMonth() {
     calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1);
-    loadPnLCalendar();
+    setHistoryMode(historyViewMode);
 }
 
 async function loadTradeHistoryList() {
@@ -8379,7 +8381,7 @@ async function loadTradeHistoryList() {
         const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
         const data = await resp.json();
-        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle');
+        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback'].includes(t.result));
         trades = trades.slice(0, 50);
 
         // Clear button at top
@@ -8569,14 +8571,37 @@ async function loadTradeHistory() {
 
 // ── Straight Bets history ───────────────────────────────────────────────────
 async function loadBetsHistory() {
+    const calPanel = document.getElementById('bets-pnl-calendar-panel');
     const statsEl = document.getElementById('bets-stats-panel');
     const sportEl = document.getElementById('bets-sport-panel');
     const listEl  = document.getElementById('bets-history-list');
     if (!listEl) return;
     try {
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500`);
+        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'watch');
+
+        // ── Calendar (all bets, ignore date filter) ──
+        if (calPanel) {
+            try {
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000`);
+                const calData = await calResp.json();
+                const allBets = (calData.trades || []).filter(t => t.type === 'watch');
+                const dayMap = {};
+                allBets.forEach(t => {
+                    const d = new Date((t.timestamp||0) * 1000);
+                    const key = d.toISOString().slice(0,10);
+                    if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
+                    const net = (t.profit_cents||0) - (t.loss_cents||0);
+                    dayMap[key].net_cents += net;
+                    dayMap[key].trades++;
+                    if (net >= 0) dayMap[key].wins++; else dayMap[key].losses++;
+                });
+                const days = Object.values(dayMap).sort((a,b) => a.date.localeCompare(b.date));
+                renderPnLCalendar(calPanel, days);
+            } catch (_) { calPanel.innerHTML = ''; }
+        }
 
         // ── Stats ──
         const WIN_R = ['take_profit_watch', 'settled_win_yes', 'settled_win_no'];
@@ -8715,13 +8740,36 @@ async function loadBetsHistory() {
 
 // ── Middles history ─────────────────────────────────────────────────────────
 async function loadMiddleHistory() {
+    const calPanel = document.getElementById('middle-pnl-calendar-panel');
     const statsEl = document.getElementById('middle-stats-panel');
     const listEl  = document.getElementById('middle-history-list');
     if (!listEl) return;
     try {
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500`);
+        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'middle');
+
+        // ── Calendar (all middles, ignore date filter) ──
+        if (calPanel) {
+            try {
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000`);
+                const calData = await calResp.json();
+                const allMiddle = (calData.trades || []).filter(t => t.type === 'middle');
+                const dayMap = {};
+                allMiddle.forEach(t => {
+                    const d = new Date((t.timestamp||0) * 1000);
+                    const key = d.toISOString().slice(0,10);
+                    if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
+                    const net = (t.profit_cents||0) - (t.loss_cents||0);
+                    dayMap[key].net_cents += net;
+                    dayMap[key].trades++;
+                    if (net >= 0) dayMap[key].wins++; else dayMap[key].losses++;
+                });
+                const days = Object.values(dayMap).sort((a,b) => a.date.localeCompare(b.date));
+                renderPnLCalendar(calPanel, days);
+            } catch (_) { calPanel.innerHTML = ''; }
+        }
 
         const settled = trades.filter(t => !!t.result);  // has a result = settled/completed
         const midHits = settled.filter(t => t.middle_hit === true);

@@ -2244,8 +2244,16 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
         return
 
+    already_cleared = (sell_info or {}).get('already_cleared', False)
     sell_price = (sell_info or {}).get('actual_fill_price', 0)
-    loss_cents = (avg_price - sell_price) * total_fill_qty if sell_price else avg_price * total_fill_qty
+
+    if already_cleared and not sell_price:
+        # Position was already gone (sold/settled elsewhere) — record 0 loss, not full loss
+        print(f'🔙 LADDER SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
+        loss_cents = 0
+        sell_price = avg_price  # assume break-even since we don't know actual price
+    else:
+        loss_cents = (avg_price - sell_price) * total_fill_qty if sell_price else avg_price * total_fill_qty
 
     session_pnl['gross_loss_cents'] += loss_cents
     session_pnl['stopped_bots'] += 1
@@ -3518,7 +3526,7 @@ def place_straight_order():
                 'stop_loss_cents':  stop_loss_cents,
                 'take_profit_cents': take_profit_cents,
                 'fair_value_cents': fair_value_cents,
-                'has_sl_tp':        True,
+                'has_sl_tp':        stop_loss_cents > 0 or take_profit_cents > 0,
                 'status':           'watching',
                 'created_at':       time.time(),
                 'order_id':         order_id,
@@ -4396,11 +4404,18 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
                         print(f'   execute_sell({reason}): found {actual_held} {side} in unfiltered scan (ticker filter missed it)')
 
                 if actual_held == 0:
-                    print(f'✅ execute_sell({reason}): no {side} position found on Kalshi (both filtered+unfiltered) — already cleared, skipping sell')
-                    return True, {'order_id': 'already_cleared', 'filled': count,
-                                  'sell_price': last_sell_price or 0, 'already_cleared': True,
-                                  'verified_cleared': True, 'remaining': 0,
-                                  'actual_fill_price': last_sell_price}
+                    if total_sold > 0:
+                        # We already sold some — position legitimately cleared
+                        print(f'✅ execute_sell({reason}): position cleared after selling {total_sold} — done')
+                        return True, {'order_id': 'already_cleared', 'filled': count,
+                                      'sell_price': last_sell_price or 0, 'already_cleared': True,
+                                      'verified_cleared': True, 'remaining': 0,
+                                      'actual_fill_price': last_sell_price}
+                    else:
+                        # Never sold anything but position not found — API might be wrong
+                        # Return False so the bot retries rather than recording a phantom loss
+                        print(f'⚠ execute_sell({reason}): no {side} position found on Kalshi but we never sold — returning False to retry (possible API race)')
+                        return False, {'error': 'position_not_found_no_prior_sell', 'position_check_empty': True}
                 if actual_held < remaining_to_sell:
                     print(f'   execute_sell({reason}) attempt {attempt}: Kalshi shows {actual_held} {side} (bot thinks {remaining_to_sell}) — capping to Kalshi position')
                     remaining_to_sell = actual_held
@@ -5581,8 +5596,15 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
         return
 
+    already_cleared = (sell_info or {}).get('already_cleared', False)
     sell_price = sell_info.get('actual_fill_price') or sell_info.get('sell_price') or 0
-    loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
+
+    if already_cleared and not sell_price:
+        print(f'🔙 ANCHOR SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
+        loss_cents = 0
+        sell_price = dog_price  # assume break-even
+    else:
+        loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
 
     session_pnl['gross_loss_cents'] += loss_cents
     session_pnl['stopped_bots'] += 1
@@ -6346,11 +6368,8 @@ def _run_monitor():
                     if not bot.get('order_filled', False):
                         continue
 
-                    # ── Step 3: If no SL/TP configured, auto-complete after fill ──
+                    # ── Step 3: If no SL/TP configured, just keep watching (track until settlement) ──
                     if not has_sl_tp:
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        save_state()
                         continue
 
                     # Use the live_bid we already fetched above
@@ -8140,7 +8159,9 @@ def history_stats():
             if day_reset > 0 and (t.get('timestamp') or 0) < day_reset:
                 continue
             source.append(t)
-    arb_trades = [t for t in source if t.get('type') not in ('watch', 'middle')]
+    arb_trades = [t for t in source if t.get('type') not in ('watch', 'middle')
+                  and t.get('bot_category') not in ('anchor_dog', 'anchor_ladder')
+                  and t.get('result') not in ('anchor_sellback', 'ladder_sellback')]
     watch_trades = [t for t in source if t.get('type') == 'watch']
 
     WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')

@@ -1992,6 +1992,24 @@ function createMarketRow(market, label) {
         edgeDot.title = `Edge: ${liq.arbEdge}¢ · Spread: ${liq.avgSpread}¢ · ${liq.tierLabel}`;
         labelDiv.appendChild(edgeDot);
     }
+
+    // ── Active bot count badge ──
+    if (window._lastBotsData) {
+        const bots = window._lastBotsData;
+        let botCount = 0;
+        const activeSt = new Set(['both_posted','fav_posted','pending_fills','yes_filled','no_filled','amending_no','amending_yes','watching','waiting','one_filled','both_filled','waiting_repeat']);
+        for (const bid in bots) {
+            const b = bots[bid];
+            if (b.ticker === market.ticker && activeSt.has(b.status)) botCount++;
+        }
+        if (botCount > 0) {
+            const botBadge = document.createElement('span');
+            botBadge.style.cssText = 'color:#818cf8;font-size:10px;font-weight:700;margin-left:5px;white-space:nowrap;';
+            botBadge.textContent = `🤖${botCount}`;
+            botBadge.title = `${botCount} active bot${botCount > 1 ? 's' : ''} on this market`;
+            labelDiv.appendChild(botBadge);
+        }
+    }
     
     // Read all prices first for cross-referencing
     const yesBid = getPrice(market, 'yes_bid');

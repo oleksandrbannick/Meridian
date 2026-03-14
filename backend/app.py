@@ -12,6 +12,7 @@ import requests
 from typing import Dict, List, Optional
 import time
 import threading
+import math as _math
 import re
 from datetime import datetime, date, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -999,6 +1000,127 @@ TRADES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trades.j
 
 _save_lock = threading.Lock()
 
+applied_migrations: list = []  # tracks which migrations have run
+
+# ─── Kalshi Fee Calculation ──────────────────────────────────────────────────
+# Maker fee = ceil(0.0175 * C * P * (1-P) * 100) cents per side
+# Taker fee = ceil(0.07   * C * P * (1-P) * 100) cents per side
+# Arb bots use resting limit orders → maker fee on both legs.
+KALSHI_MAKER_RATE = 0.0175
+
+def _kalshi_side_fee_cents(price_cents: int, qty: int) -> int:
+    """Maker fee for one side in cents (rounded up)."""
+    P = price_cents / 100
+    raw_dollars = KALSHI_MAKER_RATE * qty * P * (1 - P)
+    return _math.ceil(raw_dollars * 100)  # cents, rounded up
+
+def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
+    """Total Kalshi maker fee for both legs of an arb trade, in cents."""
+    return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
+
+
+# ─── Data Migrations ─────────────────────────────────────────────────────────
+# To modify trade_history data permanently, add a migration function below.
+# Each migration runs ONCE after load_state(), modifies trade_history in memory,
+# then save_state() persists the changes. The migration name is recorded in
+# applied_migrations so it never re-runs.
+#
+# HOW TO ADD A NEW MIGRATION:
+#   1. Write a function: def _migrate_NNN_description():
+#      - It can read/modify the global trade_history list directly
+#      - Print what it did
+#   2. Add an entry to the MIGRATIONS list: ('NNN_description', _migrate_NNN_description)
+#   3. Restart the server — it runs automatically
+#
+# The server must be restarted for migrations to apply. They run in order.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _migrate_001_recalc_fees():
+    """Recalculate fee_cents on all historical trades using correct Kalshi maker formula.
+    Also adjusts profit_cents/loss_cents to include fees."""
+    global trade_history
+    updated = 0
+    for t in trade_history:
+        yes_p = t.get('yes_price') or t.get('yes_fill_price')
+        no_p = t.get('no_price') or t.get('no_fill_price')
+        qty = t.get('quantity') or t.get('contracts') or 100
+        if not yes_p or not no_p:
+            continue
+        yes_p = int(yes_p)
+        no_p = int(no_p)
+        qty = int(qty)
+        fee = kalshi_fee_cents(yes_p, no_p, qty)
+        old_fee = t.get('fee_cents', 0) or 0
+        if old_fee == fee:
+            continue  # already correct
+        # Undo old fee from profit/loss, apply new fee
+        if 'profit_cents' in t:
+            t['profit_cents'] = int(t['profit_cents']) + int(old_fee) - fee
+        if 'loss_cents' in t and int(t.get('loss_cents', 0)) > 0:
+            t['loss_cents'] = int(t['loss_cents']) - int(old_fee) + fee
+        t['fee_cents'] = fee
+        updated += 1
+    print(f'📊 Migration 001: recalculated fees on {updated} trades')
+
+def _migrate_002_remove_mar12():
+    """Remove all March 12 trades — they're from the old timeout-sell system
+    before the amend system was implemented. Data is inaccurate."""
+    global trade_history, pnl_resets
+    before = len(trade_history)
+    trade_history = [t for t in trade_history
+                     if datetime.fromtimestamp(t.get('timestamp', 0)).strftime('%Y-%m-%d') != '2026-03-12']
+    removed = before - len(trade_history)
+    pnl_resets.pop('2026-03-12', None)
+    print(f'📊 Migration 002: removed {removed} Mar 12 trades (old system), cleared Mar 12 reset')
+
+def _migrate_003_reclean_mar12():
+    """Re-delete Mar 12 trades that got restored from trades.jsonl.
+    Migration 002 only cleaned data.json, not trades.jsonl, so restarts re-added them."""
+    global trade_history, pnl_resets
+    before = len(trade_history)
+    trade_history = [t for t in trade_history
+                     if datetime.fromtimestamp(t.get('timestamp', 0)).strftime('%Y-%m-%d') != '2026-03-12']
+    removed = before - len(trade_history)
+    pnl_resets.pop('2026-03-12', None)
+    print(f'📊 Migration 003: re-cleaned {removed} Mar 12 trades (were restored from trades.jsonl)')
+
+# Master migration list — add new migrations at the bottom
+MIGRATIONS = [
+    ('001_recalc_fees', _migrate_001_recalc_fees),
+    ('002_remove_mar12', _migrate_002_remove_mar12),
+    ('003_reclean_mar12', _migrate_003_reclean_mar12),
+]
+
+def run_migrations():
+    """Run any pending data migrations after load_state(). Saves once if any ran."""
+    global applied_migrations
+    ran = 0
+    for name, func in MIGRATIONS:
+        if name in applied_migrations:
+            continue
+        print(f'🔄 Running migration: {name}')
+        try:
+            func()
+            applied_migrations.append(name)
+            ran += 1
+        except Exception as e:
+            print(f'❌ Migration {name} failed: {e}')
+            break  # stop on failure — don't skip
+    if ran:
+        save_state()
+        # Also rewrite trades.jsonl so deleted trades don't come back on restart
+        try:
+            with open(TRADES_FILE, 'w') as _tf:
+                for t in trade_history[:2000]:
+                    _tf.write(json.dumps(t, default=str) + '\n')
+            print(f'📝 trades.jsonl rewritten after migrations ({len(trade_history)} trades)')
+        except Exception as _je:
+            print(f'⚠ trades.jsonl rewrite failed: {_je}')
+        print(f'✅ {ran} migration(s) applied and saved')
+    else:
+        print('✅ No pending migrations')
+
+
 def save_state():
     """Persist active_bots and trade_history to disk so they survive restarts.
     Uses atomic write (temp → rename) so a crash mid-write never corrupts data.json."""
@@ -1012,6 +1134,7 @@ def save_state():
                     'session_pnl': session_pnl,
                     'opening_lines': _opening_lines,
                     'pnl_resets': pnl_resets,
+                    'applied_migrations': applied_migrations,
                 }, f, indent=2, default=str)
             os.replace(tmp, DATA_FILE)  # atomic — no partial-write corruption
         except Exception as e:
@@ -1022,7 +1145,7 @@ BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_bac
 def load_state():
     """Load persisted bots and history from disk.
     Also merges trades.jsonl to recover any trades recorded after the last save_state()."""
-    global active_bots, trade_history, session_pnl, _opening_lines, pnl_resets
+    global active_bots, trade_history, session_pnl, _opening_lines, pnl_resets, applied_migrations
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
@@ -1030,6 +1153,7 @@ def load_state():
             active_bots = data.get('active_bots', {})
             trade_history = data.get('trade_history', [])
             _opening_lines = data.get('opening_lines', {})
+            applied_migrations = data.get('applied_migrations', [])
             # Load per-day resets (or migrate from legacy single float)
             saved_resets = data.get('pnl_resets')
             if isinstance(saved_resets, dict):
@@ -2511,11 +2635,85 @@ _SPORT_TIMEOUTS: dict = {
     'KXIPL':    (10.0, 7.0),  # Cricket/IPL: long matches
 }
 
-def _late_game_timeout_min(ticker, yes_is_fav: bool) -> float:
-    """Return a shorter timeout when the game is in a late/volatile period.
-    Falls back to sport-specific defaults, then 6/4 min.
-    Late game (final period, < 5 mins left): use 2 min regardless of fav/dog."""
+# ─── Width-based timeout tiers (per sport group) ──────────────────────────
+# Each entry maps a sport prefix to a dict of width ranges → timeout minutes.
+# Format: { (min_width, max_width): timeout_min, ... }
+# Falls back to the last tier if width exceeds all ranges.
+_WIDTH_TIMEOUTS: dict = {
+    # NBA: fast pace, prices move quickly. Short timeouts across the board.
+    'KXNBA': {
+        (5, 7):   1.5,   # tiny margin, get out fast
+        (8, 10):  2.0,   # moderate buffer
+        (11, 16): 2.5,   # decent margin, slightly more patience
+    },
+    # NCAAB: slower pace than NBA, but still basketball
+    'KXNCAAMB': {
+        (5, 7):   2.0,   # narrow — quick exit
+        (8, 10):  3.0,   # moderate
+        (11, 16): 4.0,   # wide — can afford to wait
+    },
+    'KXNCAAWB': {
+        (5, 7):   2.0,
+        (8, 10):  3.0,
+        (11, 16): 4.0,
+    },
+    # Tennis: serve-aware logic handled separately in _tennis_timeout_min
+    # These are fallback defaults if serve detection fails
+    'KXATP': {
+        (5, 7):   1.0,   # tennis moves FAST mid-game
+        (8, 10):  1.5,
+        (11, 16): 2.0,
+    },
+    'KXWTA': {
+        (5, 7):   1.0,
+        (8, 10):  1.5,
+        (11, 16): 2.0,
+    },
+}
+
+def _width_timeout_min(sport_prefix: str, arb_width: int) -> float:
+    """Get timeout based on sport and arb width. Returns None if no rule found."""
+    for prefix, tiers in _WIDTH_TIMEOUTS.items():
+        if sport_prefix.startswith(prefix):
+            for (lo, hi), timeout in tiers.items():
+                if lo <= arb_width <= hi:
+                    return timeout
+            # Width outside defined ranges — use the widest tier
+            max_tier = max(tiers.items(), key=lambda x: x[0][1])
+            return max_tier[1]
+    return None  # no width rule for this sport
+
+
+def _tennis_timeout_min(ticker: str, arb_width: int) -> float:
+    """Tennis-specific timeout: shorter mid-game, longer during changeover.
+    Tennis prices swing hard on breaks of serve — mid-point is dangerous."""
+    gc = _get_game_context(ticker)
+    # Default: use width-based tennis timeout
     series = ticker.split('-')[0].upper() if ticker else ''
+    base = _width_timeout_min(series, arb_width) or 1.5
+
+    if not gc:
+        return base
+
+    # Check if between games (changeover) — prices are more stable
+    status = gc.get('status_detail', '').lower()
+    clock = gc.get('clock', '')
+    is_changeover = ('changeover' in status or 'end of' in status
+                     or 'warm' in status or clock == '0:00')
+
+    if is_changeover:
+        return max(base, 2.0)  # changeover: use at least 2 min
+    else:
+        # Mid-game (ball in play): cut timeout in half, minimum 0.5 min (30 sec)
+        return max(base * 0.5, 0.5)
+
+
+def _late_game_timeout_min(ticker, is_fav_filled: bool, arb_width: int = 0) -> float:
+    """Return timeout considering: sport, width, late-game, and tennis serve state.
+    Priority: late-game override > tennis serve > width-based > sport fav/dog default."""
+    series = ticker.split('-')[0].upper() if ticker else ''
+
+    # ── 1. Late-game override: final period <5 min = always tight ──
     rule = None
     rule_key = ''
     for prefix, r in _LATE_GAME_RULES.items():
@@ -2529,8 +2727,22 @@ def _late_game_timeout_min(ticker, yes_is_fav: bool) -> float:
             secs = _parse_clock_seconds(gc.get('clock', ''))
             is_final_period = (period == rule['block_period']) or (period > rule['final'])
             if is_final_period and secs is not None and secs <= 300:  # last 5 minutes
-                return 2.0  # tight window — force quick completion
-    # Sport-aware standard timeouts (prefix match — longest wins)
+                # NCAAB last 4 min: even tighter
+                if secs <= 240 and (series.startswith('KXNCAAMB') or series.startswith('KXNCAAWB')):
+                    return 1.5
+                return 1.5  # tight window for any sport in final minutes
+
+    # ── 2. Tennis: serve-aware timeout ──
+    if series.startswith('KXATP') or series.startswith('KXWTA'):
+        return _tennis_timeout_min(ticker, arb_width)
+
+    # ── 3. Width-based timeout (NBA, NCAAB) ──
+    if arb_width > 0:
+        wt = _width_timeout_min(series, arb_width)
+        if wt is not None:
+            return wt
+
+    # ── 4. Fallback: sport fav/dog defaults ──
     sport_key = rule_key or series
     best_t = None
     best_len = 0
@@ -2539,7 +2751,7 @@ def _late_game_timeout_min(ticker, yes_is_fav: bool) -> float:
             best_t = sp_vals
             best_len = len(sp_prefix)
     fav_t, dog_t = best_t if best_t else (6.0, 4.0)
-    return fav_t if yes_is_fav else dog_t
+    return fav_t if is_fav_filled else dog_t
 
 def _get_game_score_for_ticker(ticker: str) -> dict:
     """Get live game score info for a ticker (for bot list UI display).
@@ -4571,8 +4783,9 @@ def _run_monitor():
                     # Fav fills first → 8 min: dog is slower to fill, give it more runway.
                     # Dog fills first → 4 min: game drifting against us fast, cut early.
                     yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
-                    # Late game (final period < 5 mins): always use 2 min timeout
-                    timeout_min = _late_game_timeout_min(ticker, yes_is_fav)
+                    # Width-aware + sport-aware + late-game timeout
+                    arb_w = bot.get('arb_width') or bot.get('profit_per', 0)
+                    timeout_min = _late_game_timeout_min(ticker, yes_is_fav, arb_w)
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     # ── Halftime pause: reset timer so the bot gets a fresh window ──
@@ -4706,8 +4919,9 @@ def _run_monitor():
 
                     # NO filled first: fav=6min, dog=4min
                     no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
-                    # Late game (final period < 5 mins): always use 2 min timeout
-                    timeout_min = _late_game_timeout_min(ticker, no_is_fav)
+                    # Width-aware + sport-aware + late-game timeout
+                    arb_w = bot.get('arb_width') or bot.get('profit_per', 0)
+                    timeout_min = _late_game_timeout_min(ticker, no_is_fav, arb_w)
                     bot['timeout_min'] = timeout_min  # store so frontend can show countdown
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
                     # ── Halftime pause: reset timer so the bot gets a fresh window ──
@@ -7372,6 +7586,7 @@ def watch_position():
 
 if __name__ == '__main__':
     load_state()
+    run_migrations()
 
     # ── Auto-login at startup if config.json exists ──
     # This ensures bots are monitored immediately after a restart,

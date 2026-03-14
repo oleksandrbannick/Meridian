@@ -1,13 +1,46 @@
-✅ Loaded: 49 bots, 49 history
-✅ AUTO-LOGIN at startup: balance=$432.15
-🔍 STARTUP SL SWEEP: checking 2 active bots for overdue stop-losses...
+✅ Loaded: 1711 bots, 844 history, 1525 opening lines, resets={}
+📦 Backup written: 844 trades
+🔁 Recovered 15 trades from trades.jsonl (were missing from data.json)
+🧹 Deduped: removed 15 duplicate trade entries
+⚠ save_state: [Errno 2] No such file or directory: '/Applications/Programs/Meridian/backend/data.json.tmp' -> '/Applications/Programs/Meridian/backend/data.json'
+✅ No pending migrations
+✅ AUTO-LOGIN at startup: balance=$266.82
+🔍 STARTUP SL SWEEP: checking 3 active bots for overdue stop-losses...
 🔌 Kalshi WS connected
-📊 FILL CHECK KXNBAGAME-26MAR06DALBOS-DAL_1772782785: YES=0/5 NO=5/5 | resp_keys=['order']
-📊 FILL CHECK KXNCAAMBGAME-26MAR06BUFFTOL-TOL_1772824016: YES=2/2 NO=0/2 | resp_keys=['order']
-📋 [INFO] MONITOR_CYCLE  | {'active_bots': 2, 'actions_count': 2, 'actions_summary': ['holding_no', 'holding_yes']}
+📡 WS subscribed to balance channel
+⚠ WS error [8]: Unknown channel name
+📡 WS subscribed to 2 tickers: ['KXNBASPREAD-26MAR13PHXTOR-TOR4', 'KXNBAGAME-26MAR13PHXTOR-TOR']...
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+📊 FILL CHECK KXNBAGAME-26MAR13PHXTOR-TOR_ac7d5f96: YES=5/5 NO=0/5 | resp_keys=['order']
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+📊 FILL CHECK KXNBAGAME-26MAR13PHXTOR-TOR_87c1c16e: YES=0/5 NO=5/5 | resp_keys=['order']
+💰 WS FILL: yes 5x KXNBAGAME-26MAR13PHXTOR-TOR (order aeb76a12...)
+⚡ WS FILL UPDATE: KXNBAGAME-26MAR13PHXTOR-TOR_87c1c16e YES +5 → YES=5/5 NO=5/5
+⚡ WS INSTANT COMPLETE: KXNBAGAME-26MAR13PHXTOR-TOR_87c1c16e — both legs filled!
+🔄 WS REPEAT: KXNBAGAME-26MAR13PHXTOR-TOR_87c1c16e entering waiting_repeat — cycle 2/3
+💰 WS FILL: yes 5x KXNBAGAME-26MAR13PHXTOR-TOR (order c18185be...)
+⚡ WS FILL UPDATE: KXNBAGAME-26MAR13PHXTOR-TOR_cd78fbb9 YES +5 → YES=5/5 NO=0/5
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+📊 FILL CHECK KXNBAGAME-26MAR13PHXTOR-TOR_cd78fbb9: YES=5/5 NO=0/5 | resp_keys=['order']
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+📋 [INFO] ARB_COMPLETED KXNBAGAME-26MAR13PHXTOR-TOR_87c1c16e | {'real_yes': 64, 'real_no': 30, 'profit_cents': 30, 'fill_duration_s': None, 'source': 'ws_realtime', 'will_repeat': True}
+⚡ WS COMPLETED: KXNBAGAME-26MAR13PHXTOR-TOR_87c1c16e +30¢ (YES=64¢ NO=30¢) → repeat 2/3
+⚠ save_state: [Errno 2] No such file or directory: '/Applications/Programs/Meridian/backend/data.json.tmp' -> '/Applications/Programs/Meridian/backend/data.json'
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+⚡ SKIPPING monitor fill check for KXNBAGAME-26MAR13PHXTOR-TOR_de48cb05 — WS real-time already handling
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+🔄 REPEAT ARB cycle 2/4: KXNBAGAME-26MAR13PHXTOR-TOR_707763ed YES 60¢ + NO 29¢ posted (bid-side) → 11¢ profit (waited 1.0m)
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+🔄 REPEAT ARB cycle 2/4: KXNBAGAME-26MAR13PHXTOR-TOR_fae56ace YES 60¢ + NO 28¢ posted (bid-side) → 12¢ profit (waited 0.9m)
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+🔄 REPEAT ARB cycle 2/4: KXNBAGAME-26MAR13PHXTOR-TOR_efa9631a YES 60¢ + NO 27¢ posted (bid-side) → 13¢ profit (waited 0.9m)
+📊 FILL CHECK KXNBASPREAD-26MAR13PHXTOR-TOR4_7422dd91: YES=7/7 NO=0/7 | resp_keys=['order']
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+📊 FILL CHECK KXNBASPREAD-26MAR13PHXTOR-TOR4_38af092f: YES=7/7 NO=0/7 | resp_keys=['order']
+🏟 ESPN cache refreshed: 34 live teams: AKR, ALA, AND, ARIZ, BAD, COLU, DAV, DET, EVAN, HARV, IND, ISU, JOES, KENT, LIB, LT, MEM, MISS, NEB, NOS, NY, NYI, NYK, NYM, PHX, PIT, PUR, RICE, SAB, SCST, UNT, UVA, WAS, WSH
+📋 [INFO] MONITOR_CYCLE  | {'active_bots': 19, 'actions_count': 11, 'actions_summary': ['repeat_halftime_pause', 'repeat_halftime_pause', 'repeat_halftime_pause', 'holding_yes_one_filled', 'holding_no_one_filled', 'holding_yes_one_filled', 'repeat_cycle', 'repeat_cycle', 'repeat_cycle', 'holding_yes_one_filled', 'holding_yes_one_filled']}
 🔍 STARTUP SL SWEEP complete
  * Serving Flask app 'app'
  * Debug mode: off
 Address already in use
 Port 5001 is in use by another program. Either identify and stop that program, or start the server with a different port.
-📡 WS subscribed to 2 tickers: ['KXNBAGAME-26MAR06DALBOS-DAL', 'KXNCAAMBGAME-26MAR06BUFFTOL-TOL']...

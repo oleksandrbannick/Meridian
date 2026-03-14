@@ -5225,14 +5225,9 @@ def _handle_anchor_dog(bot_id, bot, actions):
             combined = dog_price + new_fav_price + est_fees
 
             if combined > WALK_CEILING:
-                # Hit ceiling — sell dog back
-                print(f'🛑 ANCHOR WALK CEILING: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ + fees {est_fees}¢ = {combined}¢ > {WALK_CEILING}¢ — selling back')
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(fav_order_id)
-                except Exception:
-                    pass
-                _anchor_sell_dog_back(bot_id, bot, dog_price, current_fav_bid, combined, actions)
+                # Would exceed ceiling — don't walk further, keep order at current price
+                print(f'⏸ ANCHOR WALK CAPPED: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ + fees {est_fees}¢ = {combined}¢ > {WALK_CEILING}¢ — holding at {current_fav_price}¢')
+                bot['fav_last_walk_at'] = now
                 return
 
             if new_fav_price <= current_fav_price:
@@ -5538,13 +5533,9 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             combined = avg_dog + new_fav_price + est_fees
 
             if combined > WALK_CEILING:
-                print(f'🛑 LADDER WALK CEILING: {bot_id} | dog={dog_side.upper()} avg@{avg_dog}¢ + fav@{new_fav_price}¢ + fees {est_fees}¢ = {combined}¢ > ceiling {WALK_CEILING}¢ — cancelling fav & selling back')
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(fav_order_id)
-                except Exception:
-                    pass
-                _ladder_sell_dogs_back(bot_id, bot, avg_dog, current_fav_bid, combined, actions)
+                # Would exceed ceiling — don't walk further, keep order at current price
+                print(f'⏸ LADDER WALK CAPPED: {bot_id} | dog={dog_side.upper()} avg@{avg_dog}¢ + fav@{new_fav_price}¢ + fees {est_fees}¢ = {combined}¢ > ceiling {WALK_CEILING}¢ — holding at {current_fav_price}¢')
+                bot['fav_last_walk_at'] = now
                 return
 
             if new_fav_price <= current_fav_price:
@@ -9466,19 +9457,33 @@ def get_pnl():
     dog_today = [t for t in today_trades if t.get('bot_category') in ('anchor_dog', 'anchor_ladder')]
     dog_d    = _compute_pnl_bucket(dog_today)
 
-    # Unrealized P&L from both-filled middle bots (locked-in arb profit)
+    # Unrealized P&L from active middle bots
     mid_unrealized_cents = 0
     mid_unrealized_count = 0
+    mid_at_risk_cents = 0
+    mid_at_risk_count = 0
     for b in active_bots.values():
-        if b.get('type') == 'middle' and b.get('status') == 'both_filled':
+        if b.get('type') != 'middle':
+            continue
+        status = b.get('status', '')
+        q = b.get('qty', 1)
+        if status == 'both_filled':
+            # Both legs filled — locked-in minimum profit (one leg MUST win)
             pa = b.get('leg_a_fill_price') or b.get('target_price_a') or 0
             pb = b.get('leg_b_fill_price') or b.get('target_price_b') or 0
-            q = b.get('qty', 1)
             if pa > 0 and pb > 0:
-                # Guaranteed minimum: one leg wins = 100 - cost per contract
                 locked_profit = (100 - pa - pb) * q
                 mid_unrealized_cents += locked_profit
                 mid_unrealized_count += 1
+        elif status in ('one_filled', 'one_leg_timeout'):
+            # One leg filled — at risk until settlement
+            filled_leg = b.get('filled_leg', 'a')
+            fill_price = b.get(f'leg_{filled_leg}_fill_price') or b.get('target_price', 0)
+            if fill_price > 0:
+                # Max loss = fill_price * qty (if leg loses)
+                # Max win = (100 - fill_price) * qty (if leg wins)
+                mid_at_risk_cents += fill_price * q
+                mid_at_risk_count += 1
 
     pnl = {
         # Daily (combined — unchanged)
@@ -9522,6 +9527,8 @@ def get_pnl():
         # Middle bot unrealized (both legs filled, awaiting settlement)
         'mid_unrealized_cents': mid_unrealized_cents,
         'mid_unrealized_count': mid_unrealized_count,
+        'mid_at_risk_cents': mid_at_risk_cents,
+        'mid_at_risk_count': mid_at_risk_count,
         # Meta
         'active_bots': len([b for b in active_bots.values()
                              if b['status'] in ('pending_fills', 'yes_filled', 'no_filled')]),

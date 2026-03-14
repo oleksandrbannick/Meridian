@@ -3605,6 +3605,10 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
                     'profit_cents': pnl_cents, 'timeout_min': timeout_min,
                     'source': f'timeout_amend_{amend_side}',
                 })
+                # Push notification so frontend picks it up next monitor cycle
+                action_type = 'timeout_exit_yes' if amend_side == 'no' else 'timeout_exit_no'
+                with _pending_ws_actions_lock:
+                    _pending_ws_actions.append({'bot_id': bot_id, 'action': action_type, 'pnl_cents': pnl_cents})
                 # Repeat logic
                 bot['timeout_exits_count'] = bot.get('timeout_exits_count', 0) + 1
                 repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -5914,6 +5918,7 @@ def history_stats():
     LOSS_RESULTS = (
         'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
+        'amended',
     )
 
     def _is_win(t):
@@ -6013,6 +6018,7 @@ def history_stats():
         'flip_yes', 'flip_no',          # legacy — kept for historical data
         'force_exit_yes', 'force_exit_no',
         'settled_loss_yes', 'settled_loss_no',
+        'amended',  # timeout amend losses (migration 004 relabeled these)
     )
     flip_system_results = current_system_results  # alias kept for below code
     width_stats = {}
@@ -6032,7 +6038,7 @@ def history_stats():
         else:
             width_stats[w]['losses'] += 1
             width_stats[w]['total_loss'] += t.get('loss_cents', 0)
-            if t.get('exit_via') == 'timeout_amend':
+            if t.get('exit_via') == 'timeout_amend' or t.get('result') == 'amended':
                 width_stats[w]['amended_losses'] += 1
             elif t['result'].startswith('flip_'):
                 width_stats[w]['flips'] += 1

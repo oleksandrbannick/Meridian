@@ -5764,9 +5764,15 @@ async function monitorBots() {
                     if (action.action === 'completed') {
                         const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
                         const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;
-                        playArbCompleteSound();
-                        sendPushNotification('💰 ARB COMPLETE!', `${profitStr} profit locked — Meridian`);
-                        showNotification(`✅ ARB COMPLETE! ${profitStr} profit locked`);
+                        if (pnlKey >= 0) {
+                            playArbCompleteSound();
+                            sendPushNotification('💰 ARB COMPLETE!', `${profitStr} profit locked — Meridian`);
+                            showNotification(`✅ ARB COMPLETE! ${profitStr} profit locked`);
+                        } else {
+                            playAmendCompleteSound();
+                            sendPushNotification('🔧 FILL LOSS', `${profitStr} — filled at worse price`);
+                            showNotification(`🔧 FILL LOSS: ${profitStr} — both legs filled at worse price`);
+                        }
                     } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
                         const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
                         const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;

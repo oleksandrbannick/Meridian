@@ -1136,6 +1136,19 @@ function displayMarkets(markets) {
         return;
     }
     
+    // Pre-build ticker → active bot count map (O(n) once, not per row)
+    const botMap = {};
+    if (window._lastBotsData) {
+        const deadSt = new Set(['completed','stopped','cancelled','drift_cancelled']);
+        for (const bid in window._lastBotsData) {
+            const b = window._lastBotsData[bid];
+            if (deadSt.has(b.status)) continue;
+            const t = b.ticker || '';
+            if (t) botMap[t] = (botMap[t] || 0) + 1;
+        }
+    }
+    window._botCountMap = botMap;
+    
     console.log(`Organizing ${markets.length} markets into trading floor layout...`);
     
     // Group by event (game) - one compact card per game
@@ -1994,21 +2007,13 @@ function createMarketRow(market, label) {
     }
 
     // ── Active bot count badge ──
-    if (window._lastBotsData) {
-        const bots = window._lastBotsData;
-        let botCount = 0;
-        const activeSt = new Set(['both_posted','fav_posted','pending_fills','yes_filled','no_filled','amending_no','amending_yes','watching','waiting','one_filled','both_filled','waiting_repeat']);
-        for (const bid in bots) {
-            const b = bots[bid];
-            if (b.ticker === market.ticker && activeSt.has(b.status)) botCount++;
-        }
-        if (botCount > 0) {
-            const botBadge = document.createElement('span');
-            botBadge.style.cssText = 'color:#818cf8;font-size:10px;font-weight:700;margin-left:5px;white-space:nowrap;';
-            botBadge.textContent = `🤖${botCount}`;
-            botBadge.title = `${botCount} active bot${botCount > 1 ? 's' : ''} on this market`;
-            labelDiv.appendChild(botBadge);
-        }
+    const botCount = (window._botCountMap || {})[market.ticker] || 0;
+    if (botCount > 0) {
+        const botBadge = document.createElement('span');
+        botBadge.style.cssText = 'color:#818cf8;font-size:10px;font-weight:700;margin-left:5px;white-space:nowrap;';
+        botBadge.textContent = `🤖${botCount}`;
+        botBadge.title = `${botCount} active bot${botCount > 1 ? 's' : ''} on this market`;
+        labelDiv.appendChild(botBadge);
     }
     
     // Read all prices first for cross-referencing

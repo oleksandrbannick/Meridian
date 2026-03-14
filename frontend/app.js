@@ -5349,16 +5349,35 @@ async function loadBots() {
                 </div>`;
             } else if (isAnchorDog && bot.status === 'dog_anchor_posted') {
                 const dogSide = (bot.dog_side || '?').toUpperCase();
+                const favSide = (bot.fav_side || '?').toUpperCase();
                 const dogPrice = bot.dog_price || '?';
                 const targetW = bot.target_width || bot.arb_width || '?';
                 const liveBid = dogSide === 'YES' ? bot.live_yes_bid : bot.live_no_bid;
+                const liveFavBid = favSide === 'YES' ? bot.live_yes_bid : bot.live_no_bid;
                 const hasBid = liveBid != null && liveBid > 0;
                 const dist = hasBid && typeof dogPrice === 'number' ? liveBid - dogPrice : null;
-                const distText = dist != null ? (dist > 0 ? `${dist}¢ above anchor` : dist === 0 ? 'AT anchor' : `${Math.abs(dist)}¢ below`) : '';
-                stopLossInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:4px 8px;font-size:10px;color:#ffaa00;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>🎯 <strong>ANCHOR:</strong> ${dogSide} @ ${dogPrice}¢ — waiting for volatility fill</span>
-                    ${hasBid ? `<span style="color:#8892a6;">Bid: <strong style="color:#ffaa00;">${liveBid}¢</strong> ${distText ? `(${distText})` : ''}</span>` : ''}
-                    <span style="color:#555;">Target: +${targetW}¢ width · ${ageMin}m</span>
+                const distColor = dist != null ? (dist <= 2 ? '#00ff88' : dist <= 5 ? '#ffaa00' : '#ff4444') : '#555';
+                const distText = dist != null ? (dist === 0 ? 'AT anchor' : dist > 0 ? `${dist}¢ away` : `${Math.abs(dist)}¢ past!`) : '';
+                const repostCount = bot.dog_repost_count || 0;
+                const repostMin = 3; // DOG_REPOST_MINUTES
+                const postedAt = bot.posted_at || bot.created_at || 0;
+                const sinceRepost = postedAt > 0 ? Math.round((Date.now()/1000 - postedAt) / 60 * 10) / 10 : 0;
+                const repostLeft = Math.max(0, repostMin - sinceRepost);
+                // Estimated hedge: what we'd pay for fav if dog fills now
+                const estFavMax = typeof dogPrice === 'number' ? 100 - dogPrice - targetW : '?';
+                const estTotal = typeof dogPrice === 'number' && liveFavBid ? dogPrice + Math.min(liveFavBid, estFavMax) : '?';
+                const priceSource = bot._price_source === 'rest' ? ' (REST)' : '';
+                stopLossInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px;">
+                        <span>🎯 <strong>ANCHOR:</strong> ${dogSide} @ ${dogPrice}¢</span>
+                        ${hasBid ? `<span style="color:${distColor};font-weight:700;">${distText}</span>` : '<span style="color:#555;">no bid data</span>'}
+                        <span style="color:#555;">Target: +${targetW}¢</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;">
+                        ${hasBid ? `<span>Dog bid: <strong>${liveBid}¢</strong>${priceSource}</span>` : ''}
+                        ${liveFavBid ? `<span>Fav bid: <strong>${liveFavBid}¢</strong> · est total: <strong>${estTotal}¢</strong></span>` : ''}
+                        <span style="color:#555;">${repostCount > 0 ? `repost #${repostCount} · ` : ''}${repostLeft > 0 ? `repost in ${repostLeft.toFixed(0)}m` : 'repost ready'} · ${ageMin}m</span>
+                    </div>
                 </div>`;
             } else if (isAnchorDog && (bot.status === 'dog_filled' || bot.status === 'fav_hedge_posted')) {
                 const dogSide = (bot.dog_side || '?').toUpperCase();
@@ -5367,14 +5386,27 @@ async function loadBots() {
                 const favPrice = bot.fav_price || '?';
                 const hedgeTimeout = bot.hedge_timeout_s || 120;
                 const dogFilledAt = bot.dog_filled_at || 0;
-                const hedgeElapsed = dogFilledAt > 0 ? (Date.now()/1000 - dogFilledAt) : 0;
+                const favPostedAt = bot.fav_posted_at || dogFilledAt || 0;
+                const hedgeElapsed = favPostedAt > 0 ? (Date.now()/1000 - favPostedAt) : 0;
                 const hedgeLeft = Math.max(0, hedgeTimeout - hedgeElapsed);
                 const hedgeColor = hedgeLeft <= 15 ? '#ff4444' : hedgeLeft <= 45 ? '#ff8800' : '#00aaff';
                 const isFavPosted = bot.status === 'fav_hedge_posted';
-                stopLossInfo = `<div style="background:${isFavPosted ? '#00aaff11' : '#00ff8811'};border:1px solid ${isFavPosted ? '#00aaff33' : '#00ff8833'};border-radius:5px;padding:4px 8px;font-size:10px;color:${isFavPosted ? '#00aaff' : '#00ff88'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>✓ <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ posted` : 'posting fav hedge...'}</span>
-                    <span style="color:${hedgeColor};font-weight:700;">⏳ ${Math.ceil(hedgeLeft)}s hedge window</span>
-                    <span style="color:#555;">Sellback if ceiling breached</span>
+                const favFillQty = bot.fav_fill_qty || 0;
+                const qty = bot.quantity || 1;
+                // Estimated P&L if fav fills at current price
+                const totalCost = typeof dogPrice === 'number' && typeof favPrice === 'number' ? dogPrice + favPrice : '?';
+                const estPnl = typeof totalCost === 'number' ? (100 - totalCost) * qty : '?';
+                const pnlColor = typeof estPnl === 'number' ? (estPnl >= 0 ? '#00ff88' : '#ff4444') : '#555';
+                const sellbackAttempts = bot._sellback_attempts || 0;
+                stopLossInfo = `<div style="background:${isFavPosted ? '#00aaff11' : '#00ff8811'};border:1px solid ${isFavPosted ? '#00aaff33' : '#00ff8833'};border-radius:5px;padding:6px 8px;font-size:10px;color:${isFavPosted ? '#00aaff' : '#00ff88'};margin-top:6px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:3px;">
+                        <span>✓ <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ ${favFillQty > 0 ? `(${favFillQty}/${qty} filled)` : 'posted'}` : 'posting fav hedge...'}</span>
+                        <span style="color:${hedgeColor};font-weight:700;">⏳ ${Math.ceil(hedgeLeft)}s</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;">
+                        <span>Total: <strong>${totalCost}¢</strong> · Est P&L: <strong style="color:${pnlColor};">${typeof estPnl === 'number' ? (estPnl >= 0 ? '+' : '') + estPnl + '¢' : '?'}</strong></span>
+                        <span style="color:#555;">${sellbackAttempts > 0 ? `⚠ sellback retry #${sellbackAttempts} · ` : ''}Sellback if ceiling</span>
+                    </div>
                 </div>`;
             } else if (isAnchorLadder && bot.status === 'ladder_posted') {
                 const rungs = bot.rungs || [];
@@ -7052,11 +7084,21 @@ function showMiddlesResults(data) {
                         </div>
                     </div>
                 </div>
+                <!-- Width preset pills -->
+                <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;">
+                    ${[0,2,4,6].map(w => {
+                        const isActive = w === 0;
+                        return `<button class="mid-width-pill-${idx}" data-width="${w}"
+                            onclick="setMiddleScanWidth(${idx},${w},${m.no_a_bid},${m.no_b_bid})"
+                            style="padding:3px 10px;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ${isActive ? '#ffaa00' : '#2a3550'};background:${isActive ? '#ffaa0022' : '#0a0e1a'};color:${isActive ? '#ffaa00' : '#8892a6'};">${w === 0 ? 'Straight' : '+' + w + '¢'}</button>`;
+                    }).join('')}
+                </div>
                 <!-- Profit summary -->
                 <div id="mid-summary-${idx}" style="background:#060a14;border-radius:6px;padding:7px 10px;margin-bottom:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px;text-align:center;">
                     <div>
                         <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">TOTAL COST</div>
                         <div style="color:#fff;font-weight:700;" id="mid-cost-${idx}">${m.suggested_a + m.suggested_b}¢</div>
+                        <div style="color:#556;font-size:9px;" id="mid-cost-dollars-${idx}">$${((m.suggested_a + m.suggested_b) / 100).toFixed(2)}</div>
                     </div>
                     <div>
                         <div style="color:#556;font-size:9px;font-weight:600;margin-bottom:2px;">ONE LEG WINS</div>
@@ -7071,6 +7113,7 @@ function showMiddlesResults(data) {
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <span style="color:#8892a6;font-size:11px;">Qty:</span>
                     <input id="mid-qty-${idx}" type="number" min="1" value="1"
+                        oninput="updateMiddleProfit(${idx},${m.no_a_bid},${m.no_b_bid})"
                         style="width:44px;padding:4px 6px;background:#0a0e1a;border:1px solid #2a3550;border-radius:5px;color:#fff;font-size:12px;font-weight:600;text-align:center;">
                     <button onclick="deployMiddleBotFromCard(${idx})"
                             style="background:${isGuaranteed ? '#00ff88' : '#aa66ff'};color:${isGuaranteed ? '#000' : '#fff'};border:none;padding:5px 16px;border-radius:5px;cursor:pointer;font-weight:700;font-size:11px;">
@@ -7115,21 +7158,50 @@ function showMiddlesResults(data) {
     // modal is already shown by scanMiddles(); don't re-open here
 }
 
+function setMiddleScanWidth(idx, width, bidA, bidB) {
+    const targetSum = 100 - width;
+    const totalShave = (bidA + bidB) - targetSum;
+    const shaveEach = totalShave / 2;
+    const pA = Math.max(1, Math.min(bidA, Math.round(bidA - shaveEach)));
+    const pB = Math.max(1, Math.min(bidB, Math.round(bidB - shaveEach)));
+    const elA = document.getElementById(`mid-pa-${idx}`);
+    const elB = document.getElementById(`mid-pb-${idx}`);
+    if (elA) elA.value = pA;
+    if (elB) elB.value = pB;
+    // Highlight active pill
+    document.querySelectorAll(`.mid-width-pill-${idx}`).forEach(el => {
+        const w = parseInt(el.dataset.width);
+        el.style.borderColor = w === width ? '#ffaa00' : '#2a3550';
+        el.style.background = w === width ? '#ffaa0022' : '#0a0e1a';
+        el.style.color = w === width ? '#ffaa00' : '#8892a6';
+    });
+    updateMiddleProfit(idx, bidA, bidB);
+}
+
 function updateMiddleProfit(idx, bidA, bidB) {
     const pa = parseInt(document.getElementById(`mid-pa-${idx}`)?.value) || bidA;
     const pb = parseInt(document.getElementById(`mid-pb-${idx}`)?.value) || bidB;
-    const cost = pa + pb;
-    const profit = 100 - cost;
-    const both = 200 - cost;
+    const qty = parseInt(document.getElementById(`mid-qty-${idx}`)?.value) || 1;
+    const costPer = pa + pb;
+    const profitPer = 100 - costPer;
+    const bothPer = 200 - costPer;
     const costEl = document.getElementById(`mid-cost-${idx}`);
+    const costDollarsEl = document.getElementById(`mid-cost-dollars-${idx}`);
     const profitEl = document.getElementById(`mid-profit-${idx}`);
     const bothEl = document.getElementById(`mid-both-${idx}`);
-    if (costEl) costEl.textContent = `${cost}¢`;
+    if (costEl) costEl.textContent = qty > 1 ? `${costPer * qty}¢ (${costPer}¢×${qty})` : `${costPer}¢`;
+    if (costDollarsEl) costDollarsEl.textContent = `$${((costPer * qty) / 100).toFixed(2)}`;
     if (profitEl) {
-        profitEl.textContent = `${profit >= 0 ? '+' : ''}${profit}¢`;
-        profitEl.style.color = profit >= 0 ? '#00ff88' : '#ff4444';
+        const total = profitPer * qty;
+        profitEl.textContent = qty > 1 ? `${total >= 0 ? '+' : ''}${total}¢ (${profitPer >= 0 ? '+' : ''}${profitPer}¢×${qty})` : `${profitPer >= 0 ? '+' : ''}${profitPer}¢`;
+        profitEl.style.color = profitPer >= 0 ? '#00ff88' : '#ff4444';
     }
-    if (bothEl) bothEl.textContent = `+${both}¢`;
+    if (bothEl) {
+        const total = bothPer * qty;
+        bothEl.textContent = qty > 1 ? `+${total}¢ (+${bothPer}¢×${qty})` : `+${bothPer}¢`;
+    }
+    // Clear width pill highlights when manually editing prices
+    // (pills call this after setting prices, so only clear if called from oninput)
 }
 
 async function deployMiddleBotFromCard(idx) {

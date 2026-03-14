@@ -2942,7 +2942,8 @@ let _anchorDogSide = '';  // 'yes' or 'no' (auto-detected)
 let _anchorFavBid = 0;
 let _anchorFavSide = '';
 let _anchorIsBrokenSpread = false;
-let _anchorRungs = [];    // [{price, qty}] — the ladder rungs
+let _anchorRungs = [];    // [{price, qty, offset}] — offset = distance below anchor base
+let _anchorAutoPrice = true;  // auto-adjust rung prices to market
 
 function initAnchorDogPrices() {
     if (!currentArbMarket) return;
@@ -2988,7 +2989,14 @@ function initAnchorDogPrices() {
     }
     // Auto-add a default rung with smart pricing
     if (_anchorRungs.length === 0 && anchorBase > 5) {
-        _anchorRungs.push({ price: smartPrice, qty: 1 });
+        _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
+    }
+    // Auto-adjust existing rungs to track market
+    if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
+        for (const rung of _anchorRungs) {
+            const off = rung.offset || anchorDepth;
+            rung.price = Math.max(1, anchorBase - off);
+        }
     }
     renderAnchorRungs();
     updateAnchorPreview();
@@ -2996,12 +3004,14 @@ function initAnchorDogPrices() {
 
 function addAnchorRung() {
     if (_anchorRungs.length >= 3) { showNotification('Max 3 rungs'); return; }
-    // Default: next rung 2c below lowest existing, or dog bid - 5
-    const lowest = _anchorRungs.length > 0
-        ? Math.min(..._anchorRungs.map(r => r.price))
-        : _anchorDogBid;
-    const newPrice = Math.max(1, lowest - 2);
-    _anchorRungs.push({ price: newPrice, qty: 1 });
+    // Default offset: 2c deeper than the deepest existing rung
+    const maxOffset = _anchorRungs.length > 0
+        ? Math.max(..._anchorRungs.map(r => r.offset || 5))
+        : 3;  // first rung starts at depth - 2 so second is at depth
+    const newOffset = maxOffset + 2;
+    const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
+    const newPrice = Math.max(1, anchorBase - newOffset);
+    _anchorRungs.push({ price: newPrice, qty: 1, offset: newOffset });
     renderAnchorRungs();
     updateAnchorPreview();
 }
@@ -3020,7 +3030,12 @@ function clearAnchorRungs() {
 
 function updateRungPrice(idx, val) {
     const v = parseInt(val);
-    if (v >= 1 && v <= 50) _anchorRungs[idx].price = v;
+    if (v >= 1 && v <= 50) {
+        _anchorRungs[idx].price = v;
+        // Recalculate offset from current anchor base
+        const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
+        _anchorRungs[idx].offset = anchorBase - v;
+    }
     updateAnchorPreview();
 }
 
@@ -3030,28 +3045,40 @@ function updateRungQty(idx, val) {
     updateAnchorPreview();
 }
 
+function toggleAnchorAutoPrice() {
+    _anchorAutoPrice = !_anchorAutoPrice;
+    if (_anchorAutoPrice) initAnchorDogPrices();  // recalc immediately
+    renderAnchorRungs();
+}
+
 function renderAnchorRungs() {
     const container = document.getElementById('anchor-rungs-container');
     if (!container) return;
     const countEl = document.getElementById('anchor-rung-count');
-    if (countEl) countEl.textContent = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''}`;
+    if (countEl) {
+        const autoLabel = _anchorAutoPrice
+            ? '<span style="color:#00ff88;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">AUTO</span>'
+            : '<span style="color:#ff8800;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">MANUAL</span>';
+        countEl.innerHTML = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''} · ${autoLabel}`;
+    }
 
     if (_anchorRungs.length === 0) {
         container.innerHTML = '<div style="text-align:center;color:#555;font-size:11px;padding:12px;border:1px dashed #1e2740;border-radius:6px;">No rungs yet — click "+ Add Rung"</div>';
         return;
     }
 
+    const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
+    const baseLabel = _anchorIsBrokenSpread ? 'ask' : 'bid';
     container.innerHTML = _anchorRungs.map((rung, i) => {
-        const shave = _anchorDogBid - rung.price;
-        const shaveColor = shave <= 3 ? '#ffaa00' : shave <= 7 ? '#ff8800' : '#ff5500';
-        const belowLabel = shave >= 0 ? `${shave}¢ below bid` : `${-shave}¢ above bid`;
+        const offset = rung.offset || 5;
+        const shaveColor = offset <= 3 ? '#ffaa00' : offset <= 7 ? '#ff8800' : '#ff5500';
         return `<div style="display:flex;align-items:center;gap:8px;background:#060a14;border:1px solid #ffaa0033;border-radius:6px;padding:8px 10px;">
             <span style="color:${shaveColor};font-weight:800;font-size:12px;width:20px;">#${i + 1}</span>
             <div style="flex:1;display:flex;align-items:center;gap:6px;">
                 <div style="display:flex;align-items:center;gap:3px;">
                     <span style="color:#8892a6;font-size:9px;">PRICE</span>
                     <input type="number" min="1" max="50" value="${rung.price}" onchange="updateRungPrice(${i}, this.value)"
-                        style="width:48px;padding:4px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#ffaa00;font-size:13px;font-weight:800;text-align:center;">
+                        style="width:48px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoPrice ? '#00ff8844' : '#1e2740'};border-radius:4px;color:#ffaa00;font-size:13px;font-weight:800;text-align:center;${_anchorAutoPrice ? 'opacity:0.8;' : ''}">
                     <span style="color:#ffaa0066;font-size:10px;">¢</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:3px;">
@@ -3059,7 +3086,7 @@ function renderAnchorRungs() {
                     <input type="number" min="1" max="20" value="${rung.qty}" onchange="updateRungQty(${i}, this.value)"
                         style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;font-weight:700;text-align:center;">
                 </div>
-                <span style="color:#555;font-size:9px;">${belowLabel}</span>
+                <span style="color:#555;font-size:9px;">${offset}¢ below ${baseLabel}</span>
             </div>
             <button onclick="removeAnchorRung(${i})" style="background:none;border:none;color:#ff444488;cursor:pointer;font-size:14px;padding:2px 4px;" onmouseenter="this.style.color='#ff4444'" onmouseleave="this.style.color='#ff444488'">✕</button>
         </div>`;
@@ -3777,9 +3804,11 @@ function openBotModal(market, _side, _price) {
             delete currentArbMarket.no_ask_dollars;
             // Update price cards
             refreshModalPriceCards();
-            // Recalc arb prices if in arb mode
+            // Recalc prices based on current mode
             if (currentTradeMode === 'arb') {
                 recalcArbPrices();
+            } else if (currentTradeMode === 'anchor') {
+                initAnchorDogPrices();
             }
         } catch (e) { /* silent — modal still usable with stale data */ }
     }, 3000);

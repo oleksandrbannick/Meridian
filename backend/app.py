@@ -6473,9 +6473,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         current_price = rung.get(f'{unfilled_side}_price', 0)
                         if current_price <= 0:
                             continue
-                        # Walk ceiling: don't exceed HARD_CEILING_CENTS combined
-                        max_price = min(unfilled_bid, 100 - avg_filled - 1)
-                        new_price = min(current_price + 1, max_price)
+                        # Walk to completion — no ceiling, just walk toward bid
+                        new_price = min(current_price + 1, unfilled_bid)
                         if new_price <= current_price:
                             continue
                         try:

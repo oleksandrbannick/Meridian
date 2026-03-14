@@ -1084,11 +1084,41 @@ def _migrate_003_reclean_mar12():
     pnl_resets.pop('2026-03-12', None)
     print(f'📊 Migration 003: re-cleaned {removed} Mar 12 trades (were restored from trades.jsonl)')
 
+def _migrate_004_fix_completed_labels():
+    """Fix trades labeled 'completed' that actually lost money.
+    A true completed arb (both legs filled < 100c) always profits.
+    If profit < 0 or loss > 0, it was amended/timed out, not completed."""
+    global trade_history
+    fixed = 0
+    for t in trade_history:
+        if t.get('result') != 'completed':
+            continue
+        p = t.get('profit_cents', 0) or 0
+        l = t.get('loss_cents', 0) or 0
+        if p >= 0 and l <= 0:
+            continue  # genuinely completed
+        # Determine correct label based on exit_via
+        exit_via = t.get('exit_via', '')
+        if exit_via == 'timeout_amend' or exit_via == 'cancel_amend':
+            t['result'] = 'amended'
+        elif p < 0:
+            # Negative profit, no exit_via — was amended but not tagged
+            t['result'] = 'amended'
+            # Normalize: move negative profit into loss_cents
+            t['loss_cents'] = abs(p)
+            t['profit_cents'] = 0
+        elif l > 0:
+            # Has loss_cents on a "completed" — was amended
+            t['result'] = 'amended'
+        fixed += 1
+    print(f'📊 Migration 004: relabeled {fixed} mislabeled "completed" trades → "amended"')
+
 # Master migration list — add new migrations at the bottom
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
     ('003_reclean_mar12', _migrate_003_reclean_mar12),
+    ('004_fix_completed_labels', _migrate_004_fix_completed_labels),
 ]
 
 def run_migrations():
@@ -3112,6 +3142,7 @@ def create_bot():
             'last_price_update': time.time(),
             'market_type':      _detect_market_type(ticker),
             'spread_line':      _extract_spread_line(ticker),
+            'timeout_min':      _late_game_timeout_min(ticker, yes_price >= no_price, arb_width if arb_width > 0 else profit_per),
         }
         save_state()
         bot_log('BOT_CREATED', bot_id, {'yes_price': yes_price, 'no_price': no_price, 'profit_per': profit_per, 'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count})
@@ -3446,8 +3477,8 @@ def execute_net_via_amend(order_id, amend_side, amend_price, qty, ticker, reason
                           'method': 'amend', 'verified_cleared': True}
 
         # 4. Poll up to 10s for fill
-        for poll_i in range(10):
-            time.sleep(1.0)
+        for poll_i in range(5):
+            time.sleep(0.5)
             try:
                 ws_filled = ws_manager.get_total_fills(order_id)
                 if ws_filled >= qty:
@@ -3516,6 +3547,92 @@ def monitor_bots():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, ticker, is_fav_filled, timeout_min, actions):
+    """Fire an amend in a background thread so the monitor doesn't block."""
+    def _do_amend():
+        try:
+            sold, sell_info = execute_net_via_amend(
+                order_id, amend_side, amend_price, qty,
+                ticker=ticker, reason=f'timeout_exit_{amend_side}_{bot_id}'
+            )
+            now = time.time()
+            filled_leg = 'yes' if amend_side == 'no' else 'no'
+            fill_key = 'yes_price' if amend_side == 'no' else 'no_price'
+
+            if sold:
+                if bot.get('_trade_recorded') or bot.get('status') in ('completed', 'stopped', 'waiting_repeat'):
+                    return
+                fill_price = sell_info.get('actual_fill_price') or amend_price
+                bot[f'{amend_side}_price'] = fill_price
+                orig_repeat_count = bot.get('repeat_count', 0)
+                yes_p = bot['yes_price']
+                no_p = bot['no_price']
+                filled_qty = bot.get(f'{filled_leg}_fill_qty') or qty
+                pnl_cents = (100 - yes_p - no_p) * filled_qty
+                if pnl_cents >= 0:
+                    session_pnl['gross_profit_cents'] += pnl_cents
+                else:
+                    session_pnl['gross_loss_cents'] += abs(pnl_cents)
+                session_pnl['completed_bots'] += 1
+                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + pnl_cents
+                bot['_trade_recorded'] = True
+                _record_trade({
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': yes_p, 'no_price': no_p,
+                    'original_yes': bot.get('original_yes', yes_p), 'original_no': bot.get('original_no', no_p),
+                    'quantity': filled_qty,
+                    'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
+                    'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
+                    'result': 'completed' if pnl_cents >= 0 else 'amended',
+                    'exit_via': 'timeout_amend',
+                    'first_leg': filled_leg,
+                    'timeout_min': timeout_min,
+                    'timestamp': now,
+                    'placed_at': bot.get('created_at', now),
+                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                    'arb_width': bot.get('arb_width', bot.get('profit_per', 0)),
+                    'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
+                    'game_phase': bot.get('game_phase', 'live'),
+                    'game_context': _get_game_context(ticker),
+                    'repeats_done': bot.get('repeats_done', 0),
+                    'repeat_count': orig_repeat_count,
+                    'fill_source': 'timeout_amend',
+                }, bot)
+                bot_log('ARB_COMPLETED', bot_id, {
+                    'real_yes': yes_p, 'real_no': no_p,
+                    'profit_cents': pnl_cents, 'timeout_min': timeout_min,
+                    'source': f'timeout_amend_{amend_side}',
+                })
+                # Repeat logic
+                bot['timeout_exits_count'] = bot.get('timeout_exits_count', 0) + 1
+                repeats_done_now = bot.get('repeats_done', 0) + 1
+                bot['repeats_done'] = repeats_done_now
+                repeat_total = orig_repeat_count
+                if repeats_done_now <= repeat_total:
+                    bot['status'] = 'waiting_repeat'
+                    bot['waiting_repeat_since'] = time.time()
+                    bot['first_fill_at'] = None
+                    bot['first_leg'] = None
+                    bot['sl_retry_count'] = 0
+                    print(f'🔄 TIMEOUT REPEAT: {bot_id} via thread — cycle {repeats_done_now}/{repeat_total}')
+                else:
+                    bot['status'] = 'stopped'
+                    bot['stopped_at'] = now
+                    bot['repeat_count'] = 0
+                save_state()
+            else:
+                # Amend didn't fill — revert status so next monitor cycle retries
+                bot['sl_retry_count'] = bot.get('sl_retry_count', 0) + 1
+                revert_status = f'{filled_leg}_filled'
+                bot['status'] = revert_status
+                print(f'⚠ TIMEOUT amend {amend_side} failed for {bot_id} (attempt {bot["sl_retry_count"]})')
+        except Exception as e:
+            print(f'❌ _fire_timeout_amend {bot_id}: {e}')
+            bot['status'] = f'{"yes" if amend_side == "no" else "no"}_filled'
+
+    threading.Thread(target=_do_amend, daemon=True).start()
 
 
 def _run_monitor():
@@ -4813,20 +4930,19 @@ def _run_monitor():
                         # (not 100-yes_bid which is the ask side) ensures the new order
                         # sits at the best passive price and fills on the next trade.
                         amend_price_no = no_bid if no_bid > 0 else None
-                        sold = False
-                        sell_info = {}
                         if old_no_order_id and amend_price_no and amend_price_no >= 1:
-                            # Update bot state NOW so UI shows the in-progress price
+                            # Fire amend in background thread so monitor doesn't block
                             bot['status'] = 'amending_no'
                             bot['amend_price'] = amend_price_no
                             bot['live_no_ask'] = amend_price_no
                             save_state()
-                            sold, sell_info = execute_net_via_amend(
-                                old_no_order_id, 'no', amend_price_no, qty,
-                                ticker=ticker, reason=f'timeout_exit_yes_{bot_id}'
-                            )
+                            _fire_timeout_amend(bot_id, bot, old_no_order_id, 'no', amend_price_no, qty, ticker, yes_is_fav, timeout_min, actions)
+                            continue  # don't block — next monitor cycle will see result
+                        else:
+                            actions.append({'bot_id': bot_id, 'action': 'timeout_amend_skip', 'reason': 'no_price'})
+                            continue
 
-                        if sold:
+                        if False:  # dead code — amend result handled in _fire_timeout_amend thread
                             # ── Guard: WS handler may have already completed this bot ──
                             if bot.get('_trade_recorded'):
                                 print(f'⚡ TIMEOUT SKIP: {bot_id} — WS handler already recorded trade')
@@ -4856,7 +4972,7 @@ def _run_monitor():
                                 'quantity': yes_filled,
                                 'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                                 'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                                'result': 'completed',
+                                'result': 'completed' if pnl_cents >= 0 else 'amended',
                                 'exit_via': 'timeout_amend',
                                 'first_leg': 'yes',
                                 'timeout_min': timeout_min,
@@ -4945,20 +5061,19 @@ def _run_monitor():
                         # Cancel the stale YES limit order and re-post at the current
                         # YES bid — not 100-no_bid (which is the ask side).
                         amend_price_yes = yes_bid if yes_bid > 0 else None
-                        sold = False
-                        sell_info = {}
                         if old_yes_order_id and amend_price_yes and amend_price_yes >= 1:
-                            # Update bot state NOW so UI shows the in-progress price
+                            # Fire amend in background thread so monitor doesn't block
                             bot['status'] = 'amending_yes'
                             bot['amend_price'] = amend_price_yes
                             bot['live_yes_ask'] = amend_price_yes
                             save_state()
-                            sold, sell_info = execute_net_via_amend(
-                                old_yes_order_id, 'yes', amend_price_yes, qty,
-                                ticker=ticker, reason=f'timeout_exit_no_{bot_id}'
-                            )
+                            _fire_timeout_amend(bot_id, bot, old_yes_order_id, 'yes', amend_price_yes, qty, ticker, no_is_fav, timeout_min, actions)
+                            continue  # don't block — next monitor cycle will see result
+                        else:
+                            actions.append({'bot_id': bot_id, 'action': 'timeout_amend_skip', 'reason': 'no_price'})
+                            continue
 
-                        if sold:
+                        if False:  # dead code — amend result handled in _fire_timeout_amend thread
                             # ── Guard: WS handler may have already completed this bot ──
                             if bot.get('_trade_recorded'):
                                 print(f'⚡ TIMEOUT SKIP: {bot_id} — WS handler already recorded trade')
@@ -4988,7 +5103,7 @@ def _run_monitor():
                                 'quantity': no_filled,
                                 'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                                 'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
-                                'result': 'completed',
+                                'result': 'completed' if pnl_cents >= 0 else 'amended',
                                 'exit_via': 'timeout_amend',
                                 'first_leg': 'no',
                                 'timeout_min': timeout_min,
@@ -6550,7 +6665,7 @@ def cancel_bot(bot_id):
                     actual_yes_fill = sell_prices.get('yes', entry_yes)
                     actual_no_fill  = sell_prices.get('no', entry_no)
                     profit = (100 - actual_yes_fill - actual_no_fill) * min(yes_sold_qty, no_sold_qty)
-                    trade_result = 'completed' if arb_completed_via_amend else 'manual_exit_completed'
+                    trade_result = ('amended' if profit < 0 else 'completed') if arb_completed_via_amend else 'manual_exit_completed'
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': actual_yes_fill, 'no_price': actual_no_fill,
@@ -6933,6 +7048,7 @@ PNL_LOSS_RESULTS = (
     'stopped_loss', 'flipped', 'manual_stop',
     'manual_exit_yes', 'manual_exit_no',  # manual exits that aren't wins
     'stopped_sl', 'loss',  # middle bot results
+    'amended',  # timeout/cancel amends where one leg sold at a loss
     # timeout_exit_* removed — amend completes the arb, recorded as 'completed' now
 )
 PNL_WIN_RESULTS = (

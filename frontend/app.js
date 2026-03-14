@@ -2937,9 +2937,11 @@ function setStraightSide(side) {
 
 // ── Anchor-Dog / Ladder Helpers ──────────────────────────────────────────────
 let _anchorDogBid = 0;   // cached dog bid from orderbook
+let _anchorDogAsk = 0;   // cached dog ask
 let _anchorDogSide = '';  // 'yes' or 'no' (auto-detected)
 let _anchorFavBid = 0;
 let _anchorFavSide = '';
+let _anchorIsBrokenSpread = false;
 let _anchorRungs = [];    // [{price, qty}] — the ladder rungs
 
 function initAnchorDogPrices() {
@@ -2954,12 +2956,21 @@ function initAnchorDogPrices() {
     _anchorFavBid = _anchorFavSide === 'yes' ? yesBid : noBid;
     const dogAsk = _anchorDogSide === 'yes' ? yesAsk : noAsk;
 
-    // Smart rung pricing: if spread is tight (≤2c), price 5c below bid.
-    // If spread is wide/broken, price 5c below ask (so you're first in line, not buried).
+    // Store raw prices for preview calculations
+    _anchorDogAsk = dogAsk;
     const spread = dogAsk > 0 ? (dogAsk - _anchorDogBid) : 1;
-    const isBrokenSpread = spread > 2;
-    const anchorBase = isBrokenSpread ? dogAsk : _anchorDogBid;
-    const smartPrice = Math.max(1, anchorBase - 5);
+    _anchorIsBrokenSpread = spread > 2;
+    const anchorBase = _anchorIsBrokenSpread ? dogAsk : _anchorDogBid;
+
+    // Calculate smart price using current depth setting
+    const depthSlider = document.getElementById('anchor-depth');
+    const widthSlider = document.getElementById('anchor-target-width');
+    const targetWidth = parseInt(widthSlider?.value) || 3;
+    let anchorDepth = parseInt(depthSlider?.value) || 0;
+    if (anchorDepth <= 0) {
+        anchorDepth = targetWidth <= 3 ? 5 : Math.max(5, Math.round(targetWidth * 0.8));
+    }
+    const smartPrice = Math.max(1, anchorBase - anchorDepth);
 
     // Populate display
     const dogSideEl = document.getElementById('anchor-auto-dog-side');
@@ -2967,11 +2978,10 @@ function initAnchorDogPrices() {
     const favSideEl = document.getElementById('anchor-auto-fav-side');
     const favBidEl  = document.getElementById('anchor-auto-fav-bid');
     if (dogSideEl) dogSideEl.textContent = _anchorDogSide.toUpperCase();
-    if (dogBidEl)  dogBidEl.textContent = `bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}`;
+    if (dogBidEl)  dogBidEl.textContent = `bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}${_anchorIsBrokenSpread ? ' (broken)' : ''}`;
     if (favSideEl) favSideEl.textContent = _anchorFavSide.toUpperCase();
     if (favBidEl)  favBidEl.textContent = `bid: ${_anchorFavBid}¢`;
-    // Sync width display
-    const widthSlider = document.getElementById('anchor-target-width');
+    // Sync displays
     if (widthSlider) {
         const d = document.getElementById('anchor-width-display');
         if (d) d.textContent = `${widthSlider.value}¢`;
@@ -3057,9 +3067,35 @@ function renderAnchorRungs() {
 }
 
 function updateAnchorPreview() {
-    const targetWidth = parseInt(document.getElementById('anchor-target-width')?.value) || 5;
+    const targetWidth = parseInt(document.getElementById('anchor-target-width')?.value) || 3;
     const widthDisplay = document.getElementById('anchor-width-display');
     if (widthDisplay) widthDisplay.textContent = `${targetWidth}¢`;
+
+    // Anchor depth: 0 = auto (80/20 split)
+    let anchorDepth = parseInt(document.getElementById('anchor-depth')?.value) || 0;
+    const depthDisplay = document.getElementById('anchor-depth-display');
+    const shaveInfo = document.getElementById('anchor-shave-info');
+    let fav_shave = 0;
+    if (anchorDepth <= 0) {
+        if (targetWidth <= 3) {
+            anchorDepth = 5;
+            fav_shave = 0;
+        } else {
+            anchorDepth = Math.max(5, Math.round(targetWidth * 0.8));
+            fav_shave = Math.max(0, targetWidth - anchorDepth);
+        }
+        if (depthDisplay) depthDisplay.textContent = `auto (${anchorDepth}¢)`;
+    } else {
+        fav_shave = Math.max(0, targetWidth - anchorDepth);
+        if (depthDisplay) depthDisplay.textContent = `${anchorDepth}¢`;
+    }
+    if (shaveInfo) {
+        if (fav_shave > 0) {
+            shaveInfo.innerHTML = `<span style="color:#ffaa00;">Dog depth: ${anchorDepth}¢</span> · <span style="color:#00aaff;">Fav shave: ${fav_shave}¢ below bid</span> · Walk-up +1¢/20s to fill`;
+        } else {
+            shaveInfo.innerHTML = `<span style="color:#ffaa00;">Dog: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Fav: posts at bid</span> · Walk-up +1¢/20s if slow`;
+        }
+    }
 
     const previewEl = document.getElementById('anchor-preview-content');
     if (!previewEl) return;
@@ -3072,36 +3108,43 @@ function updateAnchorPreview() {
     const totalQty = _anchorRungs.reduce((s, r) => s + r.qty, 0);
     const avgPrice = Math.round(_anchorRungs.reduce((s, r) => s + r.price * r.qty, 0) / totalQty);
     const favCeiling = 100 - avgPrice - targetWidth;
+    const favInitial = fav_shave > 0 ? Math.max(1, _anchorFavBid - fav_shave) : _anchorFavBid;
     const totalCost = _anchorRungs.reduce((s, r) => s + r.price * r.qty, 0);
-    const isCeiling = avgPrice + favCeiling > 98;
     const isInvalid = favCeiling < 1;
+    // Estimate walk-up room
+    const walkRoom = favCeiling - favInitial;
 
-    let html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+    let html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;">
         <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">${_anchorRungs.length > 1 ? 'Avg dog price' : 'Dog anchor'}</div>
+            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">${_anchorRungs.length > 1 ? 'Avg dog' : 'Dog anchor'}</div>
             <div style="color:#ffaa00;font-weight:800;font-size:16px;">${avgPrice}¢</div>
-            <div style="color:#555;font-size:9px;">${totalQty} contract${totalQty > 1 ? 's' : ''}</div>
+            <div style="color:#555;font-size:9px;">${totalQty}×${_anchorDogSide.toUpperCase()}</div>
+        </div>
+        <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Fav start</div>
+            <div style="color:#00aaff;font-weight:800;font-size:16px;">${isInvalid ? '—' : `${Math.min(favInitial, favCeiling)}¢`}</div>
+            <div style="color:#555;font-size:9px;">${fav_shave > 0 ? `bid-${fav_shave}¢` : 'at bid'}</div>
         </div>
         <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
             <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Fav ceiling</div>
-            <div style="color:${isInvalid || isCeiling ? '#ff4444' : '#00aaff'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `≤${favCeiling}¢`}</div>
+            <div style="color:${isInvalid ? '#ff4444' : '#00aaff'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `≤${favCeiling}¢`}</div>
+            <div style="color:#555;font-size:9px;">${walkRoom > 0 ? `${walkRoom}¢ walk room` : 'no room'}</div>
         </div>
         <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Target profit</div>
-            <div style="color:${isCeiling ? '#ff4444' : isInvalid ? '#ff4444' : '#00ff88'};font-weight:800;font-size:16px;">${isCeiling ? 'CEILING' : isInvalid ? 'INVALID' : `+${targetWidth * totalQty}¢`}</div>
+            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Min profit</div>
+            <div style="color:${isInvalid ? '#ff4444' : '#00ff88'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `+${targetWidth * totalQty}¢`}</div>
+            <div style="color:#555;font-size:9px;">$${(totalCost / 100).toFixed(2)} cost</div>
         </div>
     </div>`;
 
-    // Spread info
-    const dogAskP = _anchorDogSide === 'yes' ? (getPrice(currentArbMarket, 'yes_ask') || 0) : (getPrice(currentArbMarket, 'no_ask') || 0);
-    const spreadC = dogAskP > 0 ? (dogAskP - _anchorDogBid) : 0;
-    const spreadLabel = spreadC > 2 ? `<span style="color:#ff8800;">wide spread ${spreadC}¢ · priced off ask</span>` : (spreadC > 0 ? `<span style="color:#00ff88;">tight spread ${spreadC}¢</span>` : '');
-
-    if (_anchorRungs.length > 1) {
-        html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">Total cost: $${(totalCost / 100).toFixed(2)} · ${_anchorRungs.length} rungs · instant hedge ${spreadLabel ? '· ' : ''}${spreadLabel}</div>`;
-    } else {
-        html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">Cost: $${(totalCost / 100).toFixed(2)} · instant hedge on fill ${spreadLabel ? '· ' : ''}${spreadLabel}</div>`;
-    }
+    // Spread + pricing mode info
+    const spreadC = _anchorDogAsk > 0 ? (_anchorDogAsk - _anchorDogBid) : 0;
+    const spreadLabel = spreadC > 2
+        ? `<span style="color:#ff8800;">Broken spread ${spreadC}¢ — priced off ask</span>`
+        : (spreadC > 0 ? `<span style="color:#00ff88;">Tight spread ${spreadC}¢</span>` : '');
+    html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">
+        ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge on fill · walk-up to ceiling if slow
+    </div>`;
     previewEl.innerHTML = html;
 
     // Update deploy button text
@@ -3112,7 +3155,7 @@ function updateAnchorPreview() {
             btn.style.background = 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
             btn.style.color = '#fff';
         } else {
-            btn.textContent = '🎯 Deploy Anchor Dog';
+            btn.textContent = '🎯 Deploy Snap-Back Bot';
             btn.style.background = 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
             btn.style.color = '#000';
         }
@@ -3124,8 +3167,10 @@ async function deployAnchorBot() {
     if (_anchorRungs.length === 0) { alert('Add at least one rung'); return; }
     if (_anchorDogBid < 1) { alert('No dog bid detected — select a market first'); return; }
 
-    const targetWidth  = parseInt(document.getElementById('anchor-target-width')?.value) || 5;
+    const targetWidth  = parseInt(document.getElementById('anchor-target-width')?.value) || 3;
     const hedgeTimeout = parseInt(document.getElementById('anchor-hedge-timeout')?.value) || 120;
+    const repeatCount  = parseInt(document.getElementById('anchor-repeat-count')?.value) || 0;
+    const anchorDepth  = parseInt(document.getElementById('anchor-depth')?.value) || 0;  // 0 = auto
 
     // Validate rungs
     for (const r of _anchorRungs) {
@@ -3144,7 +3189,8 @@ async function deployAnchorBot() {
     const rungDetails = _anchorRungs.map((r, i) => `  Rung ${i + 1}: ${_anchorDogSide.toUpperCase()} @ ${r.price}¢ × ${r.qty}`).join('\n');
     const avgLine = isLadder ? `\nAvg dog price: ${avgPrice}¢` : '';
 
-    if (!confirm(`${isLadder ? '🪜 Deploy Ladder' : '🎯 Deploy Anchor Dog'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
+    const repeatLine = repeatCount > 0 ? `\nRepeat: ${repeatCount}× (${repeatCount + 1} total runs)` : '\nRepeat: single shot';
+    if (!confirm(`${isLadder ? '🪜 Deploy Ladder' : '🎯 Deploy Anchor Dog'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
         const endpoint = isLadder ? 'bot/ladder' : 'bot/anchor';
@@ -3155,6 +3201,8 @@ async function deployAnchorBot() {
                 target_width: targetWidth,
                 hedge_timeout_s: hedgeTimeout,
                 dog_side: _anchorDogSide,
+                repeat_count: repeatCount,
+                anchor_depth: anchorDepth,
             }
             : {
                 ticker: currentArbMarket.ticker,
@@ -3163,6 +3211,8 @@ async function deployAnchorBot() {
                 quantity: _anchorRungs[0].qty,
                 hedge_timeout_s: hedgeTimeout,
                 dog_side: _anchorDogSide,
+                repeat_count: repeatCount,
+                anchor_depth: anchorDepth,
             };
 
         const resp = await fetch(`${API_BASE}/${endpoint}`, {
@@ -4579,13 +4629,17 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const favFillCol = favFilled ? '#00ff88' : favFillQty > 0 ? '#ffaa00' : '#333';
 
     // Fav status text
+    const walkCount = bot.fav_walk_count || 0;
+    const favShave = bot.fav_shave || 0;
     let favStatusText = '';
-    if (favPrice > 0) {
+    if (favPrice > 0 && walkCount > 0) {
+        favStatusText = `📈 ${favPrice}¢ (walked +${walkCount}¢)`;
+    } else if (favPrice > 0) {
         favStatusText = `Posted @ ${favPrice}¢`;
     } else if (dogFilled) {
-        favStatusText = `Hedging... cap ≤${favCeiling}¢`;
+        favStatusText = favShave > 0 ? `Hedging bid-${favShave}¢... walk-up to ≤${favCeiling}¢` : `Hedging at bid... cap ≤${favCeiling}¢`;
     } else {
-        favStatusText = `Will post ≤${favCeiling}¢ on fill`;
+        favStatusText = favShave > 0 ? `Will post bid-${favShave}¢ → walk to ≤${favCeiling}¢` : `Will post ≤${favCeiling}¢ on fill`;
     }
 
     // Ladder rungs detail
@@ -4656,8 +4710,41 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <span style="color:#ffaa00;">Width: ${targetWidth}¢</span>
             <span style="color:#8892a6;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
-            ${bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${bot.repeats_done || 0}/${bot.repeat_count}</span>` : ''}
+            ${bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
+            ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
             <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
+            ${(() => {
+                if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
+                    const repostMin = 3;
+                    const postedAt = bot.posted_at || bot.created_at || 0;
+                    const sinceMin = postedAt > 0 ? (Date.now()/1000 - postedAt) / 60 : 0;
+                    const minsLeft = Math.max(0, repostMin - sinceMin).toFixed(1);
+                    const repostCt = bot.dog_repost_count || 0;
+                    const repostCol = minsLeft <= 0.5 ? '#ff6666' : minsLeft <= 1 ? '#ffaa00' : '#00aaff';
+                    return `<span style="color:${repostCol};">⏱ Repost in ${minsLeft}m${repostCt > 0 ? ` (×${repostCt})` : ''}</span>`;
+                }
+                if (status === 'fav_hedge_posted') {
+                    const hedgeTimeout = bot.hedge_timeout_s || 120;
+                    const favPostedAt = bot.fav_posted_at || bot.dog_filled_at || 0;
+                    const waitSec = favPostedAt > 0 ? Date.now()/1000 - favPostedAt : 0;
+                    const secsLeft = Math.max(0, hedgeTimeout - waitSec);
+                    const walkCount = bot.fav_walk_count || 0;
+                    const walkCeiling = bot.fav_walk_ceiling || 96;
+                    const combined = dogPrice + favPrice;
+                    const walkRoom = walkCeiling - combined;
+                    const hedgeCol = secsLeft <= 15 ? '#ff4444' : secsLeft <= 30 ? '#ff8800' : '#00aaff';
+                    let walkInfo = '';
+                    if (walkCount > 0) {
+                        walkInfo = `<span style="color:#00ff88;">📈 Walked +${walkCount}¢</span>`;
+                    }
+                    const nextWalkAt = bot.fav_last_walk_at || favPostedAt || 0;
+                    const sinceWalk = nextWalkAt > 0 ? Date.now()/1000 - nextWalkAt : 0;
+                    const nextWalkIn = Math.max(0, 20 - sinceWalk);
+                    return `${walkInfo}<span style="color:${hedgeCol};">⏳ ${Math.round(secsLeft)}s left</span>` +
+                           `<span style="color:#555;">Next walk ${Math.round(nextWalkIn)}s · room ${walkRoom > 0 ? walkRoom : 0}¢</span>`;
+                }
+                return '';
+            })()}
         </div>
     `;
     container.appendChild(item);
@@ -4970,10 +5057,40 @@ async function loadBots() {
                 dogList.innerHTML = '<div class="empty-state"><div class="icon">🎯</div><div class="title">No active dog bots</div><div class="desc">Deploy an anchor dog from the Markets tab</div></div>';
             } else {
                 dogList.innerHTML = '';
-                for (const botId of dogBotIds) {
+                // Group dog bots by game (same logic as arb bots)
+                const dogGameGroups = {};
+                dogBotIds.forEach(botId => {
                     const bot = bots[botId];
-                    _renderDogBotCard(bot, botId, dogList, gameScores);
-                }
+                    const ticker = bot.ticker || '';
+                    const parts = ticker.split('-');
+                    const gk = parts.length >= 2 ? parts[1] : parts[0];
+                    if (!dogGameGroups[gk]) dogGameGroups[gk] = [];
+                    dogGameGroups[gk].push(botId);
+                });
+                Object.values(dogGameGroups).forEach(ids => ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0)));
+                const sortedDogGameKeys = Object.keys(dogGameGroups).sort((a, b) => {
+                    const firstA = Math.min(...dogGameGroups[a].map(id => bots[id].created_at || 0));
+                    const firstB = Math.min(...dogGameGroups[b].map(id => bots[id].created_at || 0));
+                    return firstB - firstA;
+                });
+                sortedDogGameKeys.forEach(gk => {
+                    const groupIds = dogGameGroups[gk];
+                    if (groupIds.length > 1) {
+                        const sampleBot = bots[groupIds[0]];
+                        const groupName = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
+                        const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+                        const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : '📊';
+                        const gs = gameScores[gk] || {};
+                        const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
+                        const header = document.createElement('div');
+                        header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
+                        header.innerHTML = `<span style="color:#ffaa00;font-weight:700;">${sportIcon} ${groupName}</span><span>${scoreBadge} <span style="color:#555;">${groupIds.length} bots</span></span>`;
+                        dogList.appendChild(header);
+                    }
+                    for (const botId of groupIds) {
+                        _renderDogBotCard(bots[botId], botId, dogList, gameScores);
+                    }
+                });
             }
         }
 

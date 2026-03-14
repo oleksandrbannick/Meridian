@@ -2031,10 +2031,14 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # Cap fav price to achieve target width (don't overpay if market moved)
+        # Cap fav price to achieve target width
+        # For wider widths with fav_shave, initial fav posts below bid
         target_width = bot.get('target_width', 5)
+        fav_shave = bot.get('fav_shave', 0)
         max_fav_price = 100 - actual_dog_price - target_width
-        hedge_price = min(fav_bid, max_fav_price)
+        # Initial hedge: post at bid minus fav_shave (the 20% carved from fav side)
+        initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
+        hedge_price = min(initial_fav_target, max_fav_price)
         if hedge_price < 1:
             print(f'⚠ WS ANCHOR {bot_id}: hedge price {hedge_price}¢ too low (dog@{actual_dog_price}¢ width={target_width}¢) — deferring')
             bot['status'] = 'dog_filled'
@@ -2062,6 +2066,8 @@ def _execute_anchor_fav_hedge(bot_id):
         bot['fav_price'] = actual_fav_price
         bot['status'] = 'fav_hedge_posted'
         bot['fav_posted_at'] = time.time()
+        bot['fav_walk_count'] = 0
+        bot['fav_last_walk_at'] = None
         if fav_side == 'yes':
             bot['yes_price'] = actual_fav_price
             bot['yes_order_id'] = fav_order_id
@@ -2069,7 +2075,8 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['no_price'] = actual_fav_price
             bot['no_order_id'] = fav_order_id
 
-        print(f'⚡ WS ANCHOR HEDGE: {bot_id} dog@{actual_dog_price}¢ → fav posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
+        print(f'⚡ WS ANCHOR HEDGE: {bot_id} dog@{actual_dog_price}¢ → fav posted @{actual_fav_price}¢ '
+              f'(total {actual_dog_price + actual_fav_price}¢ shave={fav_shave}¢)')
         # Track fill-to-hedge latency
         fill_at = bot.get('dog_filled_at')
         if fill_at:
@@ -2129,10 +2136,12 @@ def _execute_ladder_fav_hedge(bot_id):
             save_state()
             return
 
-        # Cap fav price for target width
+        # Cap fav price for target width with fav_shave
         target_width = bot.get('target_width', 5)
+        fav_shave = bot.get('fav_shave', 0)
         max_fav_price = 100 - avg_price - target_width
-        hedge_price = min(fav_bid, max_fav_price)
+        initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
+        hedge_price = min(initial_fav_target, max_fav_price)
         if hedge_price < 1:
             print(f'⚠ LADDER HEDGE {bot_id}: hedge price {hedge_price}¢ too low — selling back')
             _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
@@ -2160,6 +2169,8 @@ def _execute_ladder_fav_hedge(bot_id):
         bot['fav_price'] = actual_fav_price
         bot['status'] = 'fav_hedge_posted'
         bot['fav_posted_at'] = time.time()
+        bot['fav_walk_count'] = 0
+        bot['fav_last_walk_at'] = None
         if fav_side == 'yes':
             bot['yes_price'] = actual_fav_price
             bot['yes_order_id'] = fav_order_id
@@ -3761,13 +3772,25 @@ def create_anchor_bot():
             if dog_side not in ('yes', 'no'):
                 dog_side = 'no'
 
-        # Smart pricing: 5c below bid if tight spread (≤2c), 5c below ask if broken spread
+        # Dynamic anchor depth: 80/20 shave split for wider widths
+        # Width ≤ 3: all depth on dog, fav at market
+        # Width > 3: 80% dog depth, 20% fav shave
+        anchor_depth = int(data.get('anchor_depth', 0))  # 0 = auto-calculate
+        if anchor_depth <= 0:
+            if target_width <= 3:
+                anchor_depth = 5  # default 5c below for tight widths
+            else:
+                anchor_depth = max(5, round(target_width * 0.8))
+        fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
+
+        # Smart pricing: anchor_depth below bid if tight spread (≤2c), below ask if broken spread
         if live_dog_bid > 0:
             spread = (live_dog_ask - live_dog_bid) if live_dog_ask > 0 else 1
             anchor_base = live_dog_ask if spread > 2 else live_dog_bid
-            smart_price = max(1, anchor_base - 5)
+            smart_price = max(1, anchor_base - anchor_depth)
             print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} spread={spread} '
-                  f'base={"ask" if spread > 2 else "bid"} → {smart_price}¢ (frontend sent {dog_price}¢)')
+                  f'base={"ask" if spread > 2 else "bid"} depth={anchor_depth}¢ fav_shave={fav_shave}¢ '
+                  f'→ {smart_price}¢ (frontend sent {dog_price}¢)')
             dog_price = smart_price
 
         fav_side = 'yes' if dog_side == 'no' else 'no'
@@ -3809,6 +3832,11 @@ def create_anchor_bot():
             'dog_filled_at':       None,
             'repeat_count':        repeat_count,
             'repeats_done':        0,
+            'anchor_depth':        anchor_depth,
+            'fav_shave':           fav_shave,
+            'fav_walk_count':      0,
+            'fav_walk_ceiling':    96,  # max combined cost for walk-up
+            'fav_last_walk_at':    None,
             'market_type':         _detect_market_type(ticker),
             'spread_line':         _extract_spread_line(ticker),
             # Compat fields so existing monitor/WS code can read these
@@ -3854,6 +3882,7 @@ def create_ladder_bot():
         target_width = int(data.get('target_width', 5))
         hedge_timeout = int(data.get('hedge_timeout_s', 120))
         bounce_threshold = int(data.get('bounce_threshold', 2))
+        repeat_count = int(data.get('repeat_count', 0))
         dog_side = data.get('dog_side', '')
 
         if not ticker:
@@ -3895,12 +3924,20 @@ def create_ladder_bot():
         current_dog_bid = _best_bid(ob, dog_side)
         current_dog_ask = _best_ask(ob, dog_side)
 
+        # Dynamic anchor depth for ladder — same 80/20 logic as single anchor
+        anchor_depth = int(data.get('anchor_depth', 0))
+        if anchor_depth <= 0:
+            if target_width <= 3:
+                anchor_depth = 5
+            else:
+                anchor_depth = max(5, round(target_width * 0.8))
+        fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
+
         # Smart pricing: adjust all rungs relative to live price at order creation time
-        # First rung should be 5c below bid (tight spread ≤2c) or 5c below ask (broken spread)
         if current_dog_bid > 0:
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-            smart_first = max(1, anchor_base - 5)
+            smart_first = max(1, anchor_base - anchor_depth)
 
             # Get the frontend's first rung price to compute the offset
             frontend_first = max(r.get('price', 0) for r in rungs_input)
@@ -3981,6 +4018,13 @@ def create_ladder_bot():
             'no_price': None,
             'quantity': total_dog_qty,
             'arb_width': target_width,
+            'repeat_count': repeat_count,
+            'repeats_done': 0,
+            'anchor_depth': anchor_depth,
+            'fav_shave': fav_shave,
+            'fav_walk_count': 0,
+            'fav_walk_ceiling': 96,
+            'fav_last_walk_at': None,
         }
         save_state()
 
@@ -4798,6 +4842,11 @@ def _handle_anchor_dog(bot_id, bot, actions):
         # Repost: if dog order hasn't filled after REPOST_AFTER_MINUTES, readjust
         # to current market depth (5c below bid/ask depending on spread)
         DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # same as arb bots (3 min)
+        # Pause repost during halftime — market is frozen
+        if _is_halftime(ticker) and dog_filled == 0:
+            bot['posted_at'] = now  # reset so timer restarts after halftime
+            actions.append({'bot_id': bot_id, 'action': 'anchor_dog_halftime_pause'})
+            return
         if age_min >= DOG_REPOST_MINUTES and dog_filled == 0:
             try:
                 api_rate_limiter.wait()
@@ -4821,10 +4870,11 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     save_state()
                     return
 
-                # Smart reprice: same logic as initial placement
+                # Smart reprice: same logic as initial placement — use stored anchor_depth
+                anchor_depth = bot.get('anchor_depth', 5)
                 spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
                 anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-                new_dog_price = max(1, anchor_base - 5)
+                new_dog_price = max(1, anchor_base - anchor_depth)
 
                 # Don't repost if price hasn't changed meaningfully (within 1c)
                 if abs(new_dog_price - bot['dog_price']) <= 1:
@@ -4934,8 +4984,11 @@ def _handle_anchor_dog(bot_id, bot, actions):
 
         dog_price = bot['dog_price']
         target_width = bot.get('target_width', 5)
+        fav_shave = bot.get('fav_shave', 0)
         max_fav_price = 100 - dog_price - target_width
-        hedge_price = min(fav_bid, max_fav_price)
+        # Initial hedge: post at bid minus fav_shave
+        initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
+        hedge_price = min(initial_fav_target, max_fav_price)
         if hedge_price < 1:
             _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, 999, actions)
             return
@@ -4960,13 +5013,15 @@ def _handle_anchor_dog(bot_id, bot, actions):
             bot['fav_price'] = actual_fav_price
             bot['status'] = 'fav_hedge_posted'
             bot['fav_posted_at'] = now
+            bot['fav_walk_count'] = 0
+            bot['fav_last_walk_at'] = None
             if fav_side == 'yes':
                 bot['yes_price'] = actual_fav_price
                 bot['yes_order_id'] = fav_order_id
             else:
                 bot['no_price'] = actual_fav_price
                 bot['no_order_id'] = fav_order_id
-            print(f'🎯 ANCHOR HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢')
+            print(f'🎯 ANCHOR HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢ (shave={fav_shave}¢)')
             save_state()
         except Exception as e:
             print(f'❌ ANCHOR {bot_id}: fav retry failed: {e}')
@@ -5068,8 +5123,41 @@ def _handle_anchor_dog(bot_id, bot, actions):
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
 
+        # Pause hedge timeout during halftime — don't sell the dog during halftime
+        if _is_halftime(ticker):
+            bot['fav_posted_at'] = now  # reset timer so it restarts after halftime
+            bot['fav_last_walk_at'] = now  # also pause walk-up timer
+            actions.append({'bot_id': bot_id, 'action': 'anchor_fav_halftime_pause'})
+            return
+
+        # ── Fav Walk-Up System ──
+        # Every WALK_INTERVAL_S, bump fav by 1c toward current bid.
+        # Hard stop: combined cost (dog + fav + fees) >= WALK_CEILING (96c).
+        # After hedge_timeout_s total, if still no fill → sell dog back.
+        WALK_INTERVAL_S = 20
+        WALK_CEILING = bot.get('fav_walk_ceiling', 96)
+        dog_price = bot['dog_price']
+
+        # Check absolute timeout — give up after hedge_timeout_s total
         if wait_s >= hedge_timeout_s:
-            # Timeout — try amending fav to current bid first
+            print(f'⏰ ANCHOR TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling dog back')
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_order_id)
+            except Exception:
+                pass
+            _anchor_sell_dog_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+            return
+
+        # Walk-up: every 20s, bump fav by 1c
+        fav_last_walk = bot.get('fav_last_walk_at') or bot.get('fav_posted_at') or now
+        since_last_walk = now - fav_last_walk
+        if since_last_walk >= WALK_INTERVAL_S:
+            current_fav_price = bot.get('fav_price', 0)
+            if current_fav_price <= 0:
+                return
+
+            # Fetch current bid to know upper bound
             try:
                 api_rate_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
@@ -5077,71 +5165,68 @@ def _handle_anchor_dog(bot_id, bot, actions):
             except Exception:
                 current_fav_bid = 0
 
-            dog_price = bot['dog_price']
-            target_width = bot.get('target_width', 5)
-            if current_fav_bid > 0:
-                # On timeout, allow narrower width (50% of target) to complete the arb
-                min_timeout_width = max(1, target_width // 2)
-                max_fav_amend = 100 - dog_price - min_timeout_width
-                amend_price = min(current_fav_bid, max_fav_amend)
-                if amend_price < 1:
-                    # Can't make any profit — sell dog back
+            if current_fav_bid <= 0:
+                # No bid — check if we should bail
+                if wait_s >= hedge_timeout_s * 0.75:
                     try:
-                        api_rate_limiter.wait()
                         kalshi_client.cancel_order(fav_order_id)
                     except Exception:
                         pass
-                    _anchor_sell_dog_back(bot_id, bot, dog_price, current_fav_bid, 999, actions)
-                    return
-                est_fees = kalshi_fee_cents(
-                    dog_price if dog_side == 'yes' else amend_price,
-                    dog_price if dog_side == 'no' else amend_price,
-                    qty
-                )
-                total_cost = dog_price + amend_price + est_fees
-                if total_cost <= HARD_CEILING_CENTS:
-                    # Under ceiling — amend fav to capped price
-                    print(f'⏰ ANCHOR TIMEOUT: {bot_id} amending fav to {amend_price}¢ (bid={current_fav_bid}¢ cap={max_fav_amend}¢ total {total_cost}¢)')
-                    try:
-                        amend_kwargs = {'yes_price': amend_price} if fav_side == 'yes' else {'no_price': amend_price}
-                        api_rate_limiter.wait()
-                        kalshi_client.amend_order(
-                            fav_order_id, ticker=ticker, side=fav_side,
-                            count=qty, **amend_kwargs
-                        )
-                        bot['fav_price'] = amend_price
-                        if fav_side == 'yes':
-                            bot['yes_price'] = amend_price
-                        else:
-                            bot['no_price'] = amend_price
-                        # Give it one more cycle to fill after amend
-                        bot['fav_posted_at'] = now
-                        bot['hedge_timeout_s'] = 30  # shorter timeout for amend
-                        save_state()
-                        actions.append({'bot_id': bot_id, 'action': 'anchor_fav_amended',
-                                        'new_price': current_fav_bid})
-                    except Exception as e:
-                        print(f'❌ ANCHOR {bot_id}: fav amend failed: {e}')
-                    return
-                else:
-                    # Over ceiling — sell dog back
-                    print(f'🛑 ANCHOR CEILING TIMEOUT: {bot_id} total {total_cost}¢ > {HARD_CEILING_CENTS}¢ — selling dog back')
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(fav_order_id)
-                    except Exception:
-                        pass
-                    _anchor_sell_dog_back(bot_id, bot, dog_price, current_fav_bid, total_cost, actions)
-                    return
-            else:
-                # No fav bid — sell dog back
-                print(f'⚠ ANCHOR {bot_id}: fav timeout, no bid — selling dog back')
+                    _anchor_sell_dog_back(bot_id, bot, dog_price, 0, 999, actions)
+                return
+
+            # New price: +1c, but never above current bid
+            new_fav_price = min(current_fav_price + 1, current_fav_bid)
+
+            # Check walk ceiling
+            est_fees = kalshi_fee_cents(
+                dog_price if dog_side == 'yes' else new_fav_price,
+                dog_price if dog_side == 'no' else new_fav_price,
+                qty
+            )
+            combined = dog_price + new_fav_price + est_fees
+
+            if combined > WALK_CEILING:
+                # Hit ceiling — sell dog back
+                print(f'🛑 ANCHOR WALK CEILING: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ + fees {est_fees}¢ = {combined}¢ > {WALK_CEILING}¢ — selling back')
                 try:
                     api_rate_limiter.wait()
                     kalshi_client.cancel_order(fav_order_id)
                 except Exception:
                     pass
-                _anchor_sell_dog_back(bot_id, bot, dog_price, 0, 999, actions)
+                _anchor_sell_dog_back(bot_id, bot, dog_price, current_fav_bid, combined, actions)
+                return
+
+            if new_fav_price <= current_fav_price:
+                # Already at or above bid — wait, don't walk past bid
+                bot['fav_last_walk_at'] = now
+                return
+
+            # Amend fav order up by 1c
+            try:
+                amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(
+                    fav_order_id, ticker=ticker, side=fav_side,
+                    count=qty, **amend_kwargs
+                )
+                walk_count = bot.get('fav_walk_count', 0) + 1
+                print(f'📈 ANCHOR WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                      f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
+                bot['fav_price'] = new_fav_price
+                bot['fav_walk_count'] = walk_count
+                bot['fav_last_walk_at'] = now
+                if fav_side == 'yes':
+                    bot['yes_price'] = new_fav_price
+                else:
+                    bot['no_price'] = new_fav_price
+                save_state()
+                actions.append({'bot_id': bot_id, 'action': 'anchor_fav_walkup',
+                                'old_price': current_fav_price, 'new_price': new_fav_price,
+                                'walk_count': walk_count, 'combined': combined})
+            except Exception as e:
+                print(f'❌ ANCHOR {bot_id}: fav walk-up amend failed: {e}')
+                bot['fav_last_walk_at'] = now  # don't retry immediately
         return
 
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──
@@ -5159,10 +5244,11 @@ def _handle_anchor_dog(bot_id, bot, actions):
             if current_dog_bid <= 0:
                 return  # no market data, wait
 
-            # Same smart pricing as initial placement
+            # Same smart pricing as initial placement — use stored anchor_depth
+            anchor_depth = bot.get('anchor_depth', 5)
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-            new_dog_price = max(1, anchor_base - 5)
+            new_dog_price = max(1, anchor_base - anchor_depth)
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
@@ -5181,7 +5267,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
             bot['_trade_recorded'] = False
             bot['fav_order_id'] = None
             bot['fav_price'] = None
+            bot['fav_walk_count'] = 0
+            bot['fav_last_walk_at'] = None
             bot['dog_filled_at'] = None
+            bot['_sellback_attempts'] = 0
             bot['status'] = 'dog_anchor_posted'
             bot['posted_at'] = now
 
@@ -5349,14 +5438,40 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'pnl': pnl_cents})
             return
 
-        # Fav not filled — check timeout
+        # ── Fav Walk-Up (same system as anchor_dog) ──
         hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
+        avg_dog = bot.get('avg_fill_price', 0)
 
+        # Halftime pause
+        if _is_halftime(ticker):
+            bot['fav_posted_at'] = now
+            bot['fav_last_walk_at'] = now
+            actions.append({'bot_id': bot_id, 'action': 'ladder_fav_halftime_pause'})
+            return
+
+        # Absolute timeout
         if wait_s >= hedge_timeout_s:
-            avg_dog = bot.get('avg_fill_price', 0)
-            # Try amend to current fav bid
+            print(f'⏰ LADDER TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling back')
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_order_id)
+            except Exception:
+                pass
+            _ladder_sell_dogs_back(bot_id, bot, avg_dog, bot.get('fav_price', 0), 999, actions)
+            return
+
+        # Walk-up every 20s
+        WALK_INTERVAL_S = 20
+        WALK_CEILING = bot.get('fav_walk_ceiling', 96)
+        fav_last_walk = bot.get('fav_last_walk_at') or fav_posted_at or now
+        since_last_walk = now - fav_last_walk
+        if since_last_walk >= WALK_INTERVAL_S:
+            current_fav_price = bot.get('fav_price', 0)
+            if current_fav_price <= 0:
+                return
+
             try:
                 api_rate_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
@@ -5364,38 +5479,50 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             except Exception:
                 current_fav_bid = 0
 
-            if current_fav_bid > 0:
-                min_timeout_width = max(1, bot.get('target_width', 5) // 2)
-                max_fav_amend = 100 - avg_dog - min_timeout_width
-                amend_price = min(current_fav_bid, max_fav_amend)
-                if amend_price >= 1:
-                    est_fees = kalshi_fee_cents(
-                        avg_dog if dog_side == 'yes' else amend_price,
-                        avg_dog if dog_side == 'no' else amend_price,
-                        hedge_qty
-                    )
-                    total_cost = avg_dog + amend_price + est_fees
-                    if total_cost <= HARD_CEILING_CENTS:
-                        print(f'⏰ LADDER TIMEOUT: {bot_id} amending fav to {amend_price}¢')
-                        try:
-                            amend_kwargs = {'yes_price': amend_price} if fav_side == 'yes' else {'no_price': amend_price}
-                            api_rate_limiter.wait()
-                            kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
-                            bot['fav_price'] = amend_price
-                            bot['fav_posted_at'] = now
-                            bot['hedge_timeout_s'] = 30
-                            save_state()
-                            return
-                        except Exception as amend_err:
-                            print(f'⚠ LADDER AMEND {bot_id}: {amend_err}')
+            if current_fav_bid <= 0:
+                bot['fav_last_walk_at'] = now
+                return
 
-            # Cannot amend — sell dogs back
+            new_fav_price = min(current_fav_price + 1, current_fav_bid)
+            est_fees = kalshi_fee_cents(
+                avg_dog if dog_side == 'yes' else new_fav_price,
+                avg_dog if dog_side == 'no' else new_fav_price,
+                hedge_qty
+            )
+            combined = avg_dog + new_fav_price + est_fees
+
+            if combined > WALK_CEILING:
+                print(f'🛑 LADDER WALK CEILING: {bot_id} avg@{avg_dog}¢ + fav@{new_fav_price}¢ + fees {est_fees}¢ = {combined}¢ > {WALK_CEILING}¢')
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(fav_order_id)
+                except Exception:
+                    pass
+                _ladder_sell_dogs_back(bot_id, bot, avg_dog, current_fav_bid, combined, actions)
+                return
+
+            if new_fav_price <= current_fav_price:
+                bot['fav_last_walk_at'] = now
+                return
+
             try:
+                amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_order_id)
-            except Exception:
-                pass
-            _ladder_sell_dogs_back(bot_id, bot, avg_dog, current_fav_bid or 0, 999, actions)
+                kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+                walk_count = bot.get('fav_walk_count', 0) + 1
+                print(f'📈 LADDER WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                      f'(bid={current_fav_bid}¢ combined={combined}¢ step #{walk_count})')
+                bot['fav_price'] = new_fav_price
+                bot['fav_walk_count'] = walk_count
+                bot['fav_last_walk_at'] = now
+                if fav_side == 'yes':
+                    bot['yes_price'] = new_fav_price
+                else:
+                    bot['no_price'] = new_fav_price
+                save_state()
+            except Exception as e:
+                print(f'❌ LADDER {bot_id}: fav walk-up failed: {e}')
+                bot['fav_last_walk_at'] = now
         return
 
 
@@ -5423,8 +5550,6 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     session_pnl['gross_loss_cents'] += loss_cents
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
-    bot['status'] = 'stopped'
-    bot['stopped_at'] = now
 
     yes_p = dog_price if dog_side == 'yes' else fav_bid
     no_p = dog_price if dog_side == 'no' else fav_bid
@@ -5454,6 +5579,28 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'loss_cents': loss_cents, 'fav_bid': fav_bid,
     })
     print(f'🔙 ANCHOR SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
+
+    # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
+    repeats_done_now = bot.get('repeats_done', 0) + 1
+    bot['repeats_done'] = repeats_done_now
+    repeat_total = bot.get('repeat_count', 0)
+    if repeats_done_now <= repeat_total:
+        bot['status'] = 'waiting_repeat'
+        bot['waiting_repeat_since'] = now
+        bot['dog_filled_at'] = None
+        bot['fav_order_id'] = None
+        bot['fav_fill_qty'] = 0
+        bot['dog_fill_qty'] = 0
+        bot['yes_fill_qty'] = 0
+        bot['no_fill_qty'] = 0
+        bot['_hedge_fired'] = False
+        bot['_trade_recorded'] = False
+        bot['_sellback_attempts'] = 0
+        print(f'🔄 ANCHOR SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+    else:
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = now
+
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'anchor_sellback', 'loss_cents': loss_cents})
 

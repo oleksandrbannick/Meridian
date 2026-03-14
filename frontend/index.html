@@ -680,6 +680,10 @@
                         style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
                         ↔️ Middle Bot
                     </button>
+                    <button id="mode-anchor" onclick="setTradeMode('anchor')"
+                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        🎯 Anchor Dog
+                    </button>
                 </div>
                 <!-- Market card (shared) -->
                 <div id="bot-market-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
@@ -1008,6 +1012,106 @@
                     <!-- Launch button -->
                     <button onclick="launchMiddleBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#aa66ff 0%,#8844dd 100%);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
                         ↔️ Launch Middle Bot
+                    </button>
+                </div>
+
+                <!-- ═══════ ANCHOR DOG SECTION ═══════ -->
+                <div id="anchor-section" style="display:none;">
+                    <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#6a7488;line-height:1.5;">
+                        <strong style="color:#ffaa00;">🎯 Anchor-Dog:</strong> Posts only the underdog (cheap) leg deep as a maker order. When volatility fills it, immediately hedges by posting the fav at the current best bid. Asymmetric risk — only the cheap leg is exposed. post_only=True guarantees maker fees on both legs.
+                    </div>
+                    <!-- Dog side selector -->
+                    <div style="margin-bottom:14px;">
+                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:700;margin-bottom:6px;letter-spacing:.04em;">DOG SIDE</label>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                            <button id="anchor-side-auto" onclick="setAnchorDogSide('auto')"
+                                style="padding:10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;border:2px solid #ffaa00;background:#ffaa0022;color:#ffaa00;">
+                                🔄 Auto
+                            </button>
+                            <button id="anchor-side-yes" onclick="setAnchorDogSide('yes')"
+                                style="padding:10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;border:2px solid #00ff8844;background:transparent;color:#00ff8866;">
+                                ✓ YES Dog
+                            </button>
+                            <button id="anchor-side-no" onclick="setAnchorDogSide('no')"
+                                style="padding:10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;border:2px solid #ff444444;background:transparent;color:#ff444466;">
+                                ✗ NO Dog
+                            </button>
+                        </div>
+                        <div id="anchor-side-hint" style="color:#555;font-size:10px;margin-top:4px;text-align:center;">Auto-detect: lower-bid side becomes the dog</div>
+                    </div>
+                    <!-- Dog price + Target width -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+                        <div>
+                            <label style="display:block;color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:6px;">DOG ANCHOR PRICE</label>
+                            <div style="position:relative;">
+                                <input type="number" id="anchor-dog-price" min="1" max="50" oninput="updateAnchorPreview()"
+                                    style="width:100%;padding:10px;background:#060a14;border:2px solid #ffaa0066;border-radius:6px;color:#ffaa00;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                    onfocus="this.style.borderColor='#ffaa00'" onblur="this.style.borderColor='#ffaa0066'">
+                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ffaa0066;font-size:12px;pointer-events:none;">¢</span>
+                            </div>
+                            <div id="anchor-dog-price-hint" style="color:#555;font-size:10px;margin-top:4px;text-align:center;"></div>
+                        </div>
+                        <div>
+                            <label style="display:block;color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:6px;">TARGET WIDTH</label>
+                            <div style="position:relative;">
+                                <input type="number" id="anchor-target-width" min="1" max="20" value="5" oninput="updateAnchorPreview()"
+                                    style="width:100%;padding:10px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
+                                    onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
+                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
+                            </div>
+                            <div style="color:#555;font-size:10px;margin-top:4px;text-align:center;">Profit target per contract</div>
+                        </div>
+                    </div>
+                    <!-- Qty + Hedge timeout + Repeat -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
+                            <input type="number" id="anchor-qty" min="1" value="1" oninput="updateAnchorPreview()"
+                                style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Hedge Timer</label>
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="number" id="anchor-hedge-timeout" min="30" max="600" value="120"
+                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                                <span style="color:#555;font-size:10px;">sec</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(×)</span></label>
+                            <input type="number" id="anchor-repeat" min="0" max="50" value="0"
+                                style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                        </div>
+                    </div>
+                    <!-- Preview -->
+                    <div id="anchor-preview" style="margin-bottom:14px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:12px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
+                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Dog cost</div>
+                                <div id="anchor-calc-dog" style="color:#ffaa00;font-weight:800;font-size:18px;">—</div>
+                            </div>
+                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
+                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Fav ceiling</div>
+                                <div id="anchor-calc-fav" style="color:#00aaff;font-weight:800;font-size:18px;">—</div>
+                            </div>
+                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
+                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Profit if hedged</div>
+                                <div id="anchor-calc-profit" style="color:#00ff88;font-weight:800;font-size:18px;">—</div>
+                            </div>
+                        </div>
+                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;color:#555;text-align:center;">
+                            Post-only maker orders · hard ceiling 98¢ · sell-back if breached
+                        </div>
+                    </div>
+                    <!-- Info -->
+                    <div style="margin-bottom:14px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
+                        <strong style="color:#ffaa00;">🎯 Anchor:</strong> Dog posts deep at your price — waits for volatility fill.<br>
+                        <strong style="color:#00aaff;">🔒 Hedge:</strong> On fill → fav posted at current bid. Hard ceiling check at 98¢.<br>
+                        <strong style="color:#ff4444;">🛡️ Safety:</strong> If ceiling breached → dog sold back (small loss). Only cheap leg at risk.
+                    </div>
+                    <!-- Deploy button -->
+                    <button onclick="deployAnchorBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#ffaa00 0%,#ff8800 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
+                        🎯 Deploy Anchor Dog
                     </button>
                 </div>
 

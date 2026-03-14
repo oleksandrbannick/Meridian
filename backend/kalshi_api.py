@@ -178,10 +178,11 @@ class KalshiAPI:
     # Trading Endpoints
     def create_order(self, ticker: str, side: str, action: str, count: int,
                     yes_price: Optional[int] = None, no_price: Optional[int] = None,
-                    order_type: str = 'limit', subaccount: int = 0) -> Dict:
+                    order_type: str = 'limit', subaccount: int = 0,
+                    post_only: bool = False, order_group_id: Optional[str] = None) -> Dict:
         """
         Create an order
-        
+
         Args:
             ticker: Market ticker
             side: 'yes' or 'no'
@@ -191,6 +192,8 @@ class KalshiAPI:
             no_price: NO price in cents (1-99)
             order_type: 'limit' or 'market'
             subaccount: Subaccount number (0 for primary)
+            post_only: If True, order is rejected if it would cross the spread (guarantees maker fees)
+            order_group_id: Optional group ID to link related orders for atomic cancel
         """
         data = {
             'ticker': ticker,
@@ -200,13 +203,21 @@ class KalshiAPI:
             'type': order_type,
             'subaccount': subaccount
         }
-        
+
         if yes_price is not None:
             data['yes_price'] = yes_price
         if no_price is not None:
             data['no_price'] = no_price
-            
+        if post_only:
+            data['post_only'] = True
+        if order_group_id is not None:
+            data['order_group_id'] = order_group_id
+
         return self._make_request('POST', '/portfolio/orders', data=data, authenticated=True)
+
+    def cancel_order_group(self, order_group_id: str) -> Dict:
+        """Cancel all orders in a group atomically."""
+        return self._make_request('DELETE', f'/portfolio/order_groups/{order_group_id}', authenticated=True)
     
     def cancel_order(self, order_id: str) -> Dict:
         """Cancel an order"""

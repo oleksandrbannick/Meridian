@@ -2842,9 +2842,11 @@ function setTradeMode(mode) {
     const straightSection = document.getElementById('straight-section');
     const arbSection = document.getElementById('arb-section');
     const middleSection = document.getElementById('middle-bot-section');
+    const anchorSection = document.getElementById('anchor-section');
     const straightBtn = document.getElementById('mode-straight');
     const arbBtn = document.getElementById('mode-arb');
     const middleBtn = document.getElementById('mode-middle');
+    const anchorBtn = document.getElementById('mode-anchor');
     const iconEl = document.getElementById('modal-icon');
     const titleEl = document.getElementById('modal-mode-title');
     const subtitleEl = document.getElementById('modal-mode-subtitle');
@@ -2853,7 +2855,8 @@ function setTradeMode(mode) {
     if (straightSection) straightSection.style.display = 'none';
     if (arbSection) arbSection.style.display = 'none';
     if (middleSection) middleSection.style.display = 'none';
-    [straightBtn, arbBtn, middleBtn].forEach(btn => {
+    if (anchorSection) anchorSection.style.display = 'none';
+    [straightBtn, arbBtn, middleBtn, anchorBtn].forEach(btn => {
         if (btn) { btn.style.background = 'transparent'; btn.style.color = '#8892a6'; btn.style.borderBottom = '2px solid transparent'; }
     });
 
@@ -2870,6 +2873,13 @@ function setTradeMode(mode) {
         titleEl.textContent = 'Middle Bot';
         subtitleEl.textContent = 'Dual-Spread Automation';
         updateMiddleBotCalc();
+    } else if (mode === 'anchor') {
+        if (anchorSection) anchorSection.style.display = 'block';
+        if (anchorBtn) { anchorBtn.style.background = '#ffaa0022'; anchorBtn.style.color = '#ffaa00'; anchorBtn.style.borderBottom = '2px solid #ffaa00'; }
+        iconEl.textContent = '🎯';
+        titleEl.textContent = 'Anchor Dog';
+        subtitleEl.textContent = 'Volatility Capture · Maker Only';
+        initAnchorDogPrices();
     } else {
         // arb
         if (arbSection) arbSection.style.display = 'block';
@@ -2923,6 +2933,114 @@ function setStraightSide(side) {
     }
 
     updateStraightPreview();
+}
+
+// ── Anchor-Dog Helpers ──────────────────────────────────────────────────────
+let _anchorDogSide = 'auto';  // 'auto' | 'yes' | 'no'
+
+function setAnchorDogSide(side) {
+    _anchorDogSide = side;
+    const autoBtn = document.getElementById('anchor-side-auto');
+    const yesBtn  = document.getElementById('anchor-side-yes');
+    const noBtn   = document.getElementById('anchor-side-no');
+    const hint    = document.getElementById('anchor-side-hint');
+    [autoBtn, yesBtn, noBtn].forEach(btn => {
+        if (btn) { btn.style.background = 'transparent'; btn.style.borderColor = '#1e2740'; btn.style.color = '#555'; }
+    });
+    if (side === 'auto' && autoBtn) { autoBtn.style.background = '#ffaa0022'; autoBtn.style.borderColor = '#ffaa00'; autoBtn.style.color = '#ffaa00'; hint.textContent = 'Auto-detect: lower-bid side becomes the dog'; }
+    else if (side === 'yes' && yesBtn) { yesBtn.style.background = '#00ff8822'; yesBtn.style.borderColor = '#00ff88'; yesBtn.style.color = '#00ff88'; hint.textContent = 'YES is the underdog — anchor deep on YES side'; }
+    else if (side === 'no' && noBtn) { noBtn.style.background = '#ff444422'; noBtn.style.borderColor = '#ff4444'; noBtn.style.color = '#ff4444'; hint.textContent = 'NO is the underdog — anchor deep on NO side'; }
+    updateAnchorPreview();
+}
+
+function initAnchorDogPrices() {
+    if (!currentArbMarket) return;
+    const yesBid = getPrice(currentArbMarket, 'yes_bid') || 0;
+    const noBid  = getPrice(currentArbMarket, 'no_bid') || 0;
+    // Auto-detect which side is the dog (lower bid)
+    const dogSide = noBid <= yesBid ? 'no' : 'yes';
+    const dogBid = dogSide === 'yes' ? yesBid : noBid;
+    // Suggest dog price 80% shave from bid (deep anchor)
+    const suggestedDog = Math.max(1, Math.round(dogBid * 0.6));
+    const priceInput = document.getElementById('anchor-dog-price');
+    if (priceInput && !priceInput.value) priceInput.value = suggestedDog;
+    const hint = document.getElementById('anchor-dog-price-hint');
+    if (hint) hint.textContent = `${dogSide.toUpperCase()} bid: ${dogBid}¢`;
+    updateAnchorPreview();
+}
+
+function updateAnchorPreview() {
+    const dogPrice = parseInt(document.getElementById('anchor-dog-price')?.value) || 0;
+    const targetWidth = parseInt(document.getElementById('anchor-target-width')?.value) || 5;
+    const qty = parseInt(document.getElementById('anchor-qty')?.value) || 1;
+    const dogEl = document.getElementById('anchor-calc-dog');
+    const favEl = document.getElementById('anchor-calc-fav');
+    const profEl = document.getElementById('anchor-calc-profit');
+    if (!dogEl) return;
+
+    if (dogPrice < 1) { dogEl.textContent = '—'; favEl.textContent = '—'; profEl.textContent = '—'; return; }
+
+    const favCeiling = 100 - dogPrice - targetWidth;
+    const totalCost = dogPrice + favCeiling;
+    const profit = targetWidth;
+
+    dogEl.textContent = `${dogPrice}¢`;
+    favEl.textContent = favCeiling > 0 ? `≤${favCeiling}¢` : '—';
+    profEl.textContent = profit > 0 ? `+${profit * qty}¢` : '—';
+
+    if (totalCost > 98) {
+        profEl.style.color = '#ff4444';
+        profEl.textContent = 'CEILING';
+    } else {
+        profEl.style.color = '#00ff88';
+    }
+}
+
+async function deployAnchorBot() {
+    if (!currentArbMarket) { alert('No market selected'); return; }
+
+    const dogPrice     = parseInt(document.getElementById('anchor-dog-price')?.value);
+    const targetWidth  = parseInt(document.getElementById('anchor-target-width')?.value) || 5;
+    const qty          = parseInt(document.getElementById('anchor-qty')?.value) || 1;
+    const hedgeTimeout = parseInt(document.getElementById('anchor-hedge-timeout')?.value) || 120;
+    const repeatCount  = parseInt(document.getElementById('anchor-repeat')?.value) || 0;
+    const dogSide      = _anchorDogSide === 'auto' ? '' : _anchorDogSide;
+
+    if (!dogPrice || dogPrice < 1 || dogPrice > 50) {
+        alert('Dog anchor price must be 1-50¢ (it\'s the cheap underdog leg)');
+        return;
+    }
+
+    const favCeiling = 100 - dogPrice - targetWidth;
+    const repeatMsg = repeatCount > 0 ? `\n↻ Repeat: ${repeatCount}× (${repeatCount + 1} runs total)` : '';
+    if (!confirm(`🎯 Deploy Anchor Dog — ${qty} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nDog anchor: ${dogPrice}¢ (${dogSide || 'auto-detect'} side)\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s\nMaker-only (post_only=true)${repeatMsg}\n\nConfirm?`)) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/bot/anchor`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: currentArbMarket.ticker,
+                dog_price: dogPrice,
+                target_width: targetWidth,
+                quantity: qty,
+                hedge_timeout_s: hedgeTimeout,
+                repeat_count: repeatCount,
+                dog_side: dogSide,
+            }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`🎯 ANCHOR deployed: dog @ ${dogPrice}¢ · target +${targetWidth}¢`);
+            closeModal();
+            loadBots();
+            if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    } catch (err) {
+        alert('Network error: ' + err.message);
+    }
 }
 
 // ── No-Vig Fair Value Calculator (OddsJam) ────────────────────────────────────
@@ -4686,6 +4804,7 @@ async function loadBots() {
             const ageMin      = bot.posted_at ? Math.floor((nowSec - bot.posted_at) / 60) : 0;
             const createdMin  = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : ageMin;
             const repostCount = bot.repost_count || 0;
+            const isAnchorDog = bot.bot_category === 'anchor_dog';
             const statusLabel = {
                 both_posted:      '⚡ BOTH LIVE',
                 fav_posted:       '⏳ WAITING',     // legacy: one order posted
@@ -4698,6 +4817,9 @@ async function loadBots() {
                 flipping:             '⚡ EXITING',
                 drift_cancelled:      '🚫 DRIFT GUARD',
                 awaiting_settlement:  '⏳ AWAITING SETTLEMENT',
+                dog_anchor_posted:    '🎯 DOG ANCHORED',
+                fav_hedge_posted:     '🔒 HEDGING FAV',
+                dog_filled:           '⚡ DOG FILLED',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
@@ -4711,14 +4833,18 @@ async function loadBots() {
                 amending_no:    'leg1_filled',
                 amending_yes:   'leg1_filled',
                 waiting_repeat: 'monitoring',
+                dog_anchor_posted: 'monitoring',
+                fav_hedge_posted:  'leg1_filled',
+                dog_filled:        'leg1_filled',
             }[bot.status] || 'monitoring';
 
             activeBotCount++;
             if (yFill >= qty) filledLegs++;
             if (nFill >= qty) filledLegs++;
-            // Anchored = status explicitly transitioned to yes_filled or no_filled (or amending)
+            // Anchored = status explicitly transitioned to yes_filled or no_filled (or amending), or anchor-dog hedge active
             if (bot.status === 'yes_filled' || bot.status === 'no_filled' ||
-                bot.status === 'amending_no' || bot.status === 'amending_yes') anchoredCount++;
+                bot.status === 'amending_no' || bot.status === 'amending_yes' ||
+                bot.status === 'fav_hedge_posted' || bot.status === 'dog_filled') anchoredCount++;
 
             const displayName = formatBotDisplayName(bot.ticker, bot.spread_line);
             const botScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
@@ -4854,6 +4980,35 @@ async function loadBots() {
                     <span style="color:#aaa;">${heldDesc}</span> <span style="color:#555;">· waiting ${awaitMin}m</span>
                     <br><span style="color:#555;font-size:9px;">Will auto-resolve when Kalshi settles the market</span>
                 </div>`;
+            } else if (isAnchorDog && bot.status === 'dog_anchor_posted') {
+                const dogSide = (bot.dog_side || '?').toUpperCase();
+                const dogPrice = bot.dog_price || '?';
+                const targetW = bot.target_width || bot.arb_width || '?';
+                const liveBid = dogSide === 'YES' ? bot.live_yes_bid : bot.live_no_bid;
+                const hasBid = liveBid != null && liveBid > 0;
+                const dist = hasBid && typeof dogPrice === 'number' ? liveBid - dogPrice : null;
+                const distText = dist != null ? (dist > 0 ? `${dist}¢ above anchor` : dist === 0 ? 'AT anchor' : `${Math.abs(dist)}¢ below`) : '';
+                stopLossInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:4px 8px;font-size:10px;color:#ffaa00;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>🎯 <strong>ANCHOR:</strong> ${dogSide} @ ${dogPrice}¢ — waiting for volatility fill</span>
+                    ${hasBid ? `<span style="color:#8892a6;">Bid: <strong style="color:#ffaa00;">${liveBid}¢</strong> ${distText ? `(${distText})` : ''}</span>` : ''}
+                    <span style="color:#555;">Target: +${targetW}¢ width · ${ageMin}m</span>
+                </div>`;
+            } else if (isAnchorDog && (bot.status === 'dog_filled' || bot.status === 'fav_hedge_posted')) {
+                const dogSide = (bot.dog_side || '?').toUpperCase();
+                const favSide = (bot.fav_side || '?').toUpperCase();
+                const dogPrice = bot.dog_price || '?';
+                const favPrice = bot.fav_price || '?';
+                const hedgeTimeout = bot.hedge_timeout_s || 120;
+                const dogFilledAt = bot.dog_filled_at || 0;
+                const hedgeElapsed = dogFilledAt > 0 ? (Date.now()/1000 - dogFilledAt) : 0;
+                const hedgeLeft = Math.max(0, hedgeTimeout - hedgeElapsed);
+                const hedgeColor = hedgeLeft <= 15 ? '#ff4444' : hedgeLeft <= 45 ? '#ff8800' : '#00aaff';
+                const isFavPosted = bot.status === 'fav_hedge_posted';
+                stopLossInfo = `<div style="background:${isFavPosted ? '#00aaff11' : '#00ff8811'};border:1px solid ${isFavPosted ? '#00aaff33' : '#00ff8833'};border-radius:5px;padding:4px 8px;font-size:10px;color:${isFavPosted ? '#00aaff' : '#00ff88'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>✓ <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ posted` : 'posting fav hedge...'}</span>
+                    <span style="color:${hedgeColor};font-weight:700;">⏳ ${Math.ceil(hedgeLeft)}s hedge window</span>
+                    <span style="color:#555;">Sellback if ceiling breached</span>
+                </div>`;
             }
 
             // Net P&L so far (from previous completed cycles)
@@ -4927,6 +5082,30 @@ async function loadBots() {
                 }
             } else if (bot.status === 'pending_fills') {
                 healthColor = '#00aaff'; healthLabel = '⏳ FILLING';
+            } else if (bot.status === 'dog_anchor_posted') {
+                healthColor = '#ffaa00';
+                healthLabel = '🎯 ANCHORED';
+                anchoredHealthKey = 'waiting';
+            } else if (bot.status === 'dog_filled' || bot.status === 'fav_hedge_posted') {
+                // Anchor-dog: dog filled, fav hedge in progress — time-based health
+                const hedgeTimeout = bot.hedge_timeout_s || 120;
+                const dogFilledAt = bot.dog_filled_at || 0;
+                const hedgeElapsed = dogFilledAt > 0 ? (Date.now()/1000 - dogFilledAt) : 0;
+                const hedgePctLeft = hedgeTimeout > 0 ? Math.max(0, hedgeTimeout - hedgeElapsed) / hedgeTimeout : 0;
+                if (hedgePctLeft <= 0.15) {
+                    healthColor = '#ff4444';
+                    healthAnim = 'animation: dangerPulse 0.8s ease-in-out infinite;';
+                    healthLabel = `🔴 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
+                    anchoredHealthKey = 'danger';
+                } else if (hedgePctLeft <= 0.40) {
+                    healthColor = '#ff8800';
+                    healthLabel = `🟠 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
+                    anchoredHealthKey = 'warning';
+                } else {
+                    healthColor = '#00aaff';
+                    healthLabel = `🔵 HEDGING`;
+                    anchoredHealthKey = 'holding';
+                }
             }
             // Safety net: if bot is anchored (one leg filled) but no key was assigned, count as holding
             if (!anchoredHealthKey && (yFill >= qty) !== (nFill >= qty)) {
@@ -4963,6 +5142,42 @@ async function loadBots() {
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;">
                     ${(() => {
+                        // Anchor-dog bots: show dog/fav legs instead of YES/NO
+                        if (isAnchorDog) {
+                            const dogSide = (bot.dog_side || 'no');
+                            const favSide = (bot.fav_side || 'yes');
+                            const dogFill = bot.dog_fill_qty || 0;
+                            const favFill = bot.fav_fill_qty || 0;
+                            const dogPct = Math.round((dogFill / qty) * 100);
+                            const favPct = Math.round((favFill / qty) * 100);
+                            const dogPrice = bot.dog_price || '?';
+                            const favPrice = bot.fav_price || '—';
+                            const isDogPosted = bot.status === 'dog_anchor_posted';
+                            const isFavWaiting = !bot.fav_price && bot.status !== 'fav_hedge_posted';
+                            const dogColor = dogSide === 'yes' ? '#00ff88' : '#ff4444';
+                            const favColor = favSide === 'yes' ? '#00ff88' : '#ff4444';
+
+                            return `
+                            <div>
+                                <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
+                                    <span>🎯 DOG ${dogSide.toUpperCase()} @ <strong style="color:${dogColor};">${dogPrice}¢</strong></span>
+                                    <span style="color:${dogFill >= qty ? dogColor : '#8892a6'};font-weight:${dogFill >= qty ? '700' : '400'};">${dogFill >= qty ? `${dogFill}/${qty} ✓` : `${dogFill}/${qty}`}</span>
+                                </div>
+                                <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${dogFill >= qty ? `box-shadow:0 0 8px ${dogColor}44;` : ''}">
+                                    <div style="height:100%;width:${dogPct}%;background:${dogFill >= qty ? dogColor : dogColor + '66'};border-radius:3px;transition:width .5s,background .5s;"></div>
+                                </div>
+                            </div>
+                            <div style="opacity:${isFavWaiting ? '0.4' : '1'};transition:opacity .5s;">
+                                <div style="display:flex;justify-content:space-between;color:${isFavWaiting ? '#555' : '#8892a6'};margin-bottom:3px;">
+                                    <span>🔒 FAV ${favSide.toUpperCase()} @ <strong style="color:${isFavWaiting ? favColor + '44' : favColor};">${favPrice}¢</strong></span>
+                                    <span style="color:${favFill >= qty ? favColor : (isFavWaiting ? '#555' : '#8892a6')};font-weight:${favFill >= qty ? '700' : '400'};">${isFavWaiting ? 'PENDING' : (favFill >= qty ? `${favFill}/${qty} ✓` : `${favFill}/${qty}`)}</span>
+                                </div>
+                                <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${favFill >= qty ? `box-shadow:0 0 8px ${favColor}44;` : ''}">
+                                    <div style="height:100%;width:${favPct}%;background:${favFill >= qty ? favColor : favColor + '66'};border-radius:3px;transition:width .5s,background .5s;"></div>
+                                </div>
+                            </div>`;
+                        }
+
                         // Legacy fav_posted bots: YES may be queued
                         const isFavPosted = bot.status === 'fav_posted';
                         const yesFav = bot.fav_side === 'yes';
@@ -5013,9 +5228,15 @@ async function loadBots() {
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:6px;margin-top:2px;flex-wrap:wrap;gap:4px;">
                     <a href="#" onclick="navigateToMarket('${(bot.ticker||'').split('-').slice(0,-1).join('-')}');return false;" style="color:#555;text-decoration:none;" title="View in Markets tab">🎟 ${bot.ticker || '?'}</a>
-                    <span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
-                    <span>Cost: <strong style="color:#8892a6;">$${((100 - profit) * qty / 100).toFixed(2)}</strong></span>
-                    <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>
+                    ${isAnchorDog
+                      ? `<span>Target: <strong style="color:#ffaa00;">+${bot.target_width || profit}¢</strong></span>
+                         <span>Dog: <strong style="color:#8892a6;">${bot.dog_price || '?'}¢</strong></span>
+                         <span>Hedge: <strong style="color:#8892a6;">${bot.hedge_timeout_s || 120}s</strong></span>
+                         <span style="color:#ffaa00;">🎯 Anchor-Dog</span>`
+                      : `<span>Width: <strong style="color:#00aaff;">${profit}¢</strong></span>
+                         <span>Cost: <strong style="color:#8892a6;">$${((100 - profit) * qty / 100).toFixed(2)}</strong></span>
+                         <span>Payout: <strong style="color:#00ff88;">$${(qty).toFixed(2)}</strong></span>`
+                    }
                     <span title="If one leg fills but other doesn't within timeout, exit at market">⏱ ${bot.timeout_min || 2}m exit</span>
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
                 </div>
@@ -5310,6 +5531,23 @@ const botBuddyMessages = {
         `<strong>Rough patch.</strong> Session is red but risk is managed — stick to the plan`,
         `<strong>Down but not out.</strong> Every red session ends. Stay disciplined`,
         `<strong>Temporary.</strong> Red days happen — the edge is long-term`,
+    ],
+    dog_anchored: [
+        `<strong>🎯 Dog anchored.</strong> Deep limit posted — waiting for volatility to bite`,
+        `<strong>Anchor set.</strong> Cheap leg in the book — if it fills, I hedge instantly`,
+        `<strong>Patience mode.</strong> Dog is out there — one spike and we hedge the fav`,
+        `<strong>Anchored deep.</strong> Low cost, low risk — let the market come to us`,
+    ],
+    dog_filled_hedging: [
+        `<strong>⚡ Dog filled!</strong> Posting fav hedge NOW — locking the arb`,
+        `<strong>Volatility bite!</strong> Dog leg eaten — fav going up at current bid`,
+        `<strong>Phase 2.</strong> Dog filled, deploying fav hedge. Don't touch anything`,
+        `<strong>Got the fill!</strong> Hedging immediately — this is what we anchored for`,
+    ],
+    anchor_sellback: [
+        `<strong>🛡️ Ceiling breach.</strong> Sold dog back — small loss, risk managed`,
+        `<strong>Hard ceiling hit.</strong> Fav too expensive — sold back the dog leg`,
+        `<strong>Safety net caught it.</strong> Ceiling breached, dog sold. Discipline > hope`,
     ],
 };
 
@@ -5611,6 +5849,19 @@ function buddyReactToEvent(action) {
         lockThen(8000);
     } else if (action.action === 'reposted') {
         updateBotBuddyMsg('scanning');
+    } else if (action.action === 'dog_filled_hedging') {
+        setBuddyMood('happy');
+        updateBotBuddyMsg('dog_filled_hedging', true);
+        lockThen(10000);
+    } else if (action.action === 'anchor_complete') {
+        setBuddyMood('celebrating');
+        updateBotBuddyMsg('celebrating', true);
+        triggerConfetti();
+        lockThen(12000);
+    } else if (action.action === 'anchor_sellback' || action.action === 'hard_ceiling_sellback') {
+        setBuddyMood('alert');
+        updateBotBuddyMsg('anchor_sellback', true);
+        lockThen(8000);
     }
 
     updateBuddyStats();
@@ -5736,6 +5987,15 @@ function updateBotBuddy(activeCount, filledLegs) {
     // Background message — only refreshes every 18s (cooldown in updateBotBuddyMsg)
     if (filledLegs > 0) {
         updateBotBuddyMsg('filled');
+    } else if (_botsAnchored > 0) {
+        // Check if any anchor-dog bots are active
+        const bots = window._lastBotsData || {};
+        const hasAnchoredDog = Object.values(bots).some(b => b.bot_category === 'anchor_dog' && b.status === 'dog_anchor_posted');
+        if (hasAnchoredDog) {
+            updateBotBuddyMsg('dog_anchored');
+        } else {
+            updateBotBuddyMsg('filled');
+        }
     } else if (activeCount > 0) {
         updateBotBuddyMsg('scanning');
     }
@@ -5799,6 +6059,21 @@ async function monitorBots() {
                         showNotification(`⚠️ Watch SL triggered: ${action.bot_id} | loss: ${(action.loss_cents/100).toFixed(2)}`);
                     } else if (action.action === 'take_profit_watch') {
                         showNotification(`🎯 Watch TP hit: ${action.bot_id} | profit: +${(action.profit_cents/100).toFixed(2)}`);
+                    } else if (action.action === 'dog_filled_hedging') {
+                        showNotification(`🎯 DOG FILLED! Hedging fav on ${action.ticker || action.bot_id}`);
+                        playArbCompleteSound();
+                        sendPushNotification('🎯 Dog Filled!', 'Anchor dog filled — posting fav hedge');
+                    } else if (action.action === 'anchor_complete') {
+                        const pnlKey = action.profit_cents ?? 0;
+                        const profitStr = `+$${(pnlKey/100).toFixed(2)}`;
+                        playArbCompleteSound();
+                        sendPushNotification('🔒 ANCHOR ARB COMPLETE!', `${profitStr} — both legs filled`);
+                        showNotification(`🔒 ANCHOR COMPLETE! ${profitStr} profit locked`);
+                    } else if (action.action === 'anchor_sellback' || action.action === 'hard_ceiling_sellback') {
+                        const loss = action.loss_cents ?? 0;
+                        const lossStr = `-$${(loss/100).toFixed(2)}`;
+                        showNotification(`🛡️ ${action.action === 'hard_ceiling_sellback' ? 'CEILING BREACH' : 'ANCHOR SELLBACK'}: ${lossStr} — dog sold back`);
+                        sendPushNotification('🛡️ Anchor Sellback', `${lossStr} — ceiling breached`);
                     }
                 });
             }
@@ -7365,8 +7640,10 @@ async function loadTradeHistoryList() {
             // Result styling
             const isWin = t.result === 'completed' || t.result === 'take_profit_watch'
                          || t.result === 'settled_win_yes' || t.result === 'settled_win_no'
-                         || t.result === 'manual_exit_completed';
+                         || t.result === 'manual_exit_completed'
+                         || t.result === 'anchor_dog_complete';
             const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
+            const isAnchorSellback = t.result === 'anchor_sellback' || t.result === 'hard_ceiling_sellback';
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
@@ -7391,8 +7668,8 @@ async function loadTradeHistoryList() {
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
             const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (pnl >= 0 ? '✅' : '⛔'));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isManualExit ? 'MANUAL EXIT' : (pnl < 0 ? 'AMENDED' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))))));
-            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : (isTimeoutExit ? (pnl >= 0 ? '#ffaa0022' : '#ff880033') : ((isWin) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422')));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isAnchorSellback ? 'ANCHOR SELLBACK' : (isManualExit ? 'MANUAL EXIT' : (pnl < 0 ? 'AMENDED' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))))));
+            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : (isAnchorSellback ? '#ffaa0033' : (isTimeoutExit ? (pnl >= 0 ? '#ffaa0022' : '#ff880033') : ((isWin) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'))));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
             // Display name
@@ -7402,8 +7679,9 @@ async function loadTradeHistoryList() {
             const verified = t.verified_prices || t.verified_cleared ? '<span style="color:#00ff88;font-size:9px;margin-left:4px;">✓ verified</span>' : '';
             
             // Trade type
-            const tradeType = t.type === 'watch' ? 'WATCH' : 'ARB';
-            const typeColor = t.type === 'watch' ? '#ffaa00' : '#00aaff';
+            const isAnchorTrade = t.bot_category === 'anchor_dog' || t.fill_source === 'anchor_dog';
+            const tradeType = t.type === 'watch' ? 'WATCH' : (isAnchorTrade ? 'ANCHOR' : 'ARB');
+            const typeColor = t.type === 'watch' ? '#ffaa00' : (isAnchorTrade ? '#ffaa00' : '#00aaff');
 
             // ─── New analytics fields ───
             const width = t.arb_width || 0;

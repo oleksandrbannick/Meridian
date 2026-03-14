@@ -70,9 +70,10 @@ def login():
         
         # Test connection by getting balance
         balance = kalshi_client.get_balance()
-        
+
         # Clean up
         os.remove(key_path)
+        _patch_kalshi_orderbook()
         
         return jsonify({
             'success': True,
@@ -537,6 +538,13 @@ def _best_bid(ob_data, side):
         return top[0] if isinstance(top, list) else top.get('price', 0)
     except Exception:
         return 0
+
+def _best_ask(ob_data, side):
+    """Get the best (lowest) ask price for a side.  On Kalshi binary markets,
+    the ask for YES = 100 - best NO bid, and vice versa."""
+    opp = 'no' if side == 'yes' else 'yes'
+    opp_bid = _best_bid(ob_data, opp)
+    return (100 - opp_bid) if opp_bid > 0 else 0
 
 
 def _parse_fill_count(order_data):
@@ -1926,9 +1934,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['no_fill_qty'] = bot['dog_fill_qty']
             print(f'⚡ WS ANCHOR DOG FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
 
-            if bot['dog_fill_qty'] >= qty_bot:
-                # Dog filled! Fire fav hedge immediately in background thread
+            if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
+                # Dog filled! Set status BEFORE spawning thread to prevent monitor double-fire
+                bot['_hedge_fired'] = True
                 bot['dog_filled_at'] = time.time()
+                bot['status'] = 'dog_filled'  # block monitor from re-entering dog_anchor_posted
                 threading.Thread(
                     target=_execute_anchor_fav_hedge,
                     args=(bot_id,),
@@ -1944,6 +1954,54 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             # Full fav fill will be handled by monitor on next cycle
         save_state()
         break
+
+    # ── Anchor-Ladder WS fill matching ──────────────────────────────
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_ladder':
+            continue
+        if bot.get('status') == 'ladder_posted':
+            # Match fill against any rung's order_id
+            matched_rung = None
+            for idx, rung in enumerate(bot.get('rungs', [])):
+                if order_id == rung.get('order_id'):
+                    matched_rung = idx
+                    break
+            if matched_rung is None:
+                continue
+            rung = bot['rungs'][matched_rung]
+            rung['fill_qty'] = rung.get('fill_qty', 0) + count
+            if rung['fill_qty'] >= rung['qty'] and not rung.get('filled_at'):
+                rung['filled_at'] = time.time()
+            total_fill = sum(r.get('fill_qty', 0) for r in bot['rungs'])
+            bot['total_dog_fill_qty'] = total_fill
+            if bot['dog_side'] == 'yes':
+                bot['yes_fill_qty'] = total_fill
+            else:
+                bot['no_fill_qty'] = total_fill
+            print(f'⚡ WS LADDER FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
+            # All rungs filled? Hedge immediately
+            if total_fill >= bot['total_dog_qty']:
+                bot['dog_filled_at'] = time.time()
+                threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+            elif not bot.get('_sweep_timer_started'):
+                # First fill — start 2s sweep window, then hedge with whatever filled
+                bot['_sweep_timer_started'] = True
+                bot['first_fill_at'] = time.time()
+                print(f'⏱ WS LADDER SWEEP: {bot_id} first fill detected — 2s sweep window started')
+                threading.Thread(target=_ladder_sweep_then_hedge, args=(bot_id,), daemon=True).start()
+            save_state()
+            break
+        elif bot.get('status') == 'fav_hedge_posted':
+            if order_id != bot.get('fav_order_id'):
+                continue
+            bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
+            if bot['fav_side'] == 'yes':
+                bot['yes_fill_qty'] = bot['fav_fill_qty']
+            else:
+                bot['no_fill_qty'] = bot['fav_fill_qty']
+            print(f'⚡ WS LADDER FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{bot.get("hedge_qty", "?")}')
+            save_state()
+            break
 
 
 def _execute_anchor_fav_hedge(bot_id):
@@ -1973,22 +2031,31 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
+        # Cap fav price to achieve target width (don't overpay if market moved)
+        target_width = bot.get('target_width', 5)
+        max_fav_price = 100 - actual_dog_price - target_width
+        hedge_price = min(fav_bid, max_fav_price)
+        if hedge_price < 1:
+            print(f'⚠ WS ANCHOR {bot_id}: hedge price {hedge_price}¢ too low (dog@{actual_dog_price}¢ width={target_width}¢) — deferring')
+            bot['status'] = 'dog_filled'
+            return
+
         # Hard ceiling check
         est_fees = kalshi_fee_cents(
-            actual_dog_price if dog_side == 'yes' else fav_bid,
-            actual_dog_price if dog_side == 'no' else fav_bid,
+            actual_dog_price if dog_side == 'yes' else hedge_price,
+            actual_dog_price if dog_side == 'no' else hedge_price,
             qty
         )
-        total_cost = actual_dog_price + fav_bid + est_fees
+        total_cost = actual_dog_price + hedge_price + est_fees
         if total_cost > HARD_CEILING_CENTS:
             print(f'🛑 WS ANCHOR CEILING: {bot_id} {total_cost}¢ > {HARD_CEILING_CENTS}¢ — deferring to monitor for sellback')
             bot['status'] = 'dog_filled'
             return
 
-        # Post fav hedge at current bid
+        # Post fav hedge at capped price (may be below bid if market moved against us)
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=qty, price=fav_bid
+            count=qty, price=hedge_price
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -2003,12 +2070,175 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['no_order_id'] = fav_order_id
 
         print(f'⚡ WS ANCHOR HEDGE: {bot_id} dog@{actual_dog_price}¢ → fav posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
+        # Track fill-to-hedge latency
+        fill_at = bot.get('dog_filled_at')
+        if fill_at:
+            f2h_ms = (time.time() - fill_at) * 1000
+            _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_dog', 'fav_price': actual_fav_price})
+            print(f'⏱ FILL→HEDGE: {bot_id} {f2h_ms:.0f}ms')
         save_state()
     except Exception as e:
         print(f'❌ WS ANCHOR HEDGE {bot_id}: {e}')
         bot = active_bots.get(bot_id)
         if bot:
             bot['status'] = 'dog_filled'  # fallback to monitor
+
+
+def _execute_ladder_fav_hedge(bot_id):
+    """Post fav hedge based on weighted average of filled ladder rungs.
+    Called from WS handler (all rungs fill) or monitor (bounce detected)."""
+    try:
+        bot = active_bots.get(bot_id)
+        if not bot or bot.get('status') in ('stopped', 'completed', 'fav_hedge_posted'):
+            return
+
+        ticker = bot['ticker']
+        fav_side = bot['fav_side']
+        dog_side = bot['dog_side']
+
+        # Cancel any unfilled rung orders
+        for rung in bot.get('rungs', []):
+            if rung.get('fill_qty', 0) < rung['qty'] and rung.get('order_id'):
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(rung['order_id'])
+                except Exception:
+                    pass
+
+        # Calculate weighted average price and total quantity
+        filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
+        if not filled_rungs:
+            bot['status'] = 'completed'
+            bot['completed_at'] = time.time()
+            save_state()
+            return
+
+        total_fill_qty = sum(r['fill_qty'] for r in filled_rungs)
+        avg_price = round(sum(r['price'] * r['fill_qty'] for r in filled_rungs) / total_fill_qty)
+        bot['avg_fill_price'] = avg_price
+        bot['hedge_qty'] = total_fill_qty
+        bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
+
+        # Get current fav bid
+        api_rate_limiter.wait()
+        ob = kalshi_client.get_market_orderbook(ticker)
+        fav_bid = _best_bid(ob, fav_side)
+        if fav_bid <= 0:
+            print(f'⚠ LADDER HEDGE {bot_id}: no fav bid — deferring to monitor')
+            bot['status'] = 'ladder_filled_no_fav'
+            save_state()
+            return
+
+        # Cap fav price for target width
+        target_width = bot.get('target_width', 5)
+        max_fav_price = 100 - avg_price - target_width
+        hedge_price = min(fav_bid, max_fav_price)
+        if hedge_price < 1:
+            print(f'⚠ LADDER HEDGE {bot_id}: hedge price {hedge_price}¢ too low — selling back')
+            _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
+            return
+
+        # Hard ceiling check
+        est_fees = kalshi_fee_cents(
+            avg_price if dog_side == 'yes' else hedge_price,
+            avg_price if dog_side == 'no' else hedge_price,
+            total_fill_qty
+        )
+        total_cost = avg_price + hedge_price + est_fees
+        if total_cost > HARD_CEILING_CENTS:
+            print(f'🛑 LADDER CEILING: {bot_id} avg@{avg_price}¢ + fav@{hedge_price}¢ + fees {est_fees}¢ = {total_cost}¢')
+            _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, [])
+            return
+
+        # Post single fav hedge for total filled qty
+        fav_resp, actual_fav_price = create_order_maker(
+            ticker=ticker, side=fav_side, action='buy',
+            count=total_fill_qty, price=hedge_price
+        )
+        fav_order_id = fav_resp['order']['order_id']
+        bot['fav_order_id'] = fav_order_id
+        bot['fav_price'] = actual_fav_price
+        bot['status'] = 'fav_hedge_posted'
+        bot['fav_posted_at'] = time.time()
+        if fav_side == 'yes':
+            bot['yes_price'] = actual_fav_price
+            bot['yes_order_id'] = fav_order_id
+        else:
+            bot['no_price'] = actual_fav_price
+            bot['no_order_id'] = fav_order_id
+        print(f'⚡ LADDER HEDGE: {bot_id} avg_dog@{avg_price}¢ → fav posted @{actual_fav_price}¢ qty={total_fill_qty}')
+        # Track fill-to-hedge latency
+        fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
+        if fill_at:
+            f2h_ms = (time.time() - fill_at) * 1000
+            _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
+            print(f'⏱ FILL→HEDGE: {bot_id} {f2h_ms:.0f}ms')
+        save_state()
+    except Exception as e:
+        print(f'❌ LADDER HEDGE {bot_id}: {e}')
+        bot = active_bots.get(bot_id)
+        if bot:
+            bot['status'] = 'ladder_filled_no_fav'
+            save_state()
+
+
+def _ladder_sweep_then_hedge(bot_id):
+    """Fire immediately on first rung fill — cancel unfilled rungs + hedge.
+    The ~100ms of API calls to cancel orders IS the sweep window:
+    any fills that arrive via WS during that time get included automatically."""
+    bot = active_bots.get(bot_id)
+    if not bot or bot.get('status') != 'ladder_posted':
+        return
+    print(f'⚡ LADDER INSTANT HEDGE: {bot_id} — cancelling unfilled + hedging')
+    bot['dog_filled_at'] = time.time()
+    _execute_ladder_fav_hedge(bot_id)
+
+
+def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
+    """Sell all filled ladder rung contracts back."""
+    now = time.time()
+    ticker = bot['ticker']
+    dog_side = bot['dog_side']
+    total_fill_qty = bot.get('hedge_qty') or sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
+
+    if total_fill_qty <= 0:
+        bot['status'] = 'completed'
+        bot['completed_at'] = now
+        save_state()
+        return
+
+    sold_back, sell_info = execute_sell(ticker, dog_side, total_fill_qty,
+                                        reason=f'ladder_sellback_{bot_id}')
+    sell_price = (sell_info or {}).get('actual_fill_price', 0) if sold_back else 0
+    loss_cents = (avg_price - sell_price) * total_fill_qty if sell_price else avg_price * total_fill_qty
+
+    session_pnl['gross_loss_cents'] += loss_cents
+    session_pnl['stopped_bots'] += 1
+    bot['_trade_recorded'] = True
+    bot['status'] = 'stopped'
+    bot['stopped_at'] = now
+
+    _record_trade({
+        'bot_id': bot_id, 'ticker': ticker,
+        'yes_price': avg_price if dog_side == 'yes' else fav_bid,
+        'no_price': avg_price if dog_side == 'no' else fav_bid,
+        'quantity': total_fill_qty,
+        'profit_cents': 0, 'loss_cents': loss_cents, 'fee_cents': 0,
+        'result': 'ladder_sellback',
+        'exit_via': f'sell_back_{dog_side}',
+        'sell_back_price': sell_price,
+        'hard_ceiling_total': total_cost,
+        'timestamp': now,
+        'placed_at': bot.get('created_at', now),
+        'arb_width': bot.get('target_width', 0),
+        'game_phase': bot.get('game_phase', 'live'),
+        'game_context': _get_game_context(ticker),
+        'fill_source': 'ladder_sellback',
+        'bot_category': 'anchor_ladder',
+    }, bot)
+    print(f'🔙 LADDER SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (avg@{avg_price}¢) loss={loss_cents}¢')
+    save_state()
+    actions.append({'bot_id': bot_id, 'action': 'ladder_sellback', 'loss_cents': loss_cents})
 
 
 def _execute_ws_dog_post(bot_id):
@@ -2249,6 +2479,56 @@ session_pnl = {
     'session_start':      time.time(),
     'day_key':            date.today().isoformat(),  # for daily auto-reset
 }
+
+# ─── LATENCY TRACKER ──────────────────────────────────────────────────────────
+from collections import deque
+
+_latency_log = {
+    'order_place':    deque(maxlen=200),   # ms per create_order call
+    'orderbook':      deque(maxlen=200),   # ms per get_market_orderbook call
+    'fill_to_hedge':  deque(maxlen=50),    # ms from WS fill to hedge order posted
+    'api_generic':    deque(maxlen=200),   # ms for other API calls
+}
+_latency_lock = threading.Lock()
+
+def _record_latency(category, ms, meta=None):
+    """Record a latency measurement."""
+    with _latency_lock:
+        entry = {'ms': round(ms, 1), 'ts': time.time()}
+        if meta:
+            entry.update(meta)
+        _latency_log[category].append(entry)
+
+def _latency_stats(category):
+    """Get min/avg/max/p95/count for a latency category."""
+    with _latency_lock:
+        entries = list(_latency_log[category])
+    if not entries:
+        return {'min': 0, 'avg': 0, 'max': 0, 'p95': 0, 'count': 0, 'recent': []}
+    vals = [e['ms'] for e in entries]
+    vals_sorted = sorted(vals)
+    p95_idx = max(0, int(len(vals_sorted) * 0.95) - 1)
+    return {
+        'min':    round(vals_sorted[0], 1),
+        'avg':    round(sum(vals) / len(vals), 1),
+        'max':    round(vals_sorted[-1], 1),
+        'p95':    round(vals_sorted[p95_idx], 1),
+        'count':  len(vals),
+        'recent': [e for e in entries[-10:]],  # last 10
+    }
+
+def _timed_orderbook(ticker, **kwargs):
+    """Wrapper around kalshi_client.get_market_orderbook with latency tracking."""
+    t0 = time.time()
+    result = kalshi_client._original_get_market_orderbook(ticker, **kwargs)
+    _record_latency('orderbook', (time.time() - t0) * 1000, {'ticker': ticker})
+    return result
+
+def _patch_kalshi_orderbook():
+    """Monkey-patch the orderbook method to add latency tracking."""
+    if kalshi_client and not hasattr(kalshi_client, '_original_get_market_orderbook'):
+        kalshi_client._original_get_market_orderbook = kalshi_client.get_market_orderbook
+        kalshi_client.get_market_orderbook = _timed_orderbook
 
 # Per-day reset timestamps.  Maps "YYYY-MM-DD" → float-timestamp.
 # Trades on that day BEFORE the stored timestamp are excluded from P&L.
@@ -2535,14 +2815,15 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
     # actually live at trade completion time, record it as live.
     if record.get('game_phase') == 'pregame' and ticker and _is_game_live(ticker):
         record['game_phase'] = 'live'
-    # Bot category for split P&L tracking
-    bot_type = record.get('type') or (bot.get('type') if bot else None) or 'arb'
-    if bot_type == 'watch':
-        record['bot_category'] = 'bet'
-    elif bot_type == 'middle':
-        record['bot_category'] = 'middle'
-    else:
-        record['bot_category'] = 'arb'
+    # Bot category for split P&L tracking (preserve if already set)
+    if 'bot_category' not in record:
+        bot_type = record.get('type') or (bot.get('type') if bot else None) or 'arb'
+        if bot_type == 'watch':
+            record['bot_category'] = 'bet'
+        elif bot_type == 'middle':
+            record['bot_category'] = 'middle'
+        else:
+            record['bot_category'] = 'arb'
     # Sport from series ticker prefix
     series = ticker.split('-')[0].upper() if ticker else ''
     _SPORT_MAP = {
@@ -2666,8 +2947,9 @@ def _is_game_live(ticker: str) -> bool:
                 mo_fb = _MONTH_ABBR.get(m_fb.group(2))
                 if mo_fb:
                     fb_date = date(2000 + int(m_fb.group(1)), mo_fb, int(m_fb.group(3)))
-                    if fb_date != date.today():
-                        return False  # Future (or past) game — never trust ESPN fallback
+                    from datetime import timedelta
+                    if fb_date not in (date.today(), date.today() + timedelta(days=1)):
+                        return False  # Future or past game — never trust ESPN fallback
     except Exception:
         pass
     _refresh_espn_cache()
@@ -2691,7 +2973,8 @@ def _get_game_context(ticker: str) -> dict:
     Always force-refreshes ESPN cache (bypasses TTL) so blocking uses fresh data.
     Also applies the same date guard as _get_game_score_for_ticker to avoid
     matching a different same-team game."""
-    # Guard: if ticker is for a future game, no live context exists
+    # Guard: if ticker is for a game >1 day away, no live context exists
+    # Allow tomorrow's date because late-night games (10+ PM) use the next day's date
     try:
         parts_chk = ticker.split('-')
         if len(parts_chk) >= 2:
@@ -2700,7 +2983,8 @@ def _get_game_context(ticker: str) -> dict:
                 mo = _MONTH_ABBR.get(m_chk.group(2))
                 if mo:
                     ticker_date = date(2000 + int(m_chk.group(1)), mo, int(m_chk.group(3)))
-                    if ticker_date > date.today():
+                    from datetime import timedelta
+                    if ticker_date > date.today() + timedelta(days=1):
                         return {}
     except Exception:
         pass
@@ -3009,7 +3293,8 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                 mo = _MONTH_ABBR.get(m_chk.group(2))
                 if mo:
                     ticker_date = date(2000 + int(m_chk.group(1)), mo, int(m_chk.group(3)))
-                    if ticker_date > date.today():
+                    from datetime import timedelta
+                    if ticker_date > date.today() + timedelta(days=1):
                         return {}  # Future game — don't match today's team scores
     except Exception:
         pass
@@ -3280,6 +3565,10 @@ def create_bot():
 
         # ── PRICE VALIDATION: fetch ORDERBOOK for real-time best bids ──────────
         # The market endpoint returns stale prices; orderbook is real-time
+        live_yes_bid = 0
+        live_no_bid = 0
+        live_yes_ask = 99
+        live_no_ask = 99
         try:
             api_rate_limiter.wait()
             ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
@@ -3322,17 +3611,13 @@ def create_bot():
         # Place both YES and NO limit orders at the same time.
         # If both fill → profit locked at settlement.
         # If one fills but other is pending after 8 min → cancel pending, sell filled at market.
-        import uuid as _uuid
-        arb_group_id = str(_uuid.uuid4())
         yes_order, yes_price = create_order_maker(
             ticker=ticker, side='yes', action='buy',
             count=quantity, price=yes_price,
-            order_group_id=arb_group_id
         )
         no_order, no_price = create_order_maker(
             ticker=ticker, side='no', action='buy',
             count=quantity, price=no_price,
-            order_group_id=arb_group_id
         )
         yes_order_id = yes_order['order']['order_id']
         no_order_id  = no_order['order']['order_id']
@@ -3360,7 +3645,7 @@ def create_bot():
             'status':           'both_posted',
             'yes_order_id':     yes_order_id,
             'no_order_id':      no_order_id,
-            'order_group_id':   arb_group_id,
+            'order_group_id':   None,
             'yes_fill_qty':     0,
             'no_fill_qty':      0,
             'created_at':       time.time(),
@@ -3455,16 +3740,32 @@ def create_anchor_bot():
             return jsonify({'error': f'Bot cap: {active_on_ticker} bots on {ticker} (max {MAX_BOTS_PER_TICKER})'}), 400
 
         # Auto-detect dog side from orderbook if not specified
-        if dog_side not in ('yes', 'no'):
-            try:
-                api_rate_limiter.wait()
-                ob = kalshi_client.get_market_orderbook(ticker)
+        # Always fetch live orderbook for smart pricing
+        try:
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            live_dog_bid = _best_bid(ob, dog_side if dog_side in ('yes', 'no') else 'no')
+            live_dog_ask = _best_ask(ob, dog_side if dog_side in ('yes', 'no') else 'no')
+            if dog_side not in ('yes', 'no'):
                 yes_bid = _best_bid(ob, 'yes')
                 no_bid  = _best_bid(ob, 'no')
-                # Dog = lower priced side
                 dog_side = 'no' if no_bid <= yes_bid else 'yes'
-            except Exception:
-                dog_side = 'no'  # default: NO is usually the dog
+                live_dog_bid = _best_bid(ob, dog_side)
+                live_dog_ask = _best_ask(ob, dog_side)
+        except Exception:
+            live_dog_bid = 0
+            live_dog_ask = 0
+            if dog_side not in ('yes', 'no'):
+                dog_side = 'no'
+
+        # Smart pricing: 5c below bid if tight spread (≤2c), 5c below ask if broken spread
+        if live_dog_bid > 0:
+            spread = (live_dog_ask - live_dog_bid) if live_dog_ask > 0 else 1
+            anchor_base = live_dog_ask if spread > 2 else live_dog_bid
+            smart_price = max(1, anchor_base - 5)
+            print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} spread={spread} '
+                  f'base={"ask" if spread > 2 else "bid"} → {smart_price}¢ (frontend sent {dog_price}¢)')
+            dog_price = smart_price
 
         fav_side = 'yes' if dog_side == 'no' else 'no'
 
@@ -3536,29 +3837,287 @@ def create_anchor_bot():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    """
-    Check the Kalshi positions API to confirm we no longer hold contracts.
-    Returns (is_cleared: bool, remaining: int)
-    """
+
+
+@app.route('/api/bot/ladder', methods=['POST'])
+def create_ladder_bot():
+    """Create a multi-rung anchor-ladder bot."""
     try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not logged in'}), 401
+        data = request.json or {}
+        ticker = data.get('ticker', '')
+        rungs_input = data.get('rungs', [])
+        target_width = int(data.get('target_width', 5))
+        hedge_timeout = int(data.get('hedge_timeout_s', 120))
+        bounce_threshold = int(data.get('bounce_threshold', 2))
+        dog_side = data.get('dog_side', '')
+
+        if not ticker:
+            return jsonify({'error': 'Missing ticker'}), 400
+        if not rungs_input or len(rungs_input) < 1 or len(rungs_input) > 3:
+            return jsonify({'error': 'Need 1-3 rungs'}), 400
+        if target_width < 1:
+            return jsonify({'error': 'target_width must be >= 1'}), 400
+
+        # Validate each rung
+        for r in rungs_input:
+            p = int(r.get('price', 0))
+            q = int(r.get('qty', 1))
+            if p < 1 or p > 50:
+                return jsonify({'error': f'Rung price {p}¢ out of range (1-50)'}), 400
+            if q < 1 or q > 20:
+                return jsonify({'error': f'Rung qty {q} out of range (1-20)'}), 400
+
+        # Game phase
+        game_phase = 'live' if _is_game_live(ticker) else 'pregame'
+
+        # Bot cap
+        MAX_BOTS_PER_TICKER = 5
+        active_on_ticker = sum(1 for b in active_bots.values()
+                               if b.get('ticker') == ticker
+                               and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead'))
+        if active_on_ticker >= MAX_BOTS_PER_TICKER:
+            return jsonify({'error': f'Bot cap: {active_on_ticker} bots on {ticker} (max {MAX_BOTS_PER_TICKER})'}), 400
+
+        # Auto-detect dog side if not provided + fetch live orderbook for smart pricing
         api_rate_limiter.wait()
-        pos_resp = kalshi_client.get_positions(ticker=ticker)
-        positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
-        for p in positions:
-            if p.get('ticker') == ticker:
-                qty = p.get('position', 0)
-                # positive = YES, negative = NO
-                if side == 'yes' and qty > 0:
-                    print(f'⚠ verify_position: still holding {qty} YES on {ticker}')
-                    return False, qty
-                elif side == 'no' and qty < 0:
-                    print(f'⚠ verify_position: still holding {abs(qty)} NO on {ticker}')
-                    return False, abs(qty)
-        print(f'✅ verify_position: {side} position on {ticker} confirmed CLEARED')
-        return True, 0
+        ob = kalshi_client.get_market_orderbook(ticker)
+        if not dog_side:
+            yes_bid = _best_bid(ob, 'yes')
+            no_bid = _best_bid(ob, 'no')
+            dog_side = 'no' if no_bid <= yes_bid else 'yes'
+        fav_side = 'no' if dog_side == 'yes' else 'yes'
+
+        current_dog_bid = _best_bid(ob, dog_side)
+        current_dog_ask = _best_ask(ob, dog_side)
+
+        # Smart pricing: adjust all rungs relative to live price at order creation time
+        # First rung should be 5c below bid (tight spread ≤2c) or 5c below ask (broken spread)
+        if current_dog_bid > 0:
+            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
+            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
+            smart_first = max(1, anchor_base - 5)
+
+            # Get the frontend's first rung price to compute the offset
+            frontend_first = max(r.get('price', 0) for r in rungs_input)
+            price_shift = smart_first - frontend_first
+
+            if price_shift != 0:
+                print(f'🪜 LADDER SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
+                      f'base={"ask" if spread > 2 else "bid"} → shifting all rungs by {price_shift:+d}¢')
+                for r in rungs_input:
+                    r['price'] = max(1, int(r['price']) + price_shift)
+
+        # Place all rung orders
+        placed_rungs = []
+        for r in rungs_input:
+            price = int(r['price'])
+            qty = int(r.get('qty', 1))
+            try:
+                resp, actual_price = create_order_maker(
+                    ticker=ticker, side=dog_side, action='buy',
+                    count=qty, price=price
+                )
+                placed_rungs.append({
+                    'price': actual_price,
+                    'qty': qty,
+                    'order_id': resp['order']['order_id'],
+                    'fill_qty': 0,
+                    'filled_at': None,
+                })
+            except Exception as rung_err:
+                # Cancel already-placed rungs on failure
+                for pr in placed_rungs:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(pr['order_id'])
+                    except Exception:
+                        pass
+                return jsonify({'error': f'Failed to place rung at {price}¢: {rung_err}'}), 500
+
+        total_dog_qty = sum(r['qty'] for r in placed_rungs)
+        bot_id = f'ladder_{ticker}_{int(time.time() * 1000)}'
+
+        # Subscribe WS
+        if ws_manager:
+            ws_manager.add_ticker(ticker)
+
+        active_bots[bot_id] = {
+            'ticker': ticker,
+            'bot_category': 'anchor_ladder',
+            'status': 'ladder_posted',
+            'dog_side': dog_side,
+            'fav_side': fav_side,
+            'rungs': placed_rungs,
+            'total_dog_qty': total_dog_qty,
+            'total_dog_fill_qty': 0,
+            'fav_order_id': None,
+            'fav_price': None,
+            'fav_fill_qty': 0,
+            'target_width': target_width,
+            'hedge_timeout_s': hedge_timeout,
+            'bounce_threshold': bounce_threshold,
+            'lowest_dog_bid_seen': current_dog_bid if current_dog_bid > 0 else 999,
+            'lowest_dog_bid_at': time.time(),
+            'bounce_detected_at': None,
+            'avg_fill_price': None,
+            'hedge_qty': None,
+            'game_phase': game_phase,
+            'created_at': time.time(),
+            'posted_at': time.time(),
+            'dog_filled_at': None,
+            'market_type': _detect_market_type(ticker),
+            'spread_line': _extract_spread_line(ticker),
+            # Compat fields
+            'yes_order_id': None,
+            'no_order_id': None,
+            'yes_fill_qty': 0,
+            'no_fill_qty': 0,
+            'yes_price': None,
+            'no_price': None,
+            'quantity': total_dog_qty,
+            'arb_width': target_width,
+        }
+        save_state()
+
+        rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in placed_rungs)
+        return jsonify({
+            'success': True,
+            'bot_id': bot_id,
+            'rungs': len(placed_rungs),
+            'total_qty': total_dog_qty,
+            'message': f'[LADDER] {dog_side.upper()} {len(placed_rungs)} rungs posted: {rung_desc}'
+        })
+
     except Exception as e:
-        print(f'⚠ verify_position error: {e} — treating as unverified')
-        return False, -1
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/bot/ladder/simulate', methods=['POST'])
+def simulate_ladder():
+    """Dry-run simulation: shows what a ladder/anchor bot WOULD do without placing real orders.
+    Simulates fill scenarios and hedge math so you can verify averaging + pricing logic."""
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        data = request.json or {}
+        ticker = data.get('ticker', '').strip()
+        rungs_input = data.get('rungs', [])  # [{price, qty}]
+        target_width = int(data.get('target_width', 5))
+        dog_side = data.get('dog_side', '').lower()
+
+        if not ticker:
+            return jsonify({'error': 'Required: ticker'}), 400
+
+        # Get live orderbook
+        api_rate_limiter.wait()
+        ob = kalshi_client.get_market_orderbook(ticker)
+
+        # Auto-detect dog side
+        yes_bid = _best_bid(ob, 'yes')
+        no_bid = _best_bid(ob, 'no')
+        if dog_side not in ('yes', 'no'):
+            dog_side = 'no' if no_bid <= yes_bid else 'yes'
+        fav_side = 'yes' if dog_side == 'no' else 'no'
+        dog_bid = yes_bid if dog_side == 'yes' else no_bid
+        fav_bid = yes_bid if fav_side == 'yes' else no_bid
+
+        # Default rungs if none provided (single anchor at dog_bid - 5)
+        if not rungs_input:
+            rungs_input = [{'price': max(1, dog_bid - 5), 'qty': 1}]
+
+        rungs = []
+        for r in rungs_input:
+            rungs.append({'price': int(r['price']), 'qty': int(r.get('qty', 1))})
+
+        # Simulate each fill scenario
+        scenarios = []
+
+        # Scenario 1: All rungs fill
+        total_qty = sum(r['qty'] for r in rungs)
+        total_cost = sum(r['price'] * r['qty'] for r in rungs)
+        avg_dog_price = round(total_cost / total_qty) if total_qty > 0 else 0
+        max_fav_price = 100 - avg_dog_price - target_width
+        hedge_price = min(fav_bid, max_fav_price)
+        est_fees = sum(
+            kalshi_fee_cents(
+                r['price'] if dog_side == 'yes' else hedge_price,
+                r['price'] if dog_side == 'no' else hedge_price,
+                r['qty']
+            ) for r in rungs
+        )
+        total_arb_cost = avg_dog_price + hedge_price + est_fees
+        net_profit = (100 - avg_dog_price - hedge_price) * total_qty - est_fees
+        hard_ceiling_hit = total_arb_cost > HARD_CEILING_CENTS
+
+        scenarios.append({
+            'name': f'All {len(rungs)} rungs fill',
+            'rungs_filled': len(rungs),
+            'total_qty': total_qty,
+            'avg_dog_price': avg_dog_price,
+            'fav_bid_now': fav_bid,
+            'max_fav_price': max_fav_price,
+            'hedge_price': hedge_price,
+            'est_fees': est_fees,
+            'total_cost_per_contract': avg_dog_price + hedge_price,
+            'total_cost_with_fees': total_arb_cost,
+            'net_profit_cents': net_profit,
+            'net_profit_dollars': round(net_profit / 100, 2),
+            'hard_ceiling_hit': hard_ceiling_hit,
+            'action': 'SELLBACK — over ceiling' if hard_ceiling_hit else ('HEDGE at ' + str(hedge_price) + '¢' if hedge_price >= 1 else 'SELLBACK — hedge too low'),
+        })
+
+        # Scenario per partial fill (each rung individually)
+        for i, rung in enumerate(rungs):
+            partial_qty = rung['qty']
+            partial_avg = rung['price']
+            max_fav = 100 - partial_avg - target_width
+            h_price = min(fav_bid, max_fav)
+            p_fees = kalshi_fee_cents(
+                partial_avg if dog_side == 'yes' else h_price,
+                partial_avg if dog_side == 'no' else h_price,
+                partial_qty
+            )
+            p_cost = partial_avg + h_price + p_fees
+            p_net = (100 - partial_avg - h_price) * partial_qty - p_fees
+            scenarios.append({
+                'name': f'Only rung #{i+1} fills ({rung["price"]}¢ × {rung["qty"]})',
+                'rungs_filled': 1,
+                'total_qty': partial_qty,
+                'avg_dog_price': partial_avg,
+                'fav_bid_now': fav_bid,
+                'max_fav_price': max_fav,
+                'hedge_price': h_price,
+                'est_fees': p_fees,
+                'total_cost_per_contract': partial_avg + h_price,
+                'total_cost_with_fees': p_cost,
+                'net_profit_cents': p_net,
+                'net_profit_dollars': round(p_net / 100, 2),
+                'hard_ceiling_hit': p_cost > HARD_CEILING_CENTS,
+                'action': 'SELLBACK' if p_cost > HARD_CEILING_CENTS else ('HEDGE at ' + str(h_price) + '¢' if h_price >= 1 else 'SELLBACK'),
+            })
+
+        return jsonify({
+            'success': True,
+            'ticker': ticker,
+            'dog_side': dog_side,
+            'fav_side': fav_side,
+            'dog_bid': dog_bid,
+            'fav_bid': fav_bid,
+            'target_width': target_width,
+            'hard_ceiling': HARD_CEILING_CENTS,
+            'rungs': rungs,
+            'scenarios': scenarios,
+            'summary': {
+                'best_case_profit': scenarios[0]['net_profit_cents'],
+                'worst_rung_profit': min(s['net_profit_cents'] for s in scenarios),
+                'any_ceiling_hit': any(s['hard_ceiling_hit'] for s in scenarios),
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ─── POST-ONLY AWARE ORDER PLACEMENT ──────────────────────────────
@@ -3588,7 +4147,10 @@ def create_order_maker(ticker, side, action, count, price, post_only=True,
             }
             if order_group_id is not None:
                 kwargs['order_group_id'] = order_group_id
+            t0 = time.time()
             resp = kalshi_client.create_order(**kwargs)
+            _record_latency('order_place', (time.time() - t0) * 1000,
+                            {'ticker': ticker, 'side': side, 'price': attempt_price})
 
             # Parse actual fees from response for tracking
             order_data = resp.get('order', {})
@@ -3676,6 +4238,28 @@ def get_actual_fill_price(order_id, side='yes', retries=2):
         if attempt < retries:
             time.sleep(0.8)
     return None
+
+
+def verify_position_cleared(ticker, side, count):
+    """Check if a position has been cleared after a sell order."""
+    try:
+        api_rate_limiter.wait()
+        pos_resp = kalshi_client.get_positions(ticker=ticker)
+        positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+        for p in positions:
+            if p.get('ticker') == ticker:
+                qty = p.get('position', 0)
+                if side == 'yes' and qty > 0:
+                    print(f'⚠ verify_position: still holding {qty} YES on {ticker}')
+                    return False, qty
+                elif side == 'no' and qty < 0:
+                    print(f'⚠ verify_position: still holding {abs(qty)} NO on {ticker}')
+                    return False, abs(qty)
+        print(f'✅ verify_position: {side} position on {ticker} confirmed CLEARED')
+        return True, 0
+    except Exception as e:
+        print(f'⚠ verify_position error: {e} — treating as unverified')
+        return False, -1
 
 
 def execute_sell(ticker, side, count, reason='stop_loss'):
@@ -4131,24 +4715,33 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 actions.append({'bot_id': bot_id, 'action': 'dog_filled_no_fav_bid'})
                 return
 
+            # Cap fav price to achieve target width (don't overpay if market moved)
+            target_width = bot.get('target_width', 5)
+            max_fav_price = 100 - actual_dog_price - target_width
+            hedge_price = min(fav_bid, max_fav_price)
+            if hedge_price < 1:
+                print(f'⚠ ANCHOR {bot_id}: hedge price {hedge_price}¢ too low — selling dog back')
+                _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
+                return
+
             # Hard ceiling check before hedging
             est_fees = kalshi_fee_cents(
-                actual_dog_price if dog_side == 'yes' else fav_bid,
-                actual_dog_price if dog_side == 'no' else fav_bid,
+                actual_dog_price if dog_side == 'yes' else hedge_price,
+                actual_dog_price if dog_side == 'no' else hedge_price,
                 qty
             )
-            total_cost = actual_dog_price + fav_bid + est_fees
+            total_cost = actual_dog_price + hedge_price + est_fees
             if total_cost > HARD_CEILING_CENTS:
                 # Arb dead on arrival — sell dog back immediately
                 print(f'🛑 ANCHOR CEILING: {bot_id} dog@{actual_dog_price}¢ + fav@{fav_bid}¢ + fees {est_fees}¢ = {total_cost}¢ — selling dog back')
                 _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
                 return
 
-            # Post the fav hedge at current best bid (tight, maker)
+            # Post the fav hedge at target-width-capped price (maker)
             try:
                 fav_resp, actual_fav_price = create_order_maker(
                     ticker=ticker, side=fav_side, action='buy',
-                    count=qty, price=fav_bid
+                    count=qty, price=hedge_price
                 )
                 fav_order_id = fav_resp['order']['order_id']
                 bot['fav_order_id'] = fav_order_id
@@ -4209,12 +4802,19 @@ def _handle_anchor_dog(bot_id, bot, actions):
             return
 
         dog_price = bot['dog_price']
+        target_width = bot.get('target_width', 5)
+        max_fav_price = 100 - dog_price - target_width
+        hedge_price = min(fav_bid, max_fav_price)
+        if hedge_price < 1:
+            _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, 999, actions)
+            return
+
         est_fees = kalshi_fee_cents(
-            dog_price if dog_side == 'yes' else fav_bid,
-            dog_price if dog_side == 'no' else fav_bid,
+            dog_price if dog_side == 'yes' else hedge_price,
+            dog_price if dog_side == 'no' else hedge_price,
             qty
         )
-        total_cost = dog_price + fav_bid + est_fees
+        total_cost = dog_price + hedge_price + est_fees
         if total_cost > HARD_CEILING_CENTS:
             _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
             return
@@ -4222,7 +4822,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
         try:
             fav_resp, actual_fav_price = create_order_maker(
                 ticker=ticker, side=fav_side, action='buy',
-                count=qty, price=fav_bid
+                count=qty, price=hedge_price
             )
             fav_order_id = fav_resp['order']['order_id']
             bot['fav_order_id'] = fav_order_id
@@ -4345,28 +4945,42 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 current_fav_bid = 0
 
             dog_price = bot['dog_price']
+            target_width = bot.get('target_width', 5)
             if current_fav_bid > 0:
+                # On timeout, allow narrower width (50% of target) to complete the arb
+                min_timeout_width = max(1, target_width // 2)
+                max_fav_amend = 100 - dog_price - min_timeout_width
+                amend_price = min(current_fav_bid, max_fav_amend)
+                if amend_price < 1:
+                    # Can't make any profit — sell dog back
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(fav_order_id)
+                    except Exception:
+                        pass
+                    _anchor_sell_dog_back(bot_id, bot, dog_price, current_fav_bid, 999, actions)
+                    return
                 est_fees = kalshi_fee_cents(
-                    dog_price if dog_side == 'yes' else current_fav_bid,
-                    dog_price if dog_side == 'no' else current_fav_bid,
+                    dog_price if dog_side == 'yes' else amend_price,
+                    dog_price if dog_side == 'no' else amend_price,
                     qty
                 )
-                total_cost = dog_price + current_fav_bid + est_fees
+                total_cost = dog_price + amend_price + est_fees
                 if total_cost <= HARD_CEILING_CENTS:
-                    # Under ceiling — amend fav to current bid
-                    print(f'⏰ ANCHOR TIMEOUT: {bot_id} amending fav to {current_fav_bid}¢ (total {total_cost}¢)')
+                    # Under ceiling — amend fav to capped price
+                    print(f'⏰ ANCHOR TIMEOUT: {bot_id} amending fav to {amend_price}¢ (bid={current_fav_bid}¢ cap={max_fav_amend}¢ total {total_cost}¢)')
                     try:
-                        amend_kwargs = {'yes_price': current_fav_bid} if fav_side == 'yes' else {'no_price': current_fav_bid}
+                        amend_kwargs = {'yes_price': amend_price} if fav_side == 'yes' else {'no_price': amend_price}
                         api_rate_limiter.wait()
                         kalshi_client.amend_order(
                             fav_order_id, ticker=ticker, side=fav_side,
                             count=qty, **amend_kwargs
                         )
-                        bot['fav_price'] = current_fav_bid
+                        bot['fav_price'] = amend_price
                         if fav_side == 'yes':
-                            bot['yes_price'] = current_fav_bid
+                            bot['yes_price'] = amend_price
                         else:
-                            bot['no_price'] = current_fav_bid
+                            bot['no_price'] = amend_price
                         # Give it one more cycle to fill after amend
                         bot['fav_posted_at'] = now
                         bot['hedge_timeout_s'] = 30  # shorter timeout for amend
@@ -4429,6 +5043,206 @@ def _handle_anchor_dog(bot_id, bot, actions):
         return
 
 
+def _handle_anchor_ladder(bot_id, bot, actions):
+    """Handle all states for an anchor-ladder bot in the monitor loop."""
+    now = time.time()
+    ticker = bot['ticker']
+    dog_side = bot['dog_side']
+    fav_side = bot['fav_side']
+    status = bot['status']
+
+    # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
+    if status == 'ladder_posted':
+        # Get current dog bid from WS cache or orderbook
+        ws_p = (ws_manager.get_price(ticker) if ws_manager else None) or {}
+        current_dog_bid = ws_p.get(f'{dog_side}_bid', 0) or 0
+        if current_dog_bid <= 0:
+            try:
+                api_rate_limiter.wait()
+                ob = kalshi_client.get_market_orderbook(ticker)
+                current_dog_bid = _best_bid(ob, dog_side)
+            except Exception:
+                current_dog_bid = 0
+
+        # Poll fill counts (backup for WS misses)
+        total_fill = 0
+        for rung in bot.get('rungs', []):
+            if rung.get('fill_qty', 0) >= rung['qty']:
+                total_fill += rung['fill_qty']
+                continue
+            try:
+                api_rate_limiter.wait()
+                resp = kalshi_client.get_order(rung['order_id'])
+                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                filled = _parse_fill_count(ord_data)
+                rung['fill_qty'] = max(rung.get('fill_qty', 0), filled)
+                if filled >= rung['qty'] and not rung.get('filled_at'):
+                    rung['filled_at'] = now
+            except Exception:
+                pass
+            total_fill += rung.get('fill_qty', 0)
+
+        bot['total_dog_fill_qty'] = total_fill
+        if dog_side == 'yes':
+            bot['yes_fill_qty'] = total_fill
+        else:
+            bot['no_fill_qty'] = total_fill
+
+        # Track lowest dog bid
+        if current_dog_bid > 0:
+            lowest = bot.get('lowest_dog_bid_seen', 999)
+            if current_dog_bid < lowest:
+                bot['lowest_dog_bid_seen'] = current_dog_bid
+                bot['lowest_dog_bid_at'] = now
+
+        # All rungs fully filled? → hedge immediately
+        if total_fill >= bot['total_dog_qty']:
+            bot['dog_filled_at'] = now
+            threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+            return
+
+        # Any fill at all? Hedge instantly (backup for WS miss)
+        # WS handler normally catches this first, but monitor is the safety net
+        if total_fill > 0 and not bot.get('_sweep_timer_started'):
+            print(f'🔍 MONITOR LADDER FILL: {bot_id} detected {total_fill} fills WS missed — hedging instantly')
+            bot['_sweep_timer_started'] = True
+            bot['dog_filled_at'] = now
+            threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+            return
+
+        save_state()
+        return
+
+    # ── STATE: ladder_filled_no_fav — retry hedge ──
+    if status == 'ladder_filled_no_fav':
+        threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+        return
+
+    # ── STATE: fav_hedge_posted — waiting for fav fill ──
+    if status == 'fav_hedge_posted':
+        fav_order_id = bot.get('fav_order_id')
+        if not fav_order_id:
+            return
+        hedge_qty = bot.get('hedge_qty', bot.get('total_dog_fill_qty', 1))
+
+        api_rate_limiter.wait()
+        fav_resp = kalshi_client.get_order(fav_order_id)
+        fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
+        fav_filled = _parse_fill_count(fav_ord)
+        bot['fav_fill_qty'] = fav_filled
+        if fav_side == 'yes':
+            bot['yes_fill_qty'] = fav_filled
+        else:
+            bot['no_fill_qty'] = fav_filled
+
+        if fav_filled >= hedge_qty:
+            # COMPLETE — calculate P&L
+            actual_fav_price = get_actual_fill_price(fav_order_id, fav_side) or bot['fav_price']
+            bot['fav_price'] = actual_fav_price
+            avg_dog = bot.get('avg_fill_price', 0)
+            if fav_side == 'yes':
+                yes_p, no_p = actual_fav_price, avg_dog
+            else:
+                yes_p, no_p = avg_dog, actual_fav_price
+            bot['yes_price'] = yes_p
+            bot['no_price'] = no_p
+
+            pnl_cents = (100 - yes_p - no_p) * hedge_qty
+            fee = sum(
+                kalshi_fee_cents(
+                    r['price'] if dog_side == 'yes' else actual_fav_price,
+                    r['price'] if dog_side == 'no' else actual_fav_price,
+                    r.get('fill_qty', 0)
+                ) for r in bot['rungs'] if r.get('fill_qty', 0) > 0
+            )
+            net_pnl = pnl_cents - fee
+
+            if net_pnl >= 0:
+                session_pnl['gross_profit_cents'] += pnl_cents
+            else:
+                session_pnl['gross_loss_cents'] += abs(pnl_cents)
+            session_pnl['completed_bots'] += 1
+
+            bot['_trade_recorded'] = True
+            filled_rung_count = len([r for r in bot['rungs'] if r.get('fill_qty', 0) > 0])
+            _record_trade({
+                'bot_id': bot_id, 'ticker': ticker,
+                'yes_price': yes_p, 'no_price': no_p,
+                'quantity': hedge_qty,
+                'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
+                'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
+                'fee_cents': fee,
+                'result': 'completed' if pnl_cents >= 0 else 'amended',
+                'exit_via': 'anchor_ladder_complete',
+                'first_leg': dog_side,
+                'avg_dog_price': avg_dog,
+                'rungs_filled': filled_rung_count,
+                'rungs_total': len(bot['rungs']),
+                'bounce_detected': bot.get('bounce_detected_at') is not None,
+                'timestamp': now,
+                'placed_at': bot.get('created_at', now),
+                'arb_width': bot.get('target_width', 0),
+                'game_phase': bot.get('game_phase', 'live'),
+                'game_context': _get_game_context(ticker),
+                'fill_source': 'anchor_ladder',
+                'bot_category': 'anchor_ladder',
+            }, bot)
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            save_state()
+            actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'pnl': pnl_cents})
+            return
+
+        # Fav not filled — check timeout
+        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
+        fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
+        wait_s = now - fav_posted_at
+
+        if wait_s >= hedge_timeout_s:
+            avg_dog = bot.get('avg_fill_price', 0)
+            # Try amend to current fav bid
+            try:
+                api_rate_limiter.wait()
+                ob = kalshi_client.get_market_orderbook(ticker)
+                current_fav_bid = _best_bid(ob, fav_side)
+            except Exception:
+                current_fav_bid = 0
+
+            if current_fav_bid > 0:
+                min_timeout_width = max(1, bot.get('target_width', 5) // 2)
+                max_fav_amend = 100 - avg_dog - min_timeout_width
+                amend_price = min(current_fav_bid, max_fav_amend)
+                if amend_price >= 1:
+                    est_fees = kalshi_fee_cents(
+                        avg_dog if dog_side == 'yes' else amend_price,
+                        avg_dog if dog_side == 'no' else amend_price,
+                        hedge_qty
+                    )
+                    total_cost = avg_dog + amend_price + est_fees
+                    if total_cost <= HARD_CEILING_CENTS:
+                        print(f'⏰ LADDER TIMEOUT: {bot_id} amending fav to {amend_price}¢')
+                        try:
+                            amend_kwargs = {'yes_price': amend_price} if fav_side == 'yes' else {'no_price': amend_price}
+                            api_rate_limiter.wait()
+                            kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+                            bot['fav_price'] = amend_price
+                            bot['fav_posted_at'] = now
+                            bot['hedge_timeout_s'] = 30
+                            save_state()
+                            return
+                        except Exception as amend_err:
+                            print(f'⚠ LADDER AMEND {bot_id}: {amend_err}')
+
+            # Cannot amend — sell dogs back
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_order_id)
+            except Exception:
+                pass
+            _ladder_sell_dogs_back(bot_id, bot, avg_dog, current_fav_bid or 0, 999, actions)
+        return
+
+
 def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     """Sell the filled dog leg back to recover capital when arb is dead."""
     now = time.time()
@@ -4437,7 +5251,17 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     qty = bot.get('quantity', 1)
 
     sold_back, sell_info = execute_sell(ticker, dog_side, qty, reason=f'anchor_sellback_{bot_id}')
-    sell_price = sell_info.get('actual_fill_price', 0) if sold_back else 0
+
+    if not sold_back:
+        # Sell FAILED — keep the bot alive so monitor retries next cycle
+        # DO NOT record a trade or mark as stopped — position is still held
+        print(f'⚠ ANCHOR SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
+        bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
+        bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
+        actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
+        return
+
+    sell_price = sell_info.get('actual_fill_price') or sell_info.get('sell_price') or 0
     loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
 
     session_pnl['gross_loss_cents'] += loss_cents
@@ -4476,6 +5300,9 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     print(f'🔙 ANCHOR SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'anchor_sellback', 'loss_cents': loss_cents})
+
+
+def _run_monitor():
     """Internal monitor logic — must only be called while holding monitor_lock."""
     try:
         # Auto-reset P&L if the date has changed
@@ -4503,7 +5330,7 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'fav_hedge_posted')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -4533,6 +5360,14 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                     _handle_anchor_dog(bot_id, bot, actions)
                 except Exception as ad_err:
                     print(f'❌ anchor_dog monitor {bot_id}: {ad_err}')
+                continue
+
+            # ── ANCHOR-LADDER BOT HANDLING ─────────────────────────────
+            if bot.get('bot_category') == 'anchor_ladder':
+                try:
+                    _handle_anchor_ladder(bot_id, bot, actions)
+                except Exception as al_err:
+                    print(f'❌ anchor_ladder monitor {bot_id}: {al_err}')
                 continue
 
             try:
@@ -6488,7 +7323,8 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                         'leg_a_fill_price': fill_a, 'leg_b_fill_price': fill_b,
                         'leg_a_result': bot['leg_a_result'], 'leg_b_result': bot['leg_b_result'],
                         'middle_hit': middle_hit,
-                        'profit_cents': total_profit,
+                        'profit_cents': max(0, total_profit),
+                        'loss_cents': max(0, -total_profit),
                         'result': 'middle_hit' if middle_hit else ('arb_win' if (leg_a_win or leg_b_win) else 'loss'),
                         'timestamp': now_s,
                         'note': f'{"MIDDLE HIT" if middle_hit else ("partial win" if (leg_a_win or leg_b_win) else "both lost")} — A:{result_a} B:{result_b}',
@@ -6544,7 +7380,8 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                         'leg_a_result': bot.get('leg_a_result') or ('win' if filled_leg == 'a' and filled_leg_win else ('loss' if filled_leg == 'a' else 'cancelled')),
                         'leg_b_result': bot.get('leg_b_result') or ('win' if filled_leg == 'b' and filled_leg_win else ('loss' if filled_leg == 'b' else 'cancelled')),
                         'middle_hit': False,
-                        'profit_cents': profit,
+                        'profit_cents': max(0, profit),
+                        'loss_cents': max(0, -profit),
                         'result': 'arb_win' if profit > 0 else 'loss',
                         'timestamp': now_s,
                         'note': f'one-leg settle: {filled_leg} {"win" if filled_leg_win else "loss"}, {unfilled_leg} cancelled/unfilled',
@@ -6691,18 +7528,41 @@ def create_middle_bot():
 @app.route('/api/bot/list', methods=['GET'])
 def list_bots():
     """Get all bots with live market data"""
-    # Enrich bots with WS prices if they don't have fresh data
+    # Enrich bots with live WS prices
     for bid, bot in list(active_bots.items()):
-        if bot.get('status') in ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching'):
-            if not bot.get('live_yes_bid') and bot.get('ticker'):
-                ws_p = ws_manager.get_price(bot['ticker']) if ws_manager else None
-                if ws_p:
-                    _bl_yb = ws_p.get('yes_bid', 0)
-                    _bl_nb = ws_p.get('no_bid', 0)
-                    bot['live_yes_bid'] = _bl_yb
-                    bot['live_no_bid']  = _bl_nb
-                    bot['live_yes_ask'] = ws_p.get('yes_ask', 0) or (100 - _bl_nb if _bl_nb > 0 else 0)
-                    bot['live_no_ask']  = ws_p.get('no_ask',  0) or (100 - _bl_yb if _bl_yb > 0 else 0)
+        st = bot.get('status', '')
+        if st in ('completed', 'stopped'):
+            continue
+
+        # Clear stale live prices so we always fetch fresh from WS
+        for k in ('live_yes_bid', 'live_no_bid', 'live_yes_ask', 'live_no_ask',
+                   'live_no_a_bid', 'live_no_a_ask', 'live_no_b_bid', 'live_no_b_ask'):
+            bot.pop(k, None)
+
+        # Standard arb/dog bots — single ticker
+        if bot.get('ticker'):
+            if ws_manager and ws_manager.connected:
+                ws_manager.add_ticker(bot['ticker'])
+            ws_p = ws_manager.get_price(bot['ticker']) if ws_manager else None
+            if ws_p:
+                _bl_yb = ws_p.get('yes_bid', 0)
+                _bl_nb = ws_p.get('no_bid', 0)
+                bot['live_yes_bid'] = _bl_yb
+                bot['live_no_bid']  = _bl_nb
+                bot['live_yes_ask'] = ws_p.get('yes_ask', 0) or (100 - _bl_nb if _bl_nb > 0 else 0)
+                bot['live_no_ask']  = ws_p.get('no_ask',  0) or (100 - _bl_yb if _bl_yb > 0 else 0)
+
+        # Middle bots — dual tickers (ticker_a / ticker_b)
+        if bot.get('type') == 'middle':
+            for leg in ('a', 'b'):
+                tk = bot.get(f'ticker_{leg}', '')
+                if tk:
+                    if ws_manager and ws_manager.connected:
+                        ws_manager.add_ticker(tk)
+                    ws_p = ws_manager.get_price(tk) if ws_manager else None
+                    if ws_p:
+                        bot[f'live_no_{leg}_bid'] = ws_p.get('no_bid', 0)
+                        bot[f'live_no_{leg}_ask'] = ws_p.get('no_ask', 0) or (100 - ws_p.get('yes_bid', 0) if ws_p.get('yes_bid', 0) else 0)
 
     # Gather live scores per game-key for frontend display
     game_scores = {}
@@ -6724,10 +7584,14 @@ def bot_history():
     """Get completed/stopped trade history"""
     limit = int(request.args.get('limit', 50))
     date_filter = request.args.get('date', '').strip()
+    category_filter = request.args.get('category', '').strip()
     if date_filter:
         filtered = [t for t in trade_history if _trade_day_key(t) == date_filter]
     else:
         filtered = trade_history
+    if category_filter:
+        cats = category_filter.split(',')
+        filtered = [t for t in filtered if t.get('bot_category') in cats or t.get('fill_source') in cats]
     return jsonify({'trades': filtered[:limit], 'total': len(filtered)})
 
 
@@ -7411,6 +8275,38 @@ def cancel_bot(bot_id):
                     except Exception as e:
                         print(f'⚠ cancel_bot({bot_id}): cancel watch order failed: {e}')
                         warnings.append(f'Could not cancel {watch_side.upper()} order: {e}')
+
+            # ── Handle anchor-ladder bots ──
+            elif bot.get('bot_category') == 'anchor_ladder':
+                dog_side = bot.get('dog_side', 'no')
+                # Cancel all unfilled rung orders
+                for rung in bot.get('rungs', []):
+                    if rung.get('order_id') and rung.get('fill_qty', 0) < rung.get('qty', 1):
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(rung['order_id'])
+                            cancelled.append(f'rung@{rung["price"]}c')
+                        except Exception as e:
+                            print(f'⚠ cancel_bot({bot_id}): cancel rung failed: {e}')
+                # Cancel fav order if posted
+                if bot.get('fav_order_id'):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(bot['fav_order_id'])
+                        cancelled.append('FAV')
+                    except Exception as e:
+                        print(f'⚠ cancel_bot({bot_id}): cancel fav failed: {e}')
+                # Sell back any filled dog contracts
+                total_fill = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
+                if total_fill > 0:
+                    sold, sell_info = execute_sell(ticker, dog_side, total_fill,
+                                                   reason=f'cancel_ladder_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'{dog_side.upper()} {total_fill}x')
+                        sp = (sell_info or {}).get('actual_fill_price', 0)
+                        sell_prices[dog_side] = sp
+                    else:
+                        warnings.append(f'FAILED to sell {dog_side.upper()} {total_fill}x')
 
             # ── Handle arb bots ──
             else:
@@ -8133,6 +9029,9 @@ def get_pnl():
     arb_d    = _compute_pnl_bucket(today_trades, 'arb')
     bet_d    = _compute_pnl_bucket(today_trades, 'bet')
     mid_d    = _compute_pnl_bucket(today_trades, 'middle')
+    # Dog = anchor_dog + anchor_ladder categories
+    dog_today = [t for t in today_trades if t.get('bot_category') in ('anchor_dog', 'anchor_ladder')]
+    dog_d    = _compute_pnl_bucket(dog_today)
 
     pnl = {
         # Daily (combined — unchanged)
@@ -8165,6 +9064,12 @@ def get_pnl():
         'mid_loss_cents':   mid_d['gross_loss_cents'],
         'mid_wins':         mid_d['completed_bots'],
         'mid_losses':       mid_d['stopped_bots'],
+        # Dog category breakdown (today)
+        'dog_net_cents':    dog_d['net_cents'],
+        'dog_profit_cents': dog_d['gross_profit_cents'],
+        'dog_loss_cents':   dog_d['gross_loss_cents'],
+        'dog_wins':         dog_d['completed_bots'],
+        'dog_losses':       dog_d['stopped_bots'],
         # Sport breakdown (today)
         'sport_pnl': {s: round(v/100, 2) for s, v in daily['sport_pnl'].items() if v != 0},
         # Meta
@@ -8202,6 +9107,17 @@ def get_pnl_calendar():
             'trades':      bucket['completed_bots'] + bucket['stopped_bots'],
         })
     return jsonify({'days': calendar_data})
+
+
+@app.route('/api/latency', methods=['GET'])
+def get_latency():
+    """Get latency stats for API calls and fill-to-hedge pipeline."""
+    return jsonify({
+        'order_place':   _latency_stats('order_place'),
+        'orderbook':     _latency_stats('orderbook'),
+        'fill_to_hedge': _latency_stats('fill_to_hedge'),
+        'api_generic':   _latency_stats('api_generic'),
+    })
 
 
 @app.route('/api/pnl/reset', methods=['POST'])
@@ -8583,7 +9499,11 @@ def get_active_positions():
 
         enriched = []
         for pos in pos_list:
-            qty = pos.get('position', 0)
+            # Kalshi API returns position_fp (float string) not position (int)
+            qty_raw = pos.get('position', None)
+            if qty_raw is None:
+                qty_raw = pos.get('position_fp', '0')
+            qty = int(float(str(qty_raw)))
             if qty == 0:
                 continue
             ticker = pos.get('ticker', '')
@@ -8600,9 +9520,16 @@ def get_active_positions():
                     if d: return round(float(d) * 100)
                     return mkt.get(field, 0)
 
-                # Compute avg entry price from exposure
-                exposure_cents = pos.get('market_exposure', 0)
+                # Compute avg entry price from exposure (Kalshi returns dollars as strings)
+                exp_dollars = pos.get('market_exposure_dollars', pos.get('market_exposure', 0))
+                exposure_cents = round(float(str(exp_dollars)) * 100) if isinstance(exp_dollars, str) else int(exp_dollars)
                 avg_entry = round(exposure_cents / abs_qty) if abs_qty > 0 else 0
+
+                rpnl_dollars = pos.get('realized_pnl_dollars', pos.get('realized_pnl', 0))
+                realized_pnl_cents = round(float(str(rpnl_dollars)) * 100) if isinstance(rpnl_dollars, str) else int(rpnl_dollars)
+
+                fees_dollars = pos.get('fees_paid_dollars', pos.get('fees_paid', 0))
+                fees_cents = round(float(str(fees_dollars)) * 100) if isinstance(fees_dollars, str) else int(fees_dollars)
 
                 enriched.append({
                     'ticker':     ticker,
@@ -8614,10 +9541,10 @@ def get_active_positions():
                     'yes_ask':    tc_pos('yes_ask'),
                     'no_bid':     tc_pos('no_bid'),
                     'no_ask':     tc_pos('no_ask'),
-                    'market_exposure': pos.get('market_exposure', 0),
-                    'realized_pnl':   pos.get('realized_pnl', 0),
+                    'market_exposure': exposure_cents,
+                    'realized_pnl':   realized_pnl_cents,
                     'resting_orders': pos.get('resting_orders_count', 0),
-                    'fees_paid':      pos.get('fees_paid', 0),
+                    'fees_paid':      fees_cents,
                     'watched_by': next((bid for bid, b in active_bots.items()
                                         if b.get('ticker') == ticker and b.get('type') == 'watch'
                                         and b['status'] == 'watching'), None),
@@ -8708,6 +9635,7 @@ if __name__ == '__main__':
                 balance = kalshi_client.get_balance()
                 bal_usd = balance.get('balance', 0) / 100
                 print(f'✅ AUTO-LOGIN at startup: balance=${bal_usd:.2f}')
+                _patch_kalshi_orderbook()
                 # Start WebSocket
                 try:
                     ws_manager.connect(kalshi_client)

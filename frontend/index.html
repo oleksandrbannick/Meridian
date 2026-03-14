@@ -90,6 +90,13 @@
         .mid-phase-pill.active { background:#ff6633; color:#fff; border-color:#ff6633; }
         .anchor-signal-pill.active { background: #00ff88; color: #000; border-color: #00ff88; }
         .middle-arb-pill.active  { background: #aa66ff; color: #fff; border-color: #aa66ff; }
+        .anchor-shave-pill {
+            padding: 5px 12px; border-radius: 12px; border: 1px solid #ffaa0044;
+            background: #1a1f35; color: #ffaa00; font-size: 11px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .anchor-shave-pill:hover { border-color: #ffaa00; background: #ffaa0022; }
+        .anchor-shave-pill.active { background: #ffaa00; color: #000; border-color: #ffaa00; }
         .scan-mode-pill { padding:10px 16px; font-size:12px; font-weight:700; border:none; cursor:pointer; background:transparent; color:#8892a6; transition:all 0.15s; flex:1; min-height:44px; touch-action:manipulation; -webkit-tap-highlight-color:transparent; user-select:none; }
         .scan-mode-pill.active { color:#fff; background:#1a3a5a; border-radius:6px; }
 
@@ -528,16 +535,27 @@
                 </div>
                 <!-- P&L Dashboard -->
                 <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
-                <!-- ARB / MIDDLE toggle -->
+                <!-- ARB / MIDDLE / DOG toggle -->
                 <div style="display:flex;gap:0;margin-bottom:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
-                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">🤖 ARB BOTS</button>
-                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">↔️ MIDDLE BOTS</button>
+                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">🤖 ARB</button>
+                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">↔️ MIDDLE</button>
+                    <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">🎯 DOG</button>
                 </div>
                 <!-- Per-section daily mini-stats -->
                 <div id="bots-arb-daily" style="display:flex;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-middle-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
+                <div id="bots-dog-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-list"><p style="color: #8892a6;">No active bots</p></div>
                 <div id="middle-bots-list" style="display:none;"><p style="color:#8892a6;">No active middle bots</p></div>
+                <div id="dog-bots-list" style="display:none;"><p style="color:#8892a6;">No active dog bots</p></div>
+                <!-- Latency Monitor -->
+                <div id="latency-panel" style="margin-top:12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:12px;display:none;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="color:#00aaff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">API Latency</span>
+                        <button onclick="loadLatency()" style="background:#1a2540;border:1px solid #253555;color:#8892a6;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;">Refresh</button>
+                    </div>
+                    <div id="latency-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;"></div>
+                </div>
             </div>
 
             <!-- Feature Guide -->
@@ -589,12 +607,12 @@
                         style="flex:1;background:#253555;border:none;color:#00ff88;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🤖 ARB BOTS</button>
                     <button id="histmode-middle" onclick="setHistoryMode('middle')"
                         style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">↔️ MIDDLES</button>
+                    <button id="histmode-dog" onclick="setHistoryMode('dog')"
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🎯 DOG</button>
                 </div>
                 <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
                     <button id="histmode-bets" onclick="setHistoryMode('bets')"
                         style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🎯 STRAIGHT BETS</button>
-                    <button id="histmode-instarb" onclick="setHistoryMode('instarb')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">⚡ INSTA ARBS</button>
                 </div>
             </div>
 
@@ -626,21 +644,29 @@
                 </div>
             </div>
 
-            <!-- INSTA ARBS SECTION -->
-            <div id="hist-instarb-section" style="display:none;">
-                <div id="instarb-stats-panel" style="margin-bottom:20px;"></div>
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Insta Arb Log</h3>
-                <div id="instarb-history-list">
-                    <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
-                </div>
-            </div>
-
             <!-- MIDDLES SECTION -->
             <div id="hist-middle-section" style="display:none;">
                 <div id="middle-stats-panel" style="margin-bottom:20px;"></div>
                 <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Middles Log</h3>
                 <div id="middle-history-list">
                     <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
+                </div>
+            </div>
+
+            <!-- DOG BOT SECTION -->
+            <div id="hist-dog-section" style="display:none;">
+                <div id="dog-pnl-calendar-panel" style="margin-bottom:20px;"></div>
+                <div id="dog-stats-panel" style="margin-bottom:20px;">
+                    <p style="color:#555;text-align:center;font-size:12px;">Loading analytics...</p>
+                </div>
+                <div id="dog-width-panel" style="margin-bottom:20px;"></div>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Dog Bot Trade Log</h3>
+                <div id="dog-history-list">
+                    <div class="empty-state">
+                        <div class="icon">🎯</div>
+                        <div class="title">No dog bot trades yet</div>
+                        <div class="desc">Anchor and ladder trades will appear here</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -667,21 +693,21 @@
             </div>
             <div style="padding: 20px;">
                 <!-- ── Mode Toggle ── -->
-                <div style="display:flex;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
+                <div style="display:flex;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;flex-wrap:wrap;">
                     <button id="mode-straight" onclick="setTradeMode('straight')"
-                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
-                        💰 Straight Bet
+                        style="flex:1;min-width:33%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
+                        💰 Straight
                     </button>
                     <button id="mode-arb" onclick="setTradeMode('arb')"
-                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        ⚡ Dual Arb Bot
+                        style="flex:1;min-width:33%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        ⚡ Arb Bot
                     </button>
                     <button id="mode-middle" onclick="setTradeMode('middle')"
-                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        ↔️ Middle Bot
+                        style="flex:1;min-width:33%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        ↔️ Middle
                     </button>
                     <button id="mode-anchor" onclick="setTradeMode('anchor')"
-                        style="flex:1;padding:10px;border:none;cursor:pointer;font-size:13px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        style="flex:1;min-width:100%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
                         🎯 Anchor Dog
                     </button>
                 </div>
@@ -1015,102 +1041,69 @@
                     </button>
                 </div>
 
-                <!-- ═══════ ANCHOR DOG SECTION ═══════ -->
+                <!-- ═══════ ANCHOR DOG SECTION (LADDER) ═══════ -->
                 <div id="anchor-section" style="display:none;">
-                    <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#ffaa00;">🎯 Anchor-Dog:</strong> Posts only the underdog (cheap) leg deep as a maker order. When volatility fills it, immediately hedges by posting the fav at the current best bid. Asymmetric risk — only the cheap leg is exposed. post_only=True guarantees maker fees on both legs.
+                    <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#6a7488;line-height:1.4;">
+                        <strong style="color:#ffaa00;">🎯 Anchor Dog:</strong> Place 1-3 limit orders below the dog bid. When filled, hedges the fav at your target width. Select rungs to build a ladder.
                     </div>
-                    <!-- Dog side selector -->
-                    <div style="margin-bottom:14px;">
-                        <label style="display:block;color:#8892a6;font-size:11px;font-weight:700;margin-bottom:6px;letter-spacing:.04em;">DOG SIDE</label>
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
-                            <button id="anchor-side-auto" onclick="setAnchorDogSide('auto')"
-                                style="padding:10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;border:2px solid #ffaa00;background:#ffaa0022;color:#ffaa00;">
-                                🔄 Auto
-                            </button>
-                            <button id="anchor-side-yes" onclick="setAnchorDogSide('yes')"
-                                style="padding:10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;border:2px solid #00ff8844;background:transparent;color:#00ff8866;">
-                                ✓ YES Dog
-                            </button>
-                            <button id="anchor-side-no" onclick="setAnchorDogSide('no')"
-                                style="padding:10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;border:2px solid #ff444444;background:transparent;color:#ff444466;">
-                                ✗ NO Dog
-                            </button>
+                    <!-- Auto-detected sides -->
+                    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:12px;">
+                        <div style="background:#060a14;border:1px solid #ffaa0044;border-radius:8px;padding:8px;text-align:center;">
+                            <div style="color:#ffaa00;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">DOG (ANCHOR)</div>
+                            <div id="anchor-auto-dog-side" style="color:#ffaa00;font-weight:800;font-size:18px;">—</div>
+                            <div id="anchor-auto-dog-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: —</div>
                         </div>
-                        <div id="anchor-side-hint" style="color:#555;font-size:10px;margin-top:4px;text-align:center;">Auto-detect: lower-bid side becomes the dog</div>
-                    </div>
-                    <!-- Dog price + Target width -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
-                        <div>
-                            <label style="display:block;color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:6px;">DOG ANCHOR PRICE</label>
-                            <div style="position:relative;">
-                                <input type="number" id="anchor-dog-price" min="1" max="50" oninput="updateAnchorPreview()"
-                                    style="width:100%;padding:10px;background:#060a14;border:2px solid #ffaa0066;border-radius:6px;color:#ffaa00;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
-                                    onfocus="this.style.borderColor='#ffaa00'" onblur="this.style.borderColor='#ffaa0066'">
-                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ffaa0066;font-size:12px;pointer-events:none;">¢</span>
-                            </div>
-                            <div id="anchor-dog-price-hint" style="color:#555;font-size:10px;margin-top:4px;text-align:center;"></div>
-                        </div>
-                        <div>
-                            <label style="display:block;color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;margin-bottom:6px;">TARGET WIDTH</label>
-                            <div style="position:relative;">
-                                <input type="number" id="anchor-target-width" min="1" max="20" value="5" oninput="updateAnchorPreview()"
-                                    style="width:100%;padding:10px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
-                                    onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
-                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
-                            </div>
-                            <div style="color:#555;font-size:10px;margin-top:4px;text-align:center;">Profit target per contract</div>
+                        <div style="color:#555;font-size:14px;">→</div>
+                        <div style="background:#060a14;border:1px solid #00aaff44;border-radius:8px;padding:8px;text-align:center;">
+                            <div style="color:#00aaff;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">FAV (HEDGE)</div>
+                            <div id="anchor-auto-fav-side" style="color:#00aaff;font-weight:800;font-size:18px;">—</div>
+                            <div id="anchor-auto-fav-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: —</div>
                         </div>
                     </div>
-                    <!-- Qty + Hedge timeout + Repeat -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
-                            <input type="number" id="anchor-qty" min="1" value="1" oninput="updateAnchorPreview()"
-                                style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                    <!-- Ladder Rungs -->
+                    <div style="margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <label style="color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;">LADDER RUNGS</label>
+                            <span id="anchor-rung-count" style="color:#ffaa00;font-weight:700;font-size:11px;">0 selected</span>
                         </div>
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Hedge Timer</label>
-                            <div style="display:flex;align-items:center;gap:4px;">
-                                <input type="number" id="anchor-hedge-timeout" min="30" max="600" value="120"
-                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                                <span style="color:#555;font-size:10px;">sec</span>
-                            </div>
+                        <div id="anchor-rungs-container" style="display:flex;flex-direction:column;gap:6px;">
+                            <!-- Rungs rendered dynamically by JS -->
                         </div>
-                        <div>
-                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(×)</span></label>
-                            <input type="number" id="anchor-repeat" min="0" max="50" value="0"
-                                style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                        <div style="display:flex;gap:6px;margin-top:8px;">
+                            <button onclick="addAnchorRung()" style="flex:1;padding:8px;background:#ffaa0011;border:1px dashed #ffaa0044;border-radius:6px;color:#ffaa00;font-size:11px;font-weight:700;cursor:pointer;">+ Add Rung</button>
+                            <button onclick="clearAnchorRungs()" style="padding:8px 14px;background:#1e2740;border:1px solid #2a3550;border-radius:6px;color:#8892a6;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
                         </div>
+                    </div>
+                    <!-- Target Width -->
+                    <div style="margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;">TARGET WIDTH (min profit)</label>
+                            <span id="anchor-width-display" style="color:#00ff88;font-weight:800;font-size:13px;">5¢</span>
+                        </div>
+                        <input type="range" id="anchor-target-width" min="1" max="20" value="5" step="1" oninput="updateAnchorPreview()"
+                            style="width:100%;accent-color:#00ff88;">
+                        <div style="display:flex;justify-content:space-between;color:#555;font-size:9px;margin-top:1px;">
+                            <span>1¢ tight</span><span>20¢ wide</span>
+                        </div>
+                    </div>
+                    <!-- Hedge timeout -->
+                    <div style="margin-bottom:12px;">
+                        <label style="display:block;color:#8892a6;font-size:10px;font-weight:600;margin-bottom:3px;">Fav Hedge Timeout (sec)</label>
+                        <input type="number" id="anchor-hedge-timeout" min="30" max="600" value="120"
+                            style="width:100%;padding:7px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                        <div style="color:#555;font-size:9px;margin-top:3px;">If fav doesn't fill in this time, amend to current bid or sell dog back</div>
                     </div>
                     <!-- Preview -->
-                    <div id="anchor-preview" style="margin-bottom:14px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:12px;">
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
-                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Dog cost</div>
-                                <div id="anchor-calc-dog" style="color:#ffaa00;font-weight:800;font-size:18px;">—</div>
-                            </div>
-                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
-                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Fav ceiling</div>
-                                <div id="anchor-calc-fav" style="color:#00aaff;font-weight:800;font-size:18px;">—</div>
-                            </div>
-                            <div style="text-align:center;padding:8px;background:#0a0e1a;border-radius:6px;">
-                                <div style="color:#8892a6;font-size:10px;margin-bottom:3px;">Profit if hedged</div>
-                                <div id="anchor-calc-profit" style="color:#00ff88;font-weight:800;font-size:18px;">—</div>
-                            </div>
+                    <div id="anchor-preview" style="margin-bottom:12px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:10px;">
+                        <div id="anchor-preview-content">
+                            <div style="text-align:center;color:#555;font-size:11px;padding:8px;">Add rungs above to see preview</div>
                         </div>
-                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;color:#555;text-align:center;">
-                            Post-only maker orders · hard ceiling 98¢ · sell-back if breached
+                        <div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;font-size:9px;color:#555;text-align:center;">
+                            Post-only maker · hard ceiling 98¢ · sell-back if breached · instant hedge on fill
                         </div>
-                    </div>
-                    <!-- Info -->
-                    <div style="margin-bottom:14px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#ffaa00;">🎯 Anchor:</strong> Dog posts deep at your price — waits for volatility fill.<br>
-                        <strong style="color:#00aaff;">🔒 Hedge:</strong> On fill → fav posted at current bid. Hard ceiling check at 98¢.<br>
-                        <strong style="color:#ff4444;">🛡️ Safety:</strong> If ceiling breached → dog sold back (small loss). Only cheap leg at risk.
                     </div>
                     <!-- Deploy button -->
-                    <button onclick="deployAnchorBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#ffaa00 0%,#ff8800 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
+                    <button id="anchor-deploy-btn" onclick="deployAnchorBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#ffaa00 0%,#ff8800 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
                         🎯 Deploy Anchor Dog
                     </button>
                 </div>
@@ -1326,48 +1319,7 @@
         </div>
     </div>
 
-    <!-- ─── INSTA ARB LOG MODAL ──────────────────────────────────────────────── -->
-    <div class="modal" id="instarb-log-modal">
-        <div class="modal-content" style="max-width:480px;border:1px solid #2a3550;border-top:3px solid #00ff88;padding:0;overflow-y:auto;">
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #1e2740;">
-                <span style="color:#00ff88;font-weight:800;font-size:15px;">⚡ Log Insta Arb</span>
-                <button onclick="closeInstaArbLogModal()" style="background:none;border:none;color:#8892a6;font-size:20px;cursor:pointer;">×</button>
-            </div>
-            <div style="padding:20px;">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-                    <div>
-                        <div style="color:#00ff88;font-size:10px;font-weight:700;margin-bottom:6px;">YES TICKER</div>
-                        <input id="ia-yes-ticker" type="text" placeholder="NFLSPRD-24..."
-                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:12px;box-sizing:border-box;">
-                        <div style="color:#00ff88;font-size:10px;font-weight:700;margin:8px 0 6px;">YES PRICE ¢</div>
-                        <input id="ia-yes-price" type="number" min="1" max="99" placeholder="45" oninput="updateInstaArbCalc()"
-                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;">
-                    </div>
-                    <div>
-                        <div style="color:#ff4444;font-size:10px;font-weight:700;margin-bottom:6px;">NO TICKER</div>
-                        <input id="ia-no-ticker" type="text" placeholder="NFLSPRD-24..."
-                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:12px;box-sizing:border-box;">
-                        <div style="color:#ff4444;font-size:10px;font-weight:700;margin:8px 0 6px;">NO PRICE ¢</div>
-                        <input id="ia-no-price" type="number" min="1" max="99" placeholder="50" oninput="updateInstaArbCalc()"
-                            style="width:100%;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:8px;color:#fff;font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;">
-                    </div>
-                </div>
-                <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-                    <span style="color:#8892a6;font-size:12px;">Contracts</span>
-                    <input id="ia-qty" type="number" min="1" value="10" oninput="updateInstaArbCalc()"
-                        style="width:70px;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#fff;font-size:14px;font-weight:700;text-align:center;">
-                    <input id="ia-market-title" type="text" placeholder="Market / event description"
-                        style="flex:1;background:#111827;border:1px solid #2a3550;border-radius:6px;padding:7px;color:#aaa;font-size:12px;">
-                </div>
-                <div id="instarb-calc-panel" style="background:#0a0e1a;border:1px solid #2a3550;border-radius:8px;padding:12px;margin-bottom:14px;">
-                    <div style="color:#555;font-size:12px;text-align:center;">Enter prices to see arb analysis</div>
-                </div>
-                <button onclick="saveInstaArbLog()" style="width:100%;padding:12px;background:linear-gradient(135deg,#00cc66,#009944);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Save Insta Arb</button>
-            </div>
-        </div>
-    </div>
-
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260313p"></script>
+    <script src="app.js?v=20260314b"></script>
 </body>
 </html>

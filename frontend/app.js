@@ -3194,7 +3194,7 @@ function updateAnchorPreview() {
             btn.style.background = 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
             btn.style.color = '#fff';
         } else {
-            btn.textContent = '🎯 Deploy Snap-Back Bot';
+            btn.textContent = '🎯 Deploy Dog Bot';
             btn.style.background = 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
             btn.style.color = '#000';
         }
@@ -4740,7 +4740,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${liveScoreHtml}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-                <span style="color:#555;font-size:10px;">${ageMin}m</span>
+                <span style="color:#555;font-size:9px;" title="${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString() : ''}">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</span>
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
@@ -4865,8 +4865,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         }
     }
 
-    // P&L color
-    const combinedAvg = avgYes + avgNo;
+    // P&L color — when consolidated, use actual hedge price for accurate P&L
+    const hedgePriceForPnl = bot.hedge_price || 0;
+    const combinedAvg = (status === 'ladder_arb_yes_filled' || status === 'ladder_arb_no_filled') && hedgePriceForPnl > 0
+        ? (status === 'ladder_arb_yes_filled' ? avgYes : avgNo) + hedgePriceForPnl  // anchor avg + actual hedge
+        : avgYes + avgNo;
     const effectiveProfit = combinedAvg > 0 ? (100 - combinedAvg) : 0;
     const pnlColor = effectiveProfit > 2 ? '#00ff88' : effectiveProfit > 0 ? '#00aaff' : '#ff4444';
 
@@ -4882,74 +4885,132 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const completedRungs = bot.completed_rungs_count || 0;
     const cumulativePnl = bot.cumulative_pnl || 0;
 
-    let rungsHTML;
-    if (isConsolidated && filledSideForRungs) {
-        // Show filled side rungs + hedge(s) — dim completed rungs
-        const filledLabel = filledSideForRungs === 'yes' ? 'YES' : 'NO';
-        const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
-        const filledColor = filledSideForRungs === 'yes' ? '#00ff88' : '#ff4444';
-        const hedgeColor = hedgeSide === 'yes' ? '#00ff88' : '#ff4444';
+    // Shared fill-state variables
+    const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes' : status === 'ladder_arb_no_filled' ? 'no' : null;
+    const isFilled = !!filledSideKey;
+    const filledSideLabel = filledSideKey === 'yes' ? 'YES' : filledSideKey === 'no' ? 'NO' : '';
+    const unfilledSideLabel = filledSideLabel === 'YES' ? 'NO' : 'YES';
+    const filledColor = filledSideKey === 'yes' ? '#00ff88' : '#ff4444';
+    const hedgeColorSide = hedgeSide === 'yes' ? '#00ff88' : '#ff4444';
+    const avgFilled = isFilled ? (filledSideKey === 'yes' ? avgYes : avgNo) : 0;
+    const filledQty = isFilled ? (filledSideKey === 'yes' ? totalYesFill : totalNoFill) : 0;
+    const unfilledBid = isFilled ? (unfilledSideLabel === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0)) : 0;
+    const unfilledAsk = isFilled ? (unfilledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
+    const filledBid = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0)) : 0;
+    const filledAsk = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
+    const currentHedgePrice = hedgePrice || 0;
+    const combined = avgFilled + currentHedgePrice;
+    const firstFillAt = bot.first_fill_at || 0;
+    const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
+    const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(20 - (nowSec - lastWalkAt))) : 20;
+    const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
+    const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
+    // Ceiling distance
+    const ceilingDist = isFilled ? (98 - combined) : 0;
 
-        const filledHTML = rungs.map((r, i) => {
-            const fill = r[`${filledSideForRungs}_fill_qty`] || 0;
-            const rQty = qtyPer;
-            const filled = fill >= rQty;
+    let rungsHTML;
+    if (isFilled && (isConsolidated || completedRungs > 0)) {
+        // ── CONSOLIDATED VIEW: anchor summary + per-rung breakdown + hedge detail ──
+        const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
+
+        // Anchor summary block
+        const anchorSummary = `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
+            <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+            <span style="color:${filledColor};font-size:11px;font-weight:700;">${filledQty} contracts @ avg ${avgFilled}¢</span>
+            <span style="color:#555;font-size:9px;">bid ${filledBid}¢ · ask ${filledAsk}¢</span>
+        </div>`;
+
+        // Per-rung breakdown (compact, shows width + fill status)
+        const rungRows = rungs.map((r, i) => {
+            const fill = r[`${filledSideKey}_fill_qty`] || 0;
+            const rQty = r.quantity || qtyPer;
             const isCompleted = r.completed;
-            const dimStyle = isCompleted ? 'opacity:0.3;' : '';
-            const completedTag = isCompleted ? ' <span style="color:#00ff8888;font-size:8px;">DONE</span>' : '';
-            const col = filled ? filledColor : fill > 0 ? '#ffaa00' : '#333';
-            const pct = rQty > 0 ? Math.round((fill / rQty) * 100) : 0;
-            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;${dimStyle}">
-                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:${filledColor};font-size:9px;width:24px;">${filledLabel[0]}${r[`${filledSideForRungs}_price`]}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty} ${filledLabel} FILLED${completedTag}</span>
+            const dimStyle = isCompleted ? 'opacity:0.35;' : '';
+            const anchorPrice = r[`${filledSideKey}_price`] || 0;
+            const hedgePriceForRung = isCompleted ? (currentHedgePrice || r[`${hedgeSide}_price`] || 0) : 0;
+            const rungTotal = anchorPrice + hedgePriceForRung;
+            const rungPnl = isCompleted ? (100 - rungTotal) : 0;
+            const pnlCol = rungPnl > 2 ? '#00ff88' : rungPnl > 0 ? '#ffaa00' : '#ff4444';
+            const statusTag = isCompleted
+                ? `<span style="color:${pnlCol};font-size:8px;font-weight:700;">${rungPnl > 0 ? '+' : ''}${rungPnl}¢</span>`
+                : fill >= rQty
+                    ? `<span style="color:#ffaa00;font-size:8px;">WAITING</span>`
+                    : `<span style="color:#333;font-size:8px;">—</span>`;
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:1px 0;${dimStyle}">
+                <span style="color:#ffaa00;font-weight:700;width:22px;">${r.width}¢</span>
+                <span style="color:${filledColor};width:30px;">${filledSideLabel[0]}${anchorPrice}</span>
+                <div style="flex:1;height:3px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                    <div style="width:${fill >= rQty ? 100 : 0}%;height:100%;background:${fill >= rQty ? filledColor : '#333'};border-radius:2px;"></div>
                 </div>
+                <span style="color:#555;width:20px;text-align:right;">${fill}/${rQty}</span>
+                ${statusTag}
             </div>`;
         }).join('');
 
-        // Completed hedge history (dimmed)
+        // Hedge detail block
+        let hedgeBlock = '';
+        const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
+        const historyFills = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
+        const activeHedgeFill = Math.max(0, hedgeFill - historyFills);
+
+        // Completed hedge history
         const historyHTML = hedgeHistory.map(h => {
             const hLabel = (h.side === 'yes' ? 'YES' : 'NO');
             const hColor = h.side === 'yes' ? '#00ff88' : '#ff4444';
-            return `<div style="margin-top:4px;opacity:0.3;">
-                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
-                    <span style="color:${hColor};font-weight:800;font-size:11px;">HEDGE</span>
-                    <span style="color:${hColor};font-size:9px;">${hLabel} @${h.price}¢</span>
-                    <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:100%;height:100%;background:${hColor};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${hColor};font-weight:700;font-size:10px;">${h.fill_qty}/${h.qty} DONE</span>
-                </div>
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:2px 0;opacity:0.35;">
+                <span style="color:${hColor};font-weight:700;">HEDGE</span>
+                <span style="color:${hColor};">${hLabel} @${h.price}¢ × ${h.qty}</span>
+                <span style="color:#00ff8888;font-size:8px;">DONE</span>
             </div>`;
         }).join('');
 
-        // Active hedge row (if exists)
-        let hedgeRow = '';
-        if (hedgePrice > 0 && hedgeQty > 0) {
-            const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
-            // Subtract completed hedge fills from display
-            const historyFills = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
-            const activeHedgeFill = Math.max(0, hedgeFill - historyFills);
+        // Active hedge
+        if (currentHedgePrice > 0 && hedgeQty > 0) {
             const hedgeFilled = activeHedgeFill >= hedgeQty;
-            const hedgeCol = hedgeFilled ? hedgeColor : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
+            const hedgeCol = hedgeFilled ? hedgeColorSide : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
             const hedgePct = hedgeQty > 0 ? Math.round((activeHedgeFill / hedgeQty) * 100) : 0;
-            hedgeRow = `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e274066;">
-                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
-                    <span style="color:${hedgeColor};font-weight:800;font-size:11px;">HEDGE</span>
-                    <span style="color:${hedgeColor};font-size:9px;">${hedgeLabel} @${hedgePrice}¢</span>
+            const gapToBid = unfilledBid - currentHedgePrice;
+            const gapStr = gapToBid > 0 ? `+${gapToBid}¢ to bid` : gapToBid === 0 ? '= bid' : '';
+            hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                    <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
+                    <span style="color:${hedgeColorSide};font-size:11px;font-weight:700;">${hedgeQty} contracts @ ${currentHedgePrice}¢</span>
+                    <span style="color:#555;font-size:9px;">bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
+                    ${gapStr ? `<span style="color:#8892a6;font-size:9px;">${gapStr}</span>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
                     <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;"></div>
+                        <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;transition:width 0.3s;"></div>
                     </div>
-                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
+                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty} filled</span>
                 </div>
             </div>`;
         }
 
-        rungsHTML = filledHTML + (historyHTML ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e274066;">${historyHTML}</div>` : '') + hedgeRow;
+        rungsHTML = anchorSummary
+            + `<div style="padding:4px 8px;">${rungRows}</div>`
+            + (historyHTML ? `<div style="padding:2px 8px;border-top:1px solid #1e274033;">${historyHTML}</div>` : '')
+            + hedgeBlock;
+    } else if (isFilled) {
+        // Filled but not yet consolidated — show per-rung with fills
+        const filledLabel = filledSideKey === 'yes' ? 'YES' : 'NO';
+        rungsHTML = rungs.map((r, i) => {
+            const fill = r[`${filledSideKey}_fill_qty`] || 0;
+            const rQty = r.quantity || qtyPer;
+            const filled = fill >= rQty;
+            const col = filled ? filledColor : fill > 0 ? '#ffaa00' : '#333';
+            const pct = rQty > 0 ? Math.round((fill / rQty) * 100) : 0;
+            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:${filledColor};font-size:9px;width:24px;">${filledLabel[0]}${r[`${filledSideKey}_price`]}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty}</span>
+                </div>
+            </div>`;
+        }).join('');
     } else {
         // Normal: show both sides per rung — dim completed ones
         rungsHTML = rungs.map((r, i) => {
@@ -4984,49 +5045,57 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         }).join('');
     }
 
-    // Walk info
+    // Walk info — detailed status bar
     let walkInfo = '';
-    if (status === 'ladder_arb_yes_filled' || status === 'ladder_arb_no_filled') {
-        const filledSide = status === 'ladder_arb_yes_filled' ? 'YES' : 'NO';
-        const unfilledSide = filledSide === 'YES' ? 'NO' : 'YES';
-        const avgFilled = filledSide === 'YES' ? avgYes : avgNo;
-        const firstFillAt = bot.first_fill_at || 0;
-        const fillAgeMin = firstFillAt > 0 ? Math.floor((nowSec - firstFillAt) / 60) : 0;
-        const timeoutMin = bot.timeout_min || 6;
-        const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
-        const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(20 - (nowSec - lastWalkAt))) : 20;
-
-        const unfilledBid = unfilledSide === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0);
-        const currentHedgePrice = hedgePrice || 0;
-        const combined = avgFilled + currentHedgePrice;
-
+    if (isFilled) {
         const isHalftime = ((gameScores && gameKey && (gameScores[gameKey] || {}).status_detail) || '').toLowerCase().includes('half');
+        const walkLabel = walkCount > 0 ? `walked +${walkCount}` : '';
+        const ceilingStr = ceilingDist <= 3 ? `<span style="color:${ceilingDist <= 0 ? '#ff4444' : '#ff8800'};font-weight:700;">${ceilingDist}¢ to ceiling</span>` : '';
+
         if (isHalftime) {
-            walkInfo = `<div style="background:#818cf822;border:1px solid #818cf833;border-radius:5px;padding:4px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
-                ⏸ HALFTIME — walk-up paused · ${filledSide} avg ${avgFilled}¢ · ${unfilledSide} bid ${unfilledBid}¢
+            walkInfo = `<div style="background:#818cf822;border:1px solid #818cf833;border-radius:5px;padding:6px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>⏸ <strong>HALFTIME PAUSE</strong></span>
+                    <span style="color:#8892a6;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = ${combined}¢ · ${unfilledSideLabel} bid ${unfilledBid}¢</span>
+                </div>
             </div>`;
-        } else if (walkCount > 0) {
-            walkInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:4px 8px;font-size:10px;color:#00aaff;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
-                <span>📈 Walking ${unfilledSide} — step #${walkCount} · hedge @${currentHedgePrice}¢ → bid ${unfilledBid}¢</span>
-                <span style="color:#8892a6;">Next: ${nextWalkIn}s · combined ${combined}¢${combined >= 98 ? ' ⚡SNAP' : ''}</span>
+        } else if (walkCount > 0 && currentHedgePrice > 0) {
+            const atBid = currentHedgePrice >= unfilledBid;
+            walkInfo = `<div style="background:${atBid ? '#00ff8811' : '#00aaff11'};border:1px solid ${atBid ? '#00ff8833' : '#00aaff33'};border-radius:5px;padding:6px 8px;font-size:10px;color:${atBid ? '#00ff88' : '#00aaff'};margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:2px;">
+                    <span>${atBid ? '🎯' : '📈'} <strong>${atBid ? 'AT BID' : 'WALKING'}</strong> — ${unfilledSideLabel} hedge @${currentHedgePrice}¢ ${atBid ? '= bid' : `→ bid ${unfilledBid}¢`} · <strong>${walkLabel}</strong></span>
+                    <span style="color:#8892a6;">next walk ${nextWalkIn}s · filled ${fillAgeStr} ago</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
+                    <span>anchor ${avgFilled}¢ × ${filledQty} + hedge ${currentHedgePrice}¢ × ${hedgeQty} = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢ combined</strong></span>
+                    ${ceilingStr}
+                </div>
             </div>`;
         } else if (currentHedgePrice > 0 && currentHedgePrice >= unfilledBid) {
-            walkInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
-                <span>🎯 ${unfilledSide} hedge @${currentHedgePrice}¢ = bid — waiting for fill</span>
-                <span style="color:#8892a6;">combined ${combined}¢${combined >= 98 ? ' ⚡SNAP' : ''} · ${hedgeQty} contracts</span>
+            walkInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:6px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>🎯 <strong>${unfilledSideLabel} AT BID</strong> — @${currentHedgePrice}¢ × ${hedgeQty} — waiting for fill</span>
+                    <span style="color:#8892a6;">${combined}¢ combined · ${fillAgeStr}</span>
+                </div>
             </div>`;
         } else {
-            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:4px 8px;font-size:10px;color:#ffaa00;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
-                <span>⏳ ${filledSide} filled (avg ${avgFilled}¢) — posting ${unfilledSide} hedge · bid ${unfilledBid}¢</span>
-                <span style="color:#8892a6;">Next walk: ${nextWalkIn}s · combined ${combined}¢</span>
+            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>⏳ <strong>${filledSideLabel} FILLED</strong> (avg ${avgFilled}¢ × ${filledQty}) — posting ${unfilledSideLabel} hedge</span>
+                    <span style="color:#8892a6;">${unfilledSideLabel} bid ${unfilledBid}¢ · ask ${unfilledAsk}¢ · next walk ${nextWalkIn}s</span>
+                </div>
             </div>`;
         }
     } else if (status === 'ladder_arb_posted') {
         const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
+        const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
         const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-        walkInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:4px 8px;font-size:10px;color:#00aaff;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
-            <span>⚡ All rungs live — YES+NO posted on ${rungs.length} widths</span>
-            <span style="color:#8892a6;">Bids: Y <strong style="color:#00ff88;">${yBid}¢</strong> · N <strong style="color:#ff4444;">${nBid}¢</strong></span>
+        const nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
+        walkInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00aaff;margin-top:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                <span>⚡ All ${rungs.length} rungs live — YES+NO posted</span>
+                <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${yBid}/${yAsk}¢</strong> · N <strong style="color:#ff4444;">${nBid}/${nAsk}¢</strong></span>
+            </div>
         </div>`;
     }
 
@@ -5053,23 +5122,25 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${cycleInfo}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-                <span style="color:#555;font-size:10px;">${ageMin}m</span>
+                <span style="color:#555;font-size:9px;" title="${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString() : ''}">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</span>
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
         <div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:10px;">
+            ${isFilled && (isConsolidated || completedRungs > 0) ? '' : `
             <div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;font-size:9px;font-weight:800;color:#555;text-transform:uppercase;padding-bottom:4px;border-bottom:1px solid #1e2740;margin-bottom:4px;">
                 <span>W</span>
                 <span>YES ${bot.live_yes_bid != null ? `<span style="font-weight:400;color:#00ff8866;text-transform:none;">bid ${bot.live_yes_bid} · ask ${bot.live_yes_ask || '?'}</span>` : ''}</span>
                 <span>NO ${bot.live_no_bid != null ? `<span style="font-weight:400;color:#ff444466;text-transform:none;">bid ${bot.live_no_bid} · ask ${bot.live_no_ask || '?'}</span>` : ''}</span>
-            </div>
+            </div>`}
             ${rungsHTML}
         </div>
         ${avgYes > 0 || avgNo > 0 ? `
-        <div style="display:flex;gap:16px;margin-top:8px;padding:6px 10px;background:#060a14;border-radius:6px;font-size:11px;">
-            ${avgYes > 0 ? `<span style="color:#00ff88;">Avg YES: <strong>${avgYes}¢</strong> (${totalYesFill}/${totalExpected})</span>` : ''}
-            ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
-            ${avgYes > 0 && avgNo > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit}¢/contract</span>` : ''}
+        <div style="display:flex;gap:16px;margin-top:8px;padding:6px 10px;background:#060a14;border-radius:6px;font-size:11px;flex-wrap:wrap;">
+            ${avgYes > 0 ? `<span style="color:#00ff88;">Avg YES: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_no_filled' ? hedgePriceForPnl : avgYes}¢</strong> (${totalYesFill}/${totalExpected})</span>` : ''}
+            ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
+            ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
+            ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
         </div>` : ''}
         ${walkInfo}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
@@ -5580,7 +5651,7 @@ async function loadBots() {
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
                             ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
-                            <span style="color:#555;font-size:10px;">${ageMin}m</span>
+                            <span style="color:#555;font-size:9px;" title="${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString() : ''}">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</span>
                             <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
                         </div>
                     </div>
@@ -6821,9 +6892,15 @@ function buddyReactToEvent(action) {
     };
 
     if (action.action === 'completed') {
-        setBuddyMood('celebrating');
-        updateBotBuddyMsg('celebrating', true);
-        triggerConfetti();
+        const pnl = action.profit_cents ?? action.pnl_cents ?? 0;
+        if (pnl >= 0) {
+            setBuddyMood('celebrating');
+            updateBotBuddyMsg('celebrating', true);
+            triggerConfetti();
+        } else {
+            setBuddyMood('alert');
+            updateBotBuddyMsg('loss_complete', true);
+        }
         lockThen(12000);
     } else if (action.action === 'flip_yes' || action.action === 'flip_no') {
         setBuddyMood('worried');

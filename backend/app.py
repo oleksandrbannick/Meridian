@@ -2030,6 +2030,12 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if status not in ('ladder_arb_posted', 'ladder_arb_yes_filled', 'ladder_arb_no_filled'):
             continue
 
+        # Check if this fill is for the consolidated hedge order (bot-level tracking)
+        is_hedge_fill = False
+        if order_id in bot.get('_all_hedge_order_ids', []):
+            is_hedge_fill = True
+            bot['_hedge_fill_count'] = bot.get('_hedge_fill_count', 0) + count
+
         matched_rung = None
         matched_side = None
         for idx, rung in enumerate(bot.get('rungs', [])):
@@ -2041,15 +2047,16 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 matched_rung = idx
                 matched_side = 'no'
                 break
-        if matched_rung is None:
+        if matched_rung is None and not is_hedge_fill:
             continue
 
-        rung = bot['rungs'][matched_rung]
-        fill_key = f'{matched_side}_fill_qty'
-        qty_per = rung.get('quantity', bot.get('quantity', 1))
-        rung[fill_key] = min(rung.get(fill_key, 0) + count, qty_per)
-        if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
-            rung[f'{matched_side}_filled_at'] = time.time()
+        if matched_rung is not None:
+            rung = bot['rungs'][matched_rung]
+            fill_key = f'{matched_side}_fill_qty'
+            qty_per = rung.get('quantity', bot.get('quantity', 1))
+            rung[fill_key] = min(rung.get(fill_key, 0) + count, qty_per)
+            if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
+                rung[f'{matched_side}_filled_at'] = time.time()
 
         _recompute_ladder_arb_fills(bot)
 
@@ -2057,14 +2064,16 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         total_no = bot['filled_no_qty']
         total_expected_per_side = sum(r.get('quantity', bot.get('quantity', 1)) for r in bot['rungs'])
 
-        print(f'⚡ WS LADDER-ARB FILL: {bot_id} rung[{matched_rung}] {matched_side.upper()} +{count} '
+        hedge_info = f' (hedge fill #{bot.get("_hedge_fill_count", 0)})' if is_hedge_fill else ''
+        rung_info = f'rung[{matched_rung}] {matched_side.upper()}' if matched_rung is not None else 'hedge-only'
+        print(f'⚡ WS LADDER-ARB FILL: {bot_id} {rung_info} +{count}{hedge_info} '
               f'→ YES={total_yes}/{total_expected_per_side} NO={total_no}/{total_expected_per_side}')
 
         if total_yes >= total_expected_per_side and total_no >= total_expected_per_side:
             # Both sides fully filled — complete!
             if not bot.get('_ws_fill_handling'):
                 bot['_ws_fill_handling'] = True
-                threading.Thread(target=_execute_ladder_arb_completion, args=(bot_id,), daemon=True).start()
+                threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
         elif total_yes > 0 and total_no == 0:
             bot['status'] = 'ladder_arb_yes_filled'
             if not bot.get('first_fill_at'):
@@ -3984,15 +3993,13 @@ def _recompute_ladder_arb_fills(bot):
     if bot.get('_consolidated') and bot.get('first_fill_side'):
         filled_side = bot['first_fill_side']
         hedge_side = 'no' if filled_side == 'yes' else 'yes'
-        # Collect total hedge-side fills (WS puts them on rung[0])
-        raw_hedge_fills = sum(r.get(f'{hedge_side}_fill_qty', 0) for r in bot.get('rungs', []))
-        # Also count fills from completed hedges in hedge_history
+
+        # Use bot-level hedge fill tracking (not rung-level which caps at qty_per)
+        current_hedge_fills = bot.get('_hedge_fill_count', 0)
+        # Completed hedges from previous generations
         history_fills = sum(h.get('fill_qty', 0) for h in bot.get('hedge_history', []))
-        total_hedge_fills = max(raw_hedge_fills, history_fills)
-        # Add current hedge fills if tracked separately
-        if bot.get('hedge_order_id'):
-            # Check if WS has updated rung[0] with hedge fills
-            pass  # raw_hedge_fills already includes rung[0]
+        # Total REAL hedge fills = current hedge + history
+        total_hedge_fills = current_hedge_fills + history_fills
 
         # Distribute across anchor-filled rungs (in order by width)
         remaining = total_hedge_fills
@@ -4000,16 +4007,17 @@ def _recompute_ladder_arb_fills(bot):
             rq = rung.get('quantity', qty_per)
             anchor_fill = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
             rung[f'{filled_side}_fill_qty'] = anchor_fill
-            if anchor_fill > 0 and remaining > 0 and not rung.get('completed'):
+            if rung.get('completed'):
+                # Already completed — keep its fills, consume from remaining
+                rung[f'{hedge_side}_fill_qty'] = rq
+                remaining -= rq
+            elif anchor_fill > 0 and remaining > 0:
                 assign = min(rq, remaining)
                 rung[f'{hedge_side}_fill_qty'] = assign
                 remaining -= assign
                 # Mark rung completed when both sides fully filled
                 if anchor_fill >= rq and assign >= rq:
                     rung['completed'] = True
-            elif rung.get('completed'):
-                # Already completed — keep its fills as-is
-                rung[f'{hedge_side}_fill_qty'] = rq
             else:
                 rung[f'{hedge_side}_fill_qty'] = 0
 
@@ -4041,6 +4049,7 @@ def _recompute_ladder_arb_fills(bot):
 
 
 
+
 def _record_rung_completion(bot_id, bot, rung):
     """Record profit for a single completed rung. Called when both sides filled on a rung."""
     now = time.time()
@@ -4050,6 +4059,24 @@ def _record_rung_completion(bot_id, bot, rung):
     yes_p = rung['yes_price']
     no_p = rung['no_price']
     width = rung.get('width', 0)
+
+    # When consolidated, the hedge side was filled at the actual hedge price, not the rung's
+    # original deployment price. Use the real hedge price for accurate P&L.
+    if bot.get('bot_category') == 'ladder_arb' and (bot.get('_consolidated') or bot.get('hedge_history')):
+        hedge_side = 'no' if bot.get('first_fill_side') == 'yes' else 'yes'
+        # Current active hedge price takes priority over history
+        actual_hedge_price = bot.get('hedge_price', 0)
+        if not actual_hedge_price:
+            # Fall back to most recent hedge_history entry
+            for hh in reversed(bot.get('hedge_history', [])):
+                if hh.get('price'):
+                    actual_hedge_price = hh['price']
+                    break
+        if actual_hedge_price > 0:
+            if hedge_side == 'yes':
+                yes_p = actual_hedge_price
+            else:
+                no_p = actual_hedge_price
 
     pnl_cents = (100 - yes_p - no_p) * rq
     fee = kalshi_fee_cents(yes_p, no_p, rq)
@@ -4128,19 +4155,23 @@ def _check_and_record_rung_completions(bot_id, bot):
         if all_anchor_filled_completed and newly_completed:
             # Current hedge generation fully consumed — move to history
             hedge_history = bot.get('hedge_history', [])
+            hedge_fill_count = bot.get('_hedge_fill_count', 0)
             hedge_history.append({
                 'order_id': bot.get('hedge_order_id'),
                 'price': bot.get('hedge_price', 0),
                 'qty': bot.get('hedge_qty', 0),
                 'side': hedge_side,
-                'fill_qty': bot.get('hedge_qty', 0),
+                'fill_qty': hedge_fill_count if hedge_fill_count > 0 else bot.get('hedge_qty', 0),
                 'completed': True,
+                'order_ids': bot.get('_all_hedge_order_ids', []),
             })
             bot['hedge_history'] = hedge_history
             # Reset consolidation state for potential new fills
             bot['hedge_order_id'] = None
             bot['hedge_price'] = 0
             bot['hedge_qty'] = 0
+            bot['_hedge_fill_count'] = 0
+            bot['_all_hedge_order_ids'] = []
             bot['_consolidated'] = False
             bot['first_fill_at'] = None
             bot['first_fill_side'] = None
@@ -4148,7 +4179,7 @@ def _check_and_record_rung_completions(bot_id, bot):
             # Clear rung[0] hedge refs
             if bot.get('rungs'):
                 bot['rungs'][0][f'{hedge_side}_order_id'] = None
-            print(f'📦 HEDGE GEN COMPLETE: {bot_id} — hedge consumed, ready for new fills')
+            print(f'📦 HEDGE GEN COMPLETE: {bot_id} — hedge consumed (fills={hedge_fill_count}), ready for new fills')
 
     # Check if ALL rungs are resolved
     all_resolved = True
@@ -4193,10 +4224,16 @@ def _execute_ladder_arb_full_completion(bot_id):
                     except Exception:
                         pass
                     rung[f'{side}_order_id'] = None
+        # Cancel ALL hedge orders (current + any additional from updates)
+        cancelled_hedge_ids = set()
         if bot.get('hedge_order_id'):
+            cancelled_hedge_ids.add(bot['hedge_order_id'])
+        for oid in bot.get('_all_hedge_order_ids', []):
+            cancelled_hedge_ids.add(oid)
+        for oid in cancelled_hedge_ids:
             try:
                 api_rate_limiter.wait()
-                kalshi_client.cancel_order(bot['hedge_order_id'])
+                kalshi_client.cancel_order(oid)
             except Exception:
                 pass
 
@@ -4226,6 +4263,8 @@ def _execute_ladder_arb_full_completion(bot_id):
             bot['hedge_order_id'] = None
             bot['hedge_price'] = 0
             bot['hedge_qty'] = 0
+            bot['_hedge_fill_count'] = 0
+            bot['_all_hedge_order_ids'] = []
             bot['walk_count'] = 0
             for rung in bot.get('rungs', []):
                 rung['completed'] = False
@@ -4364,16 +4403,10 @@ def create_ladder_arb_bot():
                     'quantity': quantity,
                 })
             except Exception as rung_err:
-                # Cancel all already-placed orders on failure
-                for pr in placed_rungs:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(pr['yes_order_id'])
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(pr['no_order_id'])
-                    except Exception:
-                        pass
-                return jsonify({'error': f'Failed to place rung at width {spec["width"]}¢: {rung_err}'}), 500
+                print(f'⚠ LADDER-ARB rung width={spec["width"]}¢ failed: {rung_err} — continuing with {len(placed_rungs)} placed rungs')
+                # Don't cancel placed rungs — continue with what we have
+                # A single rung failure (e.g. post_only cross) shouldn't kill the whole bot
+                continue
 
         if not placed_rungs:
             return jsonify({'error': 'No rungs placed successfully'}), 500
@@ -4411,6 +4444,9 @@ def create_ladder_arb_bot():
             'hedge_history': [],
             'cumulative_pnl': 0,
             'completed_rungs_count': 0,
+            # Hedge fill tracking (bot-level, not rung-level)
+            '_hedge_fill_count': 0,
+            '_all_hedge_order_ids': [],
             # Walk state
             'walk_count': 0,
             'last_walk_at': None,
@@ -5939,7 +5975,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             except Exception:
                 pass  # non-fatal, fall through to normal timeout
 
-        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
+        hedge_timeout_s = bot.get('hedge_timeout_s', 600)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
 
@@ -6231,6 +6267,11 @@ def _handle_anchor_ladder(bot_id, bot, actions):
 
     # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
     if status == 'ladder_posted':
+        # Pause repost/monitoring during halftime — market is frozen
+        if _is_halftime(ticker):
+            actions.append({'bot_id': bot_id, 'action': 'anchor_ladder_halftime_pause'})
+            return
+
         # Get current dog bid from WS cache or orderbook
         ws_p = (ws_manager.get_price(ticker) if ws_manager else None) or {}
         current_dog_bid = ws_p.get(f'{dog_side}_bid', 0) or 0
@@ -6297,7 +6338,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         if not bot.get('dog_filled_at'):
             bot['dog_filled_at'] = bot.get('first_fill_at') or now
         dog_filled_at = bot['dog_filled_at']
-        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
+        hedge_timeout_s = bot.get('hedge_timeout_s', 600)
         wait_s = now - dog_filled_at
         if wait_s >= hedge_timeout_s:
             avg_dog = bot.get('avg_fill_price', 0)
@@ -6417,7 +6458,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             return
 
         # ── Fav Walk-Up (same system as anchor_dog) ──
-        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
+        hedge_timeout_s = bot.get('hedge_timeout_s', 600)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
         avg_dog = bot.get('avg_fill_price', 0)
@@ -6638,6 +6679,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
     # ── STATE: ladder_arb_posted — all rungs live, both sides ──
     if status == 'ladder_arb_posted':
+        # Guard: don't process if completion thread is running
+        if bot.get('_bot_completed'):
+            bot['status'] = 'completed'
+            return
+
         # Poll fill counts (backup for WS misses)
         for rung in bot.get('rungs', []):
             for side in ('yes', 'no'):
@@ -6655,6 +6701,9 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     rung[fk] = max(rung.get(fk, 0), filled)
                     if filled >= rung.get('quantity', qty_per) and not rung.get(f'{side}_filled_at'):
                         rung[f'{side}_filled_at'] = now
+                    # Update bot-level hedge fill count from API poll
+                    if oid in bot.get('_all_hedge_order_ids', []):
+                        bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), filled)
                 except Exception:
                     pass
 
@@ -6710,8 +6759,23 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             pass
                         rung[f'{unfilled_side}_order_id'] = None
 
-                # Place ONE consolidated hedge at the bid
+                # Place ONE consolidated hedge — start at bid but cap at 98¢ ceiling
                 unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+
+                # Cap hedge price so tightest rung stays under 98¢ total cost
+                if unfilled_bid and unfilled_bid > 0:
+                    worst_anchor_price = max(
+                        r.get(f'{filled_side}_price', 0)
+                        for r in bot.get('rungs', [])
+                        if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+                    )
+                    est_fee = kalshi_fee_cents(unfilled_bid, worst_anchor_price, 1)
+                    total_cost = unfilled_bid + worst_anchor_price + est_fee
+                    if total_cost > HARD_CEILING_CENTS:
+                        safe_hedge = HARD_CEILING_CENTS - worst_anchor_price - est_fee
+                        print(f'⚠ LADDER-ARB CEILING: {bot_id} hedge@{unfilled_bid}¢ + anchor@{worst_anchor_price}¢ + fee@{est_fee}¢ = {total_cost}¢ > {HARD_CEILING_CENTS}¢ — capping at {safe_hedge}¢')
+                        unfilled_bid = max(safe_hedge, 1)
+
                 if unfilled_bid and unfilled_bid > 0:
                     try:
                         hedge_resp, actual_hedge = create_order_maker(
@@ -6722,9 +6786,15 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         bot['hedge_order_id'] = hedge_oid
                         bot['hedge_price'] = actual_hedge
                         bot['hedge_qty'] = total_filled_qty
-                        # Store on first rung for compat
+                        bot['_hedge_fill_count'] = 0
+                        # Track ALL hedge order IDs for proper cleanup
+                        all_ids = bot.get('_all_hedge_order_ids', [])
+                        all_ids.append(hedge_oid)
+                        bot['_all_hedge_order_ids'] = all_ids
+                        # Store order_id on first rung for WS matching compat
+                        # NOTE: Do NOT overwrite rung's yes_price/no_price — those are deployment prices
+                        # The actual hedge price is tracked at bot level (bot['hedge_price'])
                         bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
-                        bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
                         # Clear other rungs' unfilled orders
                         for r in bot['rungs'][1:]:
                             r[f'{unfilled_side}_order_id'] = None
@@ -6740,6 +6810,21 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if total_filled_qty > current_hedge_qty:
                     additional_qty = total_filled_qty - current_hedge_qty
                     unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+                    # Ceiling check on additional hedge too
+                    if unfilled_bid and unfilled_bid > 0 and additional_qty > 0:
+                        worst_anchor_price = max(
+                            (r.get(f'{filled_side}_price', 0)
+                             for r in bot.get('rungs', [])
+                             if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0),
+                            default=0
+                        )
+                        if worst_anchor_price > 0:
+                            est_fee = kalshi_fee_cents(unfilled_bid, worst_anchor_price, 1)
+                            total_cost = unfilled_bid + worst_anchor_price + est_fee
+                            if total_cost > HARD_CEILING_CENTS:
+                                safe_hedge = HARD_CEILING_CENTS - worst_anchor_price - est_fee
+                                print(f'⚠ LADDER-ARB ADDITIONAL CEILING: {bot_id} hedge@{unfilled_bid}¢ + anchor@{worst_anchor_price}¢ = {total_cost}¢ > {HARD_CEILING_CENTS}¢ — capping at {safe_hedge}¢')
+                                unfilled_bid = max(safe_hedge, 0) if safe_hedge > 0 else 0
                     if unfilled_bid and unfilled_bid > 0 and additional_qty > 0:
                         try:
                             hedge_resp, actual_hedge = create_order_maker(
@@ -6750,6 +6835,10 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             bot['hedge_order_id'] = hedge_oid
                             bot['hedge_price'] = actual_hedge
                             bot['hedge_qty'] = total_filled_qty
+                            # Track additional hedge order ID
+                            all_ids = bot.get('_all_hedge_order_ids', [])
+                            all_ids.append(hedge_oid)
+                            bot['_all_hedge_order_ids'] = all_ids
                             bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
                             bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
                             print(f'📈 LADDER-ARB HEDGE UPDATE: {bot_id} +{additional_qty} (total {total_filled_qty}) @ {actual_hedge}¢')
@@ -6863,28 +6952,69 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
     # ── STATE: ladder_arb_yes_filled or ladder_arb_no_filled — walk unfilled side ──
     if status in ('ladder_arb_yes_filled', 'ladder_arb_no_filled'):
+        # Guard: don't process if completion thread is running
+        if bot.get('_bot_completed'):
+            bot['status'] = 'completed'
+            return
+
         filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
 
-        # Re-poll fills (backup)
+        # Re-poll fills (backup) + update bot-level hedge fill tracking
+        # 1) Poll per-rung anchor orders
         for rung in bot.get('rungs', []):
-            for side in (filled_side, unfilled_side):
-                fk = f'{side}_fill_qty'
-                if rung.get(fk, 0) >= rung.get('quantity', qty_per):
-                    continue
-                oid = rung.get(f'{side}_order_id')
-                if not oid:
-                    continue
-                try:
-                    api_rate_limiter.wait()
-                    resp = kalshi_client.get_order(oid)
-                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                    filled = _parse_fill_count(ord_data)
-                    rung[fk] = max(rung.get(fk, 0), filled)
-                    if filled >= rung.get('quantity', qty_per) and not rung.get(f'{side}_filled_at'):
-                        rung[f'{side}_filled_at'] = now
-                except Exception:
-                    pass
+            fk = f'{filled_side}_fill_qty'
+            if rung.get(fk, 0) >= rung.get('quantity', qty_per):
+                continue
+            oid = rung.get(f'{filled_side}_order_id')
+            if not oid:
+                continue
+            try:
+                api_rate_limiter.wait()
+                resp = kalshi_client.get_order(oid)
+                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                filled = _parse_fill_count(ord_data)
+                rung[fk] = max(rung.get(fk, 0), filled)
+                if filled >= rung.get('quantity', qty_per) and not rung.get(f'{filled_side}_filled_at'):
+                    rung[f'{filled_side}_filled_at'] = now
+            except Exception:
+                pass
+
+        # 2) Poll ALL hedge orders (not just rung[0]) for accurate fill tracking
+        total_hedge_polled = 0
+        orders_polled_ok = 0
+        for hedge_oid in bot.get('_all_hedge_order_ids', []):
+            try:
+                api_rate_limiter.wait()
+                resp = kalshi_client.get_order(hedge_oid)
+                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                filled = _parse_fill_count(ord_data)
+                total_hedge_polled += filled
+                orders_polled_ok += 1
+            except Exception as poll_err:
+                # 404 = order gone from Kalshi (fully filled or cancelled+filled)
+                # Can't determine fills — skip but flag for position reconciliation
+                if '404' in str(poll_err):
+                    print(f'⚠ LADDER-ARB hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
+                pass
+        if total_hedge_polled > bot.get('_hedge_fill_count', 0):
+            bot['_hedge_fill_count'] = total_hedge_polled
+            print(f'📊 LADDER-ARB {bot_id} hedge fills updated: {total_hedge_polled} (from {orders_polled_ok} orders)')
+
+        # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
+        if orders_polled_ok == 0 and len(bot.get('_all_hedge_order_ids', [])) > 0:
+            try:
+                api_rate_limiter.wait()
+                positions = kalshi_client.get_positions(ticker=ticker)
+                pos_list = positions.get('market_positions', positions.get('positions', []))
+                if isinstance(pos_list, list):
+                    for pos in pos_list:
+                        side_pos = pos.get(f'{unfilled_side}_contracts', 0) or pos.get('position', 0)
+                        if side_pos > bot.get('_hedge_fill_count', 0):
+                            bot['_hedge_fill_count'] = side_pos
+                            print(f'📊 LADDER-ARB {bot_id} hedge fills from positions: {side_pos}')
+            except Exception:
+                pass
 
         _recompute_ladder_arb_fills(bot)
         total_yes = bot['filled_yes_qty']
@@ -6920,6 +7050,21 @@ def _handle_ladder_arb(bot_id, bot, actions):
         if bot.get('_consolidated') and total_filled_qty > current_hedge_qty:
             additional_qty = total_filled_qty - current_hedge_qty
             unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+            # Ceiling check
+            if unfilled_bid and unfilled_bid > 0 and additional_qty > 0:
+                worst_anchor_price = max(
+                    (r.get(f'{filled_side}_price', 0)
+                     for r in bot.get('rungs', [])
+                     if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0),
+                    default=0
+                )
+                if worst_anchor_price > 0:
+                    est_fee = kalshi_fee_cents(unfilled_bid, worst_anchor_price, 1)
+                    total_cost = unfilled_bid + worst_anchor_price + est_fee
+                    if total_cost > HARD_CEILING_CENTS:
+                        safe_hedge = HARD_CEILING_CENTS - worst_anchor_price - est_fee
+                        print(f'⚠ LADDER-ARB ADDITIONAL CEILING (filled): {bot_id} capping hedge@{unfilled_bid}→{safe_hedge}¢')
+                        unfilled_bid = max(safe_hedge, 0) if safe_hedge > 0 else 0
             if unfilled_bid and unfilled_bid > 0 and additional_qty > 0:
                 try:
                     # Place ADDITIONAL hedge order (don't cancel existing — it may have partial fills)
@@ -6932,8 +7077,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     bot['hedge_order_id'] = new_oid
                     bot['hedge_price'] = actual_hedge
                     bot['hedge_qty'] = total_filled_qty
+                    # Track additional hedge order ID
+                    all_ids = bot.get('_all_hedge_order_ids', [])
+                    all_ids.append(new_oid)
+                    bot['_all_hedge_order_ids'] = all_ids
                     bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid
-                    bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
                     print(f'📈 LADDER-ARB HEDGE UPDATE: {bot_id} +{additional_qty} contracts (total {total_filled_qty}) @ {actual_hedge}¢')
                     save_state()
                 except Exception as e:
@@ -6987,21 +7135,51 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         oid = bot['hedge_order_id']
                         current_price = bot.get('hedge_price', 0)
                         rq = bot.get('hedge_qty', 1)
+                        # Use worst (highest) anchor price for ceiling check — protects tightest rung
+                        worst_anchor = max(
+                            (r.get(f'{filled_side}_price', 0)
+                             for r in bot.get('rungs', [])
+                             if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0),
+                            default=avg_filled
+                        )
                         if current_price > 0 and oid:
-                            if avg_filled + current_price >= 98 and unfilled_bid > current_price:
-                                new_price = unfilled_bid
+                            # Cap walk at 98¢ total cost using worst anchor price
+                            max_hedge = HARD_CEILING_CENTS - worst_anchor - kalshi_fee_cents(current_price, worst_anchor, 1)
+                            if worst_anchor + current_price >= HARD_CEILING_CENTS and unfilled_bid > current_price:
+                                new_price = unfilled_bid  # at ceiling — cross to bid
                             else:
-                                new_price = min(current_price + 1, unfilled_bid)
+                                new_price = min(current_price + 1, unfilled_bid, max_hedge)
                             if new_price > current_price:
                                 try:
                                     api_rate_limiter.wait()
                                     kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
                                                               count=rq, **{f'{unfilled_side}_price': new_price})
                                     bot['hedge_price'] = new_price
-                                    bot['rungs'][0][f'{unfilled_side}_price'] = new_price
                                     walked_any = True
                                 except Exception as e:
-                                    print(f'❌ LADDER-ARB WALK {bot_id} hedge: {e}')
+                                    if '404' in str(e):
+                                        # Order gone — place a new one at the walk price
+                                        remaining_qty = rq - bot.get('_hedge_fill_count', 0)
+                                        if remaining_qty > 0:
+                                            try:
+                                                new_resp, actual_price = create_order_maker(
+                                                    ticker=ticker, side=unfilled_side, action='buy',
+                                                    count=remaining_qty, price=new_price
+                                                )
+                                                new_oid = new_resp['order']['order_id']
+                                                bot['hedge_order_id'] = new_oid
+                                                bot['hedge_price'] = actual_price
+                                                bot['hedge_qty'] = remaining_qty + bot.get('_hedge_fill_count', 0)
+                                                all_ids = bot.get('_all_hedge_order_ids', [])
+                                                all_ids.append(new_oid)
+                                                bot['_all_hedge_order_ids'] = all_ids
+                                                bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid
+                                                walked_any = True
+                                                print(f'🔄 LADDER-ARB WALK {bot_id}: old order 404, new order @{actual_price}¢ × {remaining_qty}')
+                                            except Exception as re_err:
+                                                print(f'❌ LADDER-ARB WALK {bot_id} re-place failed: {re_err}')
+                                    else:
+                                        print(f'❌ LADDER-ARB WALK {bot_id} hedge: {e}')
                     else:
                         # Non-consolidated: walk individual rung orders
                         for rung in bot.get('rungs', []):
@@ -7013,10 +7191,14 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             current_price = rung.get(f'{unfilled_side}_price', 0)
                             if current_price <= 0:
                                 continue
-                            if avg_filled + current_price >= 98 and unfilled_bid > current_price:
-                                new_price = unfilled_bid
+                            # Use THIS rung's anchor price for ceiling, not the average
+                            rung_anchor = rung.get(f'{filled_side}_price', avg_filled)
+                            rung_fee = kalshi_fee_cents(current_price, rung_anchor, 1)
+                            max_hedge = HARD_CEILING_CENTS - rung_anchor - rung_fee
+                            if rung_anchor + current_price >= HARD_CEILING_CENTS and unfilled_bid > current_price:
+                                new_price = unfilled_bid  # at ceiling — cross to bid
                             else:
-                                new_price = min(current_price + 1, unfilled_bid)
+                                new_price = min(current_price + 1, unfilled_bid, max_hedge)
                             if new_price <= current_price:
                                 continue
                             try:

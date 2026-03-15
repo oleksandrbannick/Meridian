@@ -2204,11 +2204,19 @@ def _execute_ladder_fav_hedge(bot_id):
         # Calculate weighted average price and total quantity
         filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
         if not filled_rungs:
-            print(f'🪜 LADDER HEDGE {bot_id}: no filled rungs — marking complete')
-            bot['status'] = 'completed'
-            bot['completed_at'] = time.time()
-            save_state()
-            return
+            # Recovery: bot-level fill data exists but rung-level doesn't
+            bot_fill = bot.get('total_dog_fill_qty', 0) or bot.get(f'{dog_side}_fill_qty', 0) or 0
+            if bot_fill > 0 and bot.get('avg_fill_price'):
+                # Reconstruct: assign fills to first rung
+                bot['rungs'][0]['fill_qty'] = min(bot_fill, bot['rungs'][0]['qty'])
+                filled_rungs = [bot['rungs'][0]]
+                print(f'🔧 LADDER HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
+            else:
+                print(f'🪜 LADDER HEDGE {bot_id}: no filled rungs — marking complete')
+                bot['status'] = 'completed'
+                bot['completed_at'] = time.time()
+                save_state()
+                return
 
         total_fill_qty = sum(r['fill_qty'] for r in filled_rungs)
         avg_price = round(sum(r['price'] * r['fill_qty'] for r in filled_rungs) / total_fill_qty)
@@ -2231,11 +2239,14 @@ def _execute_ladder_fav_hedge(bot_id):
             save_state()
             return
 
-        # Start fav at max_fav_price (preserves target width), walk-up moves toward bid
+        # Start fav at bid minus fav_shave (same as single anchor)
         target_width = bot.get('target_width', 5)
+        fav_shave = bot.get('fav_shave', 0)
         max_fav_price = 100 - avg_price - target_width
-        hedge_price = max_fav_price
-        print(f'   💰 Price calc: max_fav=100-{avg_price}-{target_width}={max_fav_price}¢ | fav_bid={fav_bid}¢ → hedge={hedge_price}¢')
+        # Post at bid - shave, capped at max_fav_price (preserves target width profit)
+        initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
+        hedge_price = min(initial_fav_target, max_fav_price)
+        print(f'   💰 Price calc: fav_bid={fav_bid}¢ shave={fav_shave}¢ → target={initial_fav_target}¢ | max={max_fav_price}¢ → hedge={hedge_price}¢')
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — selling back')
             _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
@@ -2317,11 +2328,19 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
                                         reason=f'ladder_sellback_{bot_id}')
 
     if not sold_back:
-        # Sell FAILED — keep the bot alive so monitor retries next cycle
-        print(f'⚠ LADDER SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
+        attempts = bot.get('_sellback_attempts', 0) + 1
+        bot['_sellback_attempts'] = attempts
+        # After 3 failed attempts, position likely doesn't exist — ghost data from repeat cycle
+        if attempts >= 3:
+            print(f'🔧 LADDER SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, no position exists. Completing bot.')
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot['_trade_recorded'] = True
+            save_state()
+            return
+        print(f'⚠ LADDER SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry (attempt {attempts})')
         bot['status'] = 'ladder_filled_no_fav'  # go back so monitor retries
-        bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
-        actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
+        actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': attempts})
         return
 
     already_cleared = (sell_info or {}).get('already_cleared', False)
@@ -3957,17 +3976,52 @@ def _calculate_arb_prices_server(yes_bid, no_bid, yes_ask, no_ask, width):
 
 
 def _recompute_ladder_arb_fills(bot):
-    """Recompute weighted averages and total fills across all rungs."""
+    """Recompute weighted averages and total fills across all rungs.
+    When consolidated, distributes hedge fills across anchor-filled rungs in order."""
+    qty_per = bot.get('quantity', 1)
+
+    # When consolidated, redistribute hedge-side fills across anchor-filled rungs
+    if bot.get('_consolidated') and bot.get('first_fill_side'):
+        filled_side = bot['first_fill_side']
+        hedge_side = 'no' if filled_side == 'yes' else 'yes'
+        # Collect total hedge-side fills (WS puts them on rung[0])
+        raw_hedge_fills = sum(r.get(f'{hedge_side}_fill_qty', 0) for r in bot.get('rungs', []))
+        # Also count fills from completed hedges in hedge_history
+        history_fills = sum(h.get('fill_qty', 0) for h in bot.get('hedge_history', []))
+        total_hedge_fills = max(raw_hedge_fills, history_fills)
+        # Add current hedge fills if tracked separately
+        if bot.get('hedge_order_id'):
+            # Check if WS has updated rung[0] with hedge fills
+            pass  # raw_hedge_fills already includes rung[0]
+
+        # Distribute across anchor-filled rungs (in order by width)
+        remaining = total_hedge_fills
+        for rung in bot.get('rungs', []):
+            rq = rung.get('quantity', qty_per)
+            anchor_fill = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
+            rung[f'{filled_side}_fill_qty'] = anchor_fill
+            if anchor_fill > 0 and remaining > 0 and not rung.get('completed'):
+                assign = min(rq, remaining)
+                rung[f'{hedge_side}_fill_qty'] = assign
+                remaining -= assign
+                # Mark rung completed when both sides fully filled
+                if anchor_fill >= rq and assign >= rq:
+                    rung['completed'] = True
+            elif rung.get('completed'):
+                # Already completed — keep its fills as-is
+                rung[f'{hedge_side}_fill_qty'] = rq
+            else:
+                rung[f'{hedge_side}_fill_qty'] = 0
+
+    # Cap fills and compute totals
     total_yes_qty = 0
     total_no_qty = 0
     weighted_yes_sum = 0
     weighted_no_sum = 0
-    qty_per = bot.get('quantity', 1)
     for rung in bot.get('rungs', []):
         rq = rung.get('quantity', qty_per)
         yf = min(rung.get('yes_fill_qty', 0), rq)
         nf = min(rung.get('no_fill_qty', 0), rq)
-        # Cap fills at rung quantity (WS can over-count)
         rung['yes_fill_qty'] = yf
         rung['no_fill_qty'] = nf
         total_yes_qty += yf
@@ -3987,33 +4041,167 @@ def _recompute_ladder_arb_fills(bot):
 
 
 
-def _execute_ladder_arb_completion(bot_id):
-    """Handle full completion of a ladder-arb bot (both sides fully filled)."""
+def _record_rung_completion(bot_id, bot, rung):
+    """Record profit for a single completed rung. Called when both sides filled on a rung."""
+    now = time.time()
+    ticker = bot['ticker']
+    qty_per = bot.get('quantity', 1)
+    rq = rung.get('quantity', qty_per)
+    yes_p = rung['yes_price']
+    no_p = rung['no_price']
+    width = rung.get('width', 0)
+
+    pnl_cents = (100 - yes_p - no_p) * rq
+    fee = kalshi_fee_cents(yes_p, no_p, rq)
+    net_pnl = pnl_cents - fee
+
+    if net_pnl >= 0:
+        session_pnl['gross_profit_cents'] += net_pnl
+    else:
+        session_pnl['gross_loss_cents'] += abs(net_pnl)
+
+    # Track cumulative P&L on the bot
+    bot['cumulative_pnl'] = bot.get('cumulative_pnl', 0) + net_pnl
+    bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
+    if not bot.get('_first_rung_completed_at'):
+        bot['_first_rung_completed_at'] = now
+    rung['_profit_recorded'] = True
+
+    _record_trade({
+        'bot_id': bot_id, 'ticker': ticker,
+        'yes_price': yes_p, 'no_price': no_p,
+        'quantity': rq,
+        'profit_cents': net_pnl if net_pnl >= 0 else 0,
+        'loss_cents': abs(net_pnl) if net_pnl < 0 else 0,
+        'fee_cents': fee,
+        'result': 'completed',
+        'exit_via': 'ladder_arb_rung_complete',
+        'rung_width': width,
+        'rungs_completed': bot.get('completed_rungs_count', 1),
+        'rungs_total': len(bot.get('rungs', [])),
+        'timestamp': now,
+        'placed_at': bot.get('created_at', now),
+        'arb_width': width,
+        'game_phase': bot.get('game_phase', 'live'),
+        'game_context': _get_game_context(ticker),
+        'fill_source': 'ladder_arb',
+        'bot_category': 'ladder_arb',
+    }, bot)
+
+    print(f'✅ RUNG COMPLETE: {bot_id} width={width}¢ YES@{yes_p}¢ NO@{no_p}¢ +{net_pnl}¢ ({bot.get("completed_rungs_count",1)}/{len(bot.get("rungs",[]))} rungs)')
+
+    with _pending_ws_actions_lock:
+        _pending_ws_actions.append({
+            'bot_id': bot_id, 'action': 'rung_completed',
+            'width': width, 'profit_cents': net_pnl,
+            'completed_count': bot.get('completed_rungs_count', 1),
+        })
+
+
+def _check_and_record_rung_completions(bot_id, bot):
+    """Check for newly completed rungs, record their profit, handle hedge history.
+    Returns True if ALL rungs are resolved (bot can fully complete)."""
+    qty_per = bot.get('quantity', 1)
+    newly_completed = []
+
+    for rung in bot.get('rungs', []):
+        if rung.get('completed') and not rung.get('_profit_recorded'):
+            newly_completed.append(rung)
+
+    for rung in newly_completed:
+        _record_rung_completion(bot_id, bot, rung)
+
+    # Check if current hedge is fully consumed (all its covered rungs completed)
+    if bot.get('_consolidated') and bot.get('hedge_order_id'):
+        filled_side = bot.get('first_fill_side', 'yes')
+        hedge_side = 'no' if filled_side == 'yes' else 'yes'
+        # Count anchor-filled rungs that are now completed
+        all_anchor_filled_completed = True
+        has_uncompleted_anchor_fill = False
+        for rung in bot.get('rungs', []):
+            rq = rung.get('quantity', qty_per)
+            if rung.get(f'{filled_side}_fill_qty', 0) >= rq:
+                if not rung.get('completed'):
+                    all_anchor_filled_completed = False
+                    has_uncompleted_anchor_fill = True
+
+        if all_anchor_filled_completed and newly_completed:
+            # Current hedge generation fully consumed — move to history
+            hedge_history = bot.get('hedge_history', [])
+            hedge_history.append({
+                'order_id': bot.get('hedge_order_id'),
+                'price': bot.get('hedge_price', 0),
+                'qty': bot.get('hedge_qty', 0),
+                'side': hedge_side,
+                'fill_qty': bot.get('hedge_qty', 0),
+                'completed': True,
+            })
+            bot['hedge_history'] = hedge_history
+            # Reset consolidation state for potential new fills
+            bot['hedge_order_id'] = None
+            bot['hedge_price'] = 0
+            bot['hedge_qty'] = 0
+            bot['_consolidated'] = False
+            bot['first_fill_at'] = None
+            bot['first_fill_side'] = None
+            bot['walk_count'] = 0
+            # Clear rung[0] hedge refs
+            if bot.get('rungs'):
+                bot['rungs'][0][f'{hedge_side}_order_id'] = None
+            print(f'📦 HEDGE GEN COMPLETE: {bot_id} — hedge consumed, ready for new fills')
+
+    # Check if ALL rungs are resolved
+    all_resolved = True
+    for rung in bot.get('rungs', []):
+        if rung.get('completed'):
+            continue
+        rq = rung.get('quantity', qty_per)
+        filled_side = bot.get('first_fill_side')
+        if filled_side and rung.get(f'{filled_side}_fill_qty', 0) > 0:
+            # Has anchor fill but not completed — not resolved
+            all_resolved = False
+            break
+        # Has active orders? Check if order IDs exist
+        if rung.get('yes_order_id') or rung.get('no_order_id'):
+            all_resolved = False
+            break
+
+    return all_resolved
+
+
+def _execute_ladder_arb_full_completion(bot_id):
+    """Handle full completion of a ladder-arb bot — all rungs resolved."""
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
         if not bot or bot['status'] in ('stopped', 'completed'):
             return
-        if bot.get('_trade_recorded'):
+        if bot.get('_bot_completed'):
             bot['status'] = 'completed'
             return
 
         now = time.time()
-        ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
 
-        _recompute_ladder_arb_fills(bot)
-        avg_yes = bot.get('avg_yes_price', 0)
-        avg_no = bot.get('avg_no_price', 0)
-        total_qty = bot.get('filled_yes_qty', 0)  # should equal filled_no_qty
+        # Cancel any remaining orders
+        for rung in bot.get('rungs', []):
+            for side in ('yes', 'no'):
+                oid = rung.get(f'{side}_order_id')
+                if oid:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(oid)
+                    except Exception:
+                        pass
+                    rung[f'{side}_order_id'] = None
+        if bot.get('hedge_order_id'):
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(bot['hedge_order_id'])
+            except Exception:
+                pass
 
-        pnl_cents = (100 - avg_yes - avg_no) * total_qty
-        fee = sum(
-            kalshi_fee_cents(r['yes_price'], r['no_price'],
-                             min(r.get('yes_fill_qty', 0), r.get('no_fill_qty', 0)))
-            for r in bot['rungs']
-            if r.get('yes_fill_qty', 0) > 0 and r.get('no_fill_qty', 0) > 0
-        )
-        net_pnl = pnl_cents - fee
+        total_pnl = bot.get('cumulative_pnl', 0)
+        completed_count = bot.get('completed_rungs_count', 0)
 
         # Repeat logic
         repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -4023,58 +4211,41 @@ def _execute_ladder_arb_completion(bot_id):
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
+        bot['_bot_completed'] = True
+        session_pnl['completed_bots'] += 1
+
         if will_repeat:
             bot['waiting_repeat_since'] = now
             bot['first_fill_at'] = None
             bot['first_fill_side'] = None
+            bot['_consolidated'] = False
+            bot['_bot_completed'] = False
+            bot['hedge_history'] = []
+            bot['cumulative_pnl'] = 0
+            bot['completed_rungs_count'] = 0
+            bot['hedge_order_id'] = None
+            bot['hedge_price'] = 0
+            bot['hedge_qty'] = 0
+            bot['walk_count'] = 0
+            for rung in bot.get('rungs', []):
+                rung['completed'] = False
+                rung['_profit_recorded'] = False
+                rung['yes_fill_qty'] = 0
+                rung['no_fill_qty'] = 0
+                rung['yes_filled_at'] = None
+                rung['no_filled_at'] = None
+                rung['yes_order_id'] = None
+                rung['no_order_id'] = None
 
-        if net_pnl >= 0:
-            session_pnl['gross_profit_cents'] += net_pnl
-        else:
-            session_pnl['gross_loss_cents'] += abs(net_pnl)
-        session_pnl['completed_bots'] += 1
-        bot['_trade_recorded'] = True
-
-        filled_rungs_detail = [
-            {'yes_price': r['yes_price'], 'no_price': r['no_price'],
-             'yes_fill': r.get('yes_fill_qty', 0), 'no_fill': r.get('no_fill_qty', 0),
-             'width': r.get('width', 0)}
-            for r in bot['rungs']
-        ]
-
-        _record_trade({
-            'bot_id': bot_id, 'ticker': ticker,
-            'yes_price': avg_yes, 'no_price': avg_no,
-            'quantity': total_qty,
-            'profit_cents': net_pnl if net_pnl >= 0 else 0,
-            'loss_cents': abs(net_pnl) if net_pnl < 0 else 0,
-            'fee_cents': fee,
-            'result': 'completed' if net_pnl >= 0 else 'amended',
-            'exit_via': 'ladder_arb_complete',
-            'avg_yes_price': avg_yes, 'avg_no_price': avg_no,
-            'rungs_filled': len([r for r in bot['rungs'] if r.get('yes_fill_qty', 0) > 0]),
-            'rungs_total': len(bot['rungs']),
-            'rungs_detail': filled_rungs_detail,
-            'timestamp': now,
-            'placed_at': bot.get('created_at', now),
-            'arb_width': bot.get('arb_width', 0),
-            'game_phase': bot.get('game_phase', 'live'),
-            'game_context': _get_game_context(ticker),
-            'fill_source': 'ladder_arb',
-            'bot_category': 'ladder_arb',
-            'repeats_done': repeats_done_now,
-            'repeat_count': repeat_total,
-        }, bot)
-
-        bot_log('LADDER_ARB_COMPLETED', bot_id, {
-            'avg_yes': avg_yes, 'avg_no': avg_no, 'pnl': net_pnl, 'fee': fee,
-            'total_qty': total_qty, 'will_repeat': will_repeat,
+        bot_log('LADDER_ARB_FULL_COMPLETE', bot_id, {
+            'total_pnl': total_pnl, 'completed_rungs': completed_count,
+            'will_repeat': will_repeat,
         })
-        print(f'✅ LADDER-ARB COMPLETED: {bot_id} +{net_pnl}¢ (YES avg={avg_yes}¢ NO avg={avg_no}¢ qty={total_qty})'
+        print(f'🏁 LADDER-ARB FULLY DONE: {bot_id} {completed_count} rungs completed, total P&L: {total_pnl}¢'
               + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
 
         with _pending_ws_actions_lock:
-            _pending_ws_actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': net_pnl})
+            _pending_ws_actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': total_pnl})
             if will_repeat:
                 _pending_ws_actions.append({
                     'bot_id': bot_id, 'action': 'repeat_spawned',
@@ -4097,6 +4268,7 @@ def create_ladder_arb_bot():
         widths = data.get('widths', [])
         quantity = int(data.get('quantity', 1))
         repeat_count = int(data.get('repeat_count', 0))
+        rung_timeout_min = int(data.get('rung_timeout_min', 15))  # 0 = no timeout
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -4234,6 +4406,11 @@ def create_ladder_arb_bot():
             'market_type': _detect_market_type(ticker),
             'spread_line': _extract_spread_line(ticker),
             'timeout_min': _late_game_timeout_min(ticker, live_yes_bid >= live_no_bid, narrowest_width),
+            'rung_timeout_min': rung_timeout_min,
+            # Per-rung completion tracking
+            'hedge_history': [],
+            'cumulative_pnl': 0,
+            'completed_rungs_count': 0,
             # Walk state
             'walk_count': 0,
             'last_walk_at': None,
@@ -5991,6 +6168,67 @@ def _handle_anchor_ladder(bot_id, bot, actions):
       except Exception as e:
         print(f'⚠ anchor_ladder settlement check {bot_id}: {e}')
 
+    # ── STATE: waiting_repeat — repost ladder rungs fresh ──
+    if status == 'waiting_repeat':
+        wait_since = bot.get('waiting_repeat_since', now)
+        if now - wait_since < 10:  # 10s cooldown
+            return
+        qty = bot.get('quantity', 1)
+        anchor_depth = bot.get('anchor_depth', 5)
+        try:
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            current_dog_bid = _best_bid(ob, dog_side)
+            current_dog_ask = _best_ask(ob, dog_side)
+            if current_dog_bid <= 0:
+                return  # no market data, wait
+            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
+            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
+
+            new_rungs = []
+            for rung in bot.get('rungs', []):
+                rung_price = max(1, anchor_base - anchor_depth - (len(new_rungs) * 2))
+                rung_qty = rung.get('qty', qty)
+                try:
+                    resp, actual = create_order_maker(
+                        ticker=ticker, side=dog_side, action='buy',
+                        count=rung_qty, price=rung_price
+                    )
+                    new_rungs.append({
+                        'price': actual, 'qty': rung_qty,
+                        'order_id': resp['order']['order_id'],
+                        'fill_qty': 0, 'filled_at': None,
+                    })
+                except Exception as e:
+                    print(f'⚠ LADDER REPEAT rung place fail: {bot_id} — {e}')
+
+            if new_rungs:
+                bot['rungs'] = new_rungs
+                bot['total_dog_qty'] = sum(r['qty'] for r in new_rungs)
+                bot['total_dog_fill_qty'] = 0
+                bot['dog_filled_at'] = None
+                bot['fav_order_id'] = None
+                bot['fav_fill_qty'] = 0
+                bot['fav_price'] = None
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
+                bot['_sweep_timer_started'] = False
+                bot['_sellback_attempts'] = 0
+                bot['fav_walk_count'] = 0
+                bot['fav_last_walk_at'] = None
+                bot['status'] = 'ladder_posted'
+                bot['posted_at'] = now
+                rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
+                print(f'🔄 LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
+                save_state()
+            else:
+                print(f'❌ LADDER REPEAT {bot_id}: no rungs placed — waiting')
+        except Exception as e:
+            print(f'❌ LADDER REPEAT {bot_id}: {e}')
+        return
+
     # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
     if status == 'ladder_posted':
         # Get current dog bid from WS cache or orderbook
@@ -6055,7 +6293,10 @@ def _handle_anchor_ladder(bot_id, bot, actions):
 
     # ── STATE: ladder_filled_no_fav — retry hedge with timeout ──
     if status == 'ladder_filled_no_fav':
-        dog_filled_at = bot.get('dog_filled_at', now)
+        # Set dog_filled_at if missing (recovery)
+        if not bot.get('dog_filled_at'):
+            bot['dog_filled_at'] = bot.get('first_fill_at') or now
+        dog_filled_at = bot['dog_filled_at']
         hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         wait_s = now - dog_filled_at
         if wait_s >= hedge_timeout_s:
@@ -6421,23 +6662,26 @@ def _handle_ladder_arb(bot_id, bot, actions):
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
 
-        # Both sides fully filled
-        if total_yes >= total_expected and total_no >= total_expected:
-            if not bot.get('_ws_fill_handling'):
-                bot['_ws_fill_handling'] = True
-                threading.Thread(target=_execute_ladder_arb_completion, args=(bot_id,), daemon=True).start()
+        # Record any newly completed rungs + check if bot fully done
+        all_resolved = _check_and_record_rung_completions(bot_id, bot)
+        if all_resolved and bot.get('completed_rungs_count', 0) > 0:
+            threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
             return
 
-        # One side has fills — transition state
-        if total_yes > 0 or total_no > 0:
-            if total_yes > 0 and total_no == 0:
+        # One side has fills on UNCOMPLETED rungs — transition state
+        uncompleted_yes = sum(min(r.get('yes_fill_qty', 0), r.get('quantity', qty_per))
+                              for r in bot.get('rungs', []) if not r.get('completed'))
+        uncompleted_no = sum(min(r.get('no_fill_qty', 0), r.get('quantity', qty_per))
+                             for r in bot.get('rungs', []) if not r.get('completed'))
+        if uncompleted_yes > 0 or uncompleted_no > 0:
+            if uncompleted_yes > 0 and uncompleted_no == 0:
                 bot['status'] = 'ladder_arb_yes_filled'
                 filled_side = 'yes'
-            elif total_no > 0 and total_yes == 0:
+            elif uncompleted_no > 0 and uncompleted_yes == 0:
                 bot['status'] = 'ladder_arb_no_filled'
                 filled_side = 'no'
             else:
-                filled_side = 'yes' if total_yes >= total_no else 'no'
+                filled_side = 'yes' if uncompleted_yes >= uncompleted_no else 'no'
                 bot['status'] = f'ladder_arb_{filled_side}_filled'
             unfilled_side = 'no' if filled_side == 'yes' else 'yes'
 
@@ -6448,7 +6692,12 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 bot['last_walk_at'] = now
 
             # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
-            total_filled_qty = bot[f'filled_{filled_side}_qty']
+            # Only count fills from UNCOMPLETED rungs for new hedge
+            total_filled_qty = sum(
+                min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+                for r in bot.get('rungs', [])
+                if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+            )
             if total_filled_qty > 0 and not bot.get('_consolidated'):
                 # Cancel unfilled side rung orders
                 for rung in bot.get('rungs', []):
@@ -6509,6 +6758,32 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
             save_state()
             return
+
+        # Rung timeout: cancel unfilled rungs after rung_timeout_min if some rungs completed
+        rung_timeout = bot.get('rung_timeout_min', 15)
+        if rung_timeout > 0 and bot.get('completed_rungs_count', 0) > 0:
+            # Use first rung completion time as the timer start
+            first_completion_at = bot.get('_first_rung_completed_at')
+            if not first_completion_at:
+                first_completion_at = now
+                bot['_first_rung_completed_at'] = now
+            idle_min = (now - first_completion_at) / 60.0
+            if idle_min >= rung_timeout:
+                # Cancel all unfilled orders on incomplete rungs
+                for rung in bot.get('rungs', []):
+                    if not rung.get('completed'):
+                        for side in ('yes', 'no'):
+                            oid = rung.get(f'{side}_order_id')
+                            if oid:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(oid)
+                                except Exception:
+                                    pass
+                                rung[f'{side}_order_id'] = None
+                print(f'⏰ RUNG TIMEOUT: {bot_id} — {rung_timeout}min expired, cancelling unfilled rungs')
+                threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
+                return
 
         # Repost stale orders (3 min)
         REPOST_AFTER_MIN = 3
@@ -6615,15 +6890,32 @@ def _handle_ladder_arb(bot_id, bot, actions):
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
 
-        # Check if both sides now fully filled
-        if total_yes >= total_expected and total_no >= total_expected:
-            if not bot.get('_ws_fill_handling'):
-                bot['_ws_fill_handling'] = True
-                threading.Thread(target=_execute_ladder_arb_completion, args=(bot_id,), daemon=True).start()
+        # Record any newly completed rungs + check if bot fully done
+        all_resolved = _check_and_record_rung_completions(bot_id, bot)
+        if all_resolved and bot.get('completed_rungs_count', 0) > 0:
+            threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
             return
 
+        # If hedge generation completed (all anchor-filled rungs hedged), go back to posted state
+        # to wait for more anchor fills on remaining rungs
+        if not bot.get('_consolidated') and not bot.get('hedge_order_id'):
+            # Check if there are still unfilled anchor orders open
+            has_open_anchor = False
+            for rung in bot.get('rungs', []):
+                if not rung.get('completed') and (rung.get('yes_order_id') or rung.get('no_order_id')):
+                    has_open_anchor = True
+                    break
+            if has_open_anchor:
+                bot['status'] = 'ladder_arb_posted'
+                save_state()
+                return
+
         # ── Update hedge if more fills came in after consolidation ──
-        total_filled_qty = bot.get(f'filled_{filled_side}_qty', 0)
+        total_filled_qty = sum(
+            min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+            for r in bot.get('rungs', [])
+            if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+        )
         current_hedge_qty = bot.get('hedge_qty', 0)
         if bot.get('_consolidated') and total_filled_qty > current_hedge_qty:
             additional_qty = total_filled_qty - current_hedge_qty

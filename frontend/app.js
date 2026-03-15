@@ -4465,6 +4465,7 @@ async function placeSelectedWidthsBots() {
     if (selectedArr.length === 0) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
+    const rungTimeout = parseInt(document.getElementById('bot-rung-timeout')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
     // ── Fetch fresh orderbook prices before computing widths ───────────────────
@@ -4562,6 +4563,7 @@ async function placeSelectedWidthsBots() {
                     widths: validWidths.map(v => v.w),
                     quantity: qty,
                     repeat_count: repeatCount,
+                    rung_timeout_min: rungTimeout,
                     game_phase: gamePhase,
                 }),
             });
@@ -4624,7 +4626,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const dogPrice = bot.dog_price || 0;
     const favPrice = bot.fav_price || 0;
     const targetWidth = bot.target_width || 0;
-    const favCeiling = 100 - dogPrice - targetWidth;
+    // Use actual fill price for fav calculation when dog has filled
+    const effectiveDogPrice = (bot.avg_fill_price > 0) ? bot.avg_fill_price : dogPrice;
+    const favCeiling = 100 - effectiveDogPrice - targetWidth;
 
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
@@ -4684,14 +4688,22 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const walkCount = bot.fav_walk_count || 0;
     const favShave = bot.fav_shave || 0;
     let favStatusText = '';
+    // Fav posts at fav_bid - fav_shave, capped at 100 - dog - width
+    const maxFavPrice = favCeiling;  // = 100 - dogPrice - targetWidth (cap)
+    const wouldPostAt = favShave > 0 && favBid > 0
+        ? Math.min(Math.max(1, favBid - favShave), maxFavPrice)
+        : favBid > 0 ? Math.min(favBid, maxFavPrice) : maxFavPrice;
     if (favPrice > 0 && walkCount > 0) {
-        favStatusText = `📈 ${favPrice}¢ (walked +${walkCount}¢)`;
+        const combined = avgDogPrice + favPrice;
+        favStatusText = `📈 walked +${walkCount}¢ · combined ${combined}¢ · +${100 - combined}¢/contract`;
     } else if (favPrice > 0) {
-        favStatusText = `Posted @ ${favPrice}¢`;
+        const combined = avgDogPrice + favPrice;
+        favStatusText = `Posted @${favPrice}¢ · combined ${combined}¢`;
     } else if (dogFilled) {
-        favStatusText = favShave > 0 ? `Hedging bid-${favShave}¢... walk-up to ≤${favCeiling}¢` : `Hedging at bid... cap ≤${favCeiling}¢`;
+        favStatusText = `Posting @${wouldPostAt}¢${favShave > 0 ? ` (bid-${favShave})` : ''} · walks +1¢/20s`;
     } else {
-        favStatusText = favShave > 0 ? `Will post bid-${favShave}¢ → walk to ≤${favCeiling}¢` : `Will post ≤${favCeiling}¢ on fill`;
+        const estProfit = 100 - effectiveDogPrice - wouldPostAt;
+        favStatusText = `On fill → post @${wouldPostAt}¢${favShave > 0 ? ` (bid-${favShave})` : ''} · +${estProfit}¢/contract`;
     }
 
     // Ladder rungs detail
@@ -4737,7 +4749,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <div style="background:#060a14;border:1px solid #ffaa0033;border-radius:8px;padding:10px;">
                 <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">🐕 DOG · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${isLadder && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : `${dogPrice}¢`}</div>
-                ${dogBid ? `<div style="color:#555;font-size:10px;margin-bottom:6px;">Bid <strong style="color:#fff;">${dogBid}¢</strong> · Ask <strong style="color:#fff;">${dogAsk}¢</strong></div>` : ''}
+                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
                 ${isLadder ? rungsHTML : `
                     <div style="display:flex;align-items:center;gap:6px;">
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
@@ -4750,8 +4762,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <!-- FAV SIDE -->
             <div style="background:#060a14;border:1px solid ${favPrice > 0 ? '#00aaff33' : '#1e2740'};border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
                 <div style="color:#00aaff;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>
-                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `≤${favCeiling}¢`}</div>
-                ${favBid ? `<div style="color:#555;font-size:10px;margin-bottom:6px;">Bid <strong style="color:#fff;">${favBid}¢</strong> · Ask <strong style="color:#fff;">${favAsk}¢</strong></div>` : ''}
+                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `${wouldPostAt}¢`}</div>
+                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#00aaff;">${favBid || '?'}¢</strong> · ask <strong style="color:#00aaff;">${favAsk || '?'}¢</strong></div>
                 <div style="color:#8892a6;font-size:10px;margin-bottom:4px;">${favStatusText}</div>
                 ${favPrice > 0 ? `
                     <div style="display:flex;align-items:center;gap:6px;">
@@ -4865,10 +4877,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const hedgeQty = bot.hedge_qty || 0;
     const hedgeSide = filledSideForRungs === 'yes' ? 'no' : 'yes';
 
+    // Hedge history (completed hedge generations)
+    const hedgeHistory = bot.hedge_history || [];
+    const completedRungs = bot.completed_rungs_count || 0;
+    const cumulativePnl = bot.cumulative_pnl || 0;
+
     let rungsHTML;
     if (isConsolidated && filledSideForRungs) {
-        // Show filled side rungs + single consolidated hedge
-        const filledRungs = rungs.filter(r => (r[`${filledSideForRungs}_fill_qty`] || 0) > 0);
+        // Show filled side rungs + hedge(s) — dim completed rungs
         const filledLabel = filledSideForRungs === 'yes' ? 'YES' : 'NO';
         const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
         const filledColor = filledSideForRungs === 'yes' ? '#00ff88' : '#ff4444';
@@ -4876,54 +4892,79 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         const filledHTML = rungs.map((r, i) => {
             const fill = r[`${filledSideForRungs}_fill_qty`] || 0;
-            const rQty = qtyPer;  // Use bot qty, not rung qty (rung[0].quantity gets overwritten by hedge)
+            const rQty = qtyPer;
             const filled = fill >= rQty;
+            const isCompleted = r.completed;
+            const dimStyle = isCompleted ? 'opacity:0.3;' : '';
+            const completedTag = isCompleted ? ' <span style="color:#00ff8888;font-size:8px;">DONE</span>' : '';
             const col = filled ? filledColor : fill > 0 ? '#ffaa00' : '#333';
             const pct = rQty > 0 ? Math.round((fill / rQty) * 100) : 0;
-            const otherOid = r[`${hedgeSide}_order_id`];
-            const cancelledTag = !otherOid && fill === 0 ? ' <span style="color:#ff444488;font-size:8px;">CANCELLED</span>' : '';
-            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;${dimStyle}">
                 <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
                 <div style="display:flex;align-items:center;gap:4px;">
                     <span style="color:${filledColor};font-size:9px;width:24px;">${filledLabel[0]}${r[`${filledSideForRungs}_price`]}</span>
                     <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                         <div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div>
                     </div>
-                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty} ${filledLabel} FILLED</span>
+                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty} ${filledLabel} FILLED${completedTag}</span>
                 </div>
             </div>`;
         }).join('');
 
-        // Consolidated hedge row
-        const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
-        const hedgeFilled = hedgeFill >= hedgeQty;
-        const hedgeCol = hedgeFilled ? hedgeColor : hedgeFill > 0 ? '#ffaa00' : '#00aaff';
-        const hedgePct = hedgeQty > 0 ? Math.round((hedgeFill / hedgeQty) * 100) : 0;
-        const hedgeRow = `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e274066;">
-            <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
-                <span style="color:${hedgeColor};font-weight:800;font-size:11px;">HEDGE</span>
-                <span style="color:${hedgeColor};font-size:9px;">${hedgeLabel} @${hedgePrice}¢</span>
-                <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;"></div>
+        // Completed hedge history (dimmed)
+        const historyHTML = hedgeHistory.map(h => {
+            const hLabel = (h.side === 'yes' ? 'YES' : 'NO');
+            const hColor = h.side === 'yes' ? '#00ff88' : '#ff4444';
+            return `<div style="margin-top:4px;opacity:0.3;">
+                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+                    <span style="color:${hColor};font-weight:800;font-size:11px;">HEDGE</span>
+                    <span style="color:${hColor};font-size:9px;">${hLabel} @${h.price}¢</span>
+                    <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:100%;height:100%;background:${hColor};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${hColor};font-weight:700;font-size:10px;">${h.fill_qty}/${h.qty} DONE</span>
                 </div>
-                <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${hedgeFill}/${hedgeQty}</span>
-            </div>
-        </div>`;
+            </div>`;
+        }).join('');
 
-        rungsHTML = filledHTML + hedgeRow;
+        // Active hedge row (if exists)
+        let hedgeRow = '';
+        if (hedgePrice > 0 && hedgeQty > 0) {
+            const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
+            // Subtract completed hedge fills from display
+            const historyFills = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
+            const activeHedgeFill = Math.max(0, hedgeFill - historyFills);
+            const hedgeFilled = activeHedgeFill >= hedgeQty;
+            const hedgeCol = hedgeFilled ? hedgeColor : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
+            const hedgePct = hedgeQty > 0 ? Math.round((activeHedgeFill / hedgeQty) * 100) : 0;
+            hedgeRow = `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e274066;">
+                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+                    <span style="color:${hedgeColor};font-weight:800;font-size:11px;">HEDGE</span>
+                    <span style="color:${hedgeColor};font-size:9px;">${hedgeLabel} @${hedgePrice}¢</span>
+                    <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
+                </div>
+            </div>`;
+        }
+
+        rungsHTML = filledHTML + (historyHTML ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e274066;">${historyHTML}</div>` : '') + hedgeRow;
     } else {
-        // Normal: show both sides per rung
+        // Normal: show both sides per rung — dim completed ones
         rungsHTML = rungs.map((r, i) => {
             const yFill = r.yes_fill_qty || 0;
             const nFill = r.no_fill_qty || 0;
             const rQty = r.quantity || qtyPer;
             const yFilled = yFill >= rQty;
             const nFilled = nFill >= rQty;
+            const isCompleted = r.completed;
+            const dimStyle = isCompleted ? 'opacity:0.3;' : '';
             const yCol = yFilled ? '#00ff88' : yFill > 0 ? '#ffaa00' : '#333';
             const nCol = nFilled ? '#00ff88' : nFill > 0 ? '#ffaa00' : '#333';
             const yPct = rQty > 0 ? Math.round((yFill / rQty) * 100) : 0;
             const nPct = rQty > 0 ? Math.round((nFill / rQty) * 100) : 0;
-            return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+            return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;${dimStyle}">
                 <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
                 <div style="display:flex;align-items:center;gap:4px;">
                     <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
@@ -5007,6 +5048,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 <span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">🪜 ${rungs.length} RUNGS</span>
+                ${completedRungs > 0 ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${completedRungs}/${rungs.length} DONE · ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
                 ${liveScoreHtml}
                 ${cycleInfo}
             </div>

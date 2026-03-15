@@ -6335,15 +6335,60 @@ def _handle_ladder_arb(bot_id, bot, actions):
         if total_yes > 0 or total_no > 0:
             if total_yes > 0 and total_no == 0:
                 bot['status'] = 'ladder_arb_yes_filled'
+                filled_side = 'yes'
             elif total_no > 0 and total_yes == 0:
                 bot['status'] = 'ladder_arb_no_filled'
+                filled_side = 'no'
             else:
-                bot['status'] = 'ladder_arb_yes_filled' if total_yes >= total_no else 'ladder_arb_no_filled'
+                filled_side = 'yes' if total_yes >= total_no else 'no'
+                bot['status'] = f'ladder_arb_{filled_side}_filled'
+            unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+
             if not bot.get('first_fill_at'):
                 bot['first_fill_at'] = now
-                bot['first_fill_side'] = 'yes' if total_yes >= total_no else 'no'
+                bot['first_fill_side'] = filled_side
                 bot['walk_count'] = 0
                 bot['last_walk_at'] = now
+
+                # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
+                total_filled_qty = bot[f'filled_{filled_side}_qty']
+                if total_filled_qty > 0 and not bot.get('_consolidated'):
+                    # Cancel unfilled side rung orders
+                    for rung in bot.get('rungs', []):
+                        oid = rung.get(f'{unfilled_side}_order_id')
+                        if oid:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(oid)
+                            except Exception:
+                                pass
+                            rung[f'{unfilled_side}_order_id'] = None
+
+                    # Place ONE consolidated hedge at the bid
+                    unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+                    if unfilled_bid and unfilled_bid > 0:
+                        try:
+                            hedge_resp, actual_hedge = create_order_maker(
+                                ticker=ticker, side=unfilled_side, action='buy',
+                                count=total_filled_qty, price=unfilled_bid
+                            )
+                            hedge_oid = hedge_resp['order']['order_id']
+                            bot['hedge_order_id'] = hedge_oid
+                            bot['hedge_price'] = actual_hedge
+                            bot['hedge_qty'] = total_filled_qty
+                            # Store on first rung for compat
+                            bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
+                            bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
+                            bot['rungs'][0]['quantity'] = total_filled_qty
+                            # Clear other rungs' unfilled orders
+                            for r in bot['rungs'][1:]:
+                                r[f'{unfilled_side}_order_id'] = None
+                            bot['_consolidated'] = True
+                            avg_filled = bot.get(f'avg_{filled_side}_price', 0)
+                            print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                        except Exception as e:
+                            print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
+
             save_state()
             return
 
@@ -6699,11 +6744,18 @@ def _run_monitor():
                 _fy = _ws.get('yes_bid', 0) or 0
                 _fn = _ws.get('no_bid', 0) or 0
                 if _fy > 0 and _fn > 0 and max(_fy, _fn) < 80:
-                    # Market came back — re-enter waiting_repeat for remaining cycles
-                    _bot['status'] = 'waiting_repeat'
-                    _bot['waiting_repeat_since'] = _now
-                    _bot.pop('drift_cancelled_at', None)
-                    print(f'🔄 DRIFT RECOVERY: {_bot_id} Y={_fy}¢ N={_fn}¢ back < 80¢ — re-entering waiting_repeat')
+                    # Market came back — only re-enter if repeats remain
+                    _repeats_done = _bot.get('repeats_done', 0)
+                    _repeat_total = _bot.get('repeat_count', 0)
+                    if _repeats_done < _repeat_total:
+                        _bot['status'] = 'waiting_repeat'
+                        _bot['waiting_repeat_since'] = _now
+                        _bot.pop('drift_cancelled_at', None)
+                        print(f'🔄 DRIFT RECOVERY: {_bot_id} Y={_fy}¢ N={_fn}¢ back < 80¢ — re-entering waiting_repeat')
+                    else:
+                        _bot['status'] = 'completed'
+                        _bot['completed_at'] = _now
+                        print(f'🏁 DRIFT RECOVERY SKIP: {_bot_id} no repeats left — marking completed')
                 elif _now - _bot.get('drift_cancelled_at', _now) >= 300:
                     # Still drifted after 5 min — give up
                     _bot['status'] = 'completed'

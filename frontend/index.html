@@ -450,7 +450,7 @@
                     </div>
 
                     <div style="border-top:1px solid #1e2740;margin-top:6px;padding-top:8px;color:#8892a6;">
-                        <strong style="color:#ccc;">How the bot works:</strong> Posts YES and NO limit orders simultaneously — both below current bids. When prices dip (score change, run, momentum shift) both legs fill and profit is locked in. If only one fills, the 8-min (fav) or 5-min (dog) exit timer triggers to cancel or sell. The signal tells you how much price swing to expect before you deploy.
+                        <strong style="color:#ccc;">How the bot works:</strong> Posts YES and NO limit orders simultaneously — both below current bids. When prices dip (score change, run, momentum shift) both legs fill and profit is locked in. If only one fills, it walks the other side up +1¢ every 20s toward the bid (maker only). At 98¢+ combined it snaps to bid to finish fast.
                     </div>
                 </div>
             </div>
@@ -907,24 +907,11 @@
                     <!-- Profit Preview -->
                     <div id="profit-preview" style="margin-bottom:16px;"></div>
                     <!-- Qty, Flip Threshold, Phase, Repeat -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
                         <div>
                             <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
                             <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); updateAllWidthsPreview();"
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                        </div>
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Exit Timer</label>
-                            <div style="padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#00aaff;font-size:12px;font-weight:700;text-align:center;" title="If one leg fills but other doesn't: fav fills → 8min exit; underdog fills → 5min exit">
-                                8 / 5 min
-                            </div>
-                        </div>
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Phase</label>
-                            <div id="bot-game-phase-display"
-                                 style="width:100%;padding:8px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#8892a6;font-size:12px;font-weight:600;text-align:center;">
-                                🔄 Auto
-                            </div>
                         </div>
                         <div>
                             <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(extra×)</span></label>
@@ -933,10 +920,10 @@
                                    title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
                         </div>
                     </div>
+                    <div id="bot-game-phase-display" style="display:none;">🔄 Auto</div>
                     <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#8892a6;">⚡ Simultaneous:</strong> Both YES and NO limit orders post at the same time — pure volatility capture, no fav-first.<br>
-                        <strong style="color:#8892a6;">⏱ Exit:</strong> If one leg fills and other is still pending → fav fills = 20m timeout, underdog fills = 10m. Then cancel pending + market-sell filled leg.<br>
-                        <strong style="color:#8892a6;">🔴 Live:</strong> Active — reposts stale orders. <strong style="color:#8892a6;">⏳ Pregame:</strong> Patient — orders wait for game start.
+                        <strong style="color:#8892a6;">⚡ Simultaneous:</strong> Both YES+NO post below bids. When one fills, walks the other up +1¢/20s toward the bid (maker only).<br>
+                        <strong style="color:#8892a6;">⚡ Snap-to-bid:</strong> At 98¢+ combined, jumps straight to bid to finish fast. Reposts every 3 min if no fills.
                     </div>
 
                     <!-- All-widths stats preview (shown inline when multiple selected) -->
@@ -1355,6 +1342,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260314q"></script>
+    <script src="app.js?v=20260315f"></script>
 </body>
 </html>

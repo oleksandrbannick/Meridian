@@ -3061,7 +3061,9 @@ function renderAnchorRungs() {
     const container = document.getElementById('anchor-rungs-container');
     if (!container) return;
     // Don't overwrite inputs while user is typing (Bug 4 fix)
+    // Use both activeElement check AND a flag for mobile where focus is delayed
     if (container.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+    if (window._anchorInputFocused) return;
     const countEl = document.getElementById('anchor-rung-count');
     if (countEl) {
         const autoLabel = _anchorAutoPrice
@@ -3086,12 +3088,14 @@ function renderAnchorRungs() {
                 <div style="display:flex;align-items:center;gap:3px;">
                     <span style="color:#8892a6;font-size:9px;">PRICE</span>
                     <input type="number" min="1" max="50" value="${rung.price}" onchange="updateRungPrice(${i}, this.value)"
+                        onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
                         style="width:48px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoPrice ? '#00ff8844' : '#1e2740'};border-radius:4px;color:#ffaa00;font-size:13px;font-weight:800;text-align:center;${_anchorAutoPrice ? 'opacity:0.8;' : ''}">
                     <span style="color:#ffaa0066;font-size:10px;">¢</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:3px;">
                     <span style="color:#8892a6;font-size:9px;">QTY</span>
                     <input type="number" min="1" max="20" value="${rung.qty}" onchange="updateRungQty(${i}, this.value)"
+                        onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
                         style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;font-weight:700;text-align:center;">
                 </div>
                 <span style="color:#555;font-size:9px;">${offset}¢ below ${baseLabel}</span>
@@ -4401,7 +4405,7 @@ async function createBot() {
     const profitPer = 100 - yes_price - no_price;
     const totalCost = (yes_price + no_price) * quantity;
     const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nPhase: auto-detect\n8-min timeout if one leg fills${repeatMsg}\n\nConfirm order?`)) return;
+    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nWalk-up if one fills (+1¢/20s toward bid, maker only)${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
@@ -4854,35 +4858,90 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const effectiveProfit = combinedAvg > 0 ? (100 - combinedAvg) : 0;
     const pnlColor = effectiveProfit > 2 ? '#00ff88' : effectiveProfit > 0 ? '#00aaff' : '#ff4444';
 
-    // Rungs table
-    const rungsHTML = rungs.map((r, i) => {
-        const yFill = r.yes_fill_qty || 0;
-        const nFill = r.no_fill_qty || 0;
-        const rQty = r.quantity || qtyPer;
-        const yFilled = yFill >= rQty;
-        const nFilled = nFill >= rQty;
-        const yCol = yFilled ? '#00ff88' : yFill > 0 ? '#ffaa00' : '#333';
-        const nCol = nFilled ? '#00ff88' : nFill > 0 ? '#ffaa00' : '#333';
-        const yPct = rQty > 0 ? Math.round((yFill / rQty) * 100) : 0;
-        const nPct = rQty > 0 ? Math.round((nFill / rQty) * 100) : 0;
-        return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
-            <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
-            <div style="display:flex;align-items:center;gap:4px;">
-                <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
-                <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${yPct}%;height:100%;background:${yCol};border-radius:2px;"></div>
+    // Rungs table — show consolidated hedge when one side is filled
+    const isConsolidated = bot._consolidated;
+    const filledSideForRungs = status === 'ladder_arb_yes_filled' ? 'yes' : status === 'ladder_arb_no_filled' ? 'no' : null;
+    const hedgePrice = bot.hedge_price || 0;
+    const hedgeQty = bot.hedge_qty || 0;
+    const hedgeSide = filledSideForRungs === 'yes' ? 'no' : 'yes';
+
+    let rungsHTML;
+    if (isConsolidated && filledSideForRungs) {
+        // Show filled side rungs + single consolidated hedge
+        const filledRungs = rungs.filter(r => (r[`${filledSideForRungs}_fill_qty`] || 0) > 0);
+        const filledLabel = filledSideForRungs === 'yes' ? 'YES' : 'NO';
+        const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
+        const filledColor = filledSideForRungs === 'yes' ? '#00ff88' : '#ff4444';
+        const hedgeColor = hedgeSide === 'yes' ? '#00ff88' : '#ff4444';
+
+        const filledHTML = rungs.map((r, i) => {
+            const fill = r[`${filledSideForRungs}_fill_qty`] || 0;
+            const rQty = qtyPer;  // Use bot qty, not rung qty (rung[0].quantity gets overwritten by hedge)
+            const filled = fill >= rQty;
+            const col = filled ? filledColor : fill > 0 ? '#ffaa00' : '#333';
+            const pct = rQty > 0 ? Math.round((fill / rQty) * 100) : 0;
+            const otherOid = r[`${hedgeSide}_order_id`];
+            const cancelledTag = !otherOid && fill === 0 ? ' <span style="color:#ff444488;font-size:8px;">CANCELLED</span>' : '';
+            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:${filledColor};font-size:9px;width:24px;">${filledLabel[0]}${r[`${filledSideForRungs}_price`]}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty} ${filledLabel} FILLED</span>
                 </div>
-                <span style="color:${yCol};font-weight:700;font-size:9px;">${yFill}/${rQty}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:4px;">
-                <span style="color:#ff4444;font-size:9px;width:24px;">N${r.no_price}</span>
-                <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${nPct}%;height:100%;background:${nCol};border-radius:2px;"></div>
+            </div>`;
+        }).join('');
+
+        // Consolidated hedge row
+        const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
+        const hedgeFilled = hedgeFill >= hedgeQty;
+        const hedgeCol = hedgeFilled ? hedgeColor : hedgeFill > 0 ? '#ffaa00' : '#00aaff';
+        const hedgePct = hedgeQty > 0 ? Math.round((hedgeFill / hedgeQty) * 100) : 0;
+        const hedgeRow = `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e274066;">
+            <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+                <span style="color:${hedgeColor};font-weight:800;font-size:11px;">HEDGE</span>
+                <span style="color:${hedgeColor};font-size:9px;">${hedgeLabel} @${hedgePrice}¢</span>
+                <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                    <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;"></div>
                 </div>
-                <span style="color:${nCol};font-weight:700;font-size:9px;">${nFill}/${rQty}</span>
+                <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${hedgeFill}/${hedgeQty}</span>
             </div>
         </div>`;
-    }).join('');
+
+        rungsHTML = filledHTML + hedgeRow;
+    } else {
+        // Normal: show both sides per rung
+        rungsHTML = rungs.map((r, i) => {
+            const yFill = r.yes_fill_qty || 0;
+            const nFill = r.no_fill_qty || 0;
+            const rQty = r.quantity || qtyPer;
+            const yFilled = yFill >= rQty;
+            const nFilled = nFill >= rQty;
+            const yCol = yFilled ? '#00ff88' : yFill > 0 ? '#ffaa00' : '#333';
+            const nCol = nFilled ? '#00ff88' : nFill > 0 ? '#ffaa00' : '#333';
+            const yPct = rQty > 0 ? Math.round((yFill / rQty) * 100) : 0;
+            const nPct = rQty > 0 ? Math.round((nFill / rQty) * 100) : 0;
+            return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${yPct}%;height:100%;background:${yCol};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${yCol};font-weight:700;font-size:9px;">${yFill}/${rQty}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#ff4444;font-size:9px;width:24px;">N${r.no_price}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${nPct}%;height:100%;background:${nCol};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${nCol};font-weight:700;font-size:9px;">${nFill}/${rQty}</span>
+                </div>
+            </div>`;
+        }).join('');
+    }
 
     // Walk info
     let walkInfo = '';
@@ -4896,19 +4955,29 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
         const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(20 - (nowSec - lastWalkAt))) : 20;
 
+        const unfilledBid = unfilledSide === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0);
+        const currentHedgePrice = hedgePrice || 0;
+        const combined = avgFilled + currentHedgePrice;
+
         const isHalftime = ((gameScores && gameKey && (gameScores[gameKey] || {}).status_detail) || '').toLowerCase().includes('half');
         if (isHalftime) {
             walkInfo = `<div style="background:#818cf822;border:1px solid #818cf833;border-radius:5px;padding:4px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
-                ⏸ HALFTIME — walk-up paused · ${filledSide} avg ${avgFilled}¢ filled
+                ⏸ HALFTIME — walk-up paused · ${filledSide} avg ${avgFilled}¢ · ${unfilledSide} bid ${unfilledBid}¢
             </div>`;
         } else if (walkCount > 0) {
             walkInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:4px 8px;font-size:10px;color:#00aaff;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
-                <span>📈 Walking ${unfilledSide} — step #${walkCount} · avg ${filledSide} ${avgFilled}¢</span>
-                <span style="color:#8892a6;">Next: ${nextWalkIn}s · ${fillAgeMin}m / ${timeoutMin}m timeout</span>
+                <span>📈 Walking ${unfilledSide} — step #${walkCount} · hedge @${currentHedgePrice}¢ → bid ${unfilledBid}¢</span>
+                <span style="color:#8892a6;">Next: ${nextWalkIn}s · combined ${combined}¢${combined >= 98 ? ' ⚡SNAP' : ''}</span>
+            </div>`;
+        } else if (currentHedgePrice > 0 && currentHedgePrice >= unfilledBid) {
+            walkInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:4px 8px;font-size:10px;color:#00ff88;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
+                <span>🎯 ${unfilledSide} hedge @${currentHedgePrice}¢ = bid — waiting for fill</span>
+                <span style="color:#8892a6;">combined ${combined}¢${combined >= 98 ? ' ⚡SNAP' : ''} · ${hedgeQty} contracts</span>
             </div>`;
         } else {
-            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:4px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
-                ⏳ ${filledSide} filled (avg ${avgFilled}¢) — walk-up pending for ${unfilledSide} · ${fillAgeMin}m / ${timeoutMin}m
+            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:4px 8px;font-size:10px;color:#ffaa00;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
+                <span>⏳ ${filledSide} filled (avg ${avgFilled}¢) — posting ${unfilledSide} hedge · bid ${unfilledBid}¢</span>
+                <span style="color:#8892a6;">Next walk: ${nextWalkIn}s · combined ${combined}¢</span>
             </div>`;
         }
     } else if (status === 'ladder_arb_posted') {
@@ -4948,7 +5017,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>
         <div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:10px;">
             <div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;font-size:9px;font-weight:800;color:#555;text-transform:uppercase;padding-bottom:4px;border-bottom:1px solid #1e2740;margin-bottom:4px;">
-                <span>W</span><span>YES</span><span>NO</span>
+                <span>W</span>
+                <span>YES ${bot.live_yes_bid != null ? `<span style="font-weight:400;color:#00ff8866;text-transform:none;">bid ${bot.live_yes_bid} · ask ${bot.live_yes_ask || '?'}</span>` : ''}</span>
+                <span>NO ${bot.live_no_bid != null ? `<span style="font-weight:400;color:#ff444466;text-transform:none;">bid ${bot.live_no_bid} · ask ${bot.live_no_ask || '?'}</span>` : ''}</span>
             </div>
             ${rungsHTML}
         </div>
@@ -6765,7 +6836,7 @@ function buddyReactToEvent(action) {
         updateBotBuddyMsg('celebrating', true);
         triggerConfetti();
         lockThen(12000);
-    } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback' || action.action === 'ladder_arb_sellback') {
+    } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback') {
         setBuddyMood('alert');
         updateBotBuddyMsg('anchor_sellback', true);
         lockThen(8000);
@@ -6976,10 +7047,10 @@ async function monitorBots() {
                         playArbCompleteSound();
                         sendPushNotification('🔒 ANCHOR ARB COMPLETE!', `${profitStr} — both legs filled`);
                         showNotification(`🔒 ANCHOR COMPLETE! ${profitStr} profit locked`);
-                    } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback' || action.action === 'ladder_arb_sellback') {
+                    } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback') {
                         const loss = action.loss_cents ?? 0;
                         const lossStr = `-$${(loss/100).toFixed(2)}`;
-                        showNotification(`🛡️ ${action.action === 'ladder_arb_sellback' ? 'LADDER ARB SELLBACK' : (action.action === 'hard_ceiling_sellback' ? 'CEILING BREACH' : 'ANCHOR SELLBACK')}: ${lossStr} — sold back`);
+                        showNotification(`🛡️ ${action.action === 'hard_ceiling_sellback' ? 'CEILING BREACH' : 'ANCHOR SELLBACK'}: ${lossStr} — sold back`);
                         sendPushNotification('🛡️ Anchor Sellback', `${lossStr} — ceiling breached`);
                     }
                 });
@@ -8596,7 +8667,7 @@ async function loadTradeHistoryList() {
         const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
         const data = await resp.json();
-        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback'].includes(t.result));
+        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback','ladder_arb_sellback'].includes(t.result));
         trades = trades.slice(0, 50);
 
         // Clear button at top
@@ -8625,7 +8696,7 @@ async function loadTradeHistoryList() {
                          || t.result === 'manual_exit_completed'
                          || t.result === 'anchor_dog_complete';
             const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
-            const isAnchorSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback' || t.result === 'ladder_arb_sellback';
+            const isAnchorSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
             const isCeilingExit = t.result === 'hard_ceiling_sellback';
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
@@ -8717,22 +8788,36 @@ async function loadTradeHistoryList() {
                 if (phase) wParts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 if (wParts.length > 0) analyticsRow = `<div style="display:flex;gap:12px;font-size:10px;margin-top:4px;flex-wrap:wrap;">${wParts.join('')}</div>`;
             } else if (t.yes_price || t.no_price) {
-                // Unified arb detail row — same format for all arbs (clean fills and amended)
                 const parts = [];
-                const leg = (t.first_leg || 'yes').toUpperCase();
-                const otherLeg = leg === 'YES' ? 'NO' : 'YES';
-                const firstFillPrice = leg === 'YES' ? (t.original_yes || t.yes_price || 0) : (t.original_no || t.no_price || 0);
-                const secondFillPrice = leg === 'YES' ? (t.no_price || 0) : (t.yes_price || 0);
-                const originalPending = leg === 'YES' ? (t.original_no || 0) : (t.original_yes || 0);
-                const totalCost = (t.yes_price || 0) + (t.no_price || 0);
-                const isFav = firstFillPrice >= secondFillPrice;
-                
-                parts.push(`<span style="color:#8892a6;"><strong style="color:${leg==='YES'?'#00ff88':'#ff4444'}">${leg}</strong> @ <strong style="color:#fff">${firstFillPrice}¢</strong> <span style="color:#ffaa00">(${isFav ? 'fav' : 'dog'})</span></span>`);
-                parts.push(`<span style="color:#8892a6;"><strong style="color:${otherLeg==='YES'?'#00ff88':'#ff4444'}">${otherLeg}</strong> @ <strong style="color:#fff">${secondFillPrice}¢</strong>${isTimeoutExit && originalPending && originalPending !== secondFillPrice ? ` <span style="color:#555">(was ${originalPending}¢)</span>` : ''}</span>`);
-                parts.push(`<span style="color:#8892a6;">Total: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'}">${totalCost}¢</strong>/100¢</span>`);
-                if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
-                if (isTimeoutExit && t.timeout_min) parts.push(`<span style="color:#8892a6;">⏱ ${t.timeout_min}m timeout</span>`);
-                if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                if (isAnchorSellback && t.filled_side && t.avg_fill_price) {
+                    // Sellback: show buy avg → sell price, not YES+NO arb total
+                    const side = t.filled_side.toUpperCase();
+                    const sideCol = t.filled_side === 'yes' ? '#00ff88' : '#ff4444';
+                    const avgBuy = t.avg_fill_price || 0;
+                    const sellAt = t.sell_price || 0;
+                    const diff = sellAt - avgBuy;
+                    const diffCol = diff >= 0 ? '#00ff88' : '#ff4444';
+                    parts.push(`<span style="color:#8892a6;">Bought <strong style="color:${sideCol}">${side}</strong> avg <strong style="color:#fff">${avgBuy}¢</strong> × ${t.quantity || 1}</span>`);
+                    parts.push(`<span style="color:#8892a6;">Sold back @ <strong style="color:#ffaa00">${sellAt}¢</strong></span>`);
+                    parts.push(`<span style="color:${diffCol};font-weight:700;">${diff >= 0 ? '+' : ''}${diff}¢/contract</span>`);
+                    if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                } else {
+                    // Unified arb detail row — same format for all arbs (clean fills and amended)
+                    const leg = (t.first_leg || 'yes').toUpperCase();
+                    const otherLeg = leg === 'YES' ? 'NO' : 'YES';
+                    const firstFillPrice = leg === 'YES' ? (t.original_yes || t.yes_price || 0) : (t.original_no || t.no_price || 0);
+                    const secondFillPrice = leg === 'YES' ? (t.no_price || 0) : (t.yes_price || 0);
+                    const originalPending = leg === 'YES' ? (t.original_no || 0) : (t.original_yes || 0);
+                    const totalCost = (t.yes_price || 0) + (t.no_price || 0);
+                    const isFav = firstFillPrice >= secondFillPrice;
+
+                    parts.push(`<span style="color:#8892a6;"><strong style="color:${leg==='YES'?'#00ff88':'#ff4444'}">${leg}</strong> @ <strong style="color:#fff">${firstFillPrice}¢</strong> <span style="color:#ffaa00">(${isFav ? 'fav' : 'dog'})</span></span>`);
+                    parts.push(`<span style="color:#8892a6;"><strong style="color:${otherLeg==='YES'?'#00ff88':'#ff4444'}">${otherLeg}</strong> @ <strong style="color:#fff">${secondFillPrice}¢</strong>${isTimeoutExit && originalPending && originalPending !== secondFillPrice ? ` <span style="color:#555">(was ${originalPending}¢)</span>` : ''}</span>`);
+                    parts.push(`<span style="color:#8892a6;">Total: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'}">${totalCost}¢</strong>/100¢</span>`);
+                    if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
+                    if (isTimeoutExit && t.timeout_min) parts.push(`<span style="color:#8892a6;">⏱ ${t.timeout_min}m timeout</span>`);
+                    if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                }
                 // Ladder-arb rungs detail
                 if (isLadderArbTrade && t.rungs_detail && t.rungs_detail.length > 0) {
                     const rungParts = t.rungs_detail.map(r => {
@@ -8768,12 +8853,19 @@ async function loadTradeHistoryList() {
                             <span style="color:#8892a6;">${date}</span>
                         </div>
                         <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;flex-wrap:wrap;">
-                            ${t.type === 'watch' && t.entry_price ? `<span style="color:${(t.side||'yes')==='yes'?'#00ff88':'#ff4444'};">${(t.side||'YES').toUpperCase()} Entry ${t.entry_price}¢${t.sell_price ? ` <span style="color:#ffaa00;">→ exit ${t.sell_price}¢</span>` : ''}</span>` : ''}
-                            ${t.type !== 'watch' && t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢${(t.sell_price_yes || (t.result==='manual_exit_yes' && t.sell_price)) ? ` <span style="color:#ffaa00;">→ ${t.sell_price_yes || t.sell_price}¢</span>` : ''}</span>` : ''}
-                            ${t.type !== 'watch' && t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢${(t.sell_price_no || (t.result==='manual_exit_no' && t.sell_price)) ? ` <span style="color:#ffaa00;">→ ${t.sell_price_no || t.sell_price}¢</span>` : ''}</span>` : ''}
-                            ${t.exit_bid ? `<span style="color:#ffaa00;">Exit ${t.exit_bid}¢</span>` : ''}
-                            <span style="color:#8892a6;">×${t.quantity || 1}</span>
-                            ${t.type !== 'watch' ? `<span style="color:#555;">Cost $${(((t.yes_price||0) + (t.no_price||0)) * (t.quantity||1) / 100).toFixed(2)}</span>` : `<span style="color:#555;">Cost $${((t.entry_price||0) * (t.quantity||1) / 100).toFixed(2)}</span>`}
+                            ${isAnchorSellback && t.filled_side && t.avg_fill_price ? `
+                                <span style="color:${t.filled_side==='yes'?'#00ff88':'#ff4444'};">${t.filled_side.toUpperCase()} avg ${t.avg_fill_price}¢</span>
+                                <span style="color:#ffaa00;">→ sold ${t.sell_price || '?'}¢</span>
+                                <span style="color:#8892a6;">×${t.quantity || 1}</span>
+                                <span style="color:#555;">Cost $${((t.avg_fill_price||0) * (t.quantity||1) / 100).toFixed(2)}</span>
+                            ` : `
+                                ${t.type === 'watch' && t.entry_price ? `<span style="color:${(t.side||'yes')==='yes'?'#00ff88':'#ff4444'};">${(t.side||'YES').toUpperCase()} Entry ${t.entry_price}¢${t.sell_price ? ` <span style="color:#ffaa00;">→ exit ${t.sell_price}¢</span>` : ''}</span>` : ''}
+                                ${t.type !== 'watch' && t.yes_price ? `<span style="color:#00ff88;">YES ${t.yes_price}¢${(t.sell_price_yes || (t.result==='manual_exit_yes' && t.sell_price)) ? ` <span style="color:#ffaa00;">→ ${t.sell_price_yes || t.sell_price}¢</span>` : ''}</span>` : ''}
+                                ${t.type !== 'watch' && t.no_price ? `<span style="color:#ff4444;">NO ${t.no_price}¢${(t.sell_price_no || (t.result==='manual_exit_no' && t.sell_price)) ? ` <span style="color:#ffaa00;">→ ${t.sell_price_no || t.sell_price}¢</span>` : ''}</span>` : ''}
+                                ${t.exit_bid ? `<span style="color:#ffaa00;">Exit ${t.exit_bid}¢</span>` : ''}
+                                <span style="color:#8892a6;">×${t.quantity || 1}</span>
+                                ${t.type !== 'watch' ? `<span style="color:#555;">Cost $${(((t.yes_price||0) + (t.no_price||0)) * (t.quantity||1) / 100).toFixed(2)}</span>` : `<span style="color:#555;">Cost $${((t.entry_price||0) * (t.quantity||1) / 100).toFixed(2)}</span>`}
+                            `}
                         </div>
                         ${analyticsRow}
                     </div>

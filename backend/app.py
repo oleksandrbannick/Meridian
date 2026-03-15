@@ -1426,7 +1426,7 @@ class RateLimiter:
             else:
                 self._tokens -= 1.0
 
-api_rate_limiter = RateLimiter(rate=8.0)   # 8 calls/sec
+api_rate_limiter = RateLimiter(rate=10.0)  # 10 calls/sec (Kalshi limit)
 
 # ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
 import websocket as _ws_lib
@@ -2046,8 +2046,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
         rung = bot['rungs'][matched_rung]
         fill_key = f'{matched_side}_fill_qty'
-        rung[fill_key] = rung.get(fill_key, 0) + count
         qty_per = rung.get('quantity', bot.get('quantity', 1))
+        rung[fill_key] = min(rung.get(fill_key, 0) + count, qty_per)
         if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
             rung[f'{matched_side}_filled_at'] = time.time()
 
@@ -3077,7 +3077,29 @@ def _is_game_live(ticker: str) -> bool:
     
     Fallback: ESPN (only for games where Kalshi data isn't available).
     """
-    # ── PRIMARY: Check Kalshi market data ──
+    # ── PRIMARY for sports: Check ESPN first (authoritative "game in progress") ──
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL'))
+    if is_sports:
+        try:
+            _refresh_espn_cache()
+            info = _espn_cache['data']
+            if info:
+                candidates = _get_all_ticker_team_candidates(ticker)
+                if not candidates:
+                    t1, t2 = _parse_ticker_teams(ticker)
+                    candidates = [c for c in [t1, t2] if c]
+                for code in candidates:
+                    espn_code = _KALSHI_TO_ESPN.get(code, code)
+                    entry = info.get(code) or info.get(espn_code)
+                    if entry and entry.get('live'):
+                        return True
+                # ESPN says game is NOT live — trust ESPN over Kalshi timing
+                # (Kalshi timing can say "live" for pregame games near tipoff)
+                return False
+        except Exception:
+            pass  # ESPN failed, fall through to Kalshi check
+
+    # ── SECONDARY: Check Kalshi market data (primary for non-sports like tennis) ──
     try:
         if kalshi_client:
             api_rate_limiter.wait()
@@ -3085,16 +3107,16 @@ def _is_game_live(ticker: str) -> bool:
             mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
             exp_str = mkt.get('expected_expiration_time', '')
             result = mkt.get('result', '')
-            
+
             # Already settled → not live
             if result and result != '':
                 return False
-            
+
             if exp_str:
                 exp_time = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
                 now_utc = datetime.now(timezone.utc)
                 hours_until_exp = (exp_time - now_utc).total_seconds() / 3600.0
-                
+
                 # Game is "live" if expected to end within N hours and hasn't ended yet.
                 # Tennis/tournament markets settle end-of-day → use 20h window.
                 # Basketball/hockey/etc → 3.5h window.
@@ -3104,9 +3126,9 @@ def _is_game_live(ticker: str) -> bool:
                     return True
                 return False
     except Exception as e:
-        print(f'⚠ Kalshi live check failed for {ticker}: {e} — falling back to ESPN')
-    
-    # ── FALLBACK: ESPN ── (only use if ticker date is today — prevents future markets from matching today's live teams)
+        print(f'⚠ Kalshi live check failed for {ticker}: {e}')
+
+    # ── Last resort: ESPN fallback for non-sports tickers ──
     try:
         parts_fb = ticker.split('-')
         if len(parts_fb) >= 2:
@@ -3940,9 +3962,14 @@ def _recompute_ladder_arb_fills(bot):
     total_no_qty = 0
     weighted_yes_sum = 0
     weighted_no_sum = 0
+    qty_per = bot.get('quantity', 1)
     for rung in bot.get('rungs', []):
-        yf = rung.get('yes_fill_qty', 0)
-        nf = rung.get('no_fill_qty', 0)
+        rq = rung.get('quantity', qty_per)
+        yf = min(rung.get('yes_fill_qty', 0), rq)
+        nf = min(rung.get('no_fill_qty', 0), rq)
+        # Cap fills at rung quantity (WS can over-count)
+        rung['yes_fill_qty'] = yf
+        rung['no_fill_qty'] = nf
         total_yes_qty += yf
         total_no_qty += nf
         weighted_yes_sum += rung['yes_price'] * yf
@@ -3958,95 +3985,6 @@ def _recompute_ladder_arb_fills(bot):
     if bot['avg_no_price']:
         bot['no_price'] = bot['avg_no_price']
 
-
-def _ladder_arb_sell_back(bot_id, bot, filled_side, actions):
-    """Sell all filled rung contracts on the filled side back when arb times out."""
-    now = time.time()
-    ticker = bot['ticker']
-    total_fill = bot.get(f'filled_{filled_side}_qty', 0)
-    if total_fill <= 0:
-        total_fill = sum(r.get(f'{filled_side}_fill_qty', 0) for r in bot.get('rungs', []))
-    if total_fill <= 0:
-        bot['status'] = 'completed'
-        bot['completed_at'] = now
-        save_state()
-        return
-
-    # Cancel all unfilled orders on the OTHER side
-    unfilled_side = 'no' if filled_side == 'yes' else 'yes'
-    for rung in bot.get('rungs', []):
-        uf = rung.get(f'{unfilled_side}_fill_qty', 0)
-        qty_per = rung.get('quantity', bot.get('quantity', 1))
-        if uf < qty_per and rung.get(f'{unfilled_side}_order_id'):
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(rung[f'{unfilled_side}_order_id'])
-            except Exception:
-                pass
-
-    sold_back, sell_info = execute_sell(ticker, filled_side, total_fill,
-                                         reason=f'ladder_arb_sellback_{bot_id}')
-    if not sold_back:
-        print(f'⚠ LADDER-ARB SELLBACK FAILED: {bot_id} — keeping alive for retry')
-        bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
-        actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
-        return
-
-    avg_price = bot.get(f'avg_{filled_side}_price', 0)
-    already_cleared = (sell_info or {}).get('already_cleared', False)
-    sell_price = (sell_info or {}).get('actual_fill_price', 0)
-
-    if already_cleared and not sell_price:
-        loss_cents = 0
-        sell_price = avg_price
-    else:
-        loss_cents = (avg_price - sell_price) * total_fill if sell_price else avg_price * total_fill
-
-    # Fees
-    buy_fee = sum(
-        _kalshi_side_fee_cents(r.get(f'{filled_side}_price', 0), r.get(f'{filled_side}_fill_qty', 0))
-        for r in bot.get('rungs', []) if r.get(f'{filled_side}_fill_qty', 0) > 0
-    )
-    sell_fee = _kalshi_taker_side_fee_cents(sell_price, total_fill) if sell_price else 0
-    total_fees = buy_fee + sell_fee
-    loss_cents += total_fees
-
-    session_pnl['gross_loss_cents'] += loss_cents
-    session_pnl['stopped_bots'] += 1
-    bot['_trade_recorded'] = True
-    bot['status'] = 'stopped'
-    bot['stopped_at'] = now
-
-    filled_rungs_detail = [
-        {'price': r.get(f'{filled_side}_price', 0), 'qty': r.get(f'{filled_side}_fill_qty', 0)}
-        for r in bot.get('rungs', []) if r.get(f'{filled_side}_fill_qty', 0) > 0
-    ]
-
-    _record_trade({
-        'bot_id': bot_id, 'ticker': ticker,
-        'yes_price': avg_price if filled_side == 'yes' else sell_price,
-        'no_price': avg_price if filled_side == 'no' else sell_price,
-        'quantity': total_fill,
-        'loss_cents': loss_cents,
-        'fee_cents': total_fees,
-        'result': 'ladder_arb_sellback',
-        'exit_via': 'ladder_arb_sellback',
-        'filled_side': filled_side,
-        'sell_price': sell_price,
-        'avg_fill_price': avg_price,
-        'rungs_detail': filled_rungs_detail,
-        'timestamp': now,
-        'placed_at': bot.get('created_at', now),
-        'arb_width': bot.get('arb_width', 0),
-        'game_phase': bot.get('game_phase', 'live'),
-        'game_context': _get_game_context(ticker),
-        'fill_source': 'ladder_arb_sellback',
-        'bot_category': 'ladder_arb',
-    }, bot)
-
-    print(f'🔙 LADDER-ARB SELLBACK: {bot_id} | {filled_side.upper()} avg@{avg_price}¢ → sold@{sell_price}¢ | qty={total_fill} | loss={loss_cents}¢')
-    actions.append({'bot_id': bot_id, 'action': 'ladder_arb_sellback', 'loss_cents': loss_cents})
-    save_state()
 
 
 def _execute_ladder_arb_completion(bot_id):
@@ -4162,8 +4100,8 @@ def create_ladder_arb_bot():
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
-        if not widths or len(widths) < 1 or len(widths) > 5:
-            return jsonify({'error': 'Need 1-5 widths'}), 400
+        if not widths or len(widths) < 1 or len(widths) > 20:
+            return jsonify({'error': 'Need 1-20 widths'}), 400
 
         widths = sorted([int(w) for w in widths])
 
@@ -6007,6 +5945,52 @@ def _handle_anchor_ladder(bot_id, bot, actions):
     except Exception:
         pass
 
+    # ── Settlement guard: if market is closed/settled, stop the bot (check every 30s) ──
+    _last_settle_check = bot.get('_last_settle_check', 0)
+    if now - _last_settle_check >= 30:
+      bot['_last_settle_check'] = now
+      try:
+        api_rate_limiter.wait()
+        mkt_al = kalshi_client.get_market(ticker)
+        mkt_al_data = mkt_al.get('market', mkt_al) if isinstance(mkt_al, dict) else {}
+        mkt_al_status = mkt_al_data.get('status', 'active')
+        mkt_al_result = mkt_al_data.get('result', '')
+        if mkt_al_status in ('closed', 'settled', 'finalized') or mkt_al_result:
+            # Market is done — cancel unfilled orders and stop
+            for rung in bot.get('rungs', []):
+                oid = rung.get('order_id')
+                if oid and rung.get('fill_qty', 0) < rung.get('qty', 1):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(oid)
+                    except Exception:
+                        pass
+            # If we had fills, handle fav side
+            total_fill = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
+            if total_fill > 0:
+                # Check if dog side won (result matches dog_side)
+                dog_won = (mkt_al_result == 'yes' and dog_side == 'yes') or (mkt_al_result == 'no' and dog_side == 'no')
+                if dog_won:
+                    avg_price = sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / max(total_fill, 1)
+                    pnl = int((100 - avg_price) * total_fill)
+                    session_pnl['gross_profit_cents'] += pnl
+                    session_pnl['completed_bots'] += 1
+                    print(f'🏁 ANCHOR_LADDER SETTLED WIN: {bot_id} dog={dog_side} result={mkt_al_result} pnl={pnl}¢')
+                else:
+                    avg_price = sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / max(total_fill, 1)
+                    loss = int(avg_price * total_fill)
+                    session_pnl['gross_loss_cents'] += loss
+                    session_pnl['stopped_bots'] += 1
+                    print(f'🏁 ANCHOR_LADDER SETTLED LOSS: {bot_id} dog={dog_side} result={mkt_al_result} loss={loss}¢')
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot['_trade_recorded'] = True
+            actions.append({'bot_id': bot_id, 'action': 'anchor_ladder_settled', 'result': mkt_al_result})
+            save_state()
+            return
+      except Exception as e:
+        print(f'⚠ anchor_ladder settlement check {bot_id}: {e}')
+
     # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
     if status == 'ladder_posted':
         # Get current dog bid from WS cache or orderbook
@@ -6298,6 +6282,119 @@ def _handle_ladder_arb(bot_id, bot, actions):
     no_bid = bot.get('live_no_bid', 0)
     total_expected = sum(r.get('quantity', qty_per) for r in bot.get('rungs', []))
 
+    # ── Settlement guard: if market is closed/settled, cancel everything (every 30s) ──
+    if now - bot.get('_last_settle_check', 0) >= 30:
+        bot['_last_settle_check'] = now
+        try:
+            api_rate_limiter.wait()
+            mkt_la = kalshi_client.get_market(ticker)
+            mkt_la_data = mkt_la.get('market', mkt_la) if isinstance(mkt_la, dict) else {}
+            mkt_la_status = mkt_la_data.get('status', 'active')
+            mkt_la_result = mkt_la_data.get('result', '')
+            if mkt_la_status in ('closed', 'settled', 'finalized') or mkt_la_result:
+                for rung in bot.get('rungs', []):
+                    for side in ('yes', 'no'):
+                        oid = rung.get(f'{side}_order_id')
+                        if oid:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(oid)
+                            except Exception:
+                                pass
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                actions.append({'bot_id': bot_id, 'action': 'ladder_arb_settled', 'result': mkt_la_result})
+                print(f'🏁 LADDER-ARB SETTLED: {bot_id} market={mkt_la_status} result={mkt_la_result}')
+                save_state()
+                return
+        except Exception as e:
+            print(f'⚠ ladder_arb settlement check {bot_id}: {e}')
+
+    # ── STATE: waiting_repeat — repost the ladder arb ──
+    if status == 'waiting_repeat':
+        wait_since = bot.get('waiting_repeat_since', now)
+        # Safety: if no repeats left, cancel orphaned orders and complete
+        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) >= bot.get('repeat_count', 0):
+            for rung in bot.get('rungs', []):
+                for side in ('yes', 'no'):
+                    oid = rung.get(f'{side}_order_id')
+                    if oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            print(f'🏁 LADDER-ARB REPEAT DONE: {bot_id} repeats_done={bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — completing')
+            save_state()
+            return
+        if now - wait_since < 10:  # 10s cooldown
+            return
+        # Fetch fresh orderbook and repost
+        try:
+            api_rate_limiter.wait()
+            ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
+            ob = ob_data.get('orderbook', ob_data)
+            yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+            no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+            fresh_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
+            fresh_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
+            fresh_yes_ask = 100 - fresh_no_bid if fresh_no_bid > 0 else 99
+            fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
+            if fresh_yes_bid <= 0 or fresh_no_bid <= 0 or fresh_yes_bid + fresh_no_bid >= 100:
+                return  # No market — wait
+            new_rungs = []
+            for rung in bot.get('rungs', []):
+                w = rung['width']
+                ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
+                profit = 100 - ty - tn
+                if profit <= 0:
+                    continue
+                try:
+                    yr, ya = create_order_maker(ticker=ticker, side='yes', action='buy', count=qty_per, price=ty)
+                    nr, na = create_order_maker(ticker=ticker, side='no', action='buy', count=qty_per, price=tn)
+                    new_rungs.append({
+                        'width': w, 'yes_price': ya, 'no_price': na,
+                        'yes_order_id': yr['order']['order_id'],
+                        'no_order_id': nr['order']['order_id'],
+                        'yes_fill_qty': 0, 'no_fill_qty': 0,
+                        'yes_filled_at': None, 'no_filled_at': None,
+                        'quantity': qty_per,
+                    })
+                except Exception:
+                    pass
+            if new_rungs:
+                bot['rungs'] = new_rungs
+                bot['total_rungs'] = len(new_rungs)
+                bot['posted_at'] = now
+                bot['status'] = 'ladder_arb_posted'
+                bot['filled_yes_qty'] = 0
+                bot['filled_no_qty'] = 0
+                bot['avg_yes_price'] = None
+                bot['avg_no_price'] = None
+                bot['first_fill_at'] = None
+                bot['first_fill_side'] = None
+                bot['walk_count'] = 0
+                bot['_consolidated'] = False
+                bot['_trade_recorded'] = False
+                bot['_ws_fill_handling'] = False
+                bot['hedge_order_id'] = None
+                bot['repost_count'] = bot.get('repost_count', 0) + 1
+                bot['live_yes_bid'] = fresh_yes_bid
+                bot['live_no_bid'] = fresh_no_bid
+                bot['yes_price'] = new_rungs[0]['yes_price']
+                bot['no_price'] = new_rungs[0]['no_price']
+                actions.append({'bot_id': bot_id, 'action': 'ladder_arb_repeat_repost'})
+                print(f'🔄 LADDER-ARB REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs reposted')
+            else:
+                return  # No profitable rungs — wait
+        except Exception as e:
+            print(f'❌ LADDER-ARB REPEAT {bot_id}: {e}')
+            return
+        save_state()
+        return
+
     # ── STATE: ladder_arb_posted — all rungs live, both sides ──
     if status == 'ladder_arb_posted':
         # Poll fill counts (backup for WS misses)
@@ -6350,73 +6447,68 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 bot['walk_count'] = 0
                 bot['last_walk_at'] = now
 
-                # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
-                total_filled_qty = bot[f'filled_{filled_side}_qty']
-                if total_filled_qty > 0 and not bot.get('_consolidated'):
-                    # Cancel unfilled side rung orders
-                    for rung in bot.get('rungs', []):
-                        oid = rung.get(f'{unfilled_side}_order_id')
-                        if oid:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(oid)
-                            except Exception:
-                                pass
-                            rung[f'{unfilled_side}_order_id'] = None
+            # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
+            total_filled_qty = bot[f'filled_{filled_side}_qty']
+            if total_filled_qty > 0 and not bot.get('_consolidated'):
+                # Cancel unfilled side rung orders
+                for rung in bot.get('rungs', []):
+                    oid = rung.get(f'{unfilled_side}_order_id')
+                    if oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+                        rung[f'{unfilled_side}_order_id'] = None
 
-                    # Place ONE consolidated hedge at the bid
+                # Place ONE consolidated hedge at the bid
+                unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+                if unfilled_bid and unfilled_bid > 0:
+                    try:
+                        hedge_resp, actual_hedge = create_order_maker(
+                            ticker=ticker, side=unfilled_side, action='buy',
+                            count=total_filled_qty, price=unfilled_bid
+                        )
+                        hedge_oid = hedge_resp['order']['order_id']
+                        bot['hedge_order_id'] = hedge_oid
+                        bot['hedge_price'] = actual_hedge
+                        bot['hedge_qty'] = total_filled_qty
+                        # Store on first rung for compat
+                        bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
+                        bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
+                        # Clear other rungs' unfilled orders
+                        for r in bot['rungs'][1:]:
+                            r[f'{unfilled_side}_order_id'] = None
+                        bot['_consolidated'] = True
+                        avg_filled = bot.get(f'avg_{filled_side}_price', 0)
+                        print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                    except Exception as e:
+                        print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
+
+            # ── Update hedge quantity if more fills came in after consolidation ──
+            elif bot.get('_consolidated'):
+                current_hedge_qty = bot.get('hedge_qty', 0)
+                if total_filled_qty > current_hedge_qty:
+                    additional_qty = total_filled_qty - current_hedge_qty
                     unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
-                    if unfilled_bid and unfilled_bid > 0:
+                    if unfilled_bid and unfilled_bid > 0 and additional_qty > 0:
                         try:
                             hedge_resp, actual_hedge = create_order_maker(
                                 ticker=ticker, side=unfilled_side, action='buy',
-                                count=total_filled_qty, price=unfilled_bid
+                                count=additional_qty, price=unfilled_bid
                             )
                             hedge_oid = hedge_resp['order']['order_id']
                             bot['hedge_order_id'] = hedge_oid
                             bot['hedge_price'] = actual_hedge
                             bot['hedge_qty'] = total_filled_qty
-                            # Store on first rung for compat
                             bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
                             bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
-                            bot['rungs'][0]['quantity'] = total_filled_qty
-                            # Clear other rungs' unfilled orders
-                            for r in bot['rungs'][1:]:
-                                r[f'{unfilled_side}_order_id'] = None
-                            bot['_consolidated'] = True
-                            avg_filled = bot.get(f'avg_{filled_side}_price', 0)
-                            print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                            print(f'📈 LADDER-ARB HEDGE UPDATE: {bot_id} +{additional_qty} (total {total_filled_qty}) @ {actual_hedge}¢')
                         except Exception as e:
-                            print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
+                            print(f'❌ LADDER-ARB HEDGE UPDATE {bot_id}: {e}')
 
             save_state()
             return
-
-        # Drift detection (no fills yet)
-        DRIFT_THRESHOLD_CENTS = 3
-        if phase == 'live' and yes_bid > 0 and no_bid > 0:
-            original_width = bot.get('arb_width', 0)
-            current_width = 100 - yes_bid - no_bid
-            width_drift = original_width - current_width
-            if width_drift >= DRIFT_THRESHOLD_CENTS and current_width < 2:
-                print(f'📉 LADDER-ARB DRIFT CANCEL: {bot_id} width {original_width}¢→{current_width}¢')
-                # Cancel all orders
-                for rung in bot.get('rungs', []):
-                    for side in ('yes', 'no'):
-                        oid = rung.get(f'{side}_order_id')
-                        if oid:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(oid)
-                            except Exception:
-                                pass
-                bot['status'] = 'drift_cancelled'
-                bot['drift_cancelled_at'] = now
-                bot['completed_at'] = now
-                actions.append({'bot_id': bot_id, 'action': 'drift_cancel_early',
-                                'original_width': original_width, 'current_width': current_width})
-                save_state()
-                return
 
         # Repost stale orders (3 min)
         REPOST_AFTER_MIN = 3
@@ -6530,10 +6622,34 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 threading.Thread(target=_execute_ladder_arb_completion, args=(bot_id,), daemon=True).start()
             return
 
+        # ── Update hedge if more fills came in after consolidation ──
+        total_filled_qty = bot.get(f'filled_{filled_side}_qty', 0)
+        current_hedge_qty = bot.get('hedge_qty', 0)
+        if bot.get('_consolidated') and total_filled_qty > current_hedge_qty:
+            additional_qty = total_filled_qty - current_hedge_qty
+            unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+            if unfilled_bid and unfilled_bid > 0 and additional_qty > 0:
+                try:
+                    # Place ADDITIONAL hedge order (don't cancel existing — it may have partial fills)
+                    hedge_resp, actual_hedge = create_order_maker(
+                        ticker=ticker, side=unfilled_side, action='buy',
+                        count=additional_qty, price=unfilled_bid
+                    )
+                    new_oid = hedge_resp['order']['order_id']
+                    # Track as the current hedge order (walk-up will amend this one)
+                    bot['hedge_order_id'] = new_oid
+                    bot['hedge_price'] = actual_hedge
+                    bot['hedge_qty'] = total_filled_qty
+                    bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid
+                    bot['rungs'][0][f'{unfilled_side}_price'] = actual_hedge
+                    print(f'📈 LADDER-ARB HEDGE UPDATE: {bot_id} +{additional_qty} contracts (total {total_filled_qty}) @ {actual_hedge}¢')
+                    save_state()
+                except Exception as e:
+                    print(f'❌ LADDER-ARB HEDGE UPDATE {bot_id}: {e}')
+
         avg_filled = bot.get(f'avg_{filled_side}_price', 0)
         first_fill_at = bot.get('first_fill_at', now)
         wait_min = (now - first_fill_at) / 60.0
-        timeout_min = bot.get('timeout_min', 6.0)
 
         # Halftime pause
         if _is_halftime(ticker):
@@ -6563,22 +6679,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     save_state()
                     return
 
-        # Timeout
-        if phase == 'live' and wait_min >= timeout_min:
-            print(f'⏰ LADDER-ARB TIMEOUT: {bot_id} {filled_side.upper()} filled {wait_min:.1f}m (>{timeout_min}m)')
-            # Cancel unfilled orders
-            for rung in bot.get('rungs', []):
-                uf = rung.get(f'{unfilled_side}_fill_qty', 0)
-                rq = rung.get('quantity', qty_per)
-                oid = rung.get(f'{unfilled_side}_order_id')
-                if uf < rq and oid:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(oid)
-                    except Exception:
-                        pass
-            _ladder_arb_sell_back(bot_id, bot, filled_side, actions)
-            return
+        # No timeout — walk-up is the only exit. Sit at bid until filled.
 
         # Walk-up every 20s
         DUAL_WALK_INTERVAL_S = 20
@@ -6589,32 +6690,51 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
                 if unfilled_bid and unfilled_bid > 0:
                     walked_any = False
-                    for rung in bot.get('rungs', []):
-                        uf = rung.get(f'{unfilled_side}_fill_qty', 0)
-                        rq = rung.get('quantity', qty_per)
-                        oid = rung.get(f'{unfilled_side}_order_id')
-                        if uf >= rq or not oid:
-                            continue
-                        current_price = rung.get(f'{unfilled_side}_price', 0)
-                        if current_price <= 0:
-                            continue
-                        # Walk to completion — no ceiling, just walk toward bid
-                        # Snap to bid when combined >= 98¢ (finish ASAP, still maker)
-                        if avg_filled + current_price >= 98 and unfilled_bid > current_price:
-                            new_price = unfilled_bid
-                        else:
-                            new_price = min(current_price + 1, unfilled_bid)
-                        if new_price <= current_price:
-                            continue
-                        try:
-                            amend_kwargs = {f'{unfilled_side}_price': new_price}
-                            api_rate_limiter.wait()
-                            kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
-                                                      count=rq, **amend_kwargs)
-                            rung[f'{unfilled_side}_price'] = new_price
-                            walked_any = True
-                        except Exception as e:
-                            print(f'❌ LADDER-ARB WALK {bot_id} rung: {e}')
+                    if bot.get('_consolidated') and bot.get('hedge_order_id'):
+                        # Consolidated: walk the single hedge order
+                        oid = bot['hedge_order_id']
+                        current_price = bot.get('hedge_price', 0)
+                        rq = bot.get('hedge_qty', 1)
+                        if current_price > 0 and oid:
+                            if avg_filled + current_price >= 98 and unfilled_bid > current_price:
+                                new_price = unfilled_bid
+                            else:
+                                new_price = min(current_price + 1, unfilled_bid)
+                            if new_price > current_price:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
+                                                              count=rq, **{f'{unfilled_side}_price': new_price})
+                                    bot['hedge_price'] = new_price
+                                    bot['rungs'][0][f'{unfilled_side}_price'] = new_price
+                                    walked_any = True
+                                except Exception as e:
+                                    print(f'❌ LADDER-ARB WALK {bot_id} hedge: {e}')
+                    else:
+                        # Non-consolidated: walk individual rung orders
+                        for rung in bot.get('rungs', []):
+                            uf = rung.get(f'{unfilled_side}_fill_qty', 0)
+                            rq = rung.get('quantity', qty_per)
+                            oid = rung.get(f'{unfilled_side}_order_id')
+                            if uf >= rq or not oid:
+                                continue
+                            current_price = rung.get(f'{unfilled_side}_price', 0)
+                            if current_price <= 0:
+                                continue
+                            if avg_filled + current_price >= 98 and unfilled_bid > current_price:
+                                new_price = unfilled_bid
+                            else:
+                                new_price = min(current_price + 1, unfilled_bid)
+                            if new_price <= current_price:
+                                continue
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
+                                                          count=rq, **{f'{unfilled_side}_price': new_price})
+                                rung[f'{unfilled_side}_price'] = new_price
+                                walked_any = True
+                            except Exception as e:
+                                print(f'❌ LADDER-ARB WALK {bot_id} rung: {e}')
 
                     if walked_any:
                         walk_count = bot.get('walk_count', 0) + 1
@@ -7795,40 +7915,6 @@ def _run_monitor():
 
                 bot['yes_fill_qty'] = yes_filled
                 bot['no_fill_qty']  = no_filled
-
-                # ── DRIFT DETECTION: cancel both if arb is dead before fill ──
-                # If neither leg has filled and the current prices make the arb
-                # unprofitable (width collapsed by 3¢+), kill both orders now.
-                DRIFT_THRESHOLD_CENTS = 3
-                if yes_filled == 0 and no_filled == 0 and phase == 'live':
-                    original_width = bot.get('arb_width') or bot.get('profit_per', 0)
-                    current_width = 100 - yes_bid - no_bid if (yes_bid > 0 and no_bid > 0) else original_width
-                    width_drift = original_width - current_width
-                    if width_drift >= DRIFT_THRESHOLD_CENTS and current_width < 2:
-                        print(f'📉 DRIFT CANCEL: {bot_id} width {original_width}¢→{current_width}¢ (drift {width_drift}¢) — arb is dead')
-                        try:
-                            gid = bot.get('order_group_id')
-                            if gid:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order_group(gid)
-                            else:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(bot['yes_order_id'])
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(bot['no_order_id'])
-                        except Exception:
-                            pass
-                        bot['status'] = 'drift_cancelled'
-                        bot['drift_cancelled_at'] = now
-                        bot['completed_at'] = now
-                        bot_log('DRIFT_CANCEL_EARLY', bot_id, {
-                            'original_width': original_width, 'current_width': current_width,
-                            'yes_bid': yes_bid, 'no_bid': no_bid,
-                        })
-                        actions.append({'bot_id': bot_id, 'action': 'drift_cancel_early',
-                                        'original_width': original_width, 'current_width': current_width})
-                        save_state()
-                        continue
 
                 # ── Both sides fully filled → profit locked at settlement ──
                 if yes_filled >= qty and no_filled >= qty:
@@ -10290,7 +10376,10 @@ def _compute_pnl_bucket(trades, category=None):
     """Compute gross profit/loss/counts from a list of trade_history entries.
     If category given ('arb','bet','middle'), filters to that category only."""
     if category:
-        trades = [t for t in trades if t.get('bot_category', 'arb') == category]
+        if category == 'arb':
+            trades = [t for t in trades if t.get('bot_category', 'arb') in ('arb', 'ladder_arb', 'both_posted')]
+        else:
+            trades = [t for t in trades if t.get('bot_category', 'arb') == category]
     gross_profit = 0
     gross_loss   = 0
     completed    = 0

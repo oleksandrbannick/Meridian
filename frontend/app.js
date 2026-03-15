@@ -1,4 +1,7 @@
 // Meridian — Sports Trading Terminal
+/** Return local YYYY-MM-DD string (avoids UTC date-shift bug) */
+function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
+
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 let allMarkets = [];
 let autoMonitorInterval = null;
@@ -3057,6 +3060,8 @@ function toggleAnchorAutoPrice() {
 function renderAnchorRungs() {
     const container = document.getElementById('anchor-rungs-container');
     if (!container) return;
+    // Don't overwrite inputs while user is typing (Bug 4 fix)
+    if (container.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
     const countEl = document.getElementById('anchor-rung-count');
     if (countEl) {
         const autoLabel = _anchorAutoPrice
@@ -4540,6 +4545,8 @@ async function placeSelectedWidthsBots() {
 
     let notifMsg;
 
+    console.log(`[DEPLOY] validWidths=${validWidths.length}, routing to ${validWidths.length >= 2 ? 'ladder-arb' : 'legacy'}`);
+
     if (validWidths.length >= 2) {
         // ── LADDER-ARB: single unified bot with rungs ─────────────────────────
         try {
@@ -4648,10 +4655,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         const parts = ticker.split('-');
         const gameKey = parts.length >= 2 ? parts[1] : parts[0];
         const gs = gameScores[gameKey] || gameScores[ticker] || null;
-        if (gs && (gs.home_score != null || gs.away_score != null)) {
-            const h = gs.home_score || 0, aw = gs.away_score || 0;
-            const periodStr = gs.period ? (gs.clock ? `${gs.clock} ` : '') + (gs.period >= 2 ? '2H' : '1H') : '';
-            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:#ffaa00;font-weight:700;">${aw}–${h}${periodStr ? ' · ' + periodStr : ''}</span>`;
+        if (gs) {
+            liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
         }
     }
 
@@ -5031,8 +5036,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 : legAInRange ? `✅ Leg A winning`
                 : legBInRange ? `✅ Leg B winning`
                 : '⛔ both losing';
-            const periodStr = gs.period ? (gs.clock ? `${gs.clock} ` : '') + (gs.period >= 2 ? '2H' : '1H') : '';
-            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${aw}–${h}${periodStr ? ' · ' + periodStr : ''} · ${rangeLabel}</span>`;
+            const detail = gs.status_detail || '';
+            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${aw}–${h}${detail ? ' · ' + detail : ''} · ${rangeLabel}</span>`;
         }
     }
 
@@ -5166,7 +5171,7 @@ function _renderPnlDisplay(mode) {
         const losses = pnl.dog_losses || 0;
         const gross = ((pnl.dog_profit_cents || 0) / 100).toFixed(2);
         const loss  = ((pnl.dog_loss_cents   || 0) / 100).toFixed(2);
-        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
+        const dayLabel = pnl.day_key || _localDateStr();
         el.innerHTML = `
             <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Dog Bots Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
             <span style="color:${color};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${color}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
@@ -5188,7 +5193,7 @@ function _renderPnlDisplay(mode) {
         const losses = pnl.mid_losses || 0;
         const gross = ((pnl.mid_profit_cents || 0) / 100).toFixed(2);
         const loss  = ((pnl.mid_loss_cents   || 0) / 100).toFixed(2);
-        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
+        const dayLabel = pnl.day_key || _localDateStr();
         const unrealizedBadge = unrealizedCount > 0 ? `<span style="color:#00aaff;font-size:10px;font-weight:600;">+ $${unrealized.toFixed(2)} locked (${unrealizedCount} settling)</span>` : '';
         const atRisk = (pnl.mid_at_risk_cents || 0) / 100;
         const atRiskCount = pnl.mid_at_risk_count || 0;
@@ -5213,7 +5218,7 @@ function _renderPnlDisplay(mode) {
         const loss     = ((pnl.arb_loss_cents   || 0) / 100).toFixed(2);
         const wins     = pnl.arb_wins   || 0;
         const losses   = pnl.arb_losses || 0;
-        const dayLabel = pnl.day_key || new Date().toISOString().split('T')[0];
+        const dayLabel = pnl.day_key || _localDateStr();
         el.innerHTML = `
             <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
             <span style="color:${netColor};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${netColor}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
@@ -8460,7 +8465,7 @@ function renderPnLCalendar(panel, days) {
     const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
     const totalDays = new Date(year, month + 1, 0).getDate();
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = _localDateStr(today);
 
     // Month P&L
     let monthNet = 0;
@@ -8816,7 +8821,7 @@ async function loadBetsHistory() {
                 const dayMap = {};
                 allBets.forEach(t => {
                     const d = new Date((t.timestamp||0) * 1000);
-                    const key = d.toISOString().slice(0,10);
+                    const key = _localDateStr(d);
                     if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
                     const net = (t.profit_cents||0) - (t.loss_cents||0);
                     dayMap[key].net_cents += net;
@@ -8984,7 +8989,7 @@ async function loadMiddleHistory() {
                 const dayMap = {};
                 allMiddle.forEach(t => {
                     const d = new Date((t.timestamp||0) * 1000);
-                    const key = d.toISOString().slice(0,10);
+                    const key = _localDateStr(d);
                     if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
                     const net = (t.profit_cents||0) - (t.loss_cents||0);
                     dayMap[key].net_cents += net;
@@ -9171,7 +9176,7 @@ async function loadDogHistory() {
                 const dayMap = {};
                 allDog.forEach(t => {
                     const d = new Date((t.timestamp||0) * 1000);
-                    const key = d.toISOString().slice(0,10);
+                    const key = _localDateStr(d);
                     if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
                     const net = (t.profit_cents||0) - (t.loss_cents||0);
                     dayMap[key].net_cents += net;

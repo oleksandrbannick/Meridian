@@ -2347,8 +2347,28 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
     session_pnl['gross_loss_cents'] += loss_cents
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
-    bot['status'] = 'stopped'
-    bot['stopped_at'] = now
+
+    # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
+    repeats_done_now = bot.get('repeats_done', 0) + 1
+    bot['repeats_done'] = repeats_done_now
+    repeat_total = bot.get('repeat_count', 0)
+    if repeats_done_now <= repeat_total:
+        bot['status'] = 'waiting_repeat'
+        bot['waiting_repeat_since'] = now
+        bot['dog_filled_at'] = None
+        bot['fav_order_id'] = None
+        bot['fav_fill_qty'] = 0
+        bot['total_dog_fill_qty'] = 0
+        bot['_hedge_fired'] = False
+        bot['_trade_recorded'] = False
+        bot['_sellback_attempts'] = 0
+        for rung in bot.get('rungs', []):
+            rung['fill_qty'] = 0
+            rung['order_id'] = None
+        print(f'🔄 LADDER SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+    else:
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = now
 
     filled_rungs_detail = [
         {'price': r['price'], 'qty': r.get('fill_qty', 0)}
@@ -4369,6 +4389,14 @@ def create_anchor_bot():
         if active_on_ticker >= MAX_BOTS_PER_TICKER:
             return jsonify({'error': f'Bot cap: {active_on_ticker} bots on {ticker} (max {MAX_BOTS_PER_TICKER})'}), 400
 
+        # Block duplicate dog bots on same ticker+side
+        for b in active_bots.values():
+            if (b.get('ticker') == ticker
+                and b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
+                and b.get('status') not in ('completed', 'stopped', 'cancelled')
+                and b.get('dog_side', '') == dog_side):
+                return jsonify({'error': f'A dog bot is already active on {ticker} ({dog_side} side). Cancel it first.'}), 400
+
         # Auto-detect dog side from orderbook if not specified
         # Always fetch live orderbook for smart pricing
         try:
@@ -4396,7 +4424,7 @@ def create_anchor_bot():
             if target_width <= 3:
                 anchor_depth = 5  # default 5c below for tight widths
             else:
-                anchor_depth = max(5, round(target_width * 0.8))
+                anchor_depth = round(target_width * 0.8)  # NO floor — clean 80/20 split
         fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
 
         # Smart pricing: anchor_depth below bid if tight spread (≤2c), below ask if broken spread
@@ -4546,7 +4574,7 @@ def create_ladder_bot():
             if target_width <= 3:
                 anchor_depth = 5
             else:
-                anchor_depth = max(5, round(target_width * 0.8))
+                anchor_depth = round(target_width * 0.8)  # NO floor — clean 80/20 split
         fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
 
         # Smart pricing: adjust all rungs relative to live price at order creation time
@@ -5762,7 +5790,38 @@ def _handle_anchor_dog(bot_id, bot, actions):
             actions.append({'bot_id': bot_id, 'action': 'anchor_complete', 'pnl': pnl_cents})
             return
 
-        # Fav not filled yet — check timeout
+        # Fav not filled yet — check if game/market is over
+        if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
+            # Game ending with fav unfilled — check if market settled
+            try:
+                api_rate_limiter.wait()
+                mkt_resp = kalshi_client.get_market(ticker)
+                mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
+                mkt_status = mkt.get('status', '').lower()
+                mkt_result = mkt.get('result', '').lower()
+                if mkt_status in ('settled', 'finalized', 'closed'):
+                    # Cancel unfilled fav order
+                    try:
+                        kalshi_client.cancel_order(fav_order_id)
+                    except Exception:
+                        pass
+                    dog_price = bot['dog_price']
+                    dog_won = (dog_side == 'yes' and mkt_result == 'yes') or \
+                              (dog_side == 'no' and mkt_result == 'no')
+                    profit = ((100 - dog_price) * qty) if dog_won else (-(dog_price * qty))
+                    if dog_won:
+                        session_pnl['gross_profit_cents'] += profit
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(profit)
+                    print(f'🏁 ANCHOR GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
+                    return
+            except Exception:
+                pass  # non-fatal, fall through to normal timeout
+
         hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
@@ -6105,8 +6164,27 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(net_pnl)
             session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+
+            # Repeat logic — re-anchor if repeats remain
+            repeats_done_now = bot.get('repeats_done', 0) + 1
+            bot['repeats_done'] = repeats_done_now
+            repeat_total = bot.get('repeat_count', 0)
+            if repeats_done_now <= repeat_total:
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = now
+                bot['dog_filled_at'] = None
+                bot['fav_order_id'] = None
+                bot['fav_fill_qty'] = 0
+                bot['total_dog_fill_qty'] = 0
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
+                for rung in bot.get('rungs', []):
+                    rung['fill_qty'] = 0
+                    rung['order_id'] = None
+                print(f'🔄 ANCHOR LADDER REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total}')
+            else:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'pnl': pnl_cents})
             return
@@ -8476,7 +8554,9 @@ def _run_monitor():
                 print(f'Error settling one_leg_timeout bot {bot_id}: {ol_err}')
                 continue
 
-        save_state()
+        # Only persist when something actually changed — saves ~50ms per idle cycle
+        if actions:
+            save_state()
         active_count = len([b for b in active_bots.values() if b['status'] in active_statuses])
         if actions:
             bot_log('MONITOR_CYCLE', '', {'active_bots': active_count, 'actions_count': len(actions), 'actions_summary': [a.get('action', '?') for a in actions]})

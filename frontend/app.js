@@ -5897,7 +5897,11 @@ async function loadBots() {
                 const bidDisplay = liveBidFilled != null ? `${liveBidFilled}¢` : '?';
                 const lastWalkAt = bot.last_walk_at || bot.first_fill_at || 0;
                 const nextWalkIn = lastWalkAt > 0 ? Math.max(0, 20 - (Date.now()/1000 - lastWalkAt)) : 20;
+                const nextWalkPct = Math.min(100, ((20 - nextWalkIn) / 20) * 100);
                 const nextWalkStr = Math.ceil(nextWalkIn) + 's';
+                const walkStartPrice = bot.walk_start_price || pendingPrice;
+                const prevPrice = walkCount > 0 ? pendingPrice - 1 : walkStartPrice;
+                const nextPrice = pendingPrice + 1;
                 const exitLine = isAmending
                     ? `<span style="color:#ff8800;font-weight:700;">🔧 ${pendingSide} posted ${pendingPrice}¢ → amend ${amendPrice != null ? amendPrice + '¢' : '?¢'} (completing arb…)</span>`
                     : gameOver
@@ -5905,7 +5909,23 @@ async function loadBots() {
                     : isHalftime
                     ? `<span style="color:#818cf8;font-weight:700;">⏸ HALFTIME — walk-up paused</span>`
                     : walkCount > 0
-                    ? `<span style="color:#00aaff;font-weight:700;">📈 Walking ${pendingSide} · posted at ${pendingPrice}¢ · combined ${combined}¢ · step #${walkCount} · next in ${nextWalkStr}</span>`
+                    ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="color:#00aaff;font-weight:700;">📈 Walking ${pendingSide}</span>
+                        <span style="color:#666;font-size:9px;">start ${walkStartPrice}¢</span>
+                        <span style="color:#888;">prev ${prevPrice}¢ →</span>
+                        <span style="color:#00ff88;font-weight:700;font-size:12px;">${pendingPrice}¢</span>
+                        <span style="color:#888;">→ next ${nextPrice}¢</span>
+                        <span style="color:#555;font-size:9px;">combined ${combined}¢ · step #${walkCount}</span>
+                        <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkStr}">
+                          <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
+                            <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
+                            <circle cx="10" cy="10" r="8" fill="none" stroke="#00aaff" stroke-width="2"
+                              stroke-dasharray="${2*Math.PI*8}" stroke-dashoffset="${2*Math.PI*8*(1-nextWalkPct/100)}"
+                              stroke-linecap="round"/>
+                          </svg>
+                          <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${Math.ceil(nextWalkIn)}</span>
+                        </span>
+                      </div>`
                     : `<span style="color:#ffaa00;font-weight:700;">⏳ Walk-up starting · ${pendingSide} at ${pendingPrice}¢ · next in ${nextWalkStr}</span>`;
                 stopLossInfo = `<div style="background:${gameOver ? '#818cf811' : urgColor+'11'};border:1px solid ${gameOver ? '#818cf833' : urgColor+'33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${gameOver ? '#818cf8' : urgColor};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>✓ <strong>${filledSide}</strong> filled ${fillAgeMin}m ago${isFavFilled ? ' (fav)' : ' (dog)'} @ ${entryFilled}¢</span>

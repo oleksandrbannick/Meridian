@@ -4164,17 +4164,27 @@ def _check_and_record_rung_completions(bot_id, bot):
     if bot.get('_consolidated') and bot.get('hedge_order_id'):
         filled_side = bot.get('first_fill_side', 'yes')
         hedge_side = 'no' if filled_side == 'yes' else 'yes'
-        # Count anchor-filled rungs that are now completed
-        all_anchor_filled_completed = True
-        has_uncompleted_anchor_fill = False
+        hedge_qty = bot.get('hedge_qty', 0)
+        hedge_fill_count = bot.get('_hedge_fill_count', 0)
+
+        # Count how many anchor-filled but uncompleted rungs remain
+        # that were part of THIS hedge generation (up to hedge_qty)
+        covered_completed = 0
+        covered_uncompleted = 0
         for rung in bot.get('rungs', []):
             rq = rung.get('quantity', qty_per)
             if rung.get(f'{filled_side}_fill_qty', 0) >= rq:
-                if not rung.get('completed'):
-                    all_anchor_filled_completed = False
-                    has_uncompleted_anchor_fill = True
+                if rung.get('completed'):
+                    covered_completed += 1
+                else:
+                    covered_uncompleted += 1
 
-        if all_anchor_filled_completed and newly_completed:
+        # Hedge gen is done when: hedge fully filled AND all covered rungs completed
+        # OR: completed rungs >= hedge_qty (the hedge covered exactly hedge_qty rungs)
+        hedge_fully_filled = hedge_fill_count >= hedge_qty and hedge_qty > 0
+        all_covered_done = covered_completed >= hedge_qty and hedge_qty > 0
+
+        if hedge_fully_filled and all_covered_done:
             # Current hedge generation fully consumed — move to history
             hedge_history = bot.get('hedge_history', [])
             hedge_fill_count = bot.get('_hedge_fill_count', 0)
@@ -7070,6 +7080,20 @@ def _handle_ladder_arb(bot_id, bot, actions):
         # If hedge generation completed (all anchor-filled rungs hedged), go back to posted state
         # to wait for more anchor fills on remaining rungs
         if not bot.get('_consolidated') and not bot.get('hedge_order_id'):
+            # Check if there are filled-but-uncompleted rungs that need a NEW hedge
+            new_hedge_qty = 0
+            for rung in bot.get('rungs', []):
+                if not rung.get('completed') and rung.get(f'{filled_side}_fill_qty', 0) >= rung.get('quantity', qty_per):
+                    new_hedge_qty += min(rung.get(f'{filled_side}_fill_qty', 0), rung.get('quantity', qty_per))
+            if new_hedge_qty > 0:
+                # Go back to posted so the consolidation block fires next cycle
+                print(f'🔄 LADDER-ARB NEW GEN: {bot_id} — {new_hedge_qty} filled rungs need new hedge, resetting to posted')
+                bot['status'] = 'ladder_arb_posted'
+                bot['first_fill_at'] = None
+                bot['first_fill_side'] = None
+                save_state()
+                return
+
             # Check if there are still unfilled anchor orders open
             has_open_anchor = False
             for rung in bot.get('rungs', []):
@@ -8664,6 +8688,8 @@ def _run_monitor():
                         bot['first_leg'] = 'yes'
                         bot['walk_count'] = 0
                         bot['last_walk_at'] = now
+                        bot['walk_start_price'] = bot.get('no_price', 0)
+                        bot['last_walk_at'] = now
 
                     yes_is_fav = (bot.get('yes_price', 50) >= bot.get('no_price', 50))
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0
@@ -8740,6 +8766,7 @@ def _run_monitor():
                         bot['first_leg'] = 'no'
                         bot['walk_count'] = 0
                         bot['last_walk_at'] = now
+                        bot['walk_start_price'] = bot.get('yes_price', 0)
 
                     no_is_fav = (bot.get('no_price', 50) >= bot.get('yes_price', 50))
                     wait_min = (now - bot['first_fill_at']) / 60.0 if bot.get('first_fill_at') else 0

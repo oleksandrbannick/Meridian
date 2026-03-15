@@ -2580,7 +2580,8 @@ def _execute_ws_completion(bot_id):
             actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
             real_yes = actual_yes if actual_yes else bot['yes_price']
             real_no  = actual_no  if actual_no  else bot['no_price']
-            profit_cents = (100 - real_yes - real_no) * qty
+            fee = kalshi_fee_cents(real_yes, real_no, qty)
+            profit_cents = (100 - real_yes - real_no) * qty - fee
 
             session_pnl['gross_profit_cents'] += profit_cents
             session_pnl['completed_bots']     += 1
@@ -2591,6 +2592,7 @@ def _execute_ws_completion(bot_id):
                 'yes_price': real_yes, 'no_price': real_no,
                 'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
                 'quantity': qty, 'profit_cents': profit_cents,
+                'fee_cents': fee,
                 'result': 'completed', 'timestamp': now,
                 'verified_prices': actual_yes is not None and actual_no is not None,
                 'placed_at': bot.get('created_at', now),
@@ -6552,7 +6554,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         if current_price <= 0:
                             continue
                         # Walk to completion — no ceiling, just walk toward bid
-                        new_price = min(current_price + 1, unfilled_bid)
+                        # Snap to bid when combined >= 98¢ (finish ASAP, still maker)
+                        if avg_filled + current_price >= 98 and unfilled_bid > current_price:
+                            new_price = unfilled_bid
+                        else:
+                            new_price = min(current_price + 1, unfilled_bid)
                         if new_price <= current_price:
                             continue
                         try:
@@ -7806,7 +7812,8 @@ def _run_monitor():
                         actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
                         real_yes = actual_yes if actual_yes else bot['yes_price']
                         real_no  = actual_no  if actual_no  else bot['no_price']
-                        profit_cents = (100 - real_yes - real_no) * qty
+                        fee = kalshi_fee_cents(real_yes, real_no, qty)
+                        profit_cents = (100 - real_yes - real_no) * qty - fee
 
                         session_pnl['gross_profit_cents'] += profit_cents
                         session_pnl['completed_bots']     += 1
@@ -7817,6 +7824,7 @@ def _run_monitor():
                             'yes_price': real_yes, 'no_price': real_no,
                             'original_yes': bot['yes_price'], 'original_no': bot['no_price'],
                             'quantity': qty, 'profit_cents': profit_cents,
+                            'fee_cents': fee,
                             'result': 'completed', 'timestamp': now,
                             'verified_prices': actual_yes is not None and actual_no is not None,
                             'placed_at': bot.get('created_at', now),
@@ -8035,6 +8043,7 @@ def _run_monitor():
                         bot['game_phase'] = 'live'
 
                     # ── Walk-up: every 20s, bump unfilled NO by 1¢ toward bid (maker, no ceiling) ──
+                    # When combined cost >= 98¢, snap to bid immediately (still maker/post_only)
                     last_walk = bot.get('last_walk_at') or bot.get('first_fill_at') or now
                     since_walk = now - last_walk
                     if since_walk >= DUAL_WALK_INTERVAL_S:
@@ -8042,7 +8051,12 @@ def _run_monitor():
                             old_no_order_id = bot.get('no_order_id')
                             current_no_price = bot.get('no_price', 0)
                             if old_no_order_id and current_no_price > 0 and no_bid > 0:
-                                new_no_price = min(current_no_price + 1, no_bid)
+                                combined_now = bot['yes_price'] + current_no_price
+                                # Snap to bid when already close to 100¢ — finish ASAP
+                                if combined_now >= 98 and no_bid > current_no_price:
+                                    new_no_price = no_bid  # jump straight to bid
+                                else:
+                                    new_no_price = min(current_no_price + 1, no_bid)
                                 if new_no_price > current_no_price:
                                     try:
                                         api_rate_limiter.wait()
@@ -8105,6 +8119,7 @@ def _run_monitor():
                         bot['game_phase'] = 'live'
 
                     # ── Walk-up: every 20s, bump unfilled YES by 1¢ toward bid (maker, no ceiling) ──
+                    # When combined cost >= 98¢, snap to bid immediately (still maker/post_only)
                     last_walk = bot.get('last_walk_at') or bot.get('first_fill_at') or now
                     since_walk = now - last_walk
                     if since_walk >= DUAL_WALK_INTERVAL_S:
@@ -8112,7 +8127,12 @@ def _run_monitor():
                             old_yes_order_id = bot.get('yes_order_id')
                             current_yes_price = bot.get('yes_price', 0)
                             if old_yes_order_id and current_yes_price > 0 and yes_bid > 0:
-                                new_yes_price = min(current_yes_price + 1, yes_bid)
+                                combined_now = current_yes_price + bot['no_price']
+                                # Snap to bid when already close to 100¢ — finish ASAP
+                                if combined_now >= 98 and yes_bid > current_yes_price:
+                                    new_yes_price = yes_bid  # jump straight to bid
+                                else:
+                                    new_yes_price = min(current_yes_price + 1, yes_bid)
                                 if new_yes_price > current_yes_price:
                                     try:
                                         api_rate_limiter.wait()

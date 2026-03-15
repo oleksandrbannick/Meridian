@@ -3,6 +3,12 @@
 function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
+
+/** Kalshi maker fee in cents: ceil(0.0175 × count × P × (1-P) × 100) */
+function kalshiFeeCents(yesPrice, noPrice, count) {
+    const p = yesPrice / 100;
+    return Math.ceil(0.0175 * count * p * (1 - p) * 100);
+}
 let allMarkets = [];
 let autoMonitorInterval = null;
 let liveScoresInterval = null;
@@ -267,13 +273,19 @@ async function loadLiveScores() {
         games.forEach(g => {
             const sport = g.sport || '';
             // ALL games for score display (pre, in, post)
-            if (g.homeAbbr) allGameData[`${sport}:${g.homeAbbr}`] = g;
-            if (g.awayAbbr) allGameData[`${sport}:${g.awayAbbr}`] = g;
-            // Tennis: also store under combined pair key to avoid 3-letter collisions
-            // (e.g. SHE = Shelton AND Sherif — need pair key to disambiguate)
+            // Live games take priority — don't let a finished game overwrite a live one
+            const keys = [];
+            if (g.homeAbbr) keys.push(`${sport}:${g.homeAbbr}`);
+            if (g.awayAbbr) keys.push(`${sport}:${g.awayAbbr}`);
             if (g.homeAbbr && g.awayAbbr) {
-                allGameData[`${sport}:${g.homeAbbr}${g.awayAbbr}`] = g;
-                allGameData[`${sport}:${g.awayAbbr}${g.homeAbbr}`] = g;
+                keys.push(`${sport}:${g.homeAbbr}${g.awayAbbr}`);
+                keys.push(`${sport}:${g.awayAbbr}${g.homeAbbr}`);
+            }
+            for (const key of keys) {
+                const existing = allGameData[key];
+                // Don't overwrite a live game with a finished one
+                if (existing && existing.state === 'in' && g.state !== 'in') continue;
+                allGameData[key] = g;
             }
             // Live filter only uses in-progress games
             if (g.state === 'in') {
@@ -4870,7 +4882,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const combinedAvg = (status === 'ladder_arb_yes_filled' || status === 'ladder_arb_no_filled') && hedgePriceForPnl > 0
         ? (status === 'ladder_arb_yes_filled' ? avgYes : avgNo) + hedgePriceForPnl  // anchor avg + actual hedge
         : avgYes + avgNo;
-    const effectiveProfit = combinedAvg > 0 ? (100 - combinedAvg) : 0;
+    const estFeePerContract = combinedAvg > 0 ? kalshiFeeCents(avgYes || Math.round(combinedAvg / 2), avgNo || Math.round(combinedAvg / 2), 1) : 0;
+    const effectiveProfit = combinedAvg > 0 ? (100 - combinedAvg - estFeePerContract) : 0;
     const pnlColor = effectiveProfit > 2 ? '#00ff88' : effectiveProfit > 0 ? '#00aaff' : '#ff4444';
 
     // Rungs table — show consolidated hedge when one side is filled
@@ -4929,7 +4942,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const anchorPrice = r[`${filledSideKey}_price`] || 0;
             const hedgePriceForRung = isCompleted ? (currentHedgePrice || r[`${hedgeSide}_price`] || 0) : 0;
             const rungTotal = anchorPrice + hedgePriceForRung;
-            const rungPnl = isCompleted ? (100 - rungTotal) : 0;
+            const rungFee = isCompleted && hedgePriceForRung > 0 ? kalshiFeeCents(filledSideKey === 'yes' ? anchorPrice : hedgePriceForRung, filledSideKey === 'yes' ? hedgePriceForRung : anchorPrice, rQty) : 0;
+            const rungPnl = isCompleted ? (100 - rungTotal) * rQty - rungFee : 0;
             const pnlCol = rungPnl > 2 ? '#00ff88' : rungPnl > 0 ? '#ffaa00' : '#ff4444';
             const statusTag = isCompleted
                 ? `<span style="color:${pnlCol};font-size:8px;font-weight:700;">${rungPnl > 0 ? '+' : ''}${rungPnl}¢</span>`
@@ -5570,7 +5584,15 @@ async function loadBots() {
                     // Watch bots: potential = (100 - entry) * qty
                     return sum + ((100 - (b.entry_price || 50)) * (b.quantity || 1));
                 }
-                return sum + ((b.profit_per ?? (100 - (b.yes_price || 0) - (b.no_price || 0))) * (b.quantity || 1));
+                // Ladder arb: use actual cumulative P&L (fee-adjusted) if available
+                if (b.bot_category === 'ladder_arb' && b.cumulative_pnl != null) {
+                    return sum + b.cumulative_pnl;
+                }
+                const rawProfit = (b.profit_per ?? (100 - (b.yes_price || 0) - (b.no_price || 0))) * (b.quantity || 1);
+                // Subtract estimated maker fees
+                const yp = b.yes_price || 0, np = b.no_price || 0, q = b.quantity || 1;
+                const fee = (yp > 0 && np > 0) ? kalshiFeeCents(yp, np, q) : 0;
+                return sum + rawProfit - fee;
             }, 0);
 
             const groupHeader = document.createElement('div');
@@ -5595,7 +5617,7 @@ async function loadBots() {
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                     <span style="color:#8892a6;font-size:10px;">${groupBots.length} bot${groupBots.length > 1 ? 's' : ''}</span>
-                    <span style="color:#00ff88;font-size:11px;font-weight:700;">+${(groupProfitTotal / 100).toFixed(2)}</span>
+                    <span style="color:${groupProfitTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupProfitTotal >= 0 ? '+' : ''}${(groupProfitTotal / 100).toFixed(2)}</span>
                     <button onclick="emergencyExitGame('${escapedGameKey}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🚨 Exit All</button>
                 </div>
             `;

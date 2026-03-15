@@ -2139,7 +2139,7 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # Hard ceiling check
+        # Hard ceiling check — cap hedge price to stay under ceiling, don't sell back
         est_fees = kalshi_fee_cents(
             actual_dog_price if dog_side == 'yes' else hedge_price,
             actual_dog_price if dog_side == 'no' else hedge_price,
@@ -2148,9 +2148,21 @@ def _execute_anchor_fav_hedge(bot_id):
         total_cost = actual_dog_price + hedge_price + est_fees
         print(f'   🧮 Ceiling check: {actual_dog_price}¢ + {hedge_price}¢ + {est_fees}¢ fees = {total_cost}¢ (ceiling={HARD_CEILING_CENTS}¢)')
         if total_cost > HARD_CEILING_CENTS:
-            print(f'   🛑 CEILING HIT: {total_cost}¢ > {HARD_CEILING_CENTS}¢ — deferring to monitor for sellback')
-            bot['status'] = 'dog_filled'
-            return
+            # Cap hedge price so total stays under ceiling
+            safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees
+            # Recalc fees at the safe price
+            est_fees2 = kalshi_fee_cents(
+                actual_dog_price if dog_side == 'yes' else safe_hedge,
+                actual_dog_price if dog_side == 'no' else safe_hedge,
+                qty
+            )
+            safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees2
+            if safe_hedge < 1:
+                print(f'   🛑 CEILING: safe_hedge={safe_hedge}¢ too low — deferring to monitor')
+                bot['status'] = 'dog_filled'
+                return
+            hedge_price = safe_hedge
+            print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}¢ (total was {total_cost}¢) — will walk up toward bid')
 
         # Post fav hedge at capped price
         fav_resp, actual_fav_price = create_order_maker(
@@ -2261,7 +2273,7 @@ def _execute_ladder_fav_hedge(bot_id):
             _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
             return
 
-        # Hard ceiling check
+        # Hard ceiling check — cap hedge price instead of selling back
         est_fees = kalshi_fee_cents(
             avg_price if dog_side == 'yes' else hedge_price,
             avg_price if dog_side == 'no' else hedge_price,
@@ -2270,9 +2282,19 @@ def _execute_ladder_fav_hedge(bot_id):
         total_cost = avg_price + hedge_price + est_fees
         print(f'   🧮 Ceiling check: {avg_price}¢ + {hedge_price}¢ + {est_fees}¢ fees = {total_cost}¢ (ceiling={HARD_CEILING_CENTS}¢)')
         if total_cost > HARD_CEILING_CENTS:
-            print(f'   🛑 CEILING HIT: {total_cost}¢ > {HARD_CEILING_CENTS}¢ — selling back')
-            _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, [])
-            return
+            safe_hedge = HARD_CEILING_CENTS - avg_price - est_fees
+            est_fees2 = kalshi_fee_cents(
+                avg_price if dog_side == 'yes' else safe_hedge,
+                avg_price if dog_side == 'no' else safe_hedge,
+                total_fill_qty
+            )
+            safe_hedge = HARD_CEILING_CENTS - avg_price - est_fees2
+            if safe_hedge < 1:
+                print(f'   🛑 CEILING: safe_hedge={safe_hedge}¢ too low — selling back')
+                _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, [])
+                return
+            print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}→{safe_hedge}¢ — will walk up toward bid')
+            hedge_price = safe_hedge
 
         # Post single fav hedge for total filled qty
         fav_resp, actual_fav_price = create_order_maker(
@@ -5591,7 +5613,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
                 return
 
-            # Hard ceiling check before hedging
+            # Hard ceiling check — cap hedge price instead of selling back
             est_fees = kalshi_fee_cents(
                 actual_dog_price if dog_side == 'yes' else hedge_price,
                 actual_dog_price if dog_side == 'no' else hedge_price,
@@ -5599,10 +5621,19 @@ def _handle_anchor_dog(bot_id, bot, actions):
             )
             total_cost = actual_dog_price + hedge_price + est_fees
             if total_cost > HARD_CEILING_CENTS:
-                # Arb dead on arrival — sell dog back immediately
-                print(f'🛑 ANCHOR CEILING: {bot_id} dog@{actual_dog_price}¢ + fav@{fav_bid}¢ + fees {est_fees}¢ = {total_cost}¢ — selling dog back')
-                _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
-                return
+                safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees
+                est_fees2 = kalshi_fee_cents(
+                    actual_dog_price if dog_side == 'yes' else safe_hedge,
+                    actual_dog_price if dog_side == 'no' else safe_hedge,
+                    qty
+                )
+                safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees2
+                if safe_hedge < 1:
+                    print(f'🛑 ANCHOR CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
+                    _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
+                    return
+                print(f'⚠ ANCHOR CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
+                hedge_price = safe_hedge
 
             # Post the fav hedge at target-width-capped price (maker)
             try:
@@ -5815,8 +5846,18 @@ def _handle_anchor_dog(bot_id, bot, actions):
         )
         total_cost = dog_price + hedge_price + est_fees
         if total_cost > HARD_CEILING_CENTS:
-            _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
-            return
+            safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees
+            est_fees2 = kalshi_fee_cents(
+                dog_price if dog_side == 'yes' else safe_hedge,
+                dog_price if dog_side == 'no' else safe_hedge,
+                qty
+            )
+            safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees2
+            if safe_hedge < 1:
+                _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
+                return
+            print(f'⚠ ANCHOR CEILING CAP: {bot_id} capped hedge {hedge_price}→{safe_hedge}¢')
+            hedge_price = safe_hedge
 
         try:
             fav_resp, actual_fav_price = create_order_maker(
@@ -11381,7 +11422,7 @@ def scan_middles():
                 for code in [m['team_a'], m['team_b']]:
                     espn_code = _KALSHI_TO_ESPN.get(code, code)
                     entry = espn_data.get(code) or espn_data.get(espn_code)
-                    if entry and entry.get('status') in ('in', 'post'):
+                    if entry and entry.get('status') == 'in':
                         m['score_home'] = entry.get('home_score', 0)
                         m['score_away'] = entry.get('away_score', 0)
                         m['score_diff'] = abs(entry.get('home_score', 0) - entry.get('away_score', 0))

@@ -538,23 +538,26 @@
                 <!-- ARB / MIDDLE / DOG toggle -->
                 <div style="display:flex;gap:0;margin-bottom:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
                     <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">🤖 ARB</button>
-                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">↔️ MIDDLE</button>
                     <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">🎯 DOG</button>
+                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">↔️ MIDDLE</button>
+                    <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">💰 BETS</button>
                 </div>
                 <!-- Per-section daily mini-stats -->
                 <div id="bots-arb-daily" style="display:flex;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-middle-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-dog-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
+                <div id="bots-bets-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-list"><p style="color: #8892a6;">No active bots</p></div>
                 <div id="middle-bots-list" style="display:none;"><p style="color:#8892a6;">No active middle bots</p></div>
                 <div id="dog-bots-list" style="display:none;"><p style="color:#8892a6;">No active dog bots</p></div>
+                <div id="bets-bots-list" style="display:none;"><p style="color:#8892a6;">No active straight bets</p></div>
                 <!-- Latency Monitor -->
                 <div id="latency-panel" style="margin-top:12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:12px;display:none;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <span style="color:#00aaff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">API Latency</span>
                         <button onclick="loadLatency()" style="background:#1a2540;border:1px solid #253555;color:#8892a6;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;">Refresh</button>
                     </div>
-                    <div id="latency-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;"></div>
+                    <div id="latency-stats" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;"></div>
                 </div>
             </div>
 
@@ -695,21 +698,21 @@
             </div>
             <div style="padding: 20px;">
                 <!-- ── Mode Toggle ── -->
-                <div style="display:flex;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;flex-wrap:wrap;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
                     <button id="mode-straight" onclick="setTradeMode('straight')"
-                        style="flex:1;min-width:33%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
                         💰 Straight
                     </button>
-                    <button id="mode-arb" onclick="setTradeMode('arb')"
-                        style="flex:1;min-width:33%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        ⚡ Arb Bot
-                    </button>
                     <button id="mode-middle" onclick="setTradeMode('middle')"
-                        style="flex:1;min-width:33%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
                         ↔️ Middle
                     </button>
+                    <button id="mode-arb" onclick="setTradeMode('arb')"
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        ⚡ Arb Bot
+                    </button>
                     <button id="mode-anchor" onclick="setTradeMode('anchor')"
-                        style="flex:1;min-width:100%;padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
                         🎯 Anchor Dog
                     </button>
                 </div>
@@ -798,16 +801,13 @@
                     <div id="straight-preview" style="margin-bottom:16px;"></div>
                     <!-- Edge display (from OddsJam fair value) -->
                     <div id="straight-edge-display" style="margin-bottom:16px;"></div>
-                    <!-- Optional watch (stop-loss) toggle -->
+                    <!-- Stop-Loss / Take-Profit -->
                     <div style="margin-bottom:16px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:12px;">
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                            <input type="checkbox" id="straight-add-watch" checked style="accent-color:#9966ff;width:16px;height:16px;">
-                            <span style="color:#9966ff;font-size:12px;font-weight:600;">Track bet (watch bot — required for history)</span>
-                        </label>
-                        <div id="straight-watch-opts" style="display:grid;margin-top:10px;grid-template-columns:1fr 1fr;gap:10px;">
+                        <div style="color:#9966ff;font-size:11px;font-weight:700;margin-bottom:8px;letter-spacing:.04em;">🛡 RISK MANAGEMENT</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div>
                                 <label style="display:block;color:#8892a6;font-size:10px;margin-bottom:3px;">Stop-Loss (¢ drop)</label>
-                                <input type="number" id="straight-sl" min="1" max="30" value="5"
+                                <input type="number" id="straight-sl" min="0" max="30" value="5"
                                     style="width:100%;padding:6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;text-align:center;">
                             </div>
                             <div>
@@ -1354,6 +1354,6 @@
     </div>
 
     <div id="confetti-container"></div>
-    <script src="app.js?v=20260315o"></script>
+    <script src="app.js?v=20260315y"></script>
 </body>
 </html>

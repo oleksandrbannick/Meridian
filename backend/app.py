@@ -7019,8 +7019,9 @@ def _handle_ladder_arb(bot_id, bot, actions):
             print(f'⚡ SWEEP DONE: {bot_id} — {sweep_elapsed:.1f}s elapsed, cancelling all remaining orders')
             for rung in bot.get('rungs', []):
                 for side in ('yes', 'no'):
-                    # Don't cancel orders on the anchor side of filled rungs
-                    if rung.get(f'{anchor_side}_fill_qty', 0) > 0 and side == anchor_side:
+                    # Only skip if rung is already fully filled — partial fills still need cancelling
+                    rung_qty_c = rung.get('quantity', qty_per)
+                    if rung.get(f'{anchor_side}_fill_qty', 0) >= rung_qty_c and side == anchor_side:
                         continue
                     oid = rung.get(f'{side}_order_id')
                     if oid:
@@ -7042,7 +7043,29 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
             )
             if total_filled_qty > 0:
-                # Sweep already cancelled all unfilled orders — no duplicate cancel needed
+                # Cancel ALL remaining orders (sweep may not have run if WS detected fill first)
+                for _rung in bot.get('rungs', []):
+                    for _side in ('yes', 'no'):
+                        _rq = _rung.get('quantity', qty_per)
+                        if _rung.get(f'{filled_side}_fill_qty', 0) >= _rq and _side == filled_side:
+                            continue
+                        _oid = _rung.get(f'{_side}_order_id')
+                        if _oid:
+                            try:
+                                kalshi_client.cancel_order(_oid)
+                            except Exception:
+                                pass
+                            _rung[f'{_side}_order_id'] = None
+                _recompute_ladder_arb_fills(bot)
+                # Recompute total after any last-second fills during cancellation
+                total_filled_qty = sum(
+                    min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+                    for r in bot.get('rungs', [])
+                    if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+                )
+                if total_filled_qty <= 0:
+                    save_state()
+                    return
 
                 # Use WS cache for hedge pricing (saves ~30ms + rate limit wait)
                 ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None

@@ -16,7 +16,7 @@ class KalshiAPI:
     def __init__(self, api_key_id: str, private_key_path: str, demo: bool = True):
         """
         Initialize Kalshi API client
-        
+
         Args:
             api_key_id: Your API key ID from Kalshi
             private_key_path: Path to your private key file
@@ -26,6 +26,7 @@ class KalshiAPI:
         self.private_key = self._load_private_key(private_key_path)
         self.base_url = 'https://demo-api.kalshi.co' if demo else 'https://api.elections.kalshi.com'
         self.api_version = '/trade-api/v2'
+        self.session = requests.Session()
         
     def _load_private_key(self, file_path: str):
         """Load RSA private key from file"""
@@ -86,15 +87,15 @@ class KalshiAPI:
         timeout = 15  # seconds
         try:
             if method.upper() == 'GET':
-                response = requests.get(url, headers=headers, params=params, timeout=timeout)
+                response = self.session.get(url, headers=headers, params=params, timeout=timeout)
             elif method.upper() == 'POST':
-                response = requests.post(url, headers=headers, json=data, timeout=timeout)
+                response = self.session.post(url, headers=headers, json=data, timeout=timeout)
             elif method.upper() == 'DELETE':
-                response = requests.delete(url, headers=headers, timeout=timeout)
+                response = self.session.delete(url, headers=headers, timeout=timeout)
             elif method.upper() == 'PUT':
-                response = requests.put(url, headers=headers, json=data, timeout=timeout)
+                response = self.session.put(url, headers=headers, json=data, timeout=timeout)
             elif method.upper() == 'PATCH':
-                response = requests.patch(url, headers=headers, json=data, timeout=timeout)
+                response = self.session.patch(url, headers=headers, json=data, timeout=timeout)
             else:
                 raise ValueError(f"Unsupported method: {method}")
             

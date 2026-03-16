@@ -2132,18 +2132,22 @@ def _execute_anchor_fav_hedge(bot_id):
 
         print(f'🐕 ANCHOR HEDGE START: {bot_id} | dog={dog_side.upper()}@{dog_price}¢ fav_side={fav_side.upper()} qty={qty}')
 
-        # Get actual fill price
-        actual_dog_price = get_actual_fill_price(bot['dog_order_id'], dog_side) or dog_price
-        bot['dog_price'] = actual_dog_price
-        if actual_dog_price != dog_price:
-            print(f'   📋 Dog fill price adjusted: {dog_price}¢ → {actual_dog_price}¢')
+        # Use known dog_price — verify actual fill async AFTER hedge is placed
+        actual_dog_price = dog_price
 
-        # Get current fav bid
-        api_rate_limiter.wait()
-        ob = kalshi_client.get_market_orderbook(ticker)
-        fav_bid = _best_bid(ob, fav_side)
-        fav_ask = _best_ask(ob, fav_side)
-        print(f'   📊 Fav orderbook: {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
+        # Use WS price cache instead of REST orderbook (saves ~30ms + rate limit wait)
+        ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
+        if ws_data:
+            fav_bid = ws_data.get(f'{fav_side}_bid', 0)
+            fav_ask = ws_data.get(f'{fav_side}_ask', 0)
+            print(f'   📊 Fav WS cache: {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
+        else:
+            # WS cache miss — fall back to REST
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            fav_bid = _best_bid(ob, fav_side)
+            fav_ask = _best_ask(ob, fav_side)
+            print(f'   📊 Fav orderbook (REST fallback): {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
         if fav_bid <= 0:
             print(f'   ⚠ No fav bid — deferring to monitor')
             bot['status'] = 'dog_filled'
@@ -2186,10 +2190,10 @@ def _execute_anchor_fav_hedge(bot_id):
             hedge_price = safe_hedge
             print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}¢ (total was {total_cost}¢) — will walk up toward bid')
 
-        # Post fav hedge at capped price
+        # Post fav hedge at capped price — skip rate limiter for speed
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=qty, price=hedge_price
+            count=qty, price=hedge_price, skip_rate_limit=True
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -2212,7 +2216,17 @@ def _execute_anchor_fav_hedge(bot_id):
             f2h_ms = (time.time() - fill_at) * 1000
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
             _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_dog', 'fav_price': actual_fav_price})
-            print(f'   ⏱ Fill→Hedge latency: {f2h_ms:.0f}ms')
+            print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
+
+        # Async: verify actual dog fill price (non-blocking, after hedge is already placed)
+        try:
+            verified_price = get_actual_fill_price(bot.get('dog_order_id'), dog_side)
+            if verified_price and verified_price != dog_price:
+                bot['dog_price'] = verified_price
+                print(f'   📋 Dog fill price verified: {dog_price}¢ → {verified_price}¢')
+        except Exception:
+            pass  # Non-critical — dog_price estimate is fine
+
         save_state()
     except Exception as e:
         print(f'❌ WS ANCHOR HEDGE {bot_id}: {e}')
@@ -2271,12 +2285,18 @@ def _execute_ladder_fav_hedge(bot_id):
         rungs_str = ', '.join(f'{r["price"]}¢×{r["fill_qty"]}' for r in filled_rungs)
         print(f'🪜 LADDER HEDGE START: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | cancelled {cancelled_rungs} unfilled')
 
-        # Get current fav bid
-        api_rate_limiter.wait()
-        ob = kalshi_client.get_market_orderbook(ticker)
-        fav_bid = _best_bid(ob, fav_side)
-        fav_ask = _best_ask(ob, fav_side)
-        print(f'   📊 Fav orderbook: {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
+        # Use WS cache for fav bid (saves ~30ms + rate limit wait)
+        ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
+        if ws_data:
+            fav_bid = ws_data.get(f'{fav_side}_bid', 0)
+            fav_ask = ws_data.get(f'{fav_side}_ask', 0)
+            print(f'   📊 Fav WS cache: {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
+        else:
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            fav_bid = _best_bid(ob, fav_side)
+            fav_ask = _best_ask(ob, fav_side)
+            print(f'   📊 Fav orderbook (REST fallback): {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
         if fav_bid <= 0:
             print(f'   ⚠ No fav bid — deferring to monitor')
             bot['status'] = 'ladder_filled_no_fav'
@@ -2323,10 +2343,10 @@ def _execute_ladder_fav_hedge(bot_id):
             print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}→{safe_hedge}¢ — will walk up toward bid')
             hedge_price = safe_hedge
 
-        # Post single fav hedge for total filled qty
+        # Post single fav hedge for total filled qty — skip rate limiter for speed
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=total_fill_qty, price=hedge_price
+            count=total_fill_qty, price=hedge_price, skip_rate_limit=True
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -2348,7 +2368,7 @@ def _execute_ladder_fav_hedge(bot_id):
             f2h_ms = (time.time() - fill_at) * 1000
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
             _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
-            print(f'   ⏱ Fill→Hedge latency: {f2h_ms:.0f}ms')
+            print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
         save_state()
     except Exception as e:
         print(f'❌ LADDER HEDGE {bot_id}: {e}')
@@ -5042,7 +5062,7 @@ def simulate_ladder():
 
 # ─── POST-ONLY AWARE ORDER PLACEMENT ──────────────────────────────
 def create_order_maker(ticker, side, action, count, price, post_only=True,
-                       order_group_id=None, max_retries=2):
+                       order_group_id=None, max_retries=2, skip_rate_limit=False):
     """Place a limit order with post_only=True.  If Kalshi rejects because the
     price would cross the spread, retry at a more passive price (price - 1 for
     buys, price + 1 for sells) up to *max_retries* times.
@@ -5056,7 +5076,8 @@ def create_order_maker(ticker, side, action, count, price, post_only=True,
 
     for attempt in range(max_retries + 1):
         try:
-            api_rate_limiter.wait()
+            if not skip_rate_limit:
+                api_rate_limiter.wait()
             kwargs = {
                 'ticker': ticker,
                 'side': side,
@@ -7004,7 +7025,6 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     oid = rung.get(f'{side}_order_id')
                     if oid:
                         try:
-                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(oid)
                         except Exception:
                             pass
@@ -7022,29 +7042,26 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
             )
             if total_filled_qty > 0:
-                # Cancel any remaining unfilled side rung orders (belt + suspenders)
-                for rung in bot.get('rungs', []):
-                    oid = rung.get(f'{unfilled_side}_order_id')
-                    if oid:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
-                        rung[f'{unfilled_side}_order_id'] = None
+                # Sweep already cancelled all unfilled orders — no duplicate cancel needed
 
-                # Fetch fresh bid for hedge pricing
-                try:
-                    api_rate_limiter.wait()
-                    ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
-                    ob = ob_data.get('orderbook', ob_data)
-                    yes_lvl = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-                    no_lvl  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-                    fresh_yes_bid = (yes_lvl[0][0] if isinstance(yes_lvl[0], list) else yes_lvl[0].get('price', 0)) if yes_lvl else 0
-                    fresh_no_bid  = (no_lvl[0][0]  if isinstance(no_lvl[0], list)  else no_lvl[0].get('price', 0))  if no_lvl  else 0
-                except Exception:
-                    fresh_yes_bid = bot.get('live_yes_bid', 0)
-                    fresh_no_bid = bot.get('live_no_bid', 0)
+                # Use WS cache for hedge pricing (saves ~30ms + rate limit wait)
+                ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
+                if ws_data:
+                    fresh_yes_bid = ws_data.get('yes_bid', 0)
+                    fresh_no_bid = ws_data.get('no_bid', 0)
+                else:
+                    # WS cache miss — fall back to REST
+                    try:
+                        api_rate_limiter.wait()
+                        ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
+                        ob = ob_data.get('orderbook', ob_data)
+                        yes_lvl = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                        no_lvl  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                        fresh_yes_bid = (yes_lvl[0][0] if isinstance(yes_lvl[0], list) else yes_lvl[0].get('price', 0)) if yes_lvl else 0
+                        fresh_no_bid  = (no_lvl[0][0]  if isinstance(no_lvl[0], list)  else no_lvl[0].get('price', 0))  if no_lvl  else 0
+                    except Exception:
+                        fresh_yes_bid = bot.get('live_yes_bid', 0)
+                        fresh_no_bid = bot.get('live_no_bid', 0)
                 unfilled_bid = fresh_yes_bid if unfilled_side == 'yes' else fresh_no_bid
 
                 # Place ONE consolidated hedge at WEIGHTED-AVG-WIDTH target price
@@ -7071,7 +7088,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     try:
                         hedge_resp, actual_hedge = create_order_maker(
                             ticker=ticker, side=unfilled_side, action='buy',
-                            count=total_filled_qty, price=hedge_price
+                            count=total_filled_qty, price=hedge_price,
+                            skip_rate_limit=True
                         )
                         hedge_oid = hedge_resp['order']['order_id']
                         bot['hedge_order_id'] = hedge_oid

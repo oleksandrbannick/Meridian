@@ -8516,7 +8516,7 @@ async function loadLatency() {
         const cats = [
             { key: 'order_place',   label: 'Order Place',   color: '#ffaa00', icon: '📤' },
             { key: 'orderbook',     label: 'Orderbook',     color: '#00aaff', icon: '📊' },
-            { key: 'fill_to_hedge', label: 'Fill→Hedge',    color: '#00ff88', icon: '⚡' },
+            { key: 'fill_to_hedge', label: 'Hedge Placed',   color: '#00ff88', icon: '⚡' },
             { key: 'api_ping',      label: 'API Ping',      color: '#ff66cc', icon: '🏓', live: livePing },
         ];
         stats.innerHTML = cats.map(c => {

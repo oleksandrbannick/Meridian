@@ -6897,106 +6897,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 save_state()
                 return
 
-            # ── SWEEP CHECK: 1s passed, cancel ALL remaining orders + consolidate ──
-            if bot.get('_sweep_at'):
-                sweep_elapsed = now - bot['_sweep_at']
-                if sweep_elapsed < 1.0:
-                    # Still within sweep window — wait for more fills
-                    return
-                # Sweep done — cancel ALL remaining unfilled orders on ALL rungs
-                # Use first_fill_side (locked at sweep start), not recalculated filled_side
-                anchor_side = bot.get('first_fill_side', filled_side)
-                print(f'⚡ SWEEP DONE: {bot_id} — {sweep_elapsed:.1f}s elapsed, cancelling all remaining orders')
-                for rung in bot.get('rungs', []):
-                    for side in ('yes', 'no'):
-                        # Don't cancel orders on the anchor side of filled rungs
-                        if rung.get(f'{anchor_side}_fill_qty', 0) > 0 and side == anchor_side:
-                            continue
-                        oid = rung.get(f'{side}_order_id')
-                        if oid:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(oid)
-                            except Exception:
-                                pass
-                            rung[f'{side}_order_id'] = None
-                del bot['_sweep_at']
-                # Fall through to normal consolidation below
-
-            # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
-            # Only count fills from UNCOMPLETED rungs for new hedge
-            total_filled_qty = sum(
-                min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
-                for r in bot.get('rungs', [])
-                if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
-            )
-            if total_filled_qty > 0 and not bot.get('_consolidated'):
-                # Cancel unfilled side rung orders
-                for rung in bot.get('rungs', []):
-                    oid = rung.get(f'{unfilled_side}_order_id')
-                    if oid:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
-                        rung[f'{unfilled_side}_order_id'] = None
-
-                # Place ONE consolidated hedge at WEIGHTED-AVG-WIDTH target price
-                # NOT at bid — bid is often way above profitable level
-                unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
-                avg_filled_price = bot.get(f'avg_{filled_side}_price', 0)
-
-                # Calculate volume-weighted average width across filled rungs
-                total_width_x_qty = sum(
-                    r.get('width', 0) * min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
-                    for r in bot.get('rungs', [])
-                    if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
-                )
-                weighted_avg_width = total_width_x_qty / total_filled_qty if total_filled_qty > 0 else 0
-                # Target hedge = 100 - avg_anchor - weighted_width (the profitable price)
-                target_hedge = round(100 - avg_filled_price - weighted_avg_width)
-                # Never place above the bid (we're maker), and never below 1¢
-                hedge_price = max(1, min(target_hedge, unfilled_bid)) if unfilled_bid and unfilled_bid > 0 else max(target_hedge, 1)
-                bot['_target_hedge_price'] = target_hedge  # store for display
-
-                # Safety: cap at 98¢ combined (anchor + hedge). No fee calc — 98¢ is the breakeven.
-                max_safe = HARD_CEILING_CENTS - avg_filled_price
-                if hedge_price > max_safe:
-                    print(f'⚠ LADDER-ARB CEILING: {bot_id} target_hedge={target_hedge}¢ capped to {max_safe}¢ (avg_anchor={avg_filled_price}¢)')
-                    hedge_price = max(max_safe, 1)
-
-                print(f'📊 LADDER-ARB HEDGE CALC: {bot_id} avg_anchor={avg_filled_price}¢ weighted_width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢')
-                unfilled_bid = hedge_price  # use calculated price, not raw bid
-
-                if unfilled_bid and unfilled_bid > 0:
-                    try:
-                        hedge_resp, actual_hedge = create_order_maker(
-                            ticker=ticker, side=unfilled_side, action='buy',
-                            count=total_filled_qty, price=unfilled_bid
-                        )
-                        hedge_oid = hedge_resp['order']['order_id']
-                        bot['hedge_order_id'] = hedge_oid
-                        bot['hedge_price'] = actual_hedge
-                        bot['hedge_qty'] = total_filled_qty
-                        bot['_hedge_fill_count'] = 0
-                        # Track ALL hedge order IDs for proper cleanup
-                        all_ids = bot.get('_all_hedge_order_ids', [])
-                        all_ids.append(hedge_oid)
-                        bot['_all_hedge_order_ids'] = all_ids
-                        # Store order_id on first rung for WS matching compat
-                        # NOTE: Do NOT overwrite rung's yes_price/no_price — those are deployment prices
-                        # The actual hedge price is tracked at bot level (bot['hedge_price'])
-                        bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
-                        # Clear other rungs' unfilled orders
-                        for r in bot['rungs'][1:]:
-                            r[f'{unfilled_side}_order_id'] = None
-                        bot['_consolidated'] = True
-                        avg_filled = bot.get(f'avg_{filled_side}_price', 0)
-                        print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
-                    except Exception as e:
-                        print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
-
+            # Sweep + cancel + consolidation now handled in the yes_filled/no_filled block
             save_state()
             return
 
@@ -7085,6 +6986,111 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
         filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+
+        # ── SWEEP CHECK: wait 1s after first fill, then cancel ALL remaining orders ──
+        if bot.get('_sweep_at'):
+            sweep_elapsed = now - bot['_sweep_at']
+            if sweep_elapsed < 1.0:
+                # Still within sweep window — wait for more fills to accumulate
+                return
+            # Sweep done — cancel ALL remaining unfilled orders on ALL rungs
+            anchor_side = bot.get('first_fill_side', filled_side)
+            print(f'⚡ SWEEP DONE: {bot_id} — {sweep_elapsed:.1f}s elapsed, cancelling all remaining orders')
+            for rung in bot.get('rungs', []):
+                for side in ('yes', 'no'):
+                    # Don't cancel orders on the anchor side of filled rungs
+                    if rung.get(f'{anchor_side}_fill_qty', 0) > 0 and side == anchor_side:
+                        continue
+                    oid = rung.get(f'{side}_order_id')
+                    if oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+                        rung[f'{side}_order_id'] = None
+            del bot['_sweep_at']
+            # Recompute fills after cancellation (some may have snuck in during sweep)
+            _recompute_ladder_arb_fills(bot)
+            # Fall through to consolidation below
+
+        # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
+        if not bot.get('_consolidated'):
+            total_filled_qty = sum(
+                min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+                for r in bot.get('rungs', [])
+                if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+            )
+            if total_filled_qty > 0:
+                # Cancel any remaining unfilled side rung orders (belt + suspenders)
+                for rung in bot.get('rungs', []):
+                    oid = rung.get(f'{unfilled_side}_order_id')
+                    if oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+                        rung[f'{unfilled_side}_order_id'] = None
+
+                # Fetch fresh bid for hedge pricing
+                try:
+                    api_rate_limiter.wait()
+                    ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
+                    ob = ob_data.get('orderbook', ob_data)
+                    yes_lvl = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                    no_lvl  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                    fresh_yes_bid = (yes_lvl[0][0] if isinstance(yes_lvl[0], list) else yes_lvl[0].get('price', 0)) if yes_lvl else 0
+                    fresh_no_bid  = (no_lvl[0][0]  if isinstance(no_lvl[0], list)  else no_lvl[0].get('price', 0))  if no_lvl  else 0
+                except Exception:
+                    fresh_yes_bid = bot.get('live_yes_bid', 0)
+                    fresh_no_bid = bot.get('live_no_bid', 0)
+                unfilled_bid = fresh_yes_bid if unfilled_side == 'yes' else fresh_no_bid
+
+                # Place ONE consolidated hedge at WEIGHTED-AVG-WIDTH target price
+                avg_filled_price = bot.get(f'avg_{filled_side}_price', 0)
+                total_width_x_qty = sum(
+                    r.get('width', 0) * min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+                    for r in bot.get('rungs', [])
+                    if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+                )
+                weighted_avg_width = total_width_x_qty / total_filled_qty if total_filled_qty > 0 else 0
+                target_hedge = round(100 - avg_filled_price - weighted_avg_width)
+                hedge_price = max(1, min(target_hedge, unfilled_bid)) if unfilled_bid and unfilled_bid > 0 else max(target_hedge, 1)
+                bot['_target_hedge_price'] = target_hedge
+
+                # Safety: cap at 98¢ combined
+                max_safe = HARD_CEILING_CENTS - avg_filled_price
+                if hedge_price > max_safe:
+                    print(f'⚠ LADDER-ARB CEILING: {bot_id} target_hedge={target_hedge}¢ capped to {max_safe}¢ (avg_anchor={avg_filled_price}¢)')
+                    hedge_price = max(max_safe, 1)
+
+                print(f'📊 LADDER-ARB HEDGE CALC: {bot_id} avg_anchor={avg_filled_price}¢ weighted_width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢')
+
+                if hedge_price > 0:
+                    try:
+                        hedge_resp, actual_hedge = create_order_maker(
+                            ticker=ticker, side=unfilled_side, action='buy',
+                            count=total_filled_qty, price=hedge_price
+                        )
+                        hedge_oid = hedge_resp['order']['order_id']
+                        bot['hedge_order_id'] = hedge_oid
+                        bot['hedge_price'] = actual_hedge
+                        bot['hedge_qty'] = total_filled_qty
+                        bot['_hedge_fill_count'] = 0
+                        all_ids = bot.get('_all_hedge_order_ids', [])
+                        all_ids.append(hedge_oid)
+                        bot['_all_hedge_order_ids'] = all_ids
+                        bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
+                        for r in bot['rungs'][1:]:
+                            r[f'{unfilled_side}_order_id'] = None
+                        bot['_consolidated'] = True
+                        print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled_price}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                    except Exception as e:
+                        print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
+
+                save_state()
+                return
 
         # Re-poll fills (backup) + update bot-level hedge fill tracking
         # 1) Poll per-rung anchor orders

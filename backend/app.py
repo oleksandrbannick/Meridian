@@ -11070,12 +11070,29 @@ def get_latency():
         _record_latency('api_ping', ping_ms)
     except Exception:
         pass
+    # Raw ICMP ping to Kalshi API server
+    raw_ping_ms = None
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['ping', '-c', '1', '-W', '2', 'api.elections.kalshi.com'],
+            capture_output=True, text=True, timeout=3
+        )
+        if result.returncode == 0:
+            # Parse "time=1.30 ms" from output
+            for part in result.stdout.split():
+                if part.startswith('time='):
+                    raw_ping_ms = round(float(part.split('=')[1]), 2)
+                    break
+    except Exception:
+        pass
     return jsonify({
         'order_place':   _latency_stats('order_place'),
         'orderbook':     _latency_stats('orderbook'),
         'fill_to_hedge': _latency_stats('fill_to_hedge'),
         'api_ping':      _latency_stats('api_ping'),
         'live_ping_ms':  ping_ms,
+        'raw_ping_ms':   raw_ping_ms,
     })
 
 

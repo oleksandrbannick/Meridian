@@ -8483,6 +8483,7 @@ async function loadLatency() {
         const resp = await fetch(`${API_BASE}/latency`);
         const data = await resp.json();
         const livePing = data.live_ping_ms;
+        const rawPing = data.raw_ping_ms;
         const cats = [
             { key: 'order_place',   label: 'Order Place',   color: '#ffaa00', icon: '📤' },
             { key: 'orderbook',     label: 'Orderbook',     color: '#00aaff', icon: '📊' },
@@ -8498,10 +8499,14 @@ async function loadLatency() {
             const mainVal = c.live != null ? Math.round(c.live) : Math.round(s.avg);
             const mainLabel = c.live != null ? 'now' : 'avg';
             const valCol = mainVal < 200 ? '#00ff88' : mainVal < 500 ? '#ffaa00' : '#ff4444';
+            // Raw network ping sub-line for API Ping tile
+            const rawLine = (c.key === 'api_ping' && rawPing != null)
+                ? `<div style="color:#8892a6;font-size:9px;text-align:center;margin-top:3px;">🌐 raw: <span style="color:#00ccff;font-weight:700;">${rawPing}ms</span></div>`
+                : '';
             return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;">
                 <div style="color:${c.color};font-size:10px;font-weight:700;margin-bottom:6px;">${c.icon} ${c.label}</div>
                 <div style="color:${valCol};font-size:20px;font-weight:800;text-align:center;">${mainVal}ms</div>
-                <div style="color:#666;font-size:8px;text-align:center;margin-top:-2px;">${mainLabel}</div>
+                <div style="color:#666;font-size:8px;text-align:center;margin-top:-2px;">${mainLabel}</div>${rawLine}
                 <div style="display:flex;justify-content:space-between;font-size:9px;color:#8892a6;margin-top:4px;">
                     <span>min ${Math.round(s.min)}</span>
                     <span>avg ${Math.round(s.avg)}</span>

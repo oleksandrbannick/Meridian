@@ -4227,6 +4227,16 @@ function closeOrderbookModal() {
 const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
+// ── Width-based quantity scaling (matches backend WIDTH_QTY_TIERS) ──
+function getWidthQtyMultiplier(width) {
+    if (width >= 13) return 3;
+    if (width >= 9)  return 1.5;
+    return 1;
+}
+function scaleQtyForWidth(baseQty, width) {
+    return Math.max(1, Math.floor(baseQty * getWidthQtyMultiplier(width)));
+}
+
 // ── Multi-width selector state ──
 let _selectedWidths = new Set();
 
@@ -4293,12 +4303,14 @@ function updateAllWidthsPreview() {
         preview.innerHTML = '';
         return;
     }
-    const qty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const baseQty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const useScaling = selectedArr.length >= 2;
 
     let rows = '';
     let totalCost = 0;
     let totalProfit = 0;
     let validCount = 0;
+    let totalContracts = 0;
 
     selectedArr.forEach(w => {
         const arb = calculateArbPrices(currentArbMarket, w);
@@ -4306,15 +4318,19 @@ function updateAllWidthsPreview() {
         const noPrice  = arb.targetNo;
         const profit = 100 - yesPrice - noPrice;
         const blocked = profit <= 0;
-        const cost = blocked ? 0 : (yesPrice + noPrice) * qty;
-        const profitTotal = blocked ? 0 : profit * qty;
-        if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; }
+        const rungQty = useScaling ? scaleQtyForWidth(baseQty, w) : baseQty;
+        const cost = blocked ? 0 : (yesPrice + noPrice) * rungQty;
+        const profitTotal = blocked ? 0 : profit * rungQty;
+        if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; totalContracts += rungQty; }
 
         const statusColor = blocked ? '#ff4444' : '#00ff88';
         const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
         const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
-        rows += `<div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
+        const qtyLabel = blocked ? '—' : `${rungQty}×`;
+        const qtyColor = (useScaling && !blocked && rungQty > baseQty) ? '#818cf8' : '#8892a6';
+        rows += `<div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
             <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
+            <span style="color:${qtyColor};font-size:10px;font-weight:700;text-align:center;">${qtyLabel}</span>
             <span style="color:${statusColor};font-size:10px;">${statusText}</span>
             <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : yesPrice + '¢'}</span>
             <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : noPrice + '¢'}</span>
@@ -4325,9 +4341,11 @@ function updateAllWidthsPreview() {
 
     const totalDollars  = (totalCost / 100).toFixed(2);
     const profitDollars = (totalProfit / 100).toFixed(2);
+    const qtyDesc = useScaling ? `${totalContracts} contracts (scaled)` : `${baseQty}× each`;
     preview.innerHTML = `
-        <div style="display:grid;grid-template-columns:28px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
+        <div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
             <span style="color:#555;font-size:9px;">W</span>
+            <span style="color:#555;font-size:9px;text-align:center;">QTY</span>
             <span style="color:#555;font-size:9px;">STATUS</span>
             <span style="color:#555;font-size:9px;text-align:center;">YES</span>
             <span style="color:#555;font-size:9px;text-align:center;">NO</span>
@@ -4336,7 +4354,7 @@ function updateAllWidthsPreview() {
         </div>
         ${rows}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a4a;flex-wrap:wrap;gap:6px;">
-            <span style="color:#8892a6;font-size:11px;">${validCount} of ${selectedArr.length} valid · ${qty}× each</span>
+            <span style="color:#8892a6;font-size:11px;">${validCount} of ${selectedArr.length} valid · ${qtyDesc}</span>
             <span style="color:#00ff88;font-size:12px;font-weight:800;">+$${profitDollars} max profit</span>
             <span style="color:#aab;font-size:11px;">Entry: $${totalDollars}</span>
         </div>`;
@@ -4504,9 +4522,11 @@ async function placeSelectedWidthsBots() {
     }
 
     // ── Pre-scan: build detailed confirmation ──────────────────────────────────
+    const useScaling = selectedArr.length >= 2;
     const validWidths = [];
     const skipReasons = [];
     let totalCostCents = 0;
+    let totalScaledQty = 0;
 
     for (const w of selectedArr) {
         const arb      = calculateArbPrices(currentArbMarket, w);
@@ -4516,8 +4536,10 @@ async function placeSelectedWidthsBots() {
         if (profit <= 0) {
             skipReasons.push(`  ⛔  ${w}¢ width — no profit`);
         } else {
-            validWidths.push({ w, arb, yesPrice, noPrice, profit });
-            totalCostCents += (yesPrice + noPrice) * qty;
+            const rungQty = useScaling ? scaleQtyForWidth(qty, w) : qty;
+            validWidths.push({ w, arb, yesPrice, noPrice, profit, rungQty });
+            totalCostCents += (yesPrice + noPrice) * rungQty;
+            totalScaledQty += rungQty;
         }
     }
 
@@ -4529,18 +4551,23 @@ async function placeSelectedWidthsBots() {
     // Build order table string
     const pad = (s, n) => String(s).padStart(n);
     let orderLines = [`⚡ Deploy ${validWidths.length} Widths — ${currentArbMarket.ticker}`, ''];
-    orderLines.push('  WIDTH   YES    NO    PROFIT   COST');
-    orderLines.push('  ─────────────────────────────────');
-    for (const { w, arb, yesPrice, noPrice, profit } of validWidths) {
-        const costDollars = ((yesPrice + noPrice) * qty / 100).toFixed(2);
-        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
+    orderLines.push('  WIDTH   QTY   YES    NO    PROFIT   COST');
+    orderLines.push('  ────────────────────────────────────────');
+    for (const { w, arb, yesPrice, noPrice, profit, rungQty } of validWidths) {
+        const costDollars = ((yesPrice + noPrice) * rungQty / 100).toFixed(2);
+        const qtyStr = useScaling && rungQty > qty ? `${rungQty}×` : `${rungQty}×`;
+        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(qtyStr,4)}  ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
     }
     if (skipReasons.length > 0) {
         orderLines.push('');
         orderLines.push(...skipReasons);
     }
     orderLines.push('');
-    orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
+    if (useScaling) {
+        orderLines.push(`  ${validWidths.length} widths · ${totalScaledQty} total contracts (base ${qty}×, scaled by width)`);
+    } else {
+        orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
+    }
     orderLines.push(`  Total entry cost: $${(totalCostCents / 100).toFixed(2)}`);
     orderLines.push('');
     orderLines.push('Place these orders?');
@@ -4565,6 +4592,7 @@ async function placeSelectedWidthsBots() {
                     ticker: currentArbMarket.ticker,
                     widths: validWidths.map(v => v.w),
                     quantity: qty,
+                    width_scaling: useScaling,
                     repeat_count: repeatCount,
                     rung_timeout_min: rungTimeout,
                     game_phase: gamePhase,
@@ -4572,7 +4600,8 @@ async function placeSelectedWidthsBots() {
             });
             const data = await resp.json();
             if (data.bot_id) {
-                notifMsg = `🪜 Ladder ARB placed: ${data.rungs} rungs × ${qty} contract${qty !== 1 ? 's' : ''}`;
+                const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
+                notifMsg = `🪜 Ladder ARB placed: ${data.rungs} rungs · ${qtyDesc}`;
             } else {
                 notifMsg = `❌ Ladder ARB failed: ${data.error || 'Unknown error'}`;
             }
@@ -9170,7 +9199,7 @@ async function loadTradeHistoryList() {
             // Still detect for detailed analytics display, but result label is just 'FILLED'
             const isTimeoutExit = t.exit_via === 'timeout_amend' || t.exit_via === 'amend_fallback'
                                 || t.result === 'timeout_exit_yes' || t.result === 'timeout_exit_no'
-                                || t.result === 'amended';
+                                || t.result === 'amended' || t.result === 'arb_loss';
             // P&L: for timeout amend trades, recalculate from leg prices to fix stale 0-profit records
             let pnl;
             if (isTimeoutExit && t.yes_price && t.no_price) {
@@ -9752,7 +9781,7 @@ async function loadDogHistory() {
             const net = totalProfit - totalLoss;
             const netCol = net >= 0 ? '#00ff88' : '#ff4444';
             const wins  = trades.filter(t => t.result === 'completed' || (t.profit_cents||0) > 0).length;
-            const losses = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback' || t.result === 'amended' || ((t.loss_cents||0) > 0 && (t.profit_cents||0) === 0)).length;
+            const losses = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback' || t.result === 'amended' || t.result === 'arb_loss' || ((t.loss_cents||0) > 0 && (t.profit_cents||0) === 0)).length;
             const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.arb_width||0), 0) / trades.length).toFixed(1) : '—';
             const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
             statsPanel.innerHTML = trades.length === 0

@@ -4308,6 +4308,20 @@ def _check_and_record_rung_completions(bot_id, bot):
     return all_resolved
 
 
+def _cancel_with_retry(oid, max_retries=2):
+    """Cancel an order with rate limiting + retry on 429."""
+    for attempt in range(max_retries + 1):
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(oid)
+            return True
+        except Exception as e:
+            if '429' in str(e) and attempt < max_retries:
+                time.sleep(0.5)
+                continue
+            return False
+
+
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
     """Spawned from WS fill handler on first anchor fill.
     Phase 1: IMMEDIATELY cancel all opposite-side orders (prevents unwanted fills)
@@ -4341,17 +4355,6 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         save_state()
 
     # Cancel opposite-side orders SEQUENTIALLY with rate limiting + retry
-    def _cancel_with_retry(oid, max_retries=2):
-        for attempt in range(max_retries + 1):
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(oid)
-                return True
-            except Exception as e:
-                if '429' in str(e) and attempt < max_retries:
-                    time.sleep(0.5)
-                    continue
-                return False
     cancel_ok = sum(1 for oid in unfilled_oids if _cancel_with_retry(oid))
 
     print(f'⚡ WS SWEEP PHASE1: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
@@ -4453,6 +4456,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 hedge_resp, actual_hedge = create_order_maker(
                     ticker=ticker, side=unfilled_side, action='buy',
                     count=total_filled_qty, price=hedge_price,
+                    skip_rate_limit=True
                 )
                 hedge_oid = hedge_resp['order']['order_id']
                 bot['hedge_order_id'] = hedge_oid
@@ -7353,16 +7357,16 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             continue
                         _oid = _rung.get(f'{_side}_order_id')
                         if _oid:
-                            cancel_oids.append(_oid)
-                            _rung[f'{_side}_order_id'] = None
+                            cancel_oids.append((_oid, _rung, _side))
+                cancel_ok = 0
                 if cancel_oids:
-                    def _cancel_safe_mon(oid):
-                        try:
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
-                    with ThreadPoolExecutor(max_workers=min(len(cancel_oids), 12)) as pool:
-                        pool.map(_cancel_safe_mon, cancel_oids)
+                    for _oid, _rung, _side in cancel_oids:
+                        if _cancel_with_retry(_oid):
+                            _rung[f'{_side}_order_id'] = None
+                            cancel_ok += 1
+                        else:
+                            print(f'⚠ LADDER-ARB MON CANCEL FAILED: {_oid}')
+                    print(f'🔄 LADDER-ARB MON: cancelled {cancel_ok}/{len(cancel_oids)} orders')
                 _recompute_ladder_arb_fills(bot)
                 # Recompute total after any last-second fills during cancellation
                 total_filled_qty = sum(

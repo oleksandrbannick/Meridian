@@ -5073,13 +5073,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const hedgeCol = hedgeFilled ? hedgeColorSide : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
             const hedgePct = hedgeQty > 0 ? Math.round((activeHedgeFill / hedgeQty) * 100) : 0;
             const gapToBid = unfilledBid - currentHedgePrice;
+            const gapCol = gapToBid === 0 ? '#00ff88' : gapToBid <= 2 ? '#00ff88' : gapToBid <= 5 ? '#ffaa00' : gapToBid <= 10 ? '#ff8800' : '#ff4444';
             const gapStr = gapToBid > 0 ? `+${gapToBid}¢ to bid` : gapToBid === 0 ? '= bid' : '';
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                     <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
                     <span style="color:${hedgeColorSide};font-size:11px;font-weight:700;">${hedgeQty} contracts @ ${currentHedgePrice}¢</span>
                     <span style="color:#555;font-size:9px;">bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
-                    ${gapStr ? `<span style="color:#8892a6;font-size:9px;">${gapStr}</span>` : ''}
+                    ${gapStr ? `<span style="color:${gapCol};font-size:9px;font-weight:700;">${gapStr}</span>` : ''}
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
                     <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">

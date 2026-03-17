@@ -1551,15 +1551,16 @@
         }
     </style>
 
-    <!-- FAB: Claude blob bubble -->
+    <!-- FAB: Claude starburst logo bubble -->
     <button id="claude-chat-fab" onclick="toggleClaudeChat()" aria-label="Chat with Claude">
         <svg class="claude-blob" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="100" height="100" rx="50" fill="#0c1020"/>
-            <circle cx="50" cy="50" r="30" fill="#f59e0b" opacity="0.15"/>
-            <path d="M55 32c-12 0-20 8-20 18s8 18 20 18c4 0 7-1 10-3" stroke="#f59e0b" stroke-width="5" stroke-linecap="round" fill="none"/>
-            <circle cx="58" cy="42" r="3" fill="#f59e0b"/>
-            <circle cx="46" cy="50" r="2.5" fill="#f59e0b"/>
-            <circle cx="58" cy="58" r="2" fill="#f59e0b" opacity="0.6"/>
+            <!-- Claude starburst/sparkle logo -->
+            <g transform="translate(50,50)">
+                <line x1="0" y1="-18" x2="0" y2="18" stroke="#0c1020" stroke-width="6" stroke-linecap="round"/>
+                <line x1="-15.6" y1="-9" x2="15.6" y2="9" stroke="#0c1020" stroke-width="6" stroke-linecap="round"/>
+                <line x1="-15.6" y1="9" x2="15.6" y2="-9" stroke="#0c1020" stroke-width="6" stroke-linecap="round"/>
+                <circle cx="0" cy="0" r="4.5" fill="#0c1020"/>
+            </g>
         </svg>
     </button>
 
@@ -1568,9 +1569,12 @@
         <div class="claude-chat-header">
             <div class="claude-chat-header-avatar">
                 <svg width="20" height="20" viewBox="0 0 100 100" fill="none">
-                    <path d="M55 32c-12 0-20 8-20 18s8 18 20 18c4 0 7-1 10-3" stroke="#0c1020" stroke-width="6" stroke-linecap="round" fill="none"/>
-                    <circle cx="58" cy="42" r="3" fill="#0c1020"/>
-                    <circle cx="46" cy="50" r="2.5" fill="#0c1020"/>
+                    <g transform="translate(50,50)">
+                        <line x1="0" y1="-20" x2="0" y2="20" stroke="#0c1020" stroke-width="7" stroke-linecap="round"/>
+                        <line x1="-17.3" y1="-10" x2="17.3" y2="10" stroke="#0c1020" stroke-width="7" stroke-linecap="round"/>
+                        <line x1="-17.3" y1="10" x2="17.3" y2="-10" stroke="#0c1020" stroke-width="7" stroke-linecap="round"/>
+                        <circle cx="0" cy="0" r="5" fill="#0c1020"/>
+                    </g>
                 </svg>
             </div>
             <div class="claude-chat-header-info">
@@ -1581,7 +1585,7 @@
         </div>
         <div class="claude-chat-messages" id="claude-chat-messages">
             <div class="claude-chat-welcome" id="claude-chat-welcome">
-                <canvas id="pixel-claude-canvas" width="64" height="80" style="image-rendering:pixelated;width:96px;height:120px;"></canvas>
+                <canvas id="pixel-claude-canvas" width="48" height="48" style="image-rendering:pixelated;width:120px;height:120px;"></canvas>
                 <h3>Hey, I'm Claude</h3>
                 <p>Your AI copilot for Meridian. Ask me about markets, trading strategy, arbitrage setups, or anything else.</p>
                 <div class="suggestions">
@@ -1609,59 +1613,70 @@
         const chatMessages = [];
         let chatStreaming = false;
 
-        // Draw pixel Claude Code character on canvas
+        // Draw pixel Claude Code ghost character (the >_ pac-man ghost)
         const canvas = document.getElementById('pixel-claude-canvas');
         if (canvas) {
             const ctx = canvas.getContext('2d');
             const px = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, 1, 1); };
-            const BODY = '#f59e0b', DARK = '#d97706', LIGHT = '#fbbf24',
-                  EYE = '#0c1020', WHITE = '#ffffff', SCREEN = '#00ff88',
-                  SCREEND = '#111827', OUTLINE = '#92400e';
+            const CC = '#d97706';  // Claude amber body
+            const CL = '#f59e0b'; // lighter amber highlight
+            const CD = '#92400e'; // dark outline
+            const BG = '#0c1020'; // face/eyes color
+            const GN = '#00ff88'; // green terminal accent
 
-            for (let x=24;x<=40;x++) px(x,4,OUTLINE);
-            for (let x=22;x<=42;x++) px(x,5,OUTLINE);
-            for (let x=21;x<=43;x++) px(x,6,OUTLINE);
-            for (let y=5;y<=22;y++) {
-                const inset = y < 7 ? 23 : y < 9 ? 22 : 21;
-                const outset = y < 7 ? 41 : y < 9 ? 42 : 43;
-                for (let x=inset;x<=outset;x++) px(x,y, BODY);
+            // Ghost body — rounded top, wavy bottom (48x48 grid)
+            // Row by row — top dome
+            //   row 8-10: top curve
+            for (let x=16;x<=31;x++) px(x,8,CD);
+            for (let x=14;x<=33;x++) px(x,9,CD);
+            for (let x=12;x<=35;x++) px(x,10,CD);
+            for (let x=11;x<=36;x++) px(x,11,CD);
+            for (let x=10;x<=37;x++) px(x,12,CD);
+            // Fill body rows 11-36
+            for (let y=13;y<=36;y++) {
+                const l = y < 14 ? 10 : 9;
+                const r = y < 14 ? 37 : 38;
+                for (let x=l;x<=r;x++) px(x,y,CC);
             }
-            for (let y=7;y<=22;y++) { px(20,y,OUTLINE); px(44,y,OUTLINE); }
-            for (let x=21;x<=43;x++) px(x,23,OUTLINE);
-            for (let x=23;x<=41;x++) px(x,24,OUTLINE);
-            for (let x=26;x<=29;x++) for (let y=12;y<=15;y++) px(x,y,EYE);
-            for (let x=35;x<=38;x++) for (let y=12;y<=15;y++) px(x,y,EYE);
-            px(27,12,WHITE); px(36,12,WHITE);
-            for (let x=29;x<=35;x++) px(x,19,EYE);
-            px(28,18,EYE); px(36,18,EYE);
-            for (let y=0;y<=4;y++) px(32,y,OUTLINE);
-            px(31,0,LIGHT); px(32,0,LIGHT); px(33,0,LIGHT); px(32,1,LIGHT);
-            for (let y=25;y<=50;y++) {
-                const inset = y < 27 ? 23 : 19;
-                const outset = y < 27 ? 41 : 45;
-                for (let x=inset;x<=outset;x++) px(x,y, DARK);
-                px(inset-1,y,OUTLINE); px(outset+1,y,OUTLINE);
-            }
-            for (let x=19;x<=45;x++) px(x,51,OUTLINE);
-            for (let y=30;y<=44;y++) for (let x=24;x<=40;x++) px(x,y,SCREEND);
-            for (let x=23;x<=41;x++) { px(x,29,LIGHT); px(x,45,LIGHT); }
-            for (let y=29;y<=45;y++) { px(23,y,LIGHT); px(41,y,LIGHT); }
-            for (let x=26;x<=34;x++) px(x,33,SCREEN);
-            for (let x=26;x<=38;x++) px(x,36,SCREEN);
-            for (let x=26;x<=31;x++) px(x,39,SCREEN);
-            px(33,39,SCREEN); px(34,39,SCREEN);
-            for (let y=30;y<=40;y++) { px(16,y,BODY); px(17,y,BODY); px(18,y,BODY); }
-            for (let y=30;y<=40;y++) { px(46,y,BODY); px(47,y,BODY); px(48,y,BODY); }
-            for (let x=15;x<=18;x++) for (let y=41;y<=43;y++) px(x,y,LIGHT);
-            for (let x=46;x<=49;x++) for (let y=41;y<=43;y++) px(x,y,LIGHT);
-            for (let y=52;y<=60;y++) {
-                for (let x=24;x<=29;x++) px(x,y,DARK);
-                for (let x=35;x<=40;x++) px(x,y,DARK);
-            }
-            for (let x=22;x<=30;x++) for (let y=61;y<=63;y++) px(x,y,OUTLINE);
-            for (let x=34;x<=42;x++) for (let y=61;y<=63;y++) px(x,y,OUTLINE);
-            const sparkle = (x,y) => { px(x,y,LIGHT); px(x-1,y,'#fbbf2455'); px(x+1,y,'#fbbf2455'); px(x,y-1,'#fbbf2455'); px(x,y+1,'#fbbf2455'); };
-            sparkle(10, 15); sparkle(54, 10); sparkle(8, 45); sparkle(56, 48);
+            // top dome fill
+            for (let x=16;x<=31;x++) px(x,9,CC);
+            for (let x=14;x<=33;x++) px(x,10,CC);
+            for (let x=12;x<=35;x++) px(x,11,CC);
+            for (let x=11;x<=36;x++) px(x,12,CC);
+            // highlight on top
+            for (let x=17;x<=22;x++) px(x,10,CL);
+            for (let x=13;x<=18;x++) px(x,11,CL);
+            for (let x=12;x<=15;x++) px(x,12,CL);
+
+            // Wavy ghost bottom (3 bumps)
+            for (let x=9;x<=14;x++)  { px(x,37,CC); px(x,38,CC); }
+            for (let x=17;x<=22;x++) { px(x,37,CC); px(x,38,CC); px(x,39,CC); }
+            for (let x=25;x<=30;x++) { px(x,37,CC); px(x,38,CC); }
+            for (let x=33;x<=38;x++) { px(x,37,CC); px(x,38,CC); px(x,39,CC); }
+
+            // Outline the sides
+            for (let y=13;y<=36;y++) { px(8,y,CD); px(39,y,CD); }
+            // Bottom outlines for wavy parts
+            for (let x=9;x<=14;x++)  px(x,39,CD);
+            for (let x=17;x<=22;x++) px(x,40,CD);
+            for (let x=25;x<=30;x++) px(x,39,CD);
+            for (let x=33;x<=38;x++) px(x,40,CD);
+
+            // Eyes — two round dots
+            for (let x=14;x<=17;x++) for (let y=18;y<=22;y++) px(x,y,BG);
+            for (let x=26;x<=29;x++) for (let y=18;y<=22;y++) px(x,y,BG);
+            // Eye shine
+            px(15,18,GN); px(27,18,GN);
+
+            // >_ prompt on the body
+            // > character (rows 27-33, left side)
+            px(14,27,GN); px(15,28,GN); px(16,29,GN); px(17,30,GN);
+            px(16,31,GN); px(15,32,GN); px(14,33,GN);
+            // _ character (rows 33, right side)
+            for (let x=20;x<=25;x++) px(x,33,GN);
+
+            // Sparkle accents
+            px(5,14,CL); px(42,12,CL); px(4,30,CL); px(43,28,CL);
         }
 
         const input = document.getElementById('claude-chat-input');
@@ -1812,7 +1827,7 @@
             const div = document.createElement('div');
             div.className = 'claude-msg ' + role;
             const avatarContent = role === 'assistant'
-                ? '<svg width="14" height="14" viewBox="0 0 100 100" fill="none"><path d="M55 32c-12 0-20 8-20 18s8 18 20 18c4 0 7-1 10-3" stroke="#0c1020" stroke-width="7" stroke-linecap="round" fill="none"/><circle cx="58" cy="42" r="3" fill="#0c1020"/></svg>'
+                ? '<svg width="14" height="14" viewBox="0 0 100 100" fill="none"><g transform="translate(50,50)"><line x1="0" y1="-20" x2="0" y2="20" stroke="#0c1020" stroke-width="8" stroke-linecap="round"/><line x1="-17.3" y1="-10" x2="17.3" y2="10" stroke="#0c1020" stroke-width="8" stroke-linecap="round"/><line x1="-17.3" y1="10" x2="17.3" y2="-10" stroke="#0c1020" stroke-width="8" stroke-linecap="round"/><circle cx="0" cy="0" r="5" fill="#0c1020"/></g></svg>'
                 : '<span style="font-size:11px;color:#000;font-weight:800;">You</span>';
             const bubbleContent = typing
                 ? '<div class="claude-typing"><span></span><span></span><span></span></div>'

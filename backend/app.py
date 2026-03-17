@@ -459,6 +459,15 @@ def get_markets():
         # Only capture once — first observation is the closest to true pre-game line
         _capture_opening_lines(unique_markets)
 
+        # Inject milestone_status for tennis markets (cached, no API call)
+        _refresh_milestones_cache()
+        ms_data = _milestones_cache['data']
+        if ms_data:
+            for m in unique_markets:
+                et = m.get('event_ticker', '')
+                if et in ms_data:
+                    m['milestone_status'] = ms_data[et]
+
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0
         for m in unique_markets:
@@ -2914,6 +2923,42 @@ FLIP_THRESHOLD_CENTS = 60   # Default hard floor: trigger never goes below 60¢
 FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry-15, min(floor, entry-10)) — always gives ≥10¢ room
 MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (65-69¢ entries use entry-10 floor)
 
+# ─── Kalshi Milestones Cache (authoritative live detection for tennis) ────────
+# Maps event_ticker → milestone status ('not_started', 'live', 'ended', etc.)
+_milestones_cache = {'data': {}, 'ts': 0}
+_MILESTONES_CACHE_TTL = 60  # seconds
+
+def _refresh_milestones_cache():
+    """Fetch Kalshi milestones for tennis series — cached, lazy refresh."""
+    global _milestones_cache
+    if time.time() - _milestones_cache['ts'] < _MILESTONES_CACHE_TTL:
+        return
+    if not kalshi_client:
+        return
+    event_status = {}  # event_ticker → milestone status
+    for i, series in enumerate(('KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH')):
+        try:
+            if i > 0:
+                time.sleep(0.15)  # gentle spacing to avoid 429s
+            resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
+            for m in resp.get('milestones', []):
+                ms_status = m.get('details', {}).get('status', 'not_started')
+                for et in m.get('related_event_tickers', []):
+                    event_status[et] = ms_status
+        except Exception as e:
+            print(f'⚠ Milestones fetch failed for {series}: {e}')
+            continue
+    _milestones_cache = {'data': event_status, 'ts': time.time()}
+    live_events = [k for k, v in event_status.items() if v == 'live']
+    if live_events:
+        print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
+
+
+def _get_milestone_status(event_ticker: str):
+    """Get milestone status for an event ticker. Returns 'live', 'not_started', etc. or None."""
+    _refresh_milestones_cache()
+    return _milestones_cache['data'].get(event_ticker)
+
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}
 _ESPN_CACHE_TTL = 60  # seconds
@@ -3249,14 +3294,25 @@ def _get_all_ticker_team_candidates(ticker: str):
 
 def _is_game_live(ticker: str) -> bool:
     """Check if the game referenced by a Kalshi ticker is currently live.
-    
-    Primary: Use Kalshi's own expected_expiration_time (same logic as frontend's isKalshiLive).
-    A game is "live" if expected expiration is within 3.5 hours and market isn't settled.
-    This works for ALL games Kalshi has — NBA, NCAAB, NIT, CBI, etc.
-    
-    Fallback: ESPN (only for games where Kalshi data isn't available).
+
+    Tennis: Kalshi milestones (authoritative — details.status == 'live').
+    Other sports: ESPN scoreboard cache (authoritative for NBA/NHL/MLB etc).
+    Fallback: Kalshi expected_expiration_time window.
     """
-    # ── PRIMARY for sports: Check ESPN first (authoritative "game in progress") ──
+    # ── TENNIS: Use Kalshi milestones (authoritative) ──
+    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+    if is_tennis:
+        # Extract event_ticker from market ticker (strip the player suffix)
+        # e.g. KXATPMATCH-26MAR17SVASMI-SVA → KXATPMATCH-26MAR17SVASMI
+        parts = ticker.split('-')
+        if len(parts) >= 2:
+            event_ticker = '-'.join(parts[:2])
+            ms_status = _get_milestone_status(event_ticker)
+            if ms_status is not None:
+                return ms_status == 'live'
+        # Milestones didn't have this event — fall through to expiration check
+
+    # ── OTHER SPORTS: Check ESPN first (authoritative "game in progress") ──
     is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL'))
     if is_sports:
         try:
@@ -3278,7 +3334,7 @@ def _is_game_live(ticker: str) -> bool:
         except Exception:
             pass  # ESPN failed, fall through to Kalshi check
 
-    # ── SECONDARY: Check Kalshi market data (primary for non-sports like tennis) ──
+    # ── FALLBACK: Check Kalshi expected_expiration_time ──
     try:
         if kalshi_client:
             api_rate_limiter.wait()
@@ -3296,11 +3352,7 @@ def _is_game_live(ticker: str) -> bool:
                 now_utc = datetime.now(timezone.utc)
                 hours_until_exp = (exp_time - now_utc).total_seconds() / 3600.0
 
-                # Game is "live" if expected to end within N hours and hasn't ended yet.
-                # Tennis/tournament markets settle end-of-day → use 20h window.
-                # Basketball/hockey/etc → 3.5h window.
-                is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
-                max_hours = 20.0 if is_tennis else 3.5
+                max_hours = 3.5
                 if -0.5 < hours_until_exp < max_hours:
                     return True
                 return False

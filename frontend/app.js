@@ -865,45 +865,43 @@ function getRecommendedPresets(tier, signalType) {
 }
 
 function isKalshiLive(market) {
+    // Check if game has already been resolved (result field set)
+    if (market.result && market.result !== '') return false;
+
+    const ticker = market.event_ticker || market.ticker || '';
+
+    // ── Tennis: Use Kalshi milestone_status (authoritative, from backend cache) ──
+    const isTennis = /KXATP|KXWTA/i.test(ticker);
+    if (isTennis) {
+        // milestone_status is injected by backend from milestones cache
+        if (market.milestone_status) return market.milestone_status === 'live';
+        // No milestone data — not live (don't guess from expiration)
+        return false;
+    }
+
     const expStr = market.expected_expiration_time;
     if (!expStr) return false;
-    
+
     try {
         const expTime = new Date(expStr);
         const now = Date.now();
         const hoursUntilExp = (expTime.getTime() - now) / (1000 * 60 * 60);
-        
-        // Check if game has already been resolved (result field set)
-        if (market.result && market.result !== '') return false;
-        
+
         // Golf / multi-day events: tournaments span 3-4 days.
-        // If the market is active and expires within 5 days, treat as live.
-        const ticker = market.event_ticker || market.ticker || '';
         const isGolf = /KXPGA|KXTGL|KXLIV|KXGOLF/i.test(ticker);
         if (isGolf) {
-            // Active + expires within 5 days + already opened
             const openStr = market.open_time;
             const isOpen = openStr ? new Date(openStr).getTime() <= now : true;
             return isOpen && hoursUntilExp > -0.5 && hoursUntilExp < 120;
         }
-        
-        // Tennis: Kalshi sets expiration far ahead (up to 20h) for long matches.
-        // No reliable ESPN live scores for tennis, so use a wide window matching backend.
-        const isTennis = /KXATP|KXWTA/i.test(ticker);
-        if (isTennis) {
-            const isActive = market.status === 'active' && (!market.result || market.result === '');
-            // Match backend: 20h window. Tennis has no ESPN scores so this is our only signal.
-            if (hoursUntilExp > 20.0) return false;
-            if (hoursUntilExp < -0.5 && !isActive) return false;
-        } else {
-            const isActive = market.status === 'active' && (!market.result || market.result === '');
-            const maxHours = 5.0;
-            if (hoursUntilExp > maxHours) return false;
-            if (hoursUntilExp < -0.5 && !isActive) return false;
-        }
-        
+
+        // Other sports: expiration time window
+        const isActive = market.status === 'active' && (!market.result || market.result === '');
+        const maxHours = 5.0;
+        if (hoursUntilExp > maxHours) return false;
+        if (hoursUntilExp < -0.5 && !isActive) return false;
+
         // Check game date — must be today (or yesterday for late-night games).
-        // Tomorrow's games (diffDays=1 in the future) are NOT live.
         const dateMatch = ticker.match(/(\d{2})([A-Z]{3})(\d{2})/);
         if (dateMatch) {
             const [, yr, mon, day] = dateMatch;
@@ -912,10 +910,9 @@ function isKalshiLive(market) {
             const todayMidnight = new Date();
             todayMidnight.setHours(0, 0, 0, 0);
             const diffDays = (gameDate.getTime() - todayMidnight.getTime()) / (1000*60*60*24);
-            // Allow today (0), yesterday (-1 for post-midnight), tomorrow (+1 for late-night ticker dates)
             if (diffDays > 1 || diffDays < -1) return false;
         }
-        
+
         return true;
     } catch (e) {
         // Ignore parse errors

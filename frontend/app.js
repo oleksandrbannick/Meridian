@@ -10032,6 +10032,7 @@ async function loadDogHistory() {
                     <span style="color:#555;">${dateStr}</span>
                     ${t.fee_cents ? `<span style="color:#8892a6;">Fee: ${t.fee_cents}¢</span>` : ''}
                     ${t.fill_duration_s != null ? `<span style="color:#8892a6;">Fill: ${t.fill_duration_s}s</span>` : ''}
+                    ${(() => { const lat = t.hedge_fill_latency_ms != null ? t.hedge_fill_latency_ms : t.hedge_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
                     ${isSellback && t.hard_ceiling_total ? `<span style="color:#ff6644;">Ceiling: ${t.hard_ceiling_total}¢</span>` : ''}
                     ${t.rungs_filled ? `<span style="color:#8892a6;">Rungs: ${t.rungs_filled}/${t.rungs_total||'?'}</span>` : ''}
                 </div>

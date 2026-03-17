@@ -592,6 +592,34 @@ def _parse_fill_count(order_data):
     return 0
 
 
+def _extract_order_id(resp, context=''):
+    """Safely extract order_id from create_order response, log if missing."""
+    if not isinstance(resp, dict):
+        print(f'⚠ {context}: non-dict response: {resp}')
+        return None
+    order_data = resp.get('order', resp)
+    oid = order_data.get('order_id')
+    if not oid:
+        print(f'⚠ {context}: no order_id in response: {resp}')
+    return oid
+
+
+def _safe_cancel(order_id, context=''):
+    """Cancel an order with one retry on failure. Returns True if cancelled."""
+    for attempt in range(2):
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(order_id)
+            return True
+        except Exception as e:
+            if attempt == 0:
+                print(f'⚠ {context}: cancel failed (attempt 1), retrying: {e}')
+                time.sleep(0.5)
+            else:
+                print(f'⚠ {context}: cancel failed (attempt 2), giving up: {e}')
+    return False
+
+
 @app.route('/api/orderbook/<ticker>', methods=['GET'])
 def get_orderbook(ticker):
     """Get orderbook for a market"""
@@ -2695,7 +2723,10 @@ def _execute_ws_dog_post(bot_id):
                 dog_order = kalshi_client.create_order(
                     ticker=ticker, side='no', action='buy',
                     count=qty, no_price=dog_price, post_only=True)
-                bot['no_order_id'] = dog_order['order']['order_id']
+                dog_oid = _extract_order_id(dog_order, f'WS phantom dog post {bot_id}')
+                if not dog_oid:
+                    return
+                bot['no_order_id'] = dog_oid
                 bot['no_price'] = dog_price
                 bot['yes_fill_qty'] = fav_filled
                 bot['status'] = 'yes_filled'
@@ -2703,7 +2734,10 @@ def _execute_ws_dog_post(bot_id):
                 dog_order = kalshi_client.create_order(
                     ticker=ticker, side='yes', action='buy',
                     count=qty, yes_price=dog_price, post_only=True)
-                bot['yes_order_id'] = dog_order['order']['order_id']
+                dog_oid = _extract_order_id(dog_order, f'WS phantom dog post {bot_id}')
+                if not dog_oid:
+                    return
+                bot['yes_order_id'] = dog_oid
                 bot['yes_price'] = dog_price
                 bot['no_fill_qty'] = fav_filled
                 bot['status'] = 'no_filled'
@@ -3846,9 +3880,13 @@ def place_single_order():
             count=qty, post_only=True, **price_kwargs
         )
 
+        oid = _extract_order_id(order, f'simple order {ticker} {side}')
+        if not oid:
+            return jsonify({'error': 'Order placed but no order_id returned — check Kalshi positions'}), 500
+
         return jsonify({
             'success':  True,
-            'order_id': order['order']['order_id'],
+            'order_id': oid,
             'ticker':   ticker,
             'side':     side,
             'price':    price,
@@ -3907,7 +3945,9 @@ def place_straight_order():
 
         api_rate_limiter.wait()
         order_resp = kalshi_client.create_order(**order_kwargs)
-        order_id = order_resp['order']['order_id']
+        order_id = _extract_order_id(order_resp, f'watch order {ticker} {side}')
+        if not order_id:
+            return jsonify({'error': 'Order placed but no order_id returned — check Kalshi positions'}), 500
 
         # Optionally create a watch bot for SL/TP + fill monitoring
         watch_bot_id = None
@@ -5825,11 +5865,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             last_sell_price = cur_bid  # Track for partial fill P&L
             total_sold += filled2
             print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} {remaining_to_sell}x {ticker} not filled at {cur_bid}¢ ({filled2}/{remaining_to_sell}), cancelling...')
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(order_id)
-            except Exception:
-                pass
+            _safe_cancel(order_id, f'execute_sell timeout {reason} {ticker}')
 
             if attempt < MAX_ATTEMPTS:
                 print(f'   Retrying at new bid...')
@@ -6225,11 +6261,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
         # Game ending: cancel to free capital
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
             print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(dog_order_id)
-            except Exception:
-                pass
+            _safe_cancel(dog_order_id, f'phantom ending cancel {bot_id}')
             bot['status'] = 'completed'
             bot['completed_at'] = now
             actions.append({'bot_id': bot_id, 'action': 'anchor_game_ending_cancel'})
@@ -6255,8 +6287,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 # has moved too far — this isn't a dog anymore, cancel
                 if current_dog_bid > 50:
                     print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — no longer underdog, cancelling')
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(dog_order_id)
+                    _safe_cancel(dog_order_id, f'phantom drift cancel {bot_id}')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     actions.append({'bot_id': bot_id, 'action': 'anchor_drift_cancel', 'dog_bid': current_dog_bid})
@@ -6275,14 +6306,15 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     return
 
                 # Cancel old, place new
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(dog_order_id)
+                _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
 
                 new_resp, actual_new_price = create_order_maker(
                     ticker=ticker, side=dog_side, action='buy',
                     count=qty, price=new_dog_price
                 )
-                new_order_id = new_resp['order']['order_id']
+                new_order_id = _extract_order_id(new_resp, f'phantom dog repost {bot_id}')
+                if not new_order_id:
+                    return
                 old_price = bot['dog_price']
                 bot['dog_order_id'] = new_order_id
                 bot['dog_price'] = actual_new_price
@@ -8486,7 +8518,10 @@ def _run_monitor():
                                 dog_order = kalshi_client.create_order(
                                     ticker=ticker, side='no', action='buy',
                                     count=qty, no_price=dog_price, post_only=True)
-                                bot['no_order_id'] = dog_order['order']['order_id']
+                                dog_oid = _extract_order_id(dog_order, f'monitor phantom dog post {bot_id}')
+                                if not dog_oid:
+                                    continue
+                                bot['no_order_id'] = dog_oid
                                 bot['no_price'] = dog_price
                                 bot['yes_fill_qty'] = fav_filled
                                 bot['status'] = 'yes_filled'
@@ -8494,7 +8529,10 @@ def _run_monitor():
                                 dog_order = kalshi_client.create_order(
                                     ticker=ticker, side='yes', action='buy',
                                     count=qty, yes_price=dog_price, post_only=True)
-                                bot['yes_order_id'] = dog_order['order']['order_id']
+                                dog_oid = _extract_order_id(dog_order, f'monitor phantom dog post {bot_id}')
+                                if not dog_oid:
+                                    continue
+                                bot['yes_order_id'] = dog_oid
                                 bot['yes_price'] = dog_price
                                 bot['no_fill_qty'] = fav_filled
                                 bot['status'] = 'no_filled'
@@ -8601,7 +8639,9 @@ def _run_monitor():
                                     new_fav = kalshi_client.create_order(
                                         ticker=ticker, side='no', action='buy',
                                         count=qty, no_price=new_fav_price, post_only=True)
-                                new_fav_id = new_fav['order']['order_id']
+                                new_fav_id = _extract_order_id(new_fav, f'fav repost {bot_id}')
+                                if not new_fav_id:
+                                    continue
                                 bot['fav_order_id'] = new_fav_id
                                 if fav_side == 'yes':
                                     bot['yes_order_id'] = new_fav_id
@@ -9098,14 +9138,23 @@ def _run_monitor():
                                 # Simultaneous dual order placement
                                 api_rate_limiter.wait()
                                 yes_ord = kalshi_client.create_order(ticker=ticker, side='yes', action='buy', count=qty, yes_price=new_yes, post_only=True)
+                                yes_oid = _extract_order_id(yes_ord, f'repeat arb YES {bot_id}')
+                                if not yes_oid:
+                                    continue
                                 api_rate_limiter.wait()
                                 no_ord  = kalshi_client.create_order(ticker=ticker, side='no', action='buy', count=qty, no_price=new_no, post_only=True)
+                                no_oid = _extract_order_id(no_ord, f'repeat arb NO {bot_id}')
+                                if not no_oid:
+                                    # YES order succeeded but NO failed — cancel YES to prevent orphan
+                                    print(f'⚠ repeat arb {bot_id}: NO order failed, cancelling YES order {yes_oid}')
+                                    _safe_cancel(yes_oid, f'repeat arb cleanup {bot_id}')
+                                    continue
 
                                 bot['yes_price']    = new_yes
                                 bot['no_price']     = new_no
                                 bot['profit_per']   = new_profit
-                                bot['yes_order_id'] = yes_ord['order']['order_id']
-                                bot['no_order_id']  = no_ord['order']['order_id']
+                                bot['yes_order_id'] = yes_oid
+                                bot['no_order_id']  = no_oid
                                 bot['yes_fill_qty'] = 0
                                 bot['no_fill_qty']  = 0
                                 bot['status']       = 'both_posted'
@@ -9733,7 +9782,9 @@ def _run_monitor():
                                             ticker=ticker_lr, side='no', action='buy',
                                             count=qty_m, no_price=new_price, post_only=True
                                         )
-                                        new_order_id = new_resp['order']['order_id']
+                                        new_order_id = _extract_order_id(new_resp, f'middle repost {bot_id} leg {leg}')
+                                        if not new_order_id:
+                                            continue
                                         bot[order_key] = new_order_id
                                         bot[price_key] = new_price
                                         if leg == 'a':
@@ -10084,14 +10135,24 @@ def create_middle_bot():
             ticker=ticker_a, side='no', action='buy',
             count=qty, no_price=target_price_a, post_only=True
         )
-        order_a_id = order_a_resp['order']['order_id']
+        order_a_id = _extract_order_id(order_a_resp, f'middle dual leg A {ticker_a}')
+        if not order_a_id:
+            return jsonify({'error': 'Leg A order placed but no order_id returned — check Kalshi positions'}), 500
 
-        api_rate_limiter.wait()
-        order_b_resp = kalshi_client.create_order(
-            ticker=ticker_b, side='no', action='buy',
-            count=qty, no_price=target_price_b, post_only=True
-        )
-        order_b_id = order_b_resp['order']['order_id']
+        try:
+            api_rate_limiter.wait()
+            order_b_resp = kalshi_client.create_order(
+                ticker=ticker_b, side='no', action='buy',
+                count=qty, no_price=target_price_b, post_only=True
+            )
+            order_b_id = _extract_order_id(order_b_resp, f'middle dual leg B {ticker_b}')
+            if not order_b_id:
+                # Leg A succeeded but leg B failed — cancel A to prevent orphan
+                _safe_cancel(order_a_id, f'middle dual leg B failed, cancelling A {ticker_a}')
+                return jsonify({'error': 'Leg B order failed — cancelled leg A to prevent orphan'}), 500
+        except Exception as e:
+            _safe_cancel(order_a_id, f'middle dual leg B exception, cancelling A {ticker_a}')
+            return jsonify({'error': f'Leg B failed: {e} — cancelled leg A'}), 500
 
         bot_id = f"mid_bot_{int(time.time())}"
         active_bots[bot_id] = {

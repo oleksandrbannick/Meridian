@@ -8770,7 +8770,7 @@ async function loadHistoryStats() {
                     return `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key || ''}</span></div>
                         <div style="color:${dColor};font-size:24px;font-weight:800;">${dNet >= 0 ? '+' : ''}$${dDollars}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today (Apex bots)</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today (all arbs)</div>
                     </div>`;
                 })()}
             </div>

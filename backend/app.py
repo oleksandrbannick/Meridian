@@ -4081,36 +4081,45 @@ def _recompute_ladder_arb_fills(bot):
     qty_per = bot.get('quantity', 1)
 
     # When consolidated, redistribute hedge-side fills across anchor-filled rungs
-    if bot.get('_consolidated') and bot.get('first_fill_side'):
-        filled_side = bot['first_fill_side']
-        hedge_side = 'no' if filled_side == 'yes' else 'yes'
+    if bot.get('_consolidated'):
+        filled_side = bot.get('first_fill_side')
+        # Infer from status if cleared by previous hedge gen completion
+        if not filled_side:
+            st = bot.get('status', '')
+            if 'yes_filled' in st:
+                filled_side = 'yes'
+            elif 'no_filled' in st:
+                filled_side = 'no'
 
-        # Use bot-level hedge fill tracking (not rung-level which caps at qty_per)
-        current_hedge_fills = bot.get('_hedge_fill_count', 0)
-        # Completed hedges from previous generations
-        history_fills = sum(h.get('fill_qty', 0) for h in bot.get('hedge_history', []))
-        # Total REAL hedge fills = current hedge + history
-        total_hedge_fills = current_hedge_fills + history_fills
+        if filled_side:
+            hedge_side = 'no' if filled_side == 'yes' else 'yes'
 
-        # Distribute across anchor-filled rungs (in order by width)
-        remaining = total_hedge_fills
-        for rung in bot.get('rungs', []):
-            rq = rung.get('quantity', qty_per)
-            anchor_fill = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
-            rung[f'{filled_side}_fill_qty'] = anchor_fill
-            if rung.get('completed'):
-                # Already completed — keep its fills, consume from remaining
-                rung[f'{hedge_side}_fill_qty'] = rq
-                remaining -= rq
-            elif anchor_fill > 0 and remaining > 0:
-                assign = min(rq, remaining)
-                rung[f'{hedge_side}_fill_qty'] = assign
-                remaining -= assign
-                # Mark rung completed when both sides fully filled
-                if anchor_fill >= rq and assign >= rq:
-                    rung['completed'] = True
-            else:
-                rung[f'{hedge_side}_fill_qty'] = 0
+            # Use bot-level hedge fill tracking (not rung-level which caps at qty_per)
+            current_hedge_fills = bot.get('_hedge_fill_count', 0)
+            # Completed hedges from previous generations
+            history_fills = sum(h.get('fill_qty', 0) for h in bot.get('hedge_history', []))
+            # Total REAL hedge fills = current hedge + history
+            total_hedge_fills = current_hedge_fills + history_fills
+
+            # Distribute across anchor-filled rungs (in order by width)
+            remaining = total_hedge_fills
+            for rung in bot.get('rungs', []):
+                rq = rung.get('quantity', qty_per)
+                anchor_fill = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
+                rung[f'{filled_side}_fill_qty'] = anchor_fill
+                if rung.get('completed'):
+                    # Already completed — keep its fills, consume from remaining
+                    rung[f'{hedge_side}_fill_qty'] = rq
+                    remaining -= rq
+                elif anchor_fill > 0 and remaining > 0:
+                    assign = min(rq, remaining)
+                    rung[f'{hedge_side}_fill_qty'] = assign
+                    remaining -= assign
+                    # Mark rung completed when both sides fully filled
+                    if anchor_fill >= rq and assign >= rq:
+                        rung['completed'] = True
+                else:
+                    rung[f'{hedge_side}_fill_qty'] = 0
 
     # Cap fills and compute totals
     total_yes_qty = 0
@@ -7311,6 +7320,10 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
         filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+
+        # Backfill first_fill_side if cleared by previous hedge gen completion
+        if not bot.get('first_fill_side'):
+            bot['first_fill_side'] = filled_side
 
         # ── SWEEP CHECK: wait 1s after first fill, then cancel ALL remaining orders ──
         if bot.get('_sweep_at'):

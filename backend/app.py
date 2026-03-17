@@ -2146,9 +2146,37 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         break
 
 
+def _precalc_anchor_hedge(dog_price, target_width, dog_side, qty):
+    """Pre-calculate the hedge price so it's ready to fire instantly on dog fill.
+    Returns the ceiling-capped hedge price or 0 if too low."""
+    max_fav_price = 100 - dog_price - target_width
+    if max_fav_price < 1:
+        return 0
+    # Ceiling cap with fee convergence
+    est_fees = kalshi_fee_cents(
+        dog_price if dog_side == 'yes' else max_fav_price,
+        dog_price if dog_side == 'no' else max_fav_price,
+        qty
+    )
+    if dog_price + max_fav_price + est_fees <= HARD_CEILING_CENTS:
+        return max_fav_price
+    safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees
+    for _ in range(3):
+        est_fees = kalshi_fee_cents(
+            dog_price if dog_side == 'yes' else safe_hedge,
+            dog_price if dog_side == 'no' else safe_hedge,
+            qty
+        )
+        safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees
+        if dog_price + safe_hedge + est_fees <= HARD_CEILING_CENTS:
+            break
+    return max(0, safe_hedge)
+
+
 def _execute_anchor_fav_hedge(bot_id):
     """Post the favorite hedge immediately after the dog fills.
-    Called from WS fill handler in a background thread for speed."""
+    Called from WS fill handler in a background thread for speed.
+    Uses pre-calculated hedge price — zero compute on the hot path."""
     try:
         bot = active_bots.get(bot_id)
         if not bot or bot.get('status') in ('stopped', 'completed'):
@@ -2160,50 +2188,19 @@ def _execute_anchor_fav_hedge(bot_id):
         qty = bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
-        print(f'🐕 ANCHOR HEDGE START: {bot_id} | dog={dog_side.upper()}@{dog_price}¢ fav_side={fav_side.upper()} qty={qty}')
+        # Use pre-calculated hedge price — already ceiling-capped at creation time
+        hedge_price = bot.get('_precalc_hedge_price') or 0
+        if hedge_price < 1:
+            # Fallback: recalculate (shouldn't happen)
+            hedge_price = _precalc_anchor_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
+        print(f'👻 PHANTOM HEDGE START: {bot_id} | dog={dog_side.upper()}@{dog_price}¢ | precalc hedge={hedge_price}¢ | fav={fav_side.upper()} qty={qty}')
 
-        # Use known dog_price — verify actual fill async AFTER hedge is placed
-        actual_dog_price = dog_price
-
-        # Skip WS/REST lookup — hedge price is fully determined from dog_price + target_width.
-        # Walk system will reposition toward bid after placement.
-        target_width = bot.get('target_width', 5)
-        max_fav_price = 100 - actual_dog_price - target_width
-        hedge_price = max_fav_price
-        print(f'   💰 Price calc: hedge=100-{actual_dog_price}-{target_width}={hedge_price}¢')
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
             bot['status'] = 'dog_filled'
             return
 
-        # Hard ceiling check — cap hedge price to stay under ceiling, don't sell back
-        est_fees = kalshi_fee_cents(
-            actual_dog_price if dog_side == 'yes' else hedge_price,
-            actual_dog_price if dog_side == 'no' else hedge_price,
-            qty
-        )
-        total_cost = actual_dog_price + hedge_price + est_fees
-        print(f'   🧮 Ceiling check: {actual_dog_price}¢ + {hedge_price}¢ + {est_fees}¢ fees = {total_cost}¢ (ceiling={HARD_CEILING_CENTS}¢)')
-        if total_cost > HARD_CEILING_CENTS:
-            # Converge: safe_hedge ↔ fees are circular, iterate until stable
-            safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees
-            for _ in range(3):
-                est_fees = kalshi_fee_cents(
-                    actual_dog_price if dog_side == 'yes' else safe_hedge,
-                    actual_dog_price if dog_side == 'no' else safe_hedge,
-                    qty
-                )
-                safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees
-                if actual_dog_price + safe_hedge + est_fees <= HARD_CEILING_CENTS:
-                    break
-            if safe_hedge < 1:
-                print(f'   🛑 CEILING: safe_hedge={safe_hedge}¢ too low — deferring to monitor')
-                bot['status'] = 'dog_filled'
-                return
-            hedge_price = safe_hedge
-            print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}¢ (total was {total_cost}¢) — will walk up toward bid')
-
-        # Post fav hedge at capped price
+        # Post fav hedge at pre-calculated price — no computation, straight to API
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=qty, price=hedge_price
@@ -2250,7 +2247,8 @@ def _execute_anchor_fav_hedge(bot_id):
 
 def _execute_ladder_fav_hedge(bot_id):
     """Post fav hedge based on weighted average of filled ladder rungs.
-    Called from WS handler (all rungs fill) or monitor (bounce detected)."""
+    Called from WS handler (all rungs fill) or monitor (bounce detected).
+    Uses pre-calculated hedge price when all rungs fill for speed."""
     try:
         bot = active_bots.get(bot_id)
         if not bot or bot.get('status') in ('stopped', 'completed', 'fav_hedge_posted'):
@@ -2270,7 +2268,7 @@ def _execute_ladder_fav_hedge(bot_id):
                 filled_rungs = [bot['rungs'][0]]
                 print(f'🔧 LADDER HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
             else:
-                print(f'🪜 LADDER HEDGE {bot_id}: no filled rungs — marking complete')
+                print(f'👻 LADDER HEDGE {bot_id}: no filled rungs — marking complete')
                 bot['status'] = 'completed'
                 bot['completed_at'] = time.time()
                 save_state()
@@ -2284,60 +2282,59 @@ def _execute_ladder_fav_hedge(bot_id):
 
         rungs_str = ', '.join(f'{r["price"]}¢×{r["fill_qty"]}' for r in filled_rungs)
 
-        # Use WS cache for fav bid (saves ~30ms + rate limit wait)
-        ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
-        if ws_data:
-            fav_bid = ws_data.get(f'{fav_side}_bid', 0)
-            fav_ask = ws_data.get(f'{fav_side}_ask', 0)
+        # Try pre-calculated hedge first (all-rungs-fill scenario)
+        all_filled = total_fill_qty >= bot.get('total_dog_qty', total_fill_qty)
+        precalc = bot.get('_precalc_hedge_price', 0) if all_filled else 0
+
+        if precalc > 0:
+            # All rungs filled — use pre-calculated price, skip bid lookup + ceiling math
+            hedge_price = precalc
+            print(f'👻 LADDER HEDGE (PRECALC): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | precalc hedge={hedge_price}¢')
         else:
-            api_rate_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(ticker)
-            fav_bid = _best_bid(ob, fav_side)
-            fav_ask = _best_ask(ob, fav_side)
-        if fav_bid <= 0:
-            print(f'   ⚠ No fav bid — deferring to monitor')
+            # Partial fill — need to compute from actual fills + live bid
+            ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
+            if ws_data:
+                fav_bid = ws_data.get(f'{fav_side}_bid', 0)
+                fav_ask = ws_data.get(f'{fav_side}_ask', 0)
+            else:
+                api_rate_limiter.wait()
+                ob = kalshi_client.get_market_orderbook(ticker)
+                fav_bid = _best_bid(ob, fav_side)
+                fav_ask = _best_ask(ob, fav_side)
+            if fav_bid <= 0:
+                print(f'   ⚠ No fav bid — deferring to monitor')
+                bot['status'] = 'ladder_filled_no_fav'
+                save_state()
+                return
+
+            # Start fav at bid minus fav_shave (same as single anchor)
+            target_width = bot.get('target_width', 5)
+            fav_shave = bot.get('fav_shave', 0)
+            max_fav_price = 100 - avg_price - target_width
+            initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
+            hedge_price = min(initial_fav_target, max_fav_price)
+            if hedge_price < 1:
+                print(f'   ⚠ Hedge price {hedge_price}¢ too low — selling back')
+                _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
+                return
+
+            # Hard ceiling check
+            hedge_price = _precalc_anchor_hedge(avg_price, target_width, dog_side, total_fill_qty) or hedge_price
+            if hedge_price < 1:
+                print(f'   🛑 CEILING: hedge={hedge_price}¢ too low — selling back')
+                _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
+                return
+            # Cap at fav bid
+            hedge_price = min(hedge_price, fav_bid) if fav_bid > 0 else hedge_price
+
+        if hedge_price < 1:
+            print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
             bot['status'] = 'ladder_filled_no_fav'
             save_state()
             return
 
-        # Start fav at bid minus fav_shave (same as single anchor)
-        target_width = bot.get('target_width', 5)
-        fav_shave = bot.get('fav_shave', 0)
-        max_fav_price = 100 - avg_price - target_width
-        initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
-        hedge_price = min(initial_fav_target, max_fav_price)
-        if hedge_price < 1:
-            print(f'   ⚠ Hedge price {hedge_price}¢ too low — selling back')
-            _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
-            return
-
-        # Hard ceiling check
-        est_fees = kalshi_fee_cents(
-            avg_price if dog_side == 'yes' else hedge_price,
-            avg_price if dog_side == 'no' else hedge_price,
-            total_fill_qty
-        )
-        total_cost = avg_price + hedge_price + est_fees
-        if total_cost > HARD_CEILING_CENTS:
-            safe_hedge = HARD_CEILING_CENTS - avg_price - est_fees
-            for _ in range(3):
-                est_fees = kalshi_fee_cents(
-                    avg_price if dog_side == 'yes' else safe_hedge,
-                    avg_price if dog_side == 'no' else safe_hedge,
-                    total_fill_qty
-                )
-                safe_hedge = HARD_CEILING_CENTS - avg_price - est_fees
-                if avg_price + safe_hedge + est_fees <= HARD_CEILING_CENTS:
-                    break
-            if safe_hedge < 1:
-                print(f'   🛑 CEILING: safe_hedge={safe_hedge}¢ too low — selling back')
-                _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, [])
-                return
-            print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}→{safe_hedge}¢ — will walk up toward bid')
-            hedge_price = safe_hedge
-
         # ── HEDGE FIRST — gets priority burst token ──
-        print(f'🪜 LADDER HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
+        print(f'👻 LADDER HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price
@@ -4954,6 +4951,8 @@ def create_anchor_bot():
             'yes_fill_qty':        0,
             'no_fill_qty':         0,
             'arb_width':           target_width,
+            # Pre-calculated hedge price — ready to fire instantly on dog fill
+            '_precalc_hedge_price': _precalc_anchor_hedge(actual_dog_price, target_width, dog_side, quantity),
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {
@@ -5122,6 +5121,11 @@ def create_ladder_bot():
             'fav_walk_count': 0,
             'fav_walk_ceiling': HARD_CEILING_CENTS,
             'fav_last_walk_at': None,
+            # Pre-calculated hedge price assuming all rungs fill (weighted avg)
+            '_precalc_hedge_price': _precalc_anchor_hedge(
+                round(sum(r['price'] * r['qty'] for r in placed_rungs) / total_dog_qty),
+                target_width, dog_side, total_dog_qty
+            ),
         }
         save_state()
 

@@ -6692,7 +6692,13 @@ async function emergencyExitGame(gameKey) {
         });
         const data = await resp.json();
         if (data.success) {
-            showNotification(`🚨 Emergency exit: ${data.ok} cancelled · ${data.fail} failed`);
+            let msg = `🚨 Emergency exit: ${data.ok} cancelled · ${data.fail} failed`;
+            if (data.orphan_sweep) {
+                const sw = data.orphan_sweep;
+                msg += ` · 🧹 ${sw.cancelled_count} orphaned order(s) swept`;
+                if (sw.failed_count > 0) msg += ` (${sw.failed_count} sweep failures)`;
+            }
+            showNotification(msg);
             if (data.fail > 0) alert(`⚠️ ${data.fail} bot(s) failed to cancel. Check your positions on Kalshi.`);
         } else {
             showNotification(`🚨 Emergency exit failed: ${data.error || 'unknown error'}`);

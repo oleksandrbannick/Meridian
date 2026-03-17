@@ -11128,7 +11128,74 @@ def cancel_bulk():
 
     ok = sum(1 for r in results if r.get('success'))
     fail = len(results) - ok
-    return jsonify({'success': True, 'results': results, 'ok': ok, 'fail': fail})
+
+    # Auto-sweep orphaned orders after bulk cancel
+    orphan_result = _sweep_orphaned_orders()
+
+    resp = {'success': True, 'results': results, 'ok': ok, 'fail': fail}
+    if orphan_result.get('cancelled_count', 0) > 0:
+        resp['orphan_sweep'] = orphan_result
+    return jsonify(resp)
+
+
+def _sweep_orphaned_orders():
+    """Query Kalshi for all resting orders and cancel any not owned by an active bot."""
+    if not kalshi_client:
+        return {'error': 'not authenticated'}
+
+    # Collect all order IDs that belong to active bots
+    known_ids = set()
+    for bot in active_bots.values():
+        for key in ('yes_order_id', 'no_order_id', 'dog_order_id', 'fav_order_id',
+                    'order_id', 'order_a_id', 'order_b_id', 'hedge_order_id'):
+            oid = bot.get(key)
+            if oid:
+                known_ids.add(oid)
+        # Ladder rungs
+        for rung in bot.get('rungs', []):
+            for key in ('yes_order_id', 'no_order_id', 'order_id'):
+                oid = rung.get(key)
+                if oid:
+                    known_ids.add(oid)
+        # All hedge order IDs
+        for oid in bot.get('_all_hedge_order_ids', []):
+            if oid:
+                known_ids.add(oid)
+
+    try:
+        resp = kalshi_client.get_orders(status='resting')
+        resting = resp.get('orders', [])
+    except Exception as e:
+        print(f'⚠️ Orphan sweep: failed to fetch resting orders: {e}')
+        return {'error': str(e)}
+
+    orphans = [o for o in resting if o.get('order_id') not in known_ids]
+    cancelled = []
+    failed = []
+    for o in orphans:
+        oid = o.get('order_id', '')
+        ticker = o.get('ticker', '?')
+        side = o.get('side', '?')
+        try:
+            kalshi_client.cancel_order(oid)
+            cancelled.append({'order_id': oid, 'ticker': ticker, 'side': side})
+            print(f'🧹 Orphan sweep: cancelled {side} order {oid[:8]}... on {ticker}')
+        except Exception as e:
+            failed.append({'order_id': oid, 'ticker': ticker, 'error': str(e)})
+            print(f'⚠️ Orphan sweep: failed to cancel {oid[:8]}... on {ticker}: {e}')
+
+    total = len(orphans)
+    if total > 0:
+        print(f'🧹 Orphan sweep complete: {len(cancelled)}/{total} cancelled, {len(failed)} failed')
+    return {'cancelled_count': len(cancelled), 'failed_count': len(failed),
+            'cancelled': cancelled, 'failed': failed}
+
+
+@app.route('/api/bot/sweep-orphans', methods=['POST'])
+def sweep_orphans_endpoint():
+    """Manual endpoint to sweep orphaned orders not owned by any active bot."""
+    result = _sweep_orphaned_orders()
+    return jsonify({'success': True, **result})
 
 
 @app.route('/api/bot/scan', methods=['GET'])

@@ -4101,16 +4101,16 @@ def _recompute_ladder_arb_fills(bot):
             # Total REAL hedge fills = current hedge + history
             total_hedge_fills = current_hedge_fills + history_fills
 
-            # Distribute across anchor-filled rungs (in order by width)
+            # Distribute hedge fills across anchor-filled rungs in order.
+            # Skip already-completed rungs (their hedge fills were already assigned).
             remaining = total_hedge_fills
             for rung in bot.get('rungs', []):
                 rq = rung.get('quantity', qty_per)
                 anchor_fill = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
                 rung[f'{filled_side}_fill_qty'] = anchor_fill
                 if rung.get('completed'):
-                    # Already completed — keep its fills, consume from remaining
+                    # Already had hedge fills assigned — keep its fills, don't consume budget again
                     rung[f'{hedge_side}_fill_qty'] = rq
-                    remaining -= rq
                 elif anchor_fill > 0 and remaining > 0:
                     assign = min(rq, remaining)
                     rung[f'{hedge_side}_fill_qty'] = assign
@@ -4393,7 +4393,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         total_filled_qty = sum(
             min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
             for r in bot.get('rungs', [])
-            if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+            if r.get(f'{filled_side}_fill_qty', 0) > 0
         )
 
         if total_filled_qty <= 0:
@@ -4425,7 +4425,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         total_width_x_qty = sum(
             r.get('width', 0) * min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
             for r in bot.get('rungs', [])
-            if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+            if r.get(f'{filled_side}_fill_qty', 0) > 0
         )
         weighted_avg_width = total_width_x_qty / total_filled_qty if total_filled_qty > 0 else 0
         target_hedge = round(100 - avg_filled_price - weighted_avg_width)
@@ -7182,11 +7182,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
             threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
             return
 
-        # One side has fills on UNCOMPLETED rungs — transition state
+        # One side has fills — transition state
         uncompleted_yes = sum(min(r.get('yes_fill_qty', 0), r.get('quantity', qty_per))
-                              for r in bot.get('rungs', []) if not r.get('completed'))
+                              for r in bot.get('rungs', []))
         uncompleted_no = sum(min(r.get('no_fill_qty', 0), r.get('quantity', qty_per))
-                             for r in bot.get('rungs', []) if not r.get('completed'))
+                             for r in bot.get('rungs', []))
         if uncompleted_yes > 0 or uncompleted_no > 0:
             if uncompleted_yes > 0 and uncompleted_no == 0:
                 bot['status'] = 'ladder_arb_yes_filled'
@@ -7362,7 +7362,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
             total_filled_qty = sum(
                 min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
                 for r in bot.get('rungs', [])
-                if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+                if r.get(f'{filled_side}_fill_qty', 0) > 0
             )
             if total_filled_qty > 0:
                 _recompute_ladder_arb_fills(bot)
@@ -7370,7 +7370,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 total_filled_qty = sum(
                     min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
                     for r in bot.get('rungs', [])
-                    if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+                    if r.get(f'{filled_side}_fill_qty', 0) > 0
                 )
                 if total_filled_qty <= 0:
                     save_state()
@@ -7401,7 +7401,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 total_width_x_qty = sum(
                     r.get('width', 0) * min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
                     for r in bot.get('rungs', [])
-                    if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+                    if r.get(f'{filled_side}_fill_qty', 0) > 0
                 )
                 weighted_avg_width = total_width_x_qty / total_filled_qty if total_filled_qty > 0 else 0
                 target_hedge = round(100 - avg_filled_price - weighted_avg_width)
@@ -7565,7 +7565,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         anchor_price_for_ceiling = avg_filled if avg_filled > 0 else max(
                             (r.get(f'{filled_side}_price', 0)
                              for r in bot.get('rungs', [])
-                             if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0),
+                             if r.get(f'{filled_side}_fill_qty', 0) > 0),
                             default=0
                         )
                         if current_price > 0 and oid:

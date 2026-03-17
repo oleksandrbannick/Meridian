@@ -4330,12 +4330,15 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 rung[f'{unfilled_side}_order_id'] = None
         save_state()
 
-    # Cancel opposite-side orders OUTSIDE the lock (doesn't block other WS fills)
-    for oid in unfilled_oids:
+    # Cancel opposite-side orders IN PARALLEL outside the lock
+    def _cancel_safe(oid):
         try:
             kalshi_client.cancel_order(oid)
         except Exception:
             pass
+    if unfilled_oids:
+        with ThreadPoolExecutor(max_workers=min(len(unfilled_oids), 12)) as pool:
+            pool.map(_cancel_safe, unfilled_oids)
 
     print(f'⚡ WS SWEEP PHASE1: {bot_id} — instantly cancelled {len(unfilled_oids)} {unfilled_side} orders')
 
@@ -4362,6 +4365,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         qty_per = bot.get('quantity', 1)
 
         print(f'⚡ WS SWEEP PHASE3: {bot_id} — 1s elapsed, cancelling remaining orders')
+        remaining_oids = []
         for rung in bot.get('rungs', []):
             for side in ('yes', 'no'):
                 rung_qty_c = rung.get('quantity', qty_per)
@@ -4369,11 +4373,11 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                     continue
                 oid = rung.get(f'{side}_order_id')
                 if oid:
-                    try:
-                        kalshi_client.cancel_order(oid)
-                    except Exception:
-                        pass
+                    remaining_oids.append(oid)
                     rung[f'{side}_order_id'] = None
+        if remaining_oids:
+            with ThreadPoolExecutor(max_workers=min(len(remaining_oids), 12)) as pool:
+                pool.map(_cancel_safe, remaining_oids)
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)

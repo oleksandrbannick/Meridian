@@ -238,6 +238,77 @@
         .bot-buddy.mood-alert .bot-buddy-name { color:#ff4444; }
         .bot-buddy.mood-alert .bot-buddy-msg strong { color:#ff4444; }
 
+        /* ── Bot Buddy Outfits ─────────────────────────────────────── */
+        /* Shared: all accessories use pseudo-elements on .bot-buddy-body */
+        .bot-buddy-body::before, .bot-buddy-body::after { content:none; position:absolute; transition: all 0.4s ease; pointer-events:none; }
+
+        /* △ APEX — Hard hat visor, blue theme */
+        .buddy-apex .bot-buddy-body::before {
+            content:''; position:absolute; top:-6px; left:-2px; width:40px; height:10px;
+            background:linear-gradient(180deg, #0088dd, #00aaff); border-radius:8px 8px 2px 2px;
+            box-shadow:0 2px 8px rgba(0,170,255,0.4); z-index:2;
+        }
+        .buddy-apex .bot-buddy-body::after {
+            content:''; position:absolute; top:-2px; left:4px; width:28px; height:3px;
+            background:#00ccff; border-radius:1px; z-index:3; opacity:0.7;
+        }
+        .buddy-apex .bot-buddy-antenna::after { background:#00aaff !important; box-shadow:0 0 8px #00aaff !important; }
+        .buddy-apex .bot-buddy-name { color:#00aaff !important; }
+        .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
+
+        /* 👻 PHANTOM — Hooded cloak, orange theme, float animation */
+        .buddy-phantom .bot-buddy-body::before {
+            content:''; position:absolute; top:-10px; left:-5px; width:46px; height:28px;
+            background:linear-gradient(180deg, #cc7700 0%, transparent 100%);
+            border-radius:16px 16px 0 0; z-index:1; opacity:0.7;
+        }
+        .buddy-phantom .bot-buddy-body::after {
+            content:''; position:absolute; top:-8px; left:1px; width:34px; height:8px;
+            background:linear-gradient(180deg, #ffaa00, transparent);
+            border-radius:12px 12px 0 0; z-index:2; opacity:0.5;
+        }
+        .buddy-phantom .bot-buddy-body { animation: buddyFloat 2s ease-in-out infinite !important; }
+        .buddy-phantom .bot-buddy-antenna { opacity:0.3; }
+        .buddy-phantom .bot-buddy-eye { box-shadow:0 0 4px #ffaa00; }
+        .buddy-phantom .bot-buddy-name { color:#ffaa00 !important; }
+        .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
+        @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+
+        /* ⚖️ MIDDLE — Round glasses, purple theme */
+        .buddy-middle .bot-buddy-body::before {
+            content:''; position:absolute; top:6px; left:3px; width:30px; height:12px;
+            border:2px solid #aa66ff; border-radius:50%; background:transparent;
+            z-index:5; box-shadow:0 0 6px rgba(170,102,255,0.3);
+        }
+        .buddy-middle .bot-buddy-body::after {
+            content:''; position:absolute; top:10px; left:-3px; width:42px; height:2px;
+            background:#aa66ff; border-radius:1px; z-index:4; opacity:0.5;
+        }
+        .buddy-middle .bot-buddy-eye { box-shadow:0 0 3px #aa66ff; }
+        .buddy-middle .bot-buddy-antenna::after { background:#aa66ff !important; box-shadow:0 0 8px #aa66ff !important; }
+        .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
+        .buddy-middle .bot-buddy-msg strong { color:#aa66ff !important; }
+
+        /* 🎯 BETS — Headband, green theme, confident stance */
+        .buddy-bet .bot-buddy-body::before {
+            content:''; position:absolute; top:0px; left:-3px; width:42px; height:5px;
+            background:linear-gradient(90deg, #00cc66, #00ff88, #00cc66);
+            border-radius:2px; z-index:5; box-shadow:0 0 6px rgba(0,255,136,0.3);
+        }
+        .buddy-bet .bot-buddy-body::after {
+            content:''; position:absolute; top:-1px; right:-6px; width:8px; height:12px;
+            background:linear-gradient(180deg, #00ff88, transparent); border-radius:0 2px 2px 0;
+            z-index:4; transform:rotate(15deg); opacity:0.8;
+        }
+        .buddy-bet .bot-buddy-arm.left { animation:none !important; transform:rotate(-15deg); }
+        .buddy-bet .bot-buddy-arm.right { animation:none !important; transform:rotate(15deg); }
+        .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
+        .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
+
+        /* Outfit transition shimmer */
+        .buddy-morphing .bot-buddy-body { animation: buddyMorph 0.4s ease-out !important; }
+        @keyframes buddyMorph { 0%{filter:brightness(1)} 40%{filter:brightness(1.8)} 100%{filter:brightness(1)} }
+
         /* Pet reaction */
         .bot-buddy-avatar.petted .bot-buddy-body { animation: botPetReact 0.5s ease-out !important; }
         .bot-buddy-avatar.petted .bot-buddy-eye { animation: none !important; transform:scaleY(0.3) scaleX(1.4); }

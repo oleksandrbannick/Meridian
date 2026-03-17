@@ -5546,6 +5546,8 @@ function setBotsTab(mode) {
     if (betsDaily) betsDaily.style.display = mode === 'bets'   ? 'flex' : 'none';
     // Re-render the main P&L header for the active tab
     _renderPnlDisplay(mode);
+    // Switch buddy outfit to match active tab
+    setBuddyOutfit(mode);
 }
 
 function _renderPnlDisplay(mode) {
@@ -6588,6 +6590,7 @@ async function autoResumeMonitor() {
     if (button) button.textContent = '🤖 Monitoring';
     if (buddy) { buddy.classList.remove('idle'); buddy.classList.add('active'); }
     setBuddyMood('happy');
+    setBuddyOutfit(botsTabMode || 'arb');
     buddyMonitorStart = Date.now();
     buddyMonitorCycles = 0;
     monitorBots();
@@ -7130,6 +7133,28 @@ function setBuddyMood(mood) {
     buddy.classList.remove('mood-happy', 'mood-neutral', 'mood-worried', 'mood-celebrating', 'mood-focused', 'mood-alert');
     buddy.classList.add(`mood-${mood}`);
     buddyCurrentMood = mood;
+}
+
+// Switch buddy outfit based on active bot tab
+let buddyCurrentOutfit = '';
+const buddyOutfitNames = { arb: 'apex', dog: 'phantom', middle: 'middle', bets: 'bet' };
+function setBuddyOutfit(tabMode) {
+    const buddy = document.getElementById('bot-buddy');
+    if (!buddy) return;
+    const outfit = buddyOutfitNames[tabMode] || 'apex';
+    if (outfit === buddyCurrentOutfit) return;
+    buddy.classList.remove('buddy-apex', 'buddy-phantom', 'buddy-middle', 'buddy-bet');
+    // Morph flash
+    buddy.classList.add('buddy-morphing');
+    setTimeout(() => buddy.classList.remove('buddy-morphing'), 400);
+    buddy.classList.add(`buddy-${outfit}`);
+    buddyCurrentOutfit = outfit;
+    // Update name tag
+    const nameEl = buddy.querySelector('.bot-buddy-name');
+    if (nameEl) {
+        const names = { apex: 'Meridian · Apex', phantom: 'Meridian · Phantom', middle: 'Meridian · Middle', bet: 'Meridian · Bets' };
+        nameEl.textContent = names[outfit] || 'Meridian';
+    }
 }
 
 // Set mood from fleet health state (only runs when reaction lock has expired)

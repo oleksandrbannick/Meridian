@@ -151,12 +151,24 @@ class KalshiAPI:
         """Get specific market by ticker"""
         return self._make_request('GET', f'/markets/{ticker}', authenticated=False)
     
-    def get_events(self, status: Optional[str] = None, limit: int = 200) -> Dict:
-        """Get all events"""
+    def get_events(self, status: Optional[str] = None, limit: int = 200,
+                   with_milestones: bool = False, series_ticker: str = None) -> Dict:
+        """Get all events, optionally with milestones."""
         params = {'limit': limit}
         if status:
             params['status'] = status
+        if with_milestones:
+            params['with_milestones'] = 'true'
+        if series_ticker:
+            params['series_ticker'] = series_ticker
         return self._make_request('GET', '/events', params=params, authenticated=False)
+
+    def get_event(self, event_ticker: str, with_nested_markets: bool = False) -> Dict:
+        """Get a single event by ticker."""
+        params = {}
+        if with_nested_markets:
+            params['with_nested_markets'] = 'true'
+        return self._make_request('GET', f'/events/{event_ticker}', params=params, authenticated=False)
     
     def get_market_orderbook(self, ticker: str, depth: int = 0) -> Dict:
         """Get orderbook for a specific market"""

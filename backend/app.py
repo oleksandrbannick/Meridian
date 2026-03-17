@@ -835,6 +835,73 @@ def get_orders():
 
 
 
+@app.route('/api/milestones', methods=['GET'])
+def get_milestones():
+    """Fetch Kalshi events with milestones — see what game lifecycle data is available.
+    Optional params: series (e.g. KXATPMATCH), event_ticker (specific event), status (open/closed/settled)"""
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        series = request.args.get('series', '')
+        event_ticker = request.args.get('event_ticker', '')
+        status = request.args.get('status', 'open')
+
+        # If specific event requested, fetch just that one
+        if event_ticker:
+            event_resp = kalshi_client.get_event(event_ticker, with_nested_markets=True)
+            event = event_resp.get('event', event_resp)
+            # Also fetch milestones via events list filtered to this series
+            series_from_event = event_ticker.split('-')[0] if '-' in event_ticker else ''
+            ms_resp = kalshi_client.get_events(status=status, with_milestones=True,
+                                                series_ticker=series_from_event, limit=50)
+            milestones = ms_resp.get('milestones', [])
+            # Filter milestones related to this event
+            related = [m for m in milestones
+                       if event_ticker in (m.get('related_event_tickers', []) + m.get('primary_event_tickers', []))]
+            return jsonify({
+                'event': event,
+                'milestones': related,
+                'all_milestones_count': len(milestones),
+            })
+
+        # Fetch events with milestones for a series
+        resp = kalshi_client.get_events(status=status, with_milestones=True,
+                                         series_ticker=series or None, limit=50)
+        events = resp.get('events', [])
+        milestones = resp.get('milestones', [])
+
+        # Enrich: for each event, find its milestones
+        ms_by_event = {}
+        for m in milestones:
+            for et in m.get('related_event_tickers', []) + m.get('primary_event_tickers', []):
+                ms_by_event.setdefault(et, []).append(m)
+
+        summary = []
+        for e in events:
+            et = e.get('event_ticker', '')
+            summary.append({
+                'event_ticker': et,
+                'title': e.get('title', ''),
+                'status': e.get('status', ''),
+                'open_time': e.get('open_time', ''),
+                'close_time': e.get('close_time', ''),
+                'expected_expiration_time': e.get('expected_expiration_time', ''),
+                'milestones': ms_by_event.get(et, []),
+                'market_count': len(e.get('markets', [])),
+            })
+
+        return jsonify({
+            'events': summary,
+            'total_events': len(events),
+            'total_milestones': len(milestones),
+            'raw_milestones': milestones[:10],  # First 10 raw for inspection
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 @app.route('/api/scoreboard/<sport>', methods=['GET'])
 def get_scoreboard(sport):
     """Proxy ESPN public scoreboard API to avoid CORS issues.

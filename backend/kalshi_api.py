@@ -4,6 +4,8 @@ Handles authentication and API requests to Kalshi
 """
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import time
 import base64
 from cryptography.hazmat.primitives import serialization, hashes
@@ -27,6 +29,13 @@ class KalshiAPI:
         self.base_url = 'https://demo-api.kalshi.co' if demo else 'https://api.elections.kalshi.com'
         self.api_version = '/trade-api/v2'
         self.session = requests.Session()
+        # Persistent connection pool: larger pool + keep-alive for lower latency
+        adapter = HTTPAdapter(
+            pool_connections=5,
+            pool_maxsize=20,
+            pool_block=False,
+        )
+        self.session.mount('https://', adapter)
         
     def _load_private_key(self, file_path: str):
         """Load RSA private key from file"""

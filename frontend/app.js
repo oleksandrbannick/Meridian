@@ -6127,7 +6127,8 @@ async function loadBots() {
                 // Estimated hedge: what we'd pay for fav if dog fills now
                 const estFavMax = typeof dogPrice === 'number' ? 100 - dogPrice - targetW : '?';
                 const estTotal = typeof dogPrice === 'number' && liveFavBid ? dogPrice + Math.min(liveFavBid, estFavMax) : '?';
-                const priceSource = bot._price_source === 'rest' ? ' (REST)' : '';
+                const priceAge = bot._price_age_s || 0;
+                const priceSource = (bot._price_source === 'stale' ? ' ⚠ NO DATA' : bot._price_source === 'rest' ? ' (REST)' : '') + (priceAge > 30 ? ` ${priceAge}s stale` : '');
                 stopLossInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px;">
                         <span>🎯 <strong>ANCHOR:</strong> ${dogSide} @ ${dogPrice}¢</span>

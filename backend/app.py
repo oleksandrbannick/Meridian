@@ -140,10 +140,15 @@ def auto_login():
 def ws_status():
     """Get WebSocket connection status and subscribed tickers."""
     bc = ws_manager.balance_cache
+    now = time.time()
+    cache_ages = {}
+    for tk, entry in ws_manager.ticker_cache.items():
+        age = now - entry.get('_local_ts', 0)
+        cache_ages[tk] = f'{age:.0f}s ago'
     return jsonify({
         'connected': ws_manager.connected,
         'subscribed_tickers': list(ws_manager._subscribed_tickers),
-        'cached_tickers': list(ws_manager.ticker_cache.keys()),
+        'cached_tickers': cache_ages,
         'recent_fills': len(ws_manager.fill_events),
         'recent_orders': len(ws_manager.order_events),
         # live balance
@@ -1527,6 +1532,8 @@ class KalshiWSManager:
 
         def on_error(ws, error):
             print(f'⚠ Kalshi WS error: {error}')
+            # Mark disconnected so auto-reconnect can fire from on_close
+            self._connected = False
 
         def on_close(ws, close_status_code, close_msg):
             self._connected = False
@@ -9883,6 +9890,7 @@ def list_bots():
                 bot['live_yes_ask'] = ws_p.get('yes_ask', 0) or (100 - _bl_nb if _bl_nb > 0 else 0)
                 bot['live_no_ask']  = ws_p.get('no_ask',  0) or (100 - _bl_yb if _bl_yb > 0 else 0)
                 bot['_price_source'] = 'ws'
+                bot['_price_age_s'] = round(time.time() - ws_p.get('_local_ts', 0))
             elif kalshi_client:
                 # REST fallback for display — only if WS has no data
                 _rest_ticker = bot['ticker']
@@ -9898,15 +9906,22 @@ def list_bots():
                             'no_ask': (100 - _yb) if _yb > 0 else 0,
                             '_ts': time.time(),
                         }
-                    except Exception:
-                        pass
+                    except Exception as _re:
+                        print(f'⚠ REST price fetch failed for {_rest_ticker}: {_re}')
                 _rp = _rest_price_cache.get(_rest_ticker, {})
+                _rp_age = round(time.time() - _rp.get('_ts', 0)) if _rp else 999
                 if _rp.get('yes_bid', 0) > 0 or _rp.get('no_bid', 0) > 0:
-                    bot['live_yes_bid'] = _rp.get('yes_bid', 0)
-                    bot['live_no_bid']  = _rp.get('no_bid', 0)
-                    bot['live_yes_ask'] = _rp.get('yes_ask', 0)
-                    bot['live_no_ask']  = _rp.get('no_ask', 0)
-                    bot['_price_source'] = 'rest'
+                    # If REST cache is very stale (>60s), don't show it — it's misleading
+                    if _rp_age > 60:
+                        bot['_price_source'] = 'stale'
+                        bot['_price_age_s'] = _rp_age
+                    else:
+                        bot['live_yes_bid'] = _rp.get('yes_bid', 0)
+                        bot['live_no_bid']  = _rp.get('no_bid', 0)
+                        bot['live_yes_ask'] = _rp.get('yes_ask', 0)
+                        bot['live_no_ask']  = _rp.get('no_ask', 0)
+                        bot['_price_source'] = 'rest'
+                        bot['_price_age_s'] = _rp_age
 
         # Middle bots — dual tickers (ticker_a / ticker_b)
         if bot.get('type') == 'middle':

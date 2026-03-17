@@ -1235,6 +1235,15 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
     """Total Kalshi maker fee for both legs of an arb trade, in cents."""
     return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
 
+def _arb_snap_check(anchor_price, bid_price, qty):
+    """Return True if snapping to bid nets >= MIN_SNAP_NET_PER_CONTRACT per contract."""
+    gross_per = 100 - anchor_price - bid_price
+    if gross_per <= 0:
+        return False
+    total_fees = _kalshi_side_fee_cents(anchor_price, qty) + _kalshi_side_fee_cents(bid_price, qty)
+    net_per = gross_per - (total_fees / max(qty, 1))
+    return net_per >= MIN_SNAP_NET_PER_CONTRACT
+
 # ─── Width-Based Quantity Scaling ────────────────────────────────────────────
 # When deploying multiple widths (ladder-arb), wider spreads are rarer but more
 # profitable — scale up contract size on wider rungs automatically.
@@ -6011,6 +6020,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 # ANCHOR-DOG MONITOR LOGIC
 # ═══════════════════════════════════════════════════════════════════
 HARD_CEILING_CENTS = 98
+MIN_SNAP_NET_PER_CONTRACT = 2  # jump to bid when arb nets >= 2¢/contract after fees
 
 def _handle_anchor_dog(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""
@@ -7727,13 +7737,19 @@ def _handle_ladder_arb(bot_id, bot, actions):
         if not bot.get('walk_start_price') and bot.get('hedge_price'):
             bot['walk_start_price'] = bot['hedge_price']
 
-        # Walk-up every 20s
-        DUAL_WALK_INTERVAL_S = 20
+        # Walk-up — adaptive interval: 5s when snap is profitable, 20s otherwise
+        unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+        current_price_for_snap = bot.get('hedge_price', 0)
+        anchor_for_snap = bot.get(f'avg_{filled_side}_price', 0)
+        rq_for_snap = bot.get('hedge_qty', 1)
+        snap_ready = (unfilled_bid and unfilled_bid > 0 and current_price_for_snap > 0
+                      and anchor_for_snap > 0
+                      and _arb_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
+        walk_interval = 5 if snap_ready else 20
         last_walk = bot.get('last_walk_at') or first_fill_at or now
         since_walk = now - last_walk
-        if since_walk >= DUAL_WALK_INTERVAL_S:
+        if since_walk >= walk_interval:
             if not bot.get('_trade_recorded'):
-                unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
                 if unfilled_bid and unfilled_bid > 0:
                     walked_any = False
                     if bot.get('_consolidated') and bot.get('hedge_order_id'):
@@ -7755,6 +7771,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
                                 # At ceiling — jump straight to bid
                                 new_price = unfilled_bid
+                            elif (unfilled_bid > current_price
+                                  and _arb_snap_check(anchor_price_for_ceiling, unfilled_bid, rq)):
+                                new_price = min(unfilled_bid, max_hedge)
+                                print(f'⚡ APEX SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
+                                      f'(anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
                             else:
                                 new_price = min(current_price + 1, unfilled_bid, max_hedge)
                             if new_price > current_price:
@@ -7832,6 +7853,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             max_hedge = HARD_CEILING_CENTS - rung_anchor
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
                                 new_price = unfilled_bid  # at ceiling — jump to bid
+                            elif (unfilled_bid > current_price
+                                  and _arb_snap_check(rung_anchor, unfilled_bid, rq)):
+                                new_price = min(unfilled_bid, max_hedge)
+                                print(f'⚡ APEX SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
+                                      f'(anchor={rung_anchor}¢ combined={rung_anchor + new_price}¢)')
                             else:
                                 new_price = min(current_price + 1, unfilled_bid, max_hedge)
                             if new_price <= current_price:

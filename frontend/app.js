@@ -4847,7 +4847,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
             <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
-            ${(() => { const lat = bot.hedge_fill_latency_ms != null ? bot.hedge_fill_latency_ms : bot.hedge_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms${bot.hedge_fill_latency_ms != null ? '' : ' post'}</span>` : ''; })()}
+            ${(() => { const lat = bot.hedge_fill_latency_ms != null ? bot.hedge_fill_latency_ms : bot.hedge_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostMin = 3;
@@ -8645,8 +8645,8 @@ async function loadLatency() {
         const cats = [
             { key: 'order_place',   label: 'Order Place',   color: '#ffaa00', icon: '📤' },
             { key: 'orderbook',     label: 'Orderbook',     color: '#00aaff', icon: '📊' },
-            { key: 'fill_to_hedge_dog', label: 'Dog Hedge',   color: '#00ff88', icon: '⚡' },
-            { key: 'fill_to_hedge_arb', label: 'Arb Hedge',   color: '#66ffcc', icon: '🏹' },
+            { key: 'fill_to_hedge_phantom', label: 'Phantom Hedge', color: '#00ff88', icon: '👻' },
+            { key: 'fill_to_hedge_apex',    label: 'Apex Hedge',    color: '#66ffcc', icon: '🏹' },
             { key: 'api_ping',      label: 'API Ping',      color: '#ff66cc', icon: '🏓', live: livePing },
         ];
         stats.innerHTML = cats.map(c => {

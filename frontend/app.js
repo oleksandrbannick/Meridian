@@ -5675,6 +5675,10 @@ async function loadBots() {
         const betsBtn = document.getElementById('bots-tab-bets');
         if (betsBtn) betsBtn.textContent = `💰 BETS${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`;
 
+        // Update apex bots tab badge
+        const arbBtn = document.getElementById('bots-tab-arb');
+        if (arbBtn) arbBtn.textContent = `△ APEX${arbBotIds.length > 0 ? ' (' + arbBotIds.length + ')' : ''}`;
+
         // Render bets (watch bots) list
         const betsList = document.getElementById('bets-bots-list');
         if (betsList) {

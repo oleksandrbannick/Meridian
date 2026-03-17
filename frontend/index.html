@@ -1722,14 +1722,14 @@
             try {
                 const [balRes, botsRes, posRes] = await Promise.allSettled([
                     fetch(`${API_BASE}/ws/balance`).then(r => r.json()),
-                    fetch(`${API_BASE}/bots`).then(r => r.json()),
+                    fetch(`${API_BASE}/bot/list`).then(r => r.json()),
                     fetch(`${API_BASE}/positions/active`).then(r => r.json()),
                 ]);
                 if (balRes.status === 'fulfilled') ctx.balance = balRes.value;
                 if (botsRes.status === 'fulfilled') {
-                    const bots = botsRes.value;
+                    const bots = botsRes.value.bots || botsRes.value;
                     const ids = Object.keys(bots);
-                    const active = ids.filter(id => ['pending_fills','yes_filled','no_filled','watching'].includes(bots[id].status));
+                    const active = ids.filter(id => !['complete','completed','cancelled','error'].includes(bots[id].status));
                     ctx.active_bots = active.map(id => {
                         const b = bots[id];
                         return { id, ticker: b.ticker, type: b.type, status: b.status,

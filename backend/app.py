@@ -12480,14 +12480,16 @@ if __name__ == '__main__':
                 return r.json()
             elif tool_name == 'get_positions':
                 r = requests.get(f'{base}/positions/active', timeout=10)
-                return r.json()
+                data = r.json()
+                return data.get('positions', data) if isinstance(data, dict) else data
             elif tool_name == 'get_active_bots':
                 r = requests.get(f'{base}/bot/list', timeout=10)
                 data = r.json()
+                bots = data.get('bots', data) if isinstance(data, dict) else data
                 # Summarize to avoid token bloat
                 summary = {}
-                for bid, b in data.items():
-                    if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching', 'complete'):
+                for bid, b in bots.items():
+                    if b.get('status') not in ('completed', 'cancelled', 'error', None):
                         summary[bid] = {k: b.get(k) for k in ('ticker','type','status','yes_price','no_price','count','pnl','bot_category','created_at')}
                 return summary
             else:
@@ -12535,7 +12537,10 @@ if __name__ == '__main__':
                 for b in bots[:15]:
                     system_parts.append(f"  - {b.get('ticker','?')} | {b.get('type','?')} | status={b.get('status','?')} | yes={b.get('yes_price','?')}¢ no={b.get('no_price','?')}¢ x{b.get('count','?')} | pnl={b.get('pnl','?')}")
             if 'positions' in context and context['positions']:
-                system_parts.append(f"Open positions: {json.dumps(context['positions'][:10], default=str)}")
+                pos = context['positions']
+                if isinstance(pos, dict):
+                    pos = pos.get('positions', [])
+                system_parts.append(f"Open positions: {json.dumps(pos[:10], default=str)}")
             if 'visible_markets' in context:
                 mkts = context['visible_markets']
                 system_parts.append(f"Markets on screen ({len(mkts)}):")

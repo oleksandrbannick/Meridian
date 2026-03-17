@@ -4454,6 +4454,13 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                         r[f'{unfilled_side}_order_id'] = None
                 bot['_consolidated'] = True
                 print(f'🎯 WS SWEEP CONSOLIDATE: {bot_id} {filled_side.upper()} avg={avg_filled_price}¢ → {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                # Track fill-to-hedge latency
+                fill_at = bot.get('first_fill_at')
+                if fill_at:
+                    f2h_ms = (time.time() - fill_at) * 1000
+                    bot['hedge_latency_ms'] = round(f2h_ms, 1)
+                    _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_sweep', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
+                    print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
             except Exception as e:
                 print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
 
@@ -4522,11 +4529,9 @@ def _execute_ladder_arb_full_completion(bot_id):
         cancel_ok = 0
         cancel_fail = 0
         for oid in all_cancel_ids:
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(oid)
+            if _cancel_with_retry(oid):
                 cancel_ok += 1
-            except Exception:
+            else:
                 cancel_fail += 1
         print(f'🧹 FULL COMPLETION {bot_id}: cancelled {cancel_ok}/{len(all_cancel_ids)} orders ({cancel_fail} already gone)')
 
@@ -7418,6 +7423,13 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             r[f'{unfilled_side}_order_id'] = None
                         bot['_consolidated'] = True
                         print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled_price}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                        # Track fill-to-hedge latency
+                        fill_at = bot.get('first_fill_at')
+                        if fill_at:
+                            f2h_ms = (time.time() - fill_at) * 1000
+                            bot['hedge_latency_ms'] = round(f2h_ms, 1)
+                            _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
+                            print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
                     except Exception as e:
                         print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
 

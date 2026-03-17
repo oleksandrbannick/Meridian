@@ -1561,24 +1561,24 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def wait(self, priority=False):
-        with self._lock:
-            now = time.time()
-            elapsed = now - self._window_start
-            if elapsed >= 1.0:
-                # New window — reset counter
-                self._window_start = now
-                self._count = 1
-                return
-            # Priority (hedge) calls can use the full burst including reserved tokens
-            effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
-            if self._count < effective_burst:
-                self._count += 1
-                return
-            # Burst exhausted — sleep until next window
-            sleep_time = 1.0 - elapsed
+        while True:
+            with self._lock:
+                now = time.time()
+                elapsed = now - self._window_start
+                if elapsed >= 1.0:
+                    # New window — reset counter
+                    self._window_start = now
+                    self._count = 1
+                    return
+                # Priority (hedge) calls can use the full burst including reserved tokens
+                effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
+                if self._count < effective_burst:
+                    self._count += 1
+                    return
+                # Burst exhausted — compute sleep, release lock FIRST
+                sleep_time = 1.0 - elapsed
+            # Sleep OUTSIDE the lock so priority callers aren't blocked
             time.sleep(sleep_time)
-            self._window_start = time.time()
-            self._count = 1
 
 api_rate_limiter = RateLimiter(burst=10)  # Kalshi basic tier: 10 writes/s burst
 
@@ -2349,7 +2349,8 @@ def _execute_anchor_fav_hedge(bot_id):
         # Use priority rate limit token so hedge never queues behind monitor calls
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=qty, price=hedge_price, priority=True
+            count=qty, price=hedge_price, priority=True,
+            skip_rate_limit=True
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -2483,7 +2484,8 @@ def _execute_ladder_fav_hedge(bot_id):
         print(f'👻 PHANTOM HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=total_fill_qty, price=hedge_price, priority=True
+            count=total_fill_qty, price=hedge_price, priority=True,
+            skip_rate_limit=True
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -4666,6 +4668,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 hedge_resp, actual_hedge = create_order_maker(
                     ticker=ticker, side=unfilled_side, action='buy',
                     count=total_filled_qty, price=hedge_price, priority=True,
+                    skip_rate_limit=True,
                 )
                 hedge_oid = hedge_resp['order']['order_id']
                 bot['hedge_order_id'] = hedge_oid

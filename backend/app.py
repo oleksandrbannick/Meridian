@@ -2164,6 +2164,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if order_id in bot.get('_all_hedge_order_ids', []):
             is_hedge_fill = True
             bot['_hedge_fill_count'] = bot.get('_hedge_fill_count', 0) + count
+            if not bot.get('hedge_fill_at'):
+                bot['hedge_fill_at'] = time.time()
 
         matched_rung = None
         matched_side = None
@@ -2183,7 +2185,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             rung = bot['rungs'][matched_rung]
             fill_key = f'{matched_side}_fill_qty'
             qty_per = rung.get('quantity', bot.get('quantity', 1))
-            rung[fill_key] = min(rung.get(fill_key, 0) + count, qty_per)
+            old_fill = rung.get(fill_key, 0)
+            rung[fill_key] = min(old_fill + count, qty_per)
             if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
                 rung[f'{matched_side}_filled_at'] = time.time()
 
@@ -2197,17 +2200,36 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         rung_info = f'rung[{matched_rung}] {matched_side.upper()}' if matched_rung is not None else 'hedge-only'
         print(f'△ WS APEX FILL: {bot_id} {rung_info} +{count}{hedge_info} '
               f'→ YES={total_yes}/{total_expected_per_side} NO={total_no}/{total_expected_per_side}')
+        bot_log('LADDER_ARB_WS_FILL', bot_id, {
+            'rung_idx': matched_rung, 'side': matched_side, 'count': count,
+            'is_hedge_fill': is_hedge_fill,
+            'old_fill': old_fill if matched_rung is not None else None,
+            'new_fill': rung.get(fill_key, 0) if matched_rung is not None else None,
+            'rung_price': rung.get(f'{matched_side}_price', 0) if matched_rung is not None else None,
+            'hedge_fill_count': bot.get('_hedge_fill_count', 0),
+            'total_yes': total_yes, 'total_no': total_no,
+            'total_expected': total_expected_per_side,
+        })
 
         if total_yes >= total_expected_per_side and total_no >= total_expected_per_side:
             # Both sides fully filled — complete!
             if not bot.get('_ws_fill_handling'):
                 bot['_ws_fill_handling'] = True
+                bot_log('LADDER_ARB_BOTH_FILLED', bot_id, {
+                    'total_yes': total_yes, 'total_no': total_no,
+                    'first_fill_at': bot.get('first_fill_at'),
+                    'time_to_complete_s': round(time.time() - bot.get('first_fill_at', time.time()), 1),
+                })
                 threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
         elif total_yes > 0 and total_no == 0:
             bot['status'] = 'ladder_arb_yes_filled'
             if not bot.get('first_fill_at'):
                 bot['first_fill_at'] = time.time()
                 bot['first_fill_side'] = 'yes'
+                bot_log('LADDER_ARB_FIRST_FILL', bot_id, {
+                    'side': 'yes', 'total_yes': total_yes,
+                    'rung_idx': matched_rung, 'fill_price': rung.get('yes_price', 0) if matched_rung is not None else None,
+                })
                 if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
                     bot['_sweep_thread_running'] = True
                     threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
@@ -2217,6 +2239,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if not bot.get('first_fill_at'):
                 bot['first_fill_at'] = time.time()
                 bot['first_fill_side'] = 'no'
+                bot_log('LADDER_ARB_FIRST_FILL', bot_id, {
+                    'side': 'no', 'total_no': total_no,
+                    'rung_idx': matched_rung, 'fill_price': rung.get('no_price', 0) if matched_rung is not None else None,
+                })
                 if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
                     bot['_sweep_thread_running'] = True
                     threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
@@ -4337,7 +4363,26 @@ def _record_rung_completion(bot_id, bot, rung):
         'bot_category': 'ladder_arb',
     }, bot)
 
-    print(f'✅ RUNG COMPLETE: {bot_id} width={width}¢ YES@{yes_p}¢ NO@{no_p}¢ +{net_pnl}¢ ({bot.get("completed_rungs_count",1)}/{len(bot.get("rungs",[]))} rungs)')
+    # Calculate hedge latency from rung fill timestamps
+    filled_side = bot.get('first_fill_side', 'yes')
+    hedge_side = 'no' if filled_side == 'yes' else 'yes'
+    anchor_fill_at = rung.get(f'{filled_side}_filled_at')
+    hedge_fill_at = rung.get(f'{hedge_side}_filled_at')
+    hedge_latency_s = round(hedge_fill_at - anchor_fill_at, 1) if anchor_fill_at and hedge_fill_at else None
+
+    print(f'✅ RUNG COMPLETE: {bot_id} width={width}¢ YES@{yes_p}¢ NO@{no_p}¢ +{net_pnl}¢ ({bot.get("completed_rungs_count",1)}/{len(bot.get("rungs",[]))} rungs) hedge_lat={hedge_latency_s}s')
+    bot_log('RUNG_COMPLETE', bot_id, {
+        'rung_idx': bot.get('rungs', []).index(rung) if rung in bot.get('rungs', []) else None,
+        'width': width, 'yes_price': yes_p, 'no_price': no_p,
+        'combined': yes_p + no_p, 'quantity': rq,
+        'gross_pnl': pnl_cents, 'fee': fee, 'net_pnl': net_pnl,
+        'anchor_fill_at': anchor_fill_at, 'hedge_fill_at': hedge_fill_at,
+        'hedge_latency_s': hedge_latency_s,
+        'walk_count': bot.get('walk_count', 0),
+        'completed_rungs': bot.get('completed_rungs_count', 1),
+        'total_rungs': len(bot.get('rungs', [])),
+        'cumulative_pnl': bot.get('cumulative_pnl', 0),
+    })
 
     with _pending_ws_actions_lock:
         _pending_ws_actions.append({
@@ -4359,6 +4404,21 @@ def _check_and_record_rung_completions(bot_id, bot):
 
     for rung in newly_completed:
         _record_rung_completion(bot_id, bot, rung)
+
+    # Propagate hedge-side fill timestamps to individual rungs (consolidated bots)
+    # When a single consolidated hedge covers all rungs, the individual rungs don't
+    # get {hedge_side}_filled_at set automatically — we back-fill it here.
+    if bot.get('_consolidated') and bot.get('_hedge_fill_count', 0) > 0:
+        _fs = bot.get('first_fill_side', 'yes')
+        _hs = 'no' if _fs == 'yes' else 'yes'
+        _hedge_fill_ts = bot.get('hedge_fill_at') or time.time()
+        _filled_count = 0
+        for _r in bot.get('rungs', []):
+            _rq = _r.get('quantity', qty_per)
+            if _r.get(f'{_fs}_fill_qty', 0) >= _rq and not _r.get(f'{_hs}_filled_at'):
+                if _filled_count + _rq <= bot.get('_hedge_fill_count', 0):
+                    _r[f'{_hs}_filled_at'] = _hedge_fill_ts
+                    _filled_count += _rq
 
     # Check if current hedge is fully consumed (all its covered rungs completed)
     if bot.get('_consolidated') and bot.get('hedge_order_id'):
@@ -6442,11 +6502,17 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(net_pnl)
             session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
+            # Track hedge fill-to-fill latency (anchor fill → hedge fill)
+            dog_fill_at = bot.get('dog_filled_at')
+            if dog_fill_at:
+                hedge_fill_latency_ms = round((now - dog_fill_at) * 1000, 1)
+                bot['hedge_fill_latency_ms'] = hedge_fill_latency_ms
             bot_log('ANCHOR_COMPLETE', bot_id, {
                 'dog': dog_price, 'fav': actual_fav_price,
                 'pnl': pnl_cents, 'fee': fee, 'net': net_pnl,
+                'hedge_fill_latency_ms': bot.get('hedge_fill_latency_ms'),
             })
-            print(f'✅ PHANTOM COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢)')
+            print(f'✅ PHANTOM COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms')
 
             # Repeat logic
             repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -7025,7 +7091,12 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(net_pnl)
             session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
-            print(f'👻 PHANTOM P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
+            # Track hedge fill-to-fill latency (anchor fill → hedge fill)
+            dog_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
+            if dog_fill_at:
+                hedge_fill_latency_ms = round((now - dog_fill_at) * 1000, 1)
+                bot['hedge_fill_latency_ms'] = hedge_fill_latency_ms
+            print(f'👻 PHANTOM P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
 
             # Repeat logic — re-anchor if repeats remain
             repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -7345,12 +7416,20 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         resp = kalshi_client.get_order(oid)
                         ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                         filled = _parse_fill_count(ord_data)
-                        rung[fk] = max(rung.get(fk, 0), filled)
+                        old_fk_posted = rung.get(fk, 0)
+                        rung[fk] = max(old_fk_posted, filled)
                         if filled >= rung.get('quantity', qty_per) and not rung.get(f'{side}_filled_at'):
                             rung[f'{side}_filled_at'] = now
                         # Update bot-level hedge fill count from API poll
                         if oid in bot.get('_all_hedge_order_ids', []):
                             bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), filled)
+                        if filled > old_fk_posted:
+                            bot_log('LADDER_ARB_REST_FILL_POSTED', bot_id, {
+                                'rung_idx': bot.get('rungs', []).index(rung) if rung in bot.get('rungs', []) else None,
+                                'side': side, 'old_fill': old_fk_posted, 'new_fill': filled,
+                                'price': rung.get(f'{side}_price', 0),
+                                'is_hedge_order': oid in bot.get('_all_hedge_order_ids', []),
+                            })
                     except Exception:
                         pass
 
@@ -7675,9 +7754,17 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     resp = kalshi_client.get_order(oid)
                     ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                     filled = _parse_fill_count(ord_data)
-                    rung[fk] = max(rung.get(fk, 0), filled)
+                    old_fk = rung.get(fk, 0)
+                    rung[fk] = max(old_fk, filled)
                     if filled >= rung.get('quantity', qty_per) and not rung.get(f'{filled_side}_filled_at'):
                         rung[f'{filled_side}_filled_at'] = now
+                    if filled > old_fk:
+                        bot_log('LADDER_ARB_REST_ANCHOR_FILL', bot_id, {
+                            'rung_idx': bot.get('rungs', []).index(rung) if rung in bot.get('rungs', []) else None,
+                            'side': filled_side, 'old_fill': old_fk, 'new_fill': filled,
+                            'rung_qty': rung.get('quantity', qty_per),
+                            'price': rung.get(f'{filled_side}_price', 0),
+                        })
                 except Exception:
                     pass
 
@@ -7697,8 +7784,14 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         print(f'⚠ APEX hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
                     pass
             if total_hedge_polled > bot.get('_hedge_fill_count', 0):
+                old_hfc = bot.get('_hedge_fill_count', 0)
                 bot['_hedge_fill_count'] = total_hedge_polled
                 print(f'📊 APEX {bot_id} hedge fills updated: {total_hedge_polled} (from {orders_polled_ok} orders)')
+                bot_log('LADDER_ARB_HEDGE_FILL_UPDATE', bot_id, {
+                    'old_hedge_fill_count': old_hfc, 'new_hedge_fill_count': total_hedge_polled,
+                    'orders_polled': orders_polled_ok, 'hedge_price': bot.get('hedge_price', 0),
+                    'hedge_qty': bot.get('hedge_qty', 0),
+                })
 
             # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
             if orders_polled_ok == 0 and len(bot.get('_all_hedge_order_ids', [])) > 0:
@@ -7745,7 +7838,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
         snap_ready = (unfilled_bid and unfilled_bid > 0 and current_price_for_snap > 0
                       and anchor_for_snap > 0
                       and _arb_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
-        walk_interval = 5 if snap_ready else 20
+        walk_interval = 0 if snap_ready else 20
         last_walk = bot.get('last_walk_at') or first_fill_at or now
         since_walk = now - last_walk
         if since_walk >= walk_interval:
@@ -7778,8 +7871,21 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                       f'(anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
                             else:
                                 new_price = min(current_price + 1, unfilled_bid, max_hedge)
+                            # Determine walk type for logging
+                            walk_type = 'ceiling_snap' if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price else (
+                                'profit_snap' if unfilled_bid > current_price and _arb_snap_check(anchor_price_for_ceiling, unfilled_bid, rq) else 'normal_walk')
                             if new_price > current_price:
                                 print(f'📈 APEX WALK ATTEMPT: {bot_id} {unfilled_side.upper()} {current_price}¢ → {new_price}¢ (bid={unfilled_bid}¢ max_hedge={max_hedge}¢ avg_anchor={anchor_price_for_ceiling}¢)')
+                                bot_log('APEX_WALK_ATTEMPT', bot_id, {
+                                    'walk_type': walk_type, 'consolidated': True,
+                                    'old_price': current_price, 'new_price': new_price,
+                                    'unfilled_bid': unfilled_bid, 'max_hedge': max_hedge,
+                                    'anchor_price': anchor_price_for_ceiling, 'combined': anchor_price_for_ceiling + new_price,
+                                    'hedge_qty': rq, 'hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                                    'walk_interval': walk_interval, 'snap_ready': snap_ready,
+                                    'walk_count': bot.get('walk_count', 0),
+                                    'since_walk_s': round(since_walk, 1),
+                                })
                                 try:
                                     api_rate_limiter.wait()
                                     amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
@@ -7796,7 +7902,15 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                         if bot.get('rungs'):
                                             bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid_from_amend
                                         print(f'🔄 APEX WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
+                                    bot_log('APEX_WALK_SUCCESS', bot_id, {
+                                        'walk_type': walk_type, 'old_price': current_price, 'new_price': new_price,
+                                        'new_order_id': new_oid_from_amend[:12] if new_oid_from_amend else None,
+                                    })
                                 except Exception as e:
+                                    bot_log('APEX_WALK_ERROR', bot_id, {
+                                        'walk_type': walk_type, 'error': str(e)[:200],
+                                        'old_price': current_price, 'target_price': new_price,
+                                    })
                                     if '404' in str(e):
                                         # Order gone — place a new one at the walk price
                                         remaining_qty = rq - bot.get('_hedge_fill_count', 0)
@@ -7816,6 +7930,10 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                                 bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid
                                                 walked_any = True
                                                 print(f'🔄 APEX WALK {bot_id}: old order 404, new order @{actual_price}¢ × {remaining_qty}')
+                                                bot_log('APEX_WALK_404_REPLACE', bot_id, {
+                                                    'new_order_id': new_oid[:12], 'actual_price': actual_price,
+                                                    'remaining_qty': remaining_qty,
+                                                })
                                             except Exception as re_err:
                                                 print(f'❌ APEX WALK {bot_id} re-place failed: {re_err}')
                                     elif '409' in str(e):
@@ -7862,13 +7980,31 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                 new_price = min(current_price + 1, unfilled_bid, max_hedge)
                             if new_price <= current_price:
                                 continue
+                            rung_walk_type = 'ceiling_snap' if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price else (
+                                'profit_snap' if unfilled_bid > current_price and _arb_snap_check(rung_anchor, unfilled_bid, rq) else 'normal_walk')
+                            rung_idx = bot.get('rungs', []).index(rung) if rung in bot.get('rungs', []) else None
+                            bot_log('APEX_WALK_ATTEMPT', bot_id, {
+                                'walk_type': rung_walk_type, 'consolidated': False, 'rung_idx': rung_idx,
+                                'old_price': current_price, 'new_price': new_price,
+                                'unfilled_bid': unfilled_bid, 'max_hedge': max_hedge,
+                                'anchor_price': rung_anchor, 'combined': rung_anchor + new_price,
+                                'walk_interval': walk_interval, 'snap_ready': snap_ready,
+                            })
                             try:
                                 api_rate_limiter.wait()
                                 kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
                                                           count=rq, **{f'{unfilled_side}_price': new_price})
                                 rung[f'{unfilled_side}_price'] = new_price
                                 walked_any = True
+                                bot_log('APEX_WALK_SUCCESS', bot_id, {
+                                    'walk_type': rung_walk_type, 'rung_idx': rung_idx,
+                                    'old_price': current_price, 'new_price': new_price,
+                                })
                             except Exception as e:
+                                bot_log('APEX_WALK_ERROR', bot_id, {
+                                    'walk_type': rung_walk_type, 'rung_idx': rung_idx,
+                                    'error': str(e)[:200],
+                                })
                                 print(f'❌ APEX WALK {bot_id} rung: {e}')
 
                     if walked_any:

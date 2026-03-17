@@ -4299,8 +4299,9 @@ def _recompute_ladder_arb_fills(bot):
                 anchor_fill = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
                 rung[f'{filled_side}_fill_qty'] = anchor_fill
                 if rung.get('completed'):
-                    # Already had hedge fills assigned — keep its fills, don't consume budget again
+                    # Already had hedge fills assigned — consume from budget
                     rung[f'{hedge_side}_fill_qty'] = rq
+                    remaining -= rq
                 elif anchor_fill > 0 and remaining > 0:
                     assign = min(rq, remaining)
                     rung[f'{hedge_side}_fill_qty'] = assign
@@ -4664,11 +4665,12 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             cancel_ok = 0
             for oid in remaining_oids:
                 if _cancel_with_retry(oid):
-                    for rung in bot.get('rungs', []):
-                        for side in ('yes', 'no'):
-                            if rung.get(f'{side}_order_id') == oid:
-                                rung[f'{side}_order_id'] = None
                     cancel_ok += 1
+                # Always clear order_id — if cancel failed, orphan sweeper will catch it
+                for rung in bot.get('rungs', []):
+                    for side in ('yes', 'no'):
+                        if rung.get(f'{side}_order_id') == oid:
+                            rung[f'{side}_order_id'] = None
             print(f'🔄 WS SWEEP PHASE3: cancelled {cancel_ok}/{len(remaining_oids)} remaining orders')
 
         bot.pop('_sweep_thread_running', None)
@@ -7720,10 +7722,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     cancel_ok = 0
                     for _oid, _rung, _side in cancel_oids:
                         if _cancel_with_retry(_oid):
-                            _rung[f'{_side}_order_id'] = None
                             cancel_ok += 1
                         else:
                             print(f'⚠ APEX MON CANCEL FAILED: {_oid}')
+                        # Always clear — orphan sweeper catches stragglers
+                        _rung[f'{_side}_order_id'] = None
                     print(f'🔄 APEX MON: cancelled {cancel_ok}/{len(cancel_oids)} orders')
 
                 save_state()
@@ -7802,6 +7805,20 @@ def _handle_ladder_arb(bot_id, bot, actions):
         _recompute_ladder_arb_fills(bot)
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
+
+        # Safety: cancel stale orders on consolidated bots (e.g. cancel API failed during sweep)
+        if bot.get('_consolidated'):
+            hedge_oid = bot.get('hedge_order_id')
+            for _rung in bot.get('rungs', []):
+                for _s in ('yes', 'no'):
+                    _oid = _rung.get(f'{_s}_order_id')
+                    if _oid and _oid != hedge_oid:
+                        try:
+                            kalshi_client.cancel_order(_oid)
+                            print(f'🧹 STALE ORDER CLEANUP: {bot_id} cancelled {_s} {_oid[:8]}...')
+                        except Exception:
+                            pass
+                        _rung[f'{_s}_order_id'] = None
 
         # Record any newly completed rungs + check if bot fully done
         all_resolved = _check_and_record_rung_completions(bot_id, bot)

@@ -9540,7 +9540,7 @@ async function loadBetsHistory() {
                     const d = new Date((t.timestamp||0) * 1000);
                     const key = _localDateStr(d);
                     if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
-                    const net = (t.profit_cents||0) - (t.loss_cents||0);
+                    const net = (t.profit_cents||0) - (t.loss_cents||0) - (t.fee_cents||0);
                     dayMap[key].net_cents += net;
                     dayMap[key].trades++;
                     if (net >= 0) dayMap[key].wins++; else dayMap[key].losses++;
@@ -9708,7 +9708,7 @@ async function loadMiddleHistory() {
                     const d = new Date((t.timestamp||0) * 1000);
                     const key = _localDateStr(d);
                     if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
-                    const net = (t.profit_cents||0) - (t.loss_cents||0);
+                    const net = (t.profit_cents||0) - (t.loss_cents||0) - (t.fee_cents||0);
                     dayMap[key].net_cents += net;
                     dayMap[key].trades++;
                     if (net >= 0) dayMap[key].wins++; else dayMap[key].losses++;
@@ -9783,7 +9783,7 @@ async function loadMiddleHistory() {
             const isHit   = t.middle_hit === true;
             const isArbW  = t.result === 'arb_win';
             const isLoss  = t.result === 'loss';
-            const net = (t.profit_cents||0) - (t.loss_cents||0);
+            const net = (t.profit_cents||0) - (t.loss_cents||0) - (t.fee_cents||0);
             const netCol = isPend ? '#ffaa00' : net >= 0 ? '#00ff88' : '#ff4444';
             const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : isArbW ? '✅' : '⛔';
             const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : isArbW ? 'ARB WIN' : 'LOSS';
@@ -9895,7 +9895,7 @@ async function loadDogHistory() {
                     const d = new Date((t.timestamp||0) * 1000);
                     const key = _localDateStr(d);
                     if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
-                    const net = (t.profit_cents||0) - (t.loss_cents||0);
+                    const net = (t.profit_cents||0) - (t.loss_cents||0) - (t.fee_cents||0);
                     dayMap[key].net_cents += net;
                     dayMap[key].trades++;
                     if (net >= 0) dayMap[key].wins++; else dayMap[key].losses++;
@@ -9909,7 +9909,8 @@ async function loadDogHistory() {
         if (statsPanel) {
             const totalProfit = trades.reduce((s,t) => s + (t.profit_cents||0), 0);
             const totalLoss   = trades.reduce((s,t) => s + (t.loss_cents||0), 0);
-            const net = totalProfit - totalLoss;
+            const totalFees   = trades.reduce((s,t) => s + (t.fee_cents||0), 0);
+            const net = totalProfit - totalLoss - totalFees;
             const netCol = net >= 0 ? '#00ff88' : '#ff4444';
             const wins  = trades.filter(t => t.result === 'completed' || (t.profit_cents||0) > 0).length;
             const losses = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback' || t.result === 'amended' || t.result === 'arb_loss' || ((t.loss_cents||0) > 0 && (t.profit_cents||0) === 0)).length;
@@ -9946,7 +9947,7 @@ async function loadDogHistory() {
             trades.forEach(t => {
                 const w = t.arb_width || 0;
                 if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0 };
-                const net = (t.profit_cents||0) - (t.loss_cents||0);
+                const net = (t.profit_cents||0) - (t.loss_cents||0) - (t.fee_cents||0);
                 widthMap[w].net += net;
                 if (net >= 0) widthMap[w].wins++; else widthMap[w].losses++;
             });
@@ -9975,7 +9976,7 @@ async function loadDogHistory() {
         listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px;">${trades.slice(0,50).map(t => {
             const dt = new Date(t.timestamp * 1000);
             const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-            const net = (t.profit_cents||0) - (t.loss_cents||0);
+            const net = (t.profit_cents||0) - (t.loss_cents||0) - (t.fee_cents||0);
             const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
             const isWin = net >= 0 && !isSellback;
             const netCol = isSellback ? '#ff4444' : net >= 0 ? '#00ff88' : '#ff4444';

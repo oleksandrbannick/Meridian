@@ -1435,14 +1435,17 @@ def load_state():
 class RateLimiter:
     """Burst rate limiter — fires up to `burst` requests instantly within a
     1-second window, then hard-blocks until the next window starts.
-    No delay between requests within the burst (preserves 1ms latency)."""
+    No delay between requests within the burst (preserves 1ms latency).
+    Reserves 2 tokens for priority hedge operations so they never queue."""
+    RESERVED_HEDGE_TOKENS = 2  # always keep 2 slots free for hedges
+
     def __init__(self, burst: int = 10):
         self.burst = burst
         self._count = 0
         self._window_start = time.time()
         self._lock = threading.Lock()
 
-    def wait(self):
+    def wait(self, priority=False):
         with self._lock:
             now = time.time()
             elapsed = now - self._window_start
@@ -1451,8 +1454,9 @@ class RateLimiter:
                 self._window_start = now
                 self._count = 1
                 return
-            if self._count < self.burst:
-                # Within burst — no delay
+            # Priority (hedge) calls can use the full burst including reserved tokens
+            effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
+            if self._count < effective_burst:
                 self._count += 1
                 return
             # Burst exhausted — sleep until next window
@@ -2201,9 +2205,10 @@ def _execute_anchor_fav_hedge(bot_id):
             return
 
         # Post fav hedge at pre-calculated price — no computation, straight to API
+        # Use priority rate limit token so hedge never queues behind monitor calls
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=qty, price=hedge_price
+            count=qty, price=hedge_price, priority=True
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -2337,7 +2342,7 @@ def _execute_ladder_fav_hedge(bot_id):
         print(f'👻 PHANTOM HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=total_fill_qty, price=hedge_price
+            count=total_fill_qty, price=hedge_price, priority=True
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -4430,7 +4435,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             try:
                 hedge_resp, actual_hedge = create_order_maker(
                     ticker=ticker, side=unfilled_side, action='buy',
-                    count=total_filled_qty, price=hedge_price,
+                    count=total_filled_qty, price=hedge_price, priority=True,
                 )
                 hedge_oid = hedge_resp['order']['order_id']
                 bot['hedge_order_id'] = hedge_oid
@@ -5331,7 +5336,8 @@ def create_orders_batch(order_specs):
 
 # ─── POST-ONLY AWARE ORDER PLACEMENT ──────────────────────────────
 def create_order_maker(ticker, side, action, count, price, post_only=True,
-                       order_group_id=None, max_retries=2, skip_rate_limit=False):
+                       order_group_id=None, max_retries=2, skip_rate_limit=False,
+                       priority=False):
     """Place a limit order with post_only=True.  If Kalshi rejects because the
     price would cross the spread, retry at a more passive price (price - 1 for
     buys, price + 1 for sells) up to *max_retries* times.
@@ -5346,7 +5352,7 @@ def create_order_maker(ticker, side, action, count, price, post_only=True,
     for attempt in range(max_retries + 1):
         try:
             if not skip_rate_limit:
-                api_rate_limiter.wait()
+                api_rate_limiter.wait(priority=priority)
             kwargs = {
                 'ticker': ticker,
                 'side': side,

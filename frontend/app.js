@@ -4855,7 +4855,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
             <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
-            ${bot.hedge_latency_ms != null ? `<span style="color:${bot.hedge_latency_ms < 300 ? '#00ff88' : bot.hedge_latency_ms < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(bot.hedge_latency_ms)}ms</span>` : ''}
+            ${bot.hedge_latency_ms != null ? `<span style="color:${bot.hedge_latency_ms < 300 ? '#00ff88' : bot.hedge_latency_ms < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(bot.hedge_latency_ms)}ms${favPrice > 0 ? ` @ ${favPrice}¢` : ''}</span>` : ''}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostMin = 3;

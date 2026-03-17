@@ -11839,7 +11839,7 @@ def _compute_pnl_bucket(trades, category=None):
     If category given ('arb','bet','middle'), filters to that category only."""
     if category:
         if category == 'arb':
-            trades = [t for t in trades if t.get('bot_category', 'arb') in ('arb', 'ladder_arb', 'both_posted', 'anchor_ladder', 'anchor_dog')]
+            trades = [t for t in trades if t.get('bot_category', 'arb') in ('arb', 'ladder_arb', 'both_posted')]
         else:
             trades = [t for t in trades if t.get('bot_category', 'arb') == category]
     gross_profit = 0

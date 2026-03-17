@@ -4463,59 +4463,10 @@ def _check_and_record_rung_completions(bot_id, bot):
                     _r[f'{_hs}_filled_at'] = _hedge_fill_ts
                     _filled_count += _rq
 
-    # Check if current hedge is fully consumed (all its covered rungs completed)
-    if bot.get('_consolidated') and bot.get('hedge_order_id'):
-        filled_side = bot.get('first_fill_side', 'yes')
-        hedge_side = 'no' if filled_side == 'yes' else 'yes'
-        hedge_qty = bot.get('hedge_qty', 0)
-        hedge_fill_count = bot.get('_hedge_fill_count', 0)
-
-        # Count how many anchor-filled but uncompleted rungs remain
-        # that were part of THIS hedge generation (up to hedge_qty)
-        # Count in CONTRACTS (not rungs) to match hedge_qty units
-        covered_completed = 0
-        covered_uncompleted = 0
-        for rung in bot.get('rungs', []):
-            rq = rung.get('quantity', qty_per)
-            if rung.get(f'{filled_side}_fill_qty', 0) >= rq:
-                if rung.get('completed'):
-                    covered_completed += rq
-                else:
-                    covered_uncompleted += rq
-
-        # Hedge gen is done when: hedge fully filled AND all covered rungs completed
-        # OR: completed rungs >= hedge_qty (the hedge covered exactly hedge_qty rungs)
-        hedge_fully_filled = hedge_fill_count >= hedge_qty and hedge_qty > 0
-        all_covered_done = covered_completed >= hedge_qty and hedge_qty > 0
-
-        if hedge_fully_filled and all_covered_done:
-            # Current hedge generation fully consumed — move to history
-            hedge_history = bot.get('hedge_history', [])
-            hedge_fill_count = bot.get('_hedge_fill_count', 0)
-            hedge_history.append({
-                'order_id': bot.get('hedge_order_id'),
-                'price': bot.get('hedge_price', 0),
-                'qty': bot.get('hedge_qty', 0),
-                'side': hedge_side,
-                'fill_qty': hedge_fill_count if hedge_fill_count > 0 else bot.get('hedge_qty', 0),
-                'completed': True,
-                'order_ids': bot.get('_all_hedge_order_ids', []),
-            })
-            bot['hedge_history'] = hedge_history
-            # Reset consolidation state for next repeat cycle
-            bot['hedge_order_id'] = None
-            bot['hedge_price'] = 0
-            bot['hedge_qty'] = 0
-            bot['_hedge_fill_count'] = 0
-            bot['_all_hedge_order_ids'] = []
-            bot['_consolidated'] = False
-            bot['first_fill_at'] = None
-            bot['first_fill_side'] = None
-            bot['walk_count'] = 0
-            # Clear rung[0] hedge refs
-            if bot.get('rungs'):
-                bot['rungs'][0][f'{hedge_side}_order_id'] = None
-            print(f'📦 HEDGE GEN COMPLETE: {bot_id} — hedge consumed (fills={hedge_fill_count})')
+    # NOTE: Hedge gen completion + state reset is handled by
+    # _execute_ladder_arb_full_completion which properly clears rung fill counts.
+    # Do NOT reset consolidation state here — doing so leaves orphaned anchor fills
+    # that trigger duplicate hedges.
 
     # Check if ALL rungs are resolved
     all_resolved = True
@@ -7631,6 +7582,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
         # Backfill first_fill_side if cleared by previous hedge gen completion
         if not bot.get('first_fill_side'):
             bot['first_fill_side'] = filled_side
+        if not bot.get('first_fill_at'):
+            bot['first_fill_at'] = now
 
         # ── SWEEP CHECK: wait 1s after first fill, then cancel ALL remaining orders ──
         if bot.get('_sweep_at'):
@@ -8242,7 +8195,8 @@ def _run_monitor():
                 try:
                     _handle_ladder_arb(bot_id, bot, actions)
                 except Exception as la_err:
-                    print(f'❌ ladder_arb monitor {bot_id}: {la_err}')
+                    import traceback
+                    print(f'❌ ladder_arb monitor {bot_id}: {la_err}\n{traceback.format_exc()}')
                 continue
 
             try:

@@ -4299,15 +4299,57 @@ def _check_and_record_rung_completions(bot_id, bot):
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
-    """Spawned from WS fill handler — wait 1s sweep window, cancel ALL remaining orders, post ONE consolidated hedge."""
-    time.sleep(1.0)  # sweep window: let more fills accumulate
+    """Spawned from WS fill handler on first anchor fill.
+    Phase 1: IMMEDIATELY cancel all opposite-side orders (prevents unwanted fills)
+    Phase 2: Sleep 1s to accumulate more anchor-side fills
+    Phase 3: Cancel remaining unfilled anchor orders, place ONE consolidated hedge"""
 
+    # ── Phase 1: Immediately cancel opposite-side orders ──
+    unfilled_oids = []
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
         if not bot:
             return
         status = bot.get('status', '')
         if status not in ('ladder_arb_yes_filled', 'ladder_arb_no_filled'):
+            bot.pop('_sweep_thread_running', None)
+            return
+        if bot.get('_consolidated'):
+            bot.pop('_sweep_thread_running', None)
+            save_state()
+            return
+
+        filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'
+        unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+
+        # Collect opposite-side order IDs and clear them from rungs immediately
+        for rung in bot.get('rungs', []):
+            oid = rung.get(f'{unfilled_side}_order_id')
+            if oid:
+                unfilled_oids.append(oid)
+                rung[f'{unfilled_side}_order_id'] = None
+        save_state()
+
+    # Cancel opposite-side orders OUTSIDE the lock (doesn't block other WS fills)
+    for oid in unfilled_oids:
+        try:
+            kalshi_client.cancel_order(oid)
+        except Exception:
+            pass
+
+    print(f'⚡ WS SWEEP PHASE1: {bot_id} — instantly cancelled {len(unfilled_oids)} {unfilled_side} orders')
+
+    # ── Phase 2: 1s sweep window — let more anchor fills accumulate ──
+    time.sleep(1.0)
+
+    # ── Phase 3: Cancel remaining anchor orders + place consolidated hedge ──
+    with ws_fill_lock:
+        bot = active_bots.get(bot_id)
+        if not bot:
+            return
+        status = bot.get('status', '')
+        if status not in ('ladder_arb_yes_filled', 'ladder_arb_no_filled'):
+            bot.pop('_sweep_thread_running', None)
             return
         if bot.get('_consolidated'):
             bot.pop('_sweep_thread_running', None)
@@ -4319,11 +4361,10 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
 
-        print(f'⚡ WS SWEEP: {bot_id} — 1s elapsed, cancelling all remaining orders')
+        print(f'⚡ WS SWEEP PHASE3: {bot_id} — 1s elapsed, cancelling remaining orders')
         for rung in bot.get('rungs', []):
             for side in ('yes', 'no'):
                 rung_qty_c = rung.get('quantity', qty_per)
-                # Keep fully-filled anchor-side orders (they already filled, nothing to cancel)
                 if rung.get(f'{filled_side}_fill_qty', 0) >= rung_qty_c and side == filled_side:
                     continue
                 oid = rung.get(f'{side}_order_id')
@@ -7040,9 +7081,21 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 unfilled_bid_init = yes_bid if unfilled_side == 'yes' else no_bid
                 bot['walk_start_price'] = unfilled_bid_init or 0
 
-                # ── 1s SWEEP: first fill detected, wait 1s for more fills ──
+                # ── 1s SWEEP: first fill detected ──
                 bot['_sweep_at'] = now
-                print(f'⚡ SWEEP START: {bot_id} {filled_side.upper()} fill detected — 1s sweep window')
+                # Immediately cancel opposite-side orders (don't let them fill during window)
+                cancelled_opp = 0
+                for _rung in bot.get('rungs', []):
+                    _oid = _rung.get(f'{unfilled_side}_order_id')
+                    if _oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_oid)
+                        except Exception:
+                            pass
+                        _rung[f'{unfilled_side}_order_id'] = None
+                        cancelled_opp += 1
+                print(f'⚡ SWEEP START: {bot_id} {filled_side.upper()} fill — cancelled {cancelled_opp} {unfilled_side.upper()} orders, 1s anchor window')
                 save_state()
                 return
 
@@ -7131,6 +7184,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
         # Guard: don't process if completion thread is running
         if bot.get('_bot_completed'):
             bot['status'] = 'completed'
+            return
+
+        # Sweep thread handles cancel + hedge — don't interfere
+        if bot.get('_sweep_thread_running'):
+            save_state()
             return
 
         filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'

@@ -4639,7 +4639,8 @@ def create_ladder_arb_bot():
         if not rung_specs:
             return jsonify({'error': 'No valid widths after price computation'}), 400
 
-        # Place orders for all rungs IN PARALLEL (2 orders per rung, all rungs at once)
+        # Place orders for all rungs — stagger to avoid 429 rate limits
+        # With 12 rungs × 2 orders = 24 requests, parallel with 4 workers + rate limiter
         placed_rungs = []
         total_scaled_qty = 0
 
@@ -4666,7 +4667,7 @@ def create_ladder_arb_bot():
                 'quantity': rung_qty,
             }
 
-        with ThreadPoolExecutor(max_workers=min(len(rung_specs), 12)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(rung_specs), 4)) as pool:
             futures = {pool.submit(_place_rung, spec): spec for spec in rung_specs}
             for future in futures:
                 spec = futures[future]

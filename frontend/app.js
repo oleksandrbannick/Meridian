@@ -3202,7 +3202,7 @@ function updateAnchorPreview() {
     const btn = document.getElementById('anchor-deploy-btn');
     if (btn) {
         if (_anchorRungs.length > 1) {
-            btn.textContent = `🪜 Deploy ${_anchorRungs.length}-Rung Ladder`;
+            btn.textContent = `⚡ Deploy ${_anchorRungs.length}-Rung Arb Bot`;
             btn.style.background = 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
             btn.style.color = '#fff';
         } else {
@@ -3241,7 +3241,7 @@ async function deployAnchorBot() {
     const avgLine = isLadder ? `\nAvg dog price: ${avgPrice}¢` : '';
 
     const repeatLine = repeatCount > 0 ? `\nRepeat: ${repeatCount}× (${repeatCount + 1} total runs)` : '\nRepeat: single shot';
-    if (!confirm(`${isLadder ? '🪜 Deploy Ladder' : '🎯 Deploy Anchor Dog'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
+    if (!confirm(`${isLadder ? '⚡ Deploy Arb Bot' : '🎯 Deploy Dog Bot'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
         const endpoint = isLadder ? 'bot/ladder' : 'bot/anchor';
@@ -3274,8 +3274,8 @@ async function deployAnchorBot() {
         const data = await resp.json();
         if (data.success) {
             const msg = isLadder
-                ? `🪜 LADDER deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢`
-                : `🎯 ANCHOR deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢`;
+                ? `⚡ ARB BOT deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢`
+                : `🎯 DOG BOT deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢`;
             showNotification(msg);
             closeModal();
             loadBots();
@@ -4601,12 +4601,12 @@ async function placeSelectedWidthsBots() {
             const data = await resp.json();
             if (data.bot_id) {
                 const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
-                notifMsg = `🪜 Ladder ARB placed: ${data.rungs} rungs · ${qtyDesc}`;
+                notifMsg = `⚡ Arb Bot placed: ${data.rungs} rungs · ${qtyDesc}`;
             } else {
-                notifMsg = `❌ Ladder ARB failed: ${data.error || 'Unknown error'}`;
+                notifMsg = `❌ Arb Bot failed: ${data.error || 'Unknown error'}`;
             }
         } catch (err) {
-            notifMsg = `❌ Ladder ARB failed: Network error`;
+            notifMsg = `❌ Arb Bot failed: Network error`;
         }
     } else {
         // ── SINGLE WIDTH: use legacy bot/create endpoint ──────────────────────
@@ -5094,7 +5094,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const filledLabel = filledSideKey === 'yes' ? 'YES' : 'NO';
         rungsHTML = rungs.filter(r => {
             // Only show rungs that have fills on the anchor side
-            return (r[`${filledSideKey}_fill_qty`] || 0) > 0 || r.yes_order_id || r.no_order_id;
+            return (r[`${filledSideKey}_fill_qty`] || 0) > 0;
         }).map((r, i) => {
             const fill = r[`${filledSideKey}_fill_qty`] || 0;
             const rQty = r.quantity || qtyPer;

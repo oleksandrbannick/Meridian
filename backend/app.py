@@ -2269,25 +2269,12 @@ def _execute_ladder_fav_hedge(bot_id):
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
 
-        # Cancel any unfilled rung orders
-        cancelled_rungs = 0
-        for rung in bot.get('rungs', []):
-            if rung.get('fill_qty', 0) < rung['qty'] and rung.get('order_id'):
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(rung['order_id'])
-                    rung['cancelled'] = True
-                    cancelled_rungs += 1
-                except Exception as cancel_err:
-                    print(f'⚠ RUNG CANCEL FAIL: {bot_id} rung {rung.get("price")}¢ — {cancel_err}')
-
-        # Calculate weighted average price and total quantity
+        # Calculate weighted average price and total quantity FIRST (before cancels)
         filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
         if not filled_rungs:
             # Recovery: bot-level fill data exists but rung-level doesn't
             bot_fill = bot.get('total_dog_fill_qty', 0) or bot.get(f'{dog_side}_fill_qty', 0) or 0
             if bot_fill > 0 and bot.get('avg_fill_price'):
-                # Reconstruct: assign fills to first rung
                 bot['rungs'][0]['fill_qty'] = min(bot_fill, bot['rungs'][0]['qty'])
                 filled_rungs = [bot['rungs'][0]]
                 print(f'🔧 LADDER HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
@@ -2305,20 +2292,17 @@ def _execute_ladder_fav_hedge(bot_id):
         bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
 
         rungs_str = ', '.join(f'{r["price"]}¢×{r["fill_qty"]}' for r in filled_rungs)
-        print(f'🪜 LADDER HEDGE START: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | cancelled {cancelled_rungs} unfilled')
 
         # Use WS cache for fav bid (saves ~30ms + rate limit wait)
         ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
         if ws_data:
             fav_bid = ws_data.get(f'{fav_side}_bid', 0)
             fav_ask = ws_data.get(f'{fav_side}_ask', 0)
-            print(f'   📊 Fav WS cache: {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
         else:
             api_rate_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             fav_bid = _best_bid(ob, fav_side)
             fav_ask = _best_ask(ob, fav_side)
-            print(f'   📊 Fav orderbook (REST fallback): {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
         if fav_bid <= 0:
             print(f'   ⚠ No fav bid — deferring to monitor')
             bot['status'] = 'ladder_filled_no_fav'
@@ -2329,25 +2313,21 @@ def _execute_ladder_fav_hedge(bot_id):
         target_width = bot.get('target_width', 5)
         fav_shave = bot.get('fav_shave', 0)
         max_fav_price = 100 - avg_price - target_width
-        # Post at bid - shave, capped at max_fav_price (preserves target width profit)
         initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
         hedge_price = min(initial_fav_target, max_fav_price)
-        print(f'   💰 Price calc: fav_bid={fav_bid}¢ shave={fav_shave}¢ → target={initial_fav_target}¢ | max={max_fav_price}¢ → hedge={hedge_price}¢')
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — selling back')
             _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
             return
 
-        # Hard ceiling check — cap hedge price instead of selling back
+        # Hard ceiling check
         est_fees = kalshi_fee_cents(
             avg_price if dog_side == 'yes' else hedge_price,
             avg_price if dog_side == 'no' else hedge_price,
             total_fill_qty
         )
         total_cost = avg_price + hedge_price + est_fees
-        print(f'   🧮 Ceiling check: {avg_price}¢ + {hedge_price}¢ + {est_fees}¢ fees = {total_cost}¢ (ceiling={HARD_CEILING_CENTS}¢)')
         if total_cost > HARD_CEILING_CENTS:
-            # Converge: safe_hedge ↔ fees are circular, iterate until stable
             safe_hedge = HARD_CEILING_CENTS - avg_price - est_fees
             for _ in range(3):
                 est_fees = kalshi_fee_cents(
@@ -2365,7 +2345,8 @@ def _execute_ladder_fav_hedge(bot_id):
             print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}→{safe_hedge}¢ — will walk up toward bid')
             hedge_price = safe_hedge
 
-        # Post single fav hedge for total filled qty
+        # ── HEDGE FIRST — gets priority burst token ──
+        print(f'🪜 LADDER HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price
@@ -2391,6 +2372,19 @@ def _execute_ladder_fav_hedge(bot_id):
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
             _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
+
+        # ── THEN cancel unfilled rung orders (lower priority) ──
+        cancelled_rungs = 0
+        for rung in bot.get('rungs', []):
+            if rung.get('fill_qty', 0) < rung['qty'] and rung.get('order_id'):
+                if _cancel_with_retry(rung['order_id']):
+                    rung['cancelled'] = True
+                    cancelled_rungs += 1
+                else:
+                    print(f'⚠ RUNG CANCEL FAIL: {bot_id} rung {rung.get("price")}¢')
+        if cancelled_rungs:
+            print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
+
         save_state()
     except Exception as e:
         print(f'❌ LADDER HEDGE {bot_id}: {e}')
@@ -4381,23 +4375,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
 
-        print(f'⚡ WS SWEEP PHASE3: {bot_id} — 1s elapsed, cancelling remaining orders')
-        remaining_oids = []
-        for rung in bot.get('rungs', []):
-            for side in ('yes', 'no'):
-                rung_qty_c = rung.get('quantity', qty_per)
-                if rung.get(f'{filled_side}_fill_qty', 0) >= rung_qty_c and side == filled_side:
-                    continue
-                oid = rung.get(f'{side}_order_id')
-                if oid:
-                    remaining_oids.append(oid)
-        # Cancel sequentially with retry — only clear rung ref on success
-        for oid in remaining_oids:
-            if _cancel_with_retry(oid):
-                for rung in bot.get('rungs', []):
-                    for side in ('yes', 'no'):
-                        if rung.get(f'{side}_order_id') == oid:
-                            rung[f'{side}_order_id'] = None
+        print(f'⚡ WS SWEEP PHASE3: {bot_id} — 1s elapsed, computing hedge + cancelling remaining')
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)
@@ -4451,6 +4429,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
 
         print(f'📊 WS SWEEP HEDGE: {bot_id} avg_anchor={avg_filled_price}¢ width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢ × {total_filled_qty}')
 
+        # ── HEDGE FIRST — gets priority burst token before cancels ──
         if hedge_price > 0:
             try:
                 hedge_resp, actual_hedge = create_order_maker(
@@ -4477,6 +4456,27 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 print(f'🎯 WS SWEEP CONSOLIDATE: {bot_id} {filled_side.upper()} avg={avg_filled_price}¢ → {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
             except Exception as e:
                 print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
+
+        # ── THEN cancel remaining orders (lower priority) ──
+        remaining_oids = []
+        for rung in bot.get('rungs', []):
+            for side in ('yes', 'no'):
+                rung_qty_c = rung.get('quantity', qty_per)
+                if rung.get(f'{filled_side}_fill_qty', 0) >= rung_qty_c and side == filled_side:
+                    continue
+                oid = rung.get(f'{side}_order_id')
+                if oid and oid != bot.get('hedge_order_id'):
+                    remaining_oids.append(oid)
+        if remaining_oids:
+            cancel_ok = 0
+            for oid in remaining_oids:
+                if _cancel_with_retry(oid):
+                    for rung in bot.get('rungs', []):
+                        for side in ('yes', 'no'):
+                            if rung.get(f'{side}_order_id') == oid:
+                                rung[f'{side}_order_id'] = None
+                    cancel_ok += 1
+            print(f'🔄 WS SWEEP PHASE3: cancelled {cancel_ok}/{len(remaining_oids)} remaining orders')
 
         bot.pop('_sweep_thread_running', None)
         save_state()
@@ -7347,27 +7347,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
             )
             if total_filled_qty > 0:
-                # Cancel ALL remaining orders in parallel
-                cancel_oids = []
-                for _rung in bot.get('rungs', []):
-                    for _side in ('yes', 'no'):
-                        _rq = _rung.get('quantity', qty_per)
-                        if _rung.get(f'{filled_side}_fill_qty', 0) >= _rq and _side == filled_side:
-                            continue
-                        _oid = _rung.get(f'{_side}_order_id')
-                        if _oid:
-                            cancel_oids.append((_oid, _rung, _side))
-                cancel_ok = 0
-                if cancel_oids:
-                    for _oid, _rung, _side in cancel_oids:
-                        if _cancel_with_retry(_oid):
-                            _rung[f'{_side}_order_id'] = None
-                            cancel_ok += 1
-                        else:
-                            print(f'⚠ LADDER-ARB MON CANCEL FAILED: {_oid}')
-                    print(f'🔄 LADDER-ARB MON: cancelled {cancel_ok}/{len(cancel_oids)} orders')
                 _recompute_ladder_arb_fills(bot)
-                # Recompute total after any last-second fills during cancellation
+                # Recompute total after recompute
                 total_filled_qty = sum(
                     min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
                     for r in bot.get('rungs', [])
@@ -7417,6 +7398,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
                 print(f'📊 LADDER-ARB HEDGE CALC: {bot_id} avg_anchor={avg_filled_price}¢ weighted_width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢')
 
+                # ── HEDGE FIRST — gets priority burst token before cancels ──
                 if hedge_price > 0:
                     try:
                         hedge_resp, actual_hedge = create_order_maker(
@@ -7438,6 +7420,26 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled_price}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
                     except Exception as e:
                         print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
+
+                # ── THEN cancel remaining orders (lower priority) ──
+                cancel_oids = []
+                for _rung in bot.get('rungs', []):
+                    for _side in ('yes', 'no'):
+                        _rq = _rung.get('quantity', qty_per)
+                        if _rung.get(f'{filled_side}_fill_qty', 0) >= _rq and _side == filled_side:
+                            continue
+                        _oid = _rung.get(f'{_side}_order_id')
+                        if _oid and _oid != bot.get('hedge_order_id'):
+                            cancel_oids.append((_oid, _rung, _side))
+                if cancel_oids:
+                    cancel_ok = 0
+                    for _oid, _rung, _side in cancel_oids:
+                        if _cancel_with_retry(_oid):
+                            _rung[f'{_side}_order_id'] = None
+                            cancel_ok += 1
+                        else:
+                            print(f'⚠ LADDER-ARB MON CANCEL FAILED: {_oid}')
+                    print(f'🔄 LADDER-ARB MON: cancelled {cancel_ok}/{len(cancel_oids)} orders')
 
                 save_state()
                 return

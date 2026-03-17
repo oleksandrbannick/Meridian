@@ -1989,7 +1989,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['yes_fill_qty'] = bot['dog_fill_qty']
             else:
                 bot['no_fill_qty'] = bot['dog_fill_qty']
-            print(f'⚡ WS ANCHOR DOG FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
+            print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
 
             if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
                 # Dog filled! Set status BEFORE spawning thread to prevent monitor double-fire
@@ -2007,7 +2007,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['yes_fill_qty'] = bot['fav_fill_qty']
             else:
                 bot['no_fill_qty'] = bot['fav_fill_qty']
-            print(f'⚡ WS ANCHOR FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
+            print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
             # Full fav fill will be handled by monitor on next cycle
         save_state()
         break
@@ -2035,7 +2035,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['yes_fill_qty'] = total_fill
             else:
                 bot['no_fill_qty'] = total_fill
-            print(f'⚡ WS LADDER FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
+            print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
             # All rungs filled? Hedge immediately
             if total_fill >= bot['total_dog_qty']:
                 bot['dog_filled_at'] = time.time()
@@ -2044,7 +2044,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 # First fill — start 2s sweep window, then hedge with whatever filled
                 bot['_sweep_timer_started'] = True
                 bot['first_fill_at'] = time.time()
-                print(f'⏱ WS LADDER SWEEP: {bot_id} first fill detected — 2s sweep window started')
+                print(f'⏱ WS PHANTOM SWEEP: {bot_id} first fill detected — 2s sweep window started')
                 threading.Thread(target=_ladder_sweep_then_hedge, args=(bot_id,), daemon=True).start()
             save_state()
             break
@@ -2056,7 +2056,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['yes_fill_qty'] = bot['fav_fill_qty']
             else:
                 bot['no_fill_qty'] = bot['fav_fill_qty']
-            print(f'⚡ WS LADDER FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{bot.get("hedge_qty", "?")}')
+            print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{bot.get("hedge_qty", "?")}')
             save_state()
             break
 
@@ -2104,7 +2104,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
         hedge_info = f' (hedge fill #{bot.get("_hedge_fill_count", 0)})' if is_hedge_fill else ''
         rung_info = f'rung[{matched_rung}] {matched_side.upper()}' if matched_rung is not None else 'hedge-only'
-        print(f'⚡ WS LADDER-ARB FILL: {bot_id} {rung_info} +{count}{hedge_info} '
+        print(f'△ WS APEX FILL: {bot_id} {rung_info} +{count}{hedge_info} '
               f'→ YES={total_yes}/{total_expected_per_side} NO={total_no}/{total_expected_per_side}')
 
         if total_yes >= total_expected_per_side and total_no >= total_expected_per_side:
@@ -2120,7 +2120,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
                     bot['_sweep_thread_running'] = True
                     threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
-                    print(f'⚡ WS SWEEP SPAWNED: {bot_id} YES fill detected — sweep thread launched')
+                    print(f'△ APEX SWEEP SPAWNED: {bot_id} YES fill detected — sweep thread launched')
         elif total_no > 0 and total_yes == 0:
             bot['status'] = 'ladder_arb_no_filled'
             if not bot.get('first_fill_at'):
@@ -2129,7 +2129,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
                     bot['_sweep_thread_running'] = True
                     threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
-                    print(f'⚡ WS SWEEP SPAWNED: {bot_id} NO fill detected — sweep thread launched')
+                    print(f'△ APEX SWEEP SPAWNED: {bot_id} NO fill detected — sweep thread launched')
         elif total_yes > 0 and total_no > 0:
             # Both sides have some fills — keep the current status or set based on which has more
             if bot['status'] == 'ladder_arb_posted':
@@ -2140,7 +2140,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
                         bot['_sweep_thread_running'] = True
                         threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
-                        print(f'⚡ WS SWEEP SPAWNED: {bot_id} mixed fills — sweep thread launched')
+                        print(f'△ APEX SWEEP SPAWNED: {bot_id} mixed fills — sweep thread launched')
 
         save_state()
         break
@@ -2239,7 +2239,7 @@ def _execute_anchor_fav_hedge(bot_id):
 
         save_state()
     except Exception as e:
-        print(f'❌ WS ANCHOR HEDGE {bot_id}: {e}')
+        print(f'❌ WS PHANTOM HEDGE {bot_id}: {e}')
         bot = active_bots.get(bot_id)
         if bot:
             bot['status'] = 'dog_filled'  # fallback to monitor
@@ -2266,9 +2266,9 @@ def _execute_ladder_fav_hedge(bot_id):
             if bot_fill > 0 and bot.get('avg_fill_price'):
                 bot['rungs'][0]['fill_qty'] = min(bot_fill, bot['rungs'][0]['qty'])
                 filled_rungs = [bot['rungs'][0]]
-                print(f'🔧 LADDER HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
+                print(f'🔧 PHANTOM HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
             else:
-                print(f'👻 LADDER HEDGE {bot_id}: no filled rungs — marking complete')
+                print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs — marking complete')
                 bot['status'] = 'completed'
                 bot['completed_at'] = time.time()
                 save_state()
@@ -2289,7 +2289,7 @@ def _execute_ladder_fav_hedge(bot_id):
         if precalc > 0:
             # All rungs filled — use pre-calculated price, skip bid lookup + ceiling math
             hedge_price = precalc
-            print(f'👻 LADDER HEDGE (PRECALC): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | precalc hedge={hedge_price}¢')
+            print(f'👻 PHANTOM HEDGE (PRECALC): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | precalc hedge={hedge_price}¢')
         else:
             # Partial fill — need to compute from actual fills + live bid
             ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
@@ -2334,7 +2334,7 @@ def _execute_ladder_fav_hedge(bot_id):
             return
 
         # ── HEDGE FIRST — gets priority burst token ──
-        print(f'👻 LADDER HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
+        print(f'👻 PHANTOM HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price
@@ -2375,7 +2375,7 @@ def _execute_ladder_fav_hedge(bot_id):
 
         save_state()
     except Exception as e:
-        print(f'❌ LADDER HEDGE {bot_id}: {e}')
+        print(f'❌ PHANTOM HEDGE {bot_id}: {e}')
         bot = active_bots.get(bot_id)
         if bot:
             bot['status'] = 'ladder_filled_no_fav'
@@ -2389,7 +2389,7 @@ def _ladder_sweep_then_hedge(bot_id):
     bot = active_bots.get(bot_id)
     if not bot or bot.get('status') != 'ladder_posted':
         return
-    print(f'⚡ LADDER INSTANT HEDGE: {bot_id} — cancelling unfilled + hedging')
+    print(f'⚡ PHANTOM INSTANT HEDGE: {bot_id} — cancelling unfilled + hedging')
     bot['dog_filled_at'] = time.time()
     _execute_ladder_fav_hedge(bot_id)
 
@@ -2415,13 +2415,13 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
         bot['_sellback_attempts'] = attempts
         # After 3 failed attempts, position likely doesn't exist — ghost data from repeat cycle
         if attempts >= 3:
-            print(f'🔧 LADDER SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, no position exists. Completing bot.')
+            print(f'🔧 PHANTOM SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, no position exists. Completing bot.')
             bot['status'] = 'completed'
             bot['completed_at'] = now
             bot['_trade_recorded'] = True
             save_state()
             return
-        print(f'⚠ LADDER SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry (attempt {attempts})')
+        print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry (attempt {attempts})')
         bot['status'] = 'ladder_filled_no_fav'  # go back so monitor retries
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': attempts})
         return
@@ -2431,7 +2431,7 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
 
     if already_cleared and not sell_price:
         # Position was already gone (sold/settled elsewhere) — record 0 loss, not full loss
-        print(f'🔙 LADDER SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
+        print(f'🔙 PHANTOM SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
         loss_cents = 0
         sell_price = avg_price  # assume break-even since we don't know actual price
     else:
@@ -2467,7 +2467,7 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
         for rung in bot.get('rungs', []):
             rung['fill_qty'] = 0
             rung['order_id'] = None
-        print(f'🔄 LADDER SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+        print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
     else:
         bot['status'] = 'stopped'
         bot['stopped_at'] = now
@@ -2478,7 +2478,7 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
     ]
 
     bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss_cents
-    print(f'🔙 LADDER SELLBACK: {bot_id} | dog={dog_side.upper()} avg@{avg_price}¢ → sold@{sell_price}¢ | qty={total_fill_qty} | loss={loss_cents}¢ | fav_bid={fav_bid}¢ ceiling={total_cost}¢')
+    print(f'🔙 PHANTOM SELLBACK: {bot_id} | dog={dog_side.upper()} avg@{avg_price}¢ → sold@{sell_price}¢ | qty={total_fill_qty} | loss={loss_cents}¢ | fav_bid={fav_bid}¢ ceiling={total_cost}¢')
 
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,
@@ -2551,15 +2551,15 @@ def _execute_ws_dog_post(bot_id):
                 # NEVER post above the current bid
                 if dog_price > live_dog_bid and live_dog_bid > 0:
                     dog_price = live_dog_bid
-                    print(f'📉 WS DOG: Adjusted {dog_side.upper()} price to bid {live_dog_bid}¢')
+                    print(f'📉 WS PHANTOM: Adjusted {dog_side.upper()} price to bid {live_dog_bid}¢')
             except Exception as ob_err:
-                print(f'⚠ WS DOG: Orderbook check failed: {ob_err} — using planned price')
+                print(f'⚠ WS PHANTOM: Orderbook check failed: {ob_err} — using planned price')
 
             # Verify arb width still makes sense
             actual_profit = 100 - fav_price - dog_price
             min_width = max(1, bot.get('arb_width', bot.get('profit_per', 3)) // 2)
             if actual_profit < min_width:
-                print(f'⚠ WS DOG: Arb no longer viable for {bot_id}: profit={actual_profit}¢ < min={min_width}¢ — letting SL handle')
+                print(f'⚠ WS PHANTOM: Arb no longer viable for {bot_id}: profit={actual_profit}¢ < min={min_width}¢ — letting SL handle')
                 if fav_side == 'yes':
                     bot['status'] = 'yes_filled'
                 else:
@@ -2605,13 +2605,13 @@ def _execute_ws_dog_post(bot_id):
                 'profit_per': bot['profit_per'],
                 'source': 'ws_realtime'
             })
-            print(f'⚡ WS FAV-FILL → DOG POSTED: {bot_id} {fav_side.upper()} filled at {fav_price}¢ → '
+            print(f'⚡ WS FAV-FILL → PHANTOM POSTED: {bot_id} {fav_side.upper()} filled at {fav_price}¢ → '
                   f'posted {dog_side.upper()} at {dog_price}¢ '
                   f'(profit target: {bot["profit_per"]}¢) [INSTANT]')
             save_state()
 
         except Exception as err:
-            print(f'⚠ WS DOG post failed for {bot_id}: {err} — monitor will retry')
+            print(f'⚠ WS PHANTOM post failed for {bot_id}: {err} — monitor will retry')
 
         bot.pop('_ws_fill_handling', None)
 
@@ -4347,7 +4347,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
     # Cancel opposite-side orders SEQUENTIALLY with rate limiting + retry
     cancel_ok = sum(1 for oid in unfilled_oids if _cancel_with_retry(oid))
 
-    print(f'⚡ WS SWEEP PHASE1: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
+    print(f'△ APEX SWEEP PHASE1: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
 
     # ── Phase 2: 1s sweep window — let more anchor fills accumulate ──
     time.sleep(1.0)
@@ -4371,7 +4371,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
 
-        print(f'⚡ WS SWEEP PHASE3: {bot_id} — 1s elapsed, computing hedge + cancelling remaining')
+        print(f'△ APEX SWEEP PHASE3: {bot_id} — 1s elapsed, computing hedge + cancelling remaining')
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)
@@ -4574,7 +4574,7 @@ def _execute_ladder_arb_full_completion(bot_id):
             'total_pnl': total_pnl, 'completed_rungs': completed_count,
             'will_repeat': will_repeat,
         })
-        print(f'🏁 LADDER-ARB FULLY DONE: {bot_id} {completed_count} rungs completed, total P&L: {total_pnl}¢'
+        print(f'🏁 APEX FULLY DONE: {bot_id} {completed_count} rungs completed, total P&L: {total_pnl}¢'
               + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
 
         with _pending_ws_actions_lock:
@@ -4678,7 +4678,7 @@ def create_ladder_arb_bot():
         total_scaled_qty = 0
         all_placed_oids = []  # Master list of ALL order IDs for cleanup
 
-        print(f'🪜 LADDER-ARB PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling})')
+        print(f'△ APEX PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling})')
 
         # Batch YES orders and NO orders
         yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in rung_specs]
@@ -4777,7 +4777,7 @@ def create_ladder_arb_bot():
             'per_rung_qtys': {r['width']: r['quantity'] for r in placed_rungs},
             'game_phase': game_phase, 'repeat_count': repeat_count,
         })
-        print(f'🪜 LADDER-ARB CREATED: {bot_id} | {len(placed_rungs)} rungs: {rung_desc}')
+        print(f'△ APEX CREATED: {bot_id} | {len(placed_rungs)} rungs: {rung_desc}')
 
         return jsonify({
             'success': True,
@@ -5050,7 +5050,7 @@ def create_ladder_bot():
             price_shift = smart_first - frontend_first
 
             if price_shift != 0:
-                print(f'🪜 LADDER SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
+                print(f'👻 PHANTOM SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
                       f'base={"ask" if spread > 2 else "bid"} → shifting all rungs by {price_shift:+d}¢')
                 for r in rungs_input:
                     r['price'] = max(1, int(r['price']) + price_shift)
@@ -5897,7 +5897,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
     # ── State validation: recover from half-updated state after prior exceptions ──
     if bot.get('_hedge_fired') and not bot.get('fav_order_id') and status == 'dog_filled':
         # Hedge was flagged but never posted (exception mid-hedge) — reset so we retry
-        print(f'🔧 ANCHOR RECOVERY: {bot_id} _hedge_fired but no fav_order_id — resetting flag')
+        print(f'🔧 PHANTOM RECOVERY: {bot_id} _hedge_fired but no fav_order_id — resetting flag')
         bot['_hedge_fired'] = False
 
     # Update live bid/ask from WS cache
@@ -5949,7 +5949,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 fav_bid = 0
 
             if fav_bid <= 0:
-                print(f'⚠ ANCHOR {bot_id}: dog filled but no fav bid — holding')
+                print(f'⚠ PHANTOM {bot_id}: dog filled but no fav bid — holding')
                 bot['status'] = 'dog_filled'
                 actions.append({'bot_id': bot_id, 'action': 'dog_filled_no_fav_bid'})
                 return
@@ -5959,7 +5959,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             max_fav_price = 100 - actual_dog_price - target_width
             hedge_price = max_fav_price
             if hedge_price < 1:
-                print(f'⚠ ANCHOR {bot_id}: hedge price {hedge_price}¢ too low — selling dog back')
+                print(f'⚠ PHANTOM {bot_id}: hedge price {hedge_price}¢ too low — selling dog back')
                 _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
                 return
 
@@ -5983,10 +5983,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     if actual_dog_price + safe_hedge + est_fees <= HARD_CEILING_CENTS:
                         break
                 if safe_hedge < 1:
-                    print(f'🛑 ANCHOR CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
+                    print(f'🛑 PHANTOM CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
                     _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
                     return
-                print(f'⚠ ANCHOR CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
+                print(f'⚠ PHANTOM CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
                 hedge_price = safe_hedge
 
             # Post the fav hedge at target-width-capped price (maker)
@@ -6009,7 +6009,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     bot['no_price'] = actual_fav_price
                     bot['no_order_id'] = fav_order_id
 
-                print(f'🎯 ANCHOR HEDGE: {bot_id} dog filled @{actual_dog_price}¢ → fav {fav_side.upper()} posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
+                print(f'👻 PHANTOM HEDGE: {bot_id} dog filled @{actual_dog_price}¢ → fav {fav_side.upper()} posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
                 bot_log('ANCHOR_FAV_POSTED', bot_id, {
                     'dog_price': actual_dog_price, 'fav_price': actual_fav_price,
                     'fav_bid': fav_bid, 'total': actual_dog_price + actual_fav_price,
@@ -6017,7 +6017,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 actions.append({'bot_id': bot_id, 'action': 'anchor_fav_posted',
                                 'dog_price': actual_dog_price, 'fav_price': actual_fav_price})
             except Exception as e:
-                print(f'❌ ANCHOR {bot_id}: fav post failed: {e} — holding dog')
+                print(f'❌ PHANTOM {bot_id}: fav post failed: {e} — holding dog')
                 bot['status'] = 'dog_filled'
             save_state()
             return
@@ -6027,7 +6027,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
 
         # Game ending: cancel to free capital
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
-            print(f'🏁 ANCHOR ENDING: {bot_id} game ending, dog unfilled — cancelling')
+            print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(dog_order_id)
@@ -6057,7 +6057,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 # Drift guard: if dog side bid is very high (>50c), the market
                 # has moved too far — this isn't a dog anymore, cancel
                 if current_dog_bid > 50:
-                    print(f'🚫 ANCHOR DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — no longer underdog, cancelling')
+                    print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — no longer underdog, cancelling')
                     api_rate_limiter.wait()
                     kalshi_client.cancel_order(dog_order_id)
                     bot['status'] = 'completed'
@@ -6099,14 +6099,14 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     bot['no_order_id'] = new_order_id
                     bot['no_price'] = actual_new_price
 
-                print(f'🔄 ANCHOR REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
+                print(f'🔄 PHANTOM REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
                       f'(bid={current_dog_bid}¢ ask={current_dog_ask}¢ repost #{bot["dog_repost_count"]})')
                 actions.append({'bot_id': bot_id, 'action': 'anchor_dog_repost',
                                 'old_price': old_price, 'new_price': actual_new_price,
                                 'dog_bid': current_dog_bid})
                 save_state()
             except Exception as rp_err:
-                print(f'⚠ ANCHOR REPOST {bot_id}: {rp_err}')
+                print(f'⚠ PHANTOM REPOST {bot_id}: {rp_err}')
         return
 
     # ── STATE: dog_filled — dog filled but fav post failed, retry ──
@@ -6126,12 +6126,12 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 if dog_won:
                     profit = (100 - dog_price) * qty
                     session_pnl['gross_profit_cents'] += profit
-                    print(f'🏆 ANCHOR SETTLED WIN: {bot_id} dog {dog_side}@{dog_price}¢ won — +{profit}¢')
+                    print(f'🏆 PHANTOM SETTLED WIN: {bot_id} dog {dog_side}@{dog_price}¢ won — +{profit}¢')
                 else:
                     loss = dog_price * qty
                     session_pnl['gross_loss_cents'] += loss
                     profit = -loss
-                    print(f'⚠ ANCHOR SETTLED LOSS: {bot_id} dog {dog_side}@{dog_price}¢ lost — -{loss}¢')
+                    print(f'⚠ PHANTOM SETTLED LOSS: {bot_id} dog {dog_side}@{dog_price}¢ lost — -{loss}¢')
                 session_pnl['completed_bots'] += 1
                 bot['_trade_recorded'] = True
                 _record_trade({
@@ -6172,7 +6172,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             dog_filled_at = bot.get('dog_filled_at', now)
             max_hold_s = 600  # 10 minutes max
             if (now - dog_filled_at) > max_hold_s:
-                print(f'⚠ ANCHOR {bot_id}: dog held {(now - dog_filled_at)/60:.1f}m with no fav bid — selling back')
+                print(f'⚠ PHANTOM {bot_id}: dog held {(now - dog_filled_at)/60:.1f}m with no fav bid — selling back')
                 _anchor_sell_dog_back(bot_id, bot, bot['dog_price'], 0, 999, actions)
                 return
             actions.append({'bot_id': bot_id, 'action': 'dog_filled_waiting_fav_bid'})
@@ -6206,7 +6206,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             if safe_hedge < 1:
                 _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
                 return
-            print(f'⚠ ANCHOR CEILING CAP: {bot_id} capped hedge {hedge_price}→{safe_hedge}¢')
+            print(f'⚠ PHANTOM CEILING CAP: {bot_id} capped hedge {hedge_price}→{safe_hedge}¢')
             hedge_price = safe_hedge
 
         try:
@@ -6227,10 +6227,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
             else:
                 bot['no_price'] = actual_fav_price
                 bot['no_order_id'] = fav_order_id
-            print(f'🎯 ANCHOR HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢ (shave={fav_shave}¢)')
+            print(f'👻 PHANTOM HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢ (shave={fav_shave}¢)')
             save_state()
         except Exception as e:
-            print(f'❌ ANCHOR {bot_id}: fav retry failed: {e}')
+            print(f'❌ PHANTOM {bot_id}: fav retry failed: {e}')
         return
 
     # ── STATE: fav_hedge_posted — fav posted, waiting for fill ────
@@ -6255,7 +6255,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
             # re-run the completion so the trade actually gets recorded in history
             if bot.get('_trade_recorded') and bot.get('status') != 'completed':
-                print(f'🔄 ANCHOR RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
+                print(f'🔄 PHANTOM RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
             # BOTH LEGS FILLED — arb complete!
@@ -6309,7 +6309,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 'dog': dog_price, 'fav': actual_fav_price,
                 'pnl': pnl_cents, 'fee': fee, 'net': net_pnl,
             })
-            print(f'✅ ANCHOR COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢)')
+            print(f'✅ PHANTOM COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢)')
 
             # Repeat logic
             repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -6326,7 +6326,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False  # clear so next cycle can hedge
                 bot['_trade_recorded'] = False
-                print(f'🔄 ANCHOR REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total}')
+                print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total}')
             else:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
@@ -6357,7 +6357,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                         session_pnl['gross_profit_cents'] += profit
                     else:
                         session_pnl['gross_loss_cents'] += abs(profit)
-                    print(f'🏁 ANCHOR GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
+                    print(f'🏁 PHANTOM GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     save_state()
@@ -6405,7 +6405,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             if fav_filled > 0 and fav_filled < qty:
                 # Partial fav fill — record partial arb completion, sell back only the uncovered dogs
                 sell_qty = qty - fav_filled
-                print(f'⏰ ANCHOR TIMEOUT (PARTIAL): {bot_id} fav filled {fav_filled}/{qty} — selling back {sell_qty} dogs, recording {fav_filled} partial arb')
+                print(f'⏰ PHANTOM TIMEOUT (PARTIAL): {bot_id} fav filled {fav_filled}/{qty} — selling back {sell_qty} dogs, recording {fav_filled} partial arb')
                 # Record the partial arb as profit
                 fav_price = bot.get('fav_price', 0)
                 profit_per = 100 - dog_price - fav_price
@@ -6432,12 +6432,12 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 bot['quantity'] = qty  # restore original qty
             elif fav_filled >= qty:
                 # Fully filled during timeout check — complete normally
-                print(f'⏰ ANCHOR TIMEOUT: {bot_id} fav actually filled {fav_filled}/{qty} — completing')
+                print(f'⏰ PHANTOM TIMEOUT: {bot_id} fav actually filled {fav_filled}/{qty} — completing')
                 # Let monitor handle completion on next cycle
                 bot['status'] = 'fav_hedge_posted'
             else:
                 # No fav fills — sell all dogs back
-                print(f'⏰ ANCHOR TIMEOUT: {bot_id} waited {wait_s:.0f}s, 0 fav fills — selling dog back')
+                print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s, 0 fav fills — selling dog back')
                 _anchor_sell_dog_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
             return
 
@@ -6477,7 +6477,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 # At ceiling — jump to bid instead of holding
                 if current_fav_bid > current_fav_price:
                     new_fav_price = current_fav_bid
-                    print(f'📈 ANCHOR WALK CEILING → BID: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ = {dog_price + new_fav_price}¢ — jumping to bid {current_fav_bid}¢')
+                    print(f'📈 PHANTOM WALK CEILING → BID: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ = {dog_price + new_fav_price}¢ — jumping to bid {current_fav_bid}¢')
                 else:
                     bot['fav_last_walk_at'] = now
                     return
@@ -6496,7 +6496,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     count=qty, **amend_kwargs
                 )
                 walk_count = bot.get('fav_walk_count', 0) + 1
-                print(f'📈 ANCHOR WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                print(f'📈 PHANTOM WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
                       f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -6510,7 +6510,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                                 'old_price': current_fav_price, 'new_price': new_fav_price,
                                 'walk_count': walk_count, 'combined': combined})
             except Exception as e:
-                print(f'❌ ANCHOR {bot_id}: fav walk-up amend failed: {e}')
+                print(f'❌ PHANTOM {bot_id}: fav walk-up amend failed: {e}')
                 bot['fav_last_walk_at'] = now  # don't retry immediately
         return
 
@@ -6566,10 +6566,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 bot['no_order_id'] = bot['dog_order_id']
                 bot['no_price'] = actual_price
 
-            print(f'🔄 ANCHOR REPOST: {bot_id} dog re-anchored @{actual_price}¢ (smart price from orderbook)')
+            print(f'🔄 PHANTOM REPOST: {bot_id} dog re-anchored @{actual_price}¢ (smart price from orderbook)')
             save_state()
         except Exception as e:
-            print(f'❌ ANCHOR {bot_id}: repeat repost failed: {e}')
+            print(f'❌ PHANTOM {bot_id}: repeat repost failed: {e}')
         return
 
 
@@ -6609,7 +6609,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         mkt_al_status = mkt_al_data.get('status', 'active')
         mkt_al_result = mkt_al_data.get('result', '')
         if mkt_al_status not in ('active', 'open') or mkt_al_result:
-            print(f'🐕 DOG SETTLEMENT: {bot_id} market={mkt_al_status} result={mkt_al_result} status={status}')
+            print(f'👻 PHANTOM SETTLEMENT: {bot_id} market={mkt_al_status} result={mkt_al_result} status={status}')
             # Market is done — cancel unfilled orders and stop
             for rung in bot.get('rungs', []):
                 oid = rung.get('order_id')
@@ -6637,13 +6637,13 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                     pnl = int((100 - avg_price) * total_fill)
                     session_pnl['gross_profit_cents'] += pnl
                     session_pnl['completed_bots'] += 1
-                    print(f'🏁 ANCHOR_LADDER SETTLED WIN: {bot_id} dog={dog_side} result={mkt_al_result} pnl={pnl}¢')
+                    print(f'🏁 PHANTOM LADDER SETTLED WIN: {bot_id} dog={dog_side} result={mkt_al_result} pnl={pnl}¢')
                 else:
                     avg_price = sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / max(total_fill, 1)
                     loss = int(avg_price * total_fill)
                     session_pnl['gross_loss_cents'] += loss
                     session_pnl['stopped_bots'] += 1
-                    print(f'🏁 ANCHOR_LADDER SETTLED LOSS: {bot_id} dog={dog_side} result={mkt_al_result} loss={loss}¢')
+                    print(f'🏁 PHANTOM LADDER SETTLED LOSS: {bot_id} dog={dog_side} result={mkt_al_result} loss={loss}¢')
             bot['status'] = 'completed'
             bot['completed_at'] = now
             bot['_trade_recorded'] = True
@@ -6685,7 +6685,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                         'fill_qty': 0, 'filled_at': None,
                     })
                 except Exception as e:
-                    print(f'⚠ LADDER REPEAT rung place fail: {bot_id} — {e}')
+                    print(f'⚠ PHANTOM REPEAT rung place fail: {bot_id} — {e}')
 
             if new_rungs:
                 bot['rungs'] = new_rungs
@@ -6709,12 +6709,12 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 bot['status'] = 'ladder_posted'
                 bot['posted_at'] = now
                 rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
-                print(f'🔄 LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
+                print(f'🔄 PHANTOM LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
                 save_state()
             else:
-                print(f'❌ LADDER REPEAT {bot_id}: no rungs placed — waiting')
+                print(f'❌ PHANTOM REPEAT {bot_id}: no rungs placed — waiting')
         except Exception as e:
-            print(f'❌ LADDER REPEAT {bot_id}: {e}')
+            print(f'❌ PHANTOM REPEAT {bot_id}: {e}')
         return
 
     # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
@@ -6748,7 +6748,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 old_fill = rung.get('fill_qty', 0)
                 rung['fill_qty'] = max(old_fill, filled)
                 if filled > old_fill:
-                    print(f'🐕 DOG FILL UPDATE: {bot_id} rung@{rung.get("price")}¢ {old_fill}→{filled}/{rung["qty"]}')
+                    print(f'👻 PHANTOM FILL UPDATE: {bot_id} rung@{rung.get("price")}¢ {old_fill}→{filled}/{rung["qty"]}')
                 if filled >= rung['qty'] and not rung.get('filled_at'):
                     rung['filled_at'] = now
             except Exception:
@@ -6770,7 +6770,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
 
         # All rungs fully filled? → hedge immediately
         if total_fill >= bot['total_dog_qty']:
-            print(f'🐕 DOG ALL FILLED: {bot_id} {total_fill}/{bot["total_dog_qty"]} — hedging')
+            print(f'👻 PHANTOM ALL FILLED: {bot_id} {total_fill}/{bot["total_dog_qty"]} — hedging')
             bot['dog_filled_at'] = now
             threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
             return
@@ -6778,7 +6778,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         # Any fill at all? Hedge instantly (backup for WS miss)
         # WS handler normally catches this first, but monitor is the safety net
         if total_fill > 0 and not bot.get('_sweep_timer_started'):
-            print(f'🐕 MONITOR DOG FILL: {bot_id} detected {total_fill} fills WS missed — hedging instantly')
+            print(f'👻 MONITOR PHANTOM FILL: {bot_id} detected {total_fill} fills WS missed — hedging instantly')
             bot['_sweep_timer_started'] = True
             bot['dog_filled_at'] = now
             threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
@@ -6797,7 +6797,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         wait_s = now - dog_filled_at
         if wait_s >= hedge_timeout_s:
             avg_dog = bot.get('avg_fill_price', 0)
-            print(f'⏰ LADDER NO-FAV TIMEOUT: {bot_id} waited {wait_s:.0f}s for fav bid — selling back')
+            print(f'⏰ PHANTOM NO-FAV TIMEOUT: {bot_id} waited {wait_s:.0f}s for fav bid — selling back')
             _ladder_sell_dogs_back(bot_id, bot, avg_dog, 0, 999, actions)
             return
         threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
@@ -6821,11 +6821,11 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             bot['no_fill_qty'] = fav_filled
 
         if fav_filled >= hedge_qty:
-            print(f'🐕 DOG COMPLETE: {bot_id} fav filled {fav_filled}/{hedge_qty}')
+            print(f'👻 PHANTOM COMPLETE: {bot_id} fav filled {fav_filled}/{hedge_qty}')
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
             # re-run the completion so the trade actually gets recorded in history
             if bot.get('_trade_recorded') and bot.get('status') != 'completed':
-                print(f'🔄 LADDER RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
+                print(f'🔄 PHANTOM RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
             # COMPLETE — calculate P&L
@@ -6888,7 +6888,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(net_pnl)
             session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
-            print(f'🐕 DOG P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
+            print(f'👻 PHANTOM P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
 
             # Repeat logic — re-anchor if repeats remain
             repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -6906,11 +6906,11 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 for rung in bot.get('rungs', []):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None
-                print(f'🐕 DOG REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — resetting for re-anchor')
+                print(f'👻 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — resetting for re-anchor')
             else:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
-                print(f'🐕 DOG COMPLETED: {bot_id} — all cycles done')
+                print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done')
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'profit_cents': pnl_cents})
             return
@@ -6930,7 +6930,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
 
         # Absolute timeout
         if wait_s >= hedge_timeout_s:
-            print(f'⏰ LADDER TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling back')
+            print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling back')
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(fav_order_id)
@@ -6967,7 +6967,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 # At ceiling — jump to bid instead of holding
                 if current_fav_bid > current_fav_price:
                     new_fav_price = current_fav_bid
-                    print(f'📈 LADDER WALK CEILING → BID: {bot_id} | dog={dog_side.upper()} avg@{avg_dog}¢ — jumping to bid {current_fav_bid}¢')
+                    print(f'📈 PHANTOM WALK CEILING → BID: {bot_id} | dog={dog_side.upper()} avg@{avg_dog}¢ — jumping to bid {current_fav_bid}¢')
                 else:
                     bot['fav_last_walk_at'] = now
                     return
@@ -6981,7 +6981,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 api_rate_limiter.wait()
                 kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
                 walk_count = bot.get('fav_walk_count', 0) + 1
-                print(f'📈 LADDER WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                print(f'📈 PHANTOM WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
                       f'(bid={current_fav_bid}¢ combined={combined}¢ step #{walk_count})')
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -6992,7 +6992,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                     bot['no_price'] = new_fav_price
                 save_state()
             except Exception as e:
-                print(f'❌ LADDER {bot_id}: fav walk-up failed: {e}')
+                print(f'❌ PHANTOM {bot_id}: fav walk-up failed: {e}')
                 bot['fav_last_walk_at'] = now
         return
 
@@ -7008,7 +7008,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
     # ── State validation: recover from half-updated state after prior exceptions ──
     if bot.get('_consolidated') and not bot.get('hedge_order_id') and status in ('ladder_arb_yes_filled', 'ladder_arb_no_filled'):
         # Consolidation flagged but hedge never posted — reset so we retry
-        print(f'🔧 LADDER-ARB RECOVERY: {bot_id} _consolidated but no hedge_order_id — resetting')
+        print(f'🔧 APEX RECOVERY: {bot_id} _consolidated but no hedge_order_id — resetting')
         bot['_consolidated'] = False
 
     # Update live bid/ask from WS cache
@@ -7065,7 +7065,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_settled', 'result': mkt_la_result})
-                print(f'🏁 LADDER-ARB SETTLED: {bot_id} market={mkt_la_status} result={mkt_la_result}')
+                print(f'🏁 APEX SETTLED: {bot_id} market={mkt_la_status} result={mkt_la_result}')
                 save_state()
                 return
         except Exception as e:
@@ -7104,7 +7104,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     pass
             bot['status'] = 'completed'
             bot['completed_at'] = now
-            print(f'🏁 LADDER-ARB REPEAT DONE: {bot_id} repeats_done={bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — completing')
+            print(f'🏁 APEX REPEAT DONE: {bot_id} repeats_done={bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — completing')
             save_state()
             return
         if now - wait_since < 10:  # 10s cooldown
@@ -7176,11 +7176,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 bot['yes_price'] = new_rungs[0]['yes_price']
                 bot['no_price'] = new_rungs[0]['no_price']
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_repeat_repost'})
-                print(f'🔄 LADDER-ARB REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs reposted')
+                print(f'🔄 APEX REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs reposted')
             else:
                 return  # No profitable rungs — wait
         except Exception as e:
-            print(f'❌ LADDER-ARB REPEAT {bot_id}: {e}')
+            print(f'❌ APEX REPEAT {bot_id}: {e}')
             return
         save_state()
         return
@@ -7349,12 +7349,12 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     bot['yes_price'] = new_rungs[0]['yes_price']
                     bot['no_price'] = new_rungs[0]['no_price']
                     actions.append({'bot_id': bot_id, 'action': 'ladder_arb_reposted', 'repost_count': bot['repost_count']})
-                    print(f'🔄 LADDER-ARB REPOST: {bot_id} #{bot["repost_count"]} — {len(new_rungs)} rungs refreshed')
+                    print(f'🔄 APEX REPOST: {bot_id} #{bot["repost_count"]} — {len(new_rungs)} rungs refreshed')
                 else:
                     bot['status'] = 'drift_cancelled'
                     bot['completed_at'] = now
             except Exception as e:
-                print(f'❌ LADDER-ARB REPOST {bot_id}: {e}')
+                print(f'❌ APEX REPOST {bot_id}: {e}')
 
         save_state()
         return
@@ -7464,10 +7464,10 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 # Safety: cap at 98¢ combined
                 max_safe = HARD_CEILING_CENTS - avg_filled_price
                 if hedge_price > max_safe:
-                    print(f'⚠ LADDER-ARB CEILING: {bot_id} target_hedge={target_hedge}¢ capped to {max_safe}¢ (avg_anchor={avg_filled_price}¢)')
+                    print(f'⚠ APEX CEILING: {bot_id} target_hedge={target_hedge}¢ capped to {max_safe}¢ (avg_anchor={avg_filled_price}¢)')
                     hedge_price = max(max_safe, 1)
 
-                print(f'📊 LADDER-ARB HEDGE CALC: {bot_id} avg_anchor={avg_filled_price}¢ weighted_width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢')
+                print(f'📊 APEX HEDGE CALC: {bot_id} avg_anchor={avg_filled_price}¢ weighted_width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢')
 
                 # ── HEDGE FIRST — gets priority burst token before cancels ──
                 if hedge_price > 0:
@@ -7488,7 +7488,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         for r in bot['rungs'][1:]:
                             r[f'{unfilled_side}_order_id'] = None
                         bot['_consolidated'] = True
-                        print(f'🎯 LADDER-ARB CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled_price}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                        print(f'🎯 APEX CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled_price}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
                         # Track fill-to-hedge latency
                         fill_at = bot.get('first_fill_at')
                         if fill_at:
@@ -7497,7 +7497,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             _record_latency('fill_to_hedge_arb', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
                             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
                     except Exception as e:
-                        print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
+                        print(f'❌ APEX CONSOLIDATE {bot_id}: hedge placement failed: {e}')
 
                 # ── THEN cancel remaining orders (lower priority) ──
                 cancel_oids = []
@@ -7516,8 +7516,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             _rung[f'{_side}_order_id'] = None
                             cancel_ok += 1
                         else:
-                            print(f'⚠ LADDER-ARB MON CANCEL FAILED: {_oid}')
-                    print(f'🔄 LADDER-ARB MON: cancelled {cancel_ok}/{len(cancel_oids)} orders')
+                            print(f'⚠ APEX MON CANCEL FAILED: {_oid}')
+                    print(f'🔄 APEX MON: cancelled {cancel_ok}/{len(cancel_oids)} orders')
 
                 save_state()
                 return
@@ -7557,11 +7557,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     orders_polled_ok += 1
                 except Exception as poll_err:
                     if '404' in str(poll_err):
-                        print(f'⚠ LADDER-ARB hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
+                        print(f'⚠ APEX hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
                     pass
             if total_hedge_polled > bot.get('_hedge_fill_count', 0):
                 bot['_hedge_fill_count'] = total_hedge_polled
-                print(f'📊 LADDER-ARB {bot_id} hedge fills updated: {total_hedge_polled} (from {orders_polled_ok} orders)')
+                print(f'📊 APEX {bot_id} hedge fills updated: {total_hedge_polled} (from {orders_polled_ok} orders)')
 
             # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
             if orders_polled_ok == 0 and len(bot.get('_all_hedge_order_ids', [])) > 0:
@@ -7574,7 +7574,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             side_pos = pos.get(f'{unfilled_side}_contracts', 0) or pos.get('position', 0)
                             if side_pos > bot.get('_hedge_fill_count', 0):
                                 bot['_hedge_fill_count'] = side_pos
-                                print(f'📊 LADDER-ARB {bot_id} hedge fills from positions: {side_pos}')
+                                print(f'📊 APEX {bot_id} hedge fills from positions: {side_pos}')
                 except Exception:
                     pass
 
@@ -7631,7 +7631,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             else:
                                 new_price = min(current_price + 1, unfilled_bid, max_hedge)
                             if new_price > current_price:
-                                print(f'📈 LADDER-ARB WALK ATTEMPT: {bot_id} {unfilled_side.upper()} {current_price}¢ → {new_price}¢ (bid={unfilled_bid}¢ max_hedge={max_hedge}¢ avg_anchor={anchor_price_for_ceiling}¢)')
+                                print(f'📈 APEX WALK ATTEMPT: {bot_id} {unfilled_side.upper()} {current_price}¢ → {new_price}¢ (bid={unfilled_bid}¢ max_hedge={max_hedge}¢ avg_anchor={anchor_price_for_ceiling}¢)')
                                 try:
                                     api_rate_limiter.wait()
                                     amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
@@ -7647,7 +7647,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                         bot['_all_hedge_order_ids'] = all_ids
                                         if bot.get('rungs'):
                                             bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid_from_amend
-                                        print(f'🔄 LADDER-ARB WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
+                                        print(f'🔄 APEX WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
                                 except Exception as e:
                                     if '404' in str(e):
                                         # Order gone — place a new one at the walk price
@@ -7667,9 +7667,9 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                                 bot['_all_hedge_order_ids'] = all_ids
                                                 bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid
                                                 walked_any = True
-                                                print(f'🔄 LADDER-ARB WALK {bot_id}: old order 404, new order @{actual_price}¢ × {remaining_qty}')
+                                                print(f'🔄 APEX WALK {bot_id}: old order 404, new order @{actual_price}¢ × {remaining_qty}')
                                             except Exception as re_err:
-                                                print(f'❌ LADDER-ARB WALK {bot_id} re-place failed: {re_err}')
+                                                print(f'❌ APEX WALK {bot_id} re-place failed: {re_err}')
                                     elif '409' in str(e):
                                         # 409 Conflict = order may be filled or market closed
                                         # Re-poll fills to check
@@ -7680,14 +7680,14 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                             filled = _parse_fill_count(ord_data)
                                             if filled > bot.get('_hedge_fill_count', 0):
                                                 bot['_hedge_fill_count'] = filled
-                                                print(f'📊 LADDER-ARB WALK 409 → hedge already filled: {filled} contracts')
+                                                print(f'📊 APEX WALK 409 → hedge already filled: {filled} contracts')
                                         except Exception:
                                             pass
                                         # Force immediate settlement check on next cycle
                                         bot['_last_settle_check'] = 0
-                                        print(f'⚠ LADDER-ARB WALK {bot_id} 409 conflict — order may be filled, forcing settlement check')
+                                        print(f'⚠ APEX WALK {bot_id} 409 conflict — order may be filled, forcing settlement check')
                                     else:
-                                        print(f'❌ LADDER-ARB WALK {bot_id} hedge: {e}')
+                                        print(f'❌ APEX WALK {bot_id} hedge: {e}')
                     else:
                         # Non-consolidated: walk individual rung orders
                         for rung in bot.get('rungs', []):
@@ -7716,14 +7716,14 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                 rung[f'{unfilled_side}_price'] = new_price
                                 walked_any = True
                             except Exception as e:
-                                print(f'❌ LADDER-ARB WALK {bot_id} rung: {e}')
+                                print(f'❌ APEX WALK {bot_id} rung: {e}')
 
                     if walked_any:
                         walk_count = bot.get('walk_count', 0) + 1
                         bot['walk_count'] = walk_count
                         # Update compat fields with new average
                         _recompute_ladder_arb_fills(bot)
-                        print(f'📈 LADDER-ARB WALK: {bot_id} {unfilled_side.upper()} stepped (walk #{walk_count}) avg_{filled_side}={avg_filled}¢')
+                        print(f'📈 APEX WALK: {bot_id} {unfilled_side.upper()} stepped (walk #{walk_count}) avg_{filled_side}={avg_filled}¢')
 
                 bot['last_walk_at'] = now
                 save_state()
@@ -7747,7 +7747,7 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     if not sold_back:
         # Sell FAILED — keep the bot alive so monitor retries next cycle
         # DO NOT record a trade or mark as stopped — position is still held
-        print(f'⚠ ANCHOR SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
+        print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
         bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
         bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
@@ -7757,7 +7757,7 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     sell_price = sell_info.get('actual_fill_price') or sell_info.get('sell_price') or 0
 
     if already_cleared and not sell_price:
-        print(f'🔙 ANCHOR SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
+        print(f'🔙 PHANTOM SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
         loss_cents = 0
         sell_price = dog_price  # assume break-even
     else:
@@ -7805,7 +7805,7 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'dog_price': dog_price, 'sell_price': sell_price,
         'loss_cents': loss_cents, 'fav_bid': fav_bid,
     })
-    print(f'🔙 ANCHOR SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
+    print(f'🔙 PHANTOM SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
 
     # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -7823,7 +7823,7 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
-        print(f'🔄 ANCHOR SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+        print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
     else:
         bot['status'] = 'stopped'
         bot['stopped_at'] = now

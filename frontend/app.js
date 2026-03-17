@@ -894,12 +894,17 @@ function isKalshiLive(market) {
             // estimated start = expiration - 2.5h (generous for a tennis match)
             const estStartMs = expTime.getTime() - (2.5 * 60 * 60 * 1000);
             const hasStarted = now >= estStartMs;
-            // Must have started AND not ended more than 30min ago AND expires within a sane window (today)
             if (!hasStarted) return false;
-            if (hoursUntilExp < -0.5 || hoursUntilExp > 4.0) return false;
+            // If market is still active + unresolved, it's live regardless of expiration overshoot
+            const isActive = market.status === 'active' && (!market.result || market.result === '');
+            // Cap at 4h ahead; only use -0.5h floor if market isn't confirmed active
+            if (hoursUntilExp > 4.0) return false;
+            if (hoursUntilExp < -0.5 && !isActive) return false;
         } else {
+            const isActive = market.status === 'active' && (!market.result || market.result === '');
             const maxHours = 5.0;
-            if (hoursUntilExp < -0.5 || hoursUntilExp > maxHours) return false;
+            if (hoursUntilExp > maxHours) return false;
+            if (hoursUntilExp < -0.5 && !isActive) return false;
         }
         
         // Check game date — must be today (or yesterday for late-night games).
@@ -4486,7 +4491,6 @@ async function placeSelectedWidthsBots() {
     if (selectedArr.length === 0) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
-    const rungTimeout = parseInt(document.getElementById('bot-rung-timeout')?.value) || 0;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
     // ── Fetch fresh orderbook prices before computing widths ───────────────────
@@ -4594,7 +4598,6 @@ async function placeSelectedWidthsBots() {
                     quantity: qty,
                     width_scaling: useScaling,
                     repeat_count: repeatCount,
-                    rung_timeout_min: rungTimeout,
                     game_phase: gamePhase,
                 }),
             });
@@ -8522,7 +8525,8 @@ async function loadLatency() {
         const cats = [
             { key: 'order_place',   label: 'Order Place',   color: '#ffaa00', icon: '📤' },
             { key: 'orderbook',     label: 'Orderbook',     color: '#00aaff', icon: '📊' },
-            { key: 'fill_to_hedge', label: 'Hedge Placed',   color: '#00ff88', icon: '⚡' },
+            { key: 'fill_to_hedge_dog', label: 'Dog Hedge',   color: '#00ff88', icon: '⚡' },
+            { key: 'fill_to_hedge_arb', label: 'Arb Hedge',   color: '#66ffcc', icon: '🏹' },
             { key: 'api_ping',      label: 'API Ping',      color: '#ff66cc', icon: '🏓', live: livePing },
         ];
         stats.innerHTML = cats.map(c => {

@@ -2157,29 +2157,12 @@ def _execute_anchor_fav_hedge(bot_id):
         # Use known dog_price — verify actual fill async AFTER hedge is placed
         actual_dog_price = dog_price
 
-        # Use WS price cache instead of REST orderbook (saves ~30ms + rate limit wait)
-        ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
-        if ws_data:
-            fav_bid = ws_data.get(f'{fav_side}_bid', 0)
-            fav_ask = ws_data.get(f'{fav_side}_ask', 0)
-            print(f'   📊 Fav WS cache: {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
-        else:
-            # WS cache miss — fall back to REST
-            api_rate_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(ticker)
-            fav_bid = _best_bid(ob, fav_side)
-            fav_ask = _best_ask(ob, fav_side)
-            print(f'   📊 Fav orderbook (REST fallback): {fav_side.upper()} bid={fav_bid}¢ ask={fav_ask}¢')
-        if fav_bid <= 0:
-            print(f'   ⚠ No fav bid — deferring to monitor')
-            bot['status'] = 'dog_filled'
-            return
-
-        # Start fav at max_fav_price (preserves target width), walk-up moves toward bid
+        # Skip WS/REST lookup — hedge price is fully determined from dog_price + target_width.
+        # Walk system will reposition toward bid after placement.
         target_width = bot.get('target_width', 5)
         max_fav_price = 100 - actual_dog_price - target_width
         hedge_price = max_fav_price
-        print(f'   💰 Price calc: max_fav=100-{actual_dog_price}-{target_width}={max_fav_price}¢ | fav_bid={fav_bid}¢ → hedge={hedge_price}¢')
+        print(f'   💰 Price calc: hedge=100-{actual_dog_price}-{target_width}={hedge_price}¢')
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
             bot['status'] = 'dog_filled'
@@ -2237,7 +2220,7 @@ def _execute_anchor_fav_hedge(bot_id):
         if fill_at:
             f2h_ms = (time.time() - fill_at) * 1000
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
-            _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_dog', 'fav_price': actual_fav_price})
+            _record_latency('fill_to_hedge_dog', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_dog', 'fav_price': actual_fav_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
 
         # Async: verify actual dog fill price (non-blocking, after hedge is already placed)
@@ -2370,7 +2353,7 @@ def _execute_ladder_fav_hedge(bot_id):
         if fill_at:
             f2h_ms = (time.time() - fill_at) * 1000
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
-            _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
+            _record_latency('fill_to_hedge_dog', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
 
         # ── THEN cancel unfilled rung orders (lower priority) ──
@@ -2766,7 +2749,8 @@ from collections import deque
 _latency_log = {
     'order_place':    deque(maxlen=200),   # ms per create_order call
     'orderbook':      deque(maxlen=200),   # ms per get_market_orderbook call
-    'fill_to_hedge':  deque(maxlen=50),    # ms from WS fill to hedge order posted
+    'fill_to_hedge_dog': deque(maxlen=50), # ms from dog fill to hedge posted
+    'fill_to_hedge_arb': deque(maxlen=50), # ms from arb fill to hedge posted
     'api_generic':    deque(maxlen=200),   # ms for other API calls
     'api_ping':       deque(maxlen=200),   # ms per live ping (get_balance)
 }
@@ -3917,17 +3901,15 @@ def create_bot():
             print(f'⚠ Price validation skipped: {pv_err}')
 
         # ── SIMULTANEOUS DUAL LIMIT ORDER PLACEMENT ───────────────
-        # Place both YES and NO limit orders at the same time.
+        # Place both YES and NO limit orders in a single batch call.
         # If both fill → profit locked at settlement.
         # If one fills but other is pending after 8 min → cancel pending, sell filled at market.
-        yes_order, yes_price = create_order_maker(
-            ticker=ticker, side='yes', action='buy',
-            count=quantity, price=yes_price,
-        )
-        no_order, no_price = create_order_maker(
-            ticker=ticker, side='no', action='buy',
-            count=quantity, price=no_price,
-        )
+        batch_results = create_orders_batch([
+            {'ticker': ticker, 'side': 'yes', 'count': quantity, 'price': yes_price},
+            {'ticker': ticker, 'side': 'no',  'count': quantity, 'price': no_price},
+        ])
+        yes_order, yes_price = batch_results[0]
+        no_order, no_price   = batch_results[1]
         yes_order_id = yes_order['order']['order_id']
         no_order_id  = no_order['order']['order_id']
         profit_per   = 100 - yes_price - no_price  # recalc in case post_only retry adjusted
@@ -4468,7 +4450,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 if fill_at:
                     f2h_ms = (time.time() - fill_at) * 1000
                     bot['hedge_latency_ms'] = round(f2h_ms, 1)
-                    _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_sweep', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
+                    _record_latency('fill_to_hedge_arb', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_sweep', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
                     print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
             except Exception as e:
                 print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
@@ -4614,7 +4596,6 @@ def create_ladder_arb_bot():
         widths = data.get('widths', [])
         quantity = int(data.get('quantity', 1))
         repeat_count = int(data.get('repeat_count', 0))
-        rung_timeout_min = int(data.get('rung_timeout_min', 15))  # 0 = no timeout
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -4687,44 +4668,36 @@ def create_ladder_arb_bot():
         if not rung_specs:
             return jsonify({'error': 'No valid widths after price computation'}), 400
 
-        # Place orders for all rungs SEQUENTIALLY (rate-limited to avoid 429s)
+        # Place orders for all rungs via BATCH API (2 calls instead of 2×N)
         placed_rungs = []
         total_scaled_qty = 0
         all_placed_oids = []  # Master list of ALL order IDs for cleanup
 
         print(f'🪜 LADDER-ARB PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling})')
+
+        # Batch YES orders and NO orders
+        yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in rung_specs]
+        no_specs  = [{'ticker': ticker, 'side': 'no',  'count': s['rung_qty'], 'price': s['no_price']}  for s in rung_specs]
+        yes_results = create_orders_batch(yes_specs)
+        no_results  = create_orders_batch(no_specs)
+
         for spec_idx, spec in enumerate(rung_specs):
-            rung_qty = spec['rung_qty']
             try:
-                yes_resp, yes_actual = create_order_maker(
-                    ticker=ticker, side='yes', action='buy',
-                    count=rung_qty, price=spec['yes_price'],
-                )
-                yes_oid = yes_resp['order']['order_id']
-                all_placed_oids.append(yes_oid)
-
-                no_resp, no_actual = create_order_maker(
-                    ticker=ticker, side='no', action='buy',
-                    count=rung_qty, price=spec['no_price'],
-                )
-                no_oid = no_resp['order']['order_id']
-                all_placed_oids.append(no_oid)
-
-                rung_data = {
+                yr, yes_actual = yes_results[spec_idx]
+                nr, no_actual  = no_results[spec_idx]
+                yes_oid = yr['order']['order_id']
+                no_oid  = nr['order']['order_id']
+                all_placed_oids.extend([yes_oid, no_oid])
+                placed_rungs.append({
                     'width': spec['width'],
-                    'yes_price': yes_actual,
-                    'no_price': no_actual,
-                    'yes_order_id': yes_oid,
-                    'no_order_id': no_oid,
-                    'yes_fill_qty': 0,
-                    'no_fill_qty': 0,
-                    'yes_filled_at': None,
-                    'no_filled_at': None,
-                    'quantity': rung_qty,
-                }
-                placed_rungs.append(rung_data)
-                total_scaled_qty += rung_qty
-                print(f'  ✅ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ Y{yes_actual}¢ N{no_actual}¢ ×{rung_qty}')
+                    'yes_price': yes_actual, 'no_price': no_actual,
+                    'yes_order_id': yes_oid, 'no_order_id': no_oid,
+                    'yes_fill_qty': 0, 'no_fill_qty': 0,
+                    'yes_filled_at': None, 'no_filled_at': None,
+                    'quantity': spec['rung_qty'],
+                })
+                total_scaled_qty += spec['rung_qty']
+                print(f'  ✅ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ Y{yes_actual}¢ N{no_actual}¢ ×{spec["rung_qty"]}')
             except Exception as rung_err:
                 print(f'  ❌ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ FAILED: {rung_err}')
                 continue
@@ -4763,7 +4736,6 @@ def create_ladder_arb_bot():
             'market_type': _detect_market_type(ticker),
             'spread_line': _extract_spread_line(ticker),
             'timeout_min': _late_game_timeout_min(ticker, live_yes_bid >= live_no_bid, narrowest_width),
-            'rung_timeout_min': rung_timeout_min,
             # Per-rung completion tracking
             'hedge_history': [],
             'cumulative_pnl': 0,
@@ -5076,32 +5048,22 @@ def create_ladder_bot():
                 for r in rungs_input:
                     r['price'] = max(1, int(r['price']) + price_shift)
 
-        # Place all rung orders
+        # Place all rung orders via batch
+        rung_specs = [{'ticker': ticker, 'side': dog_side, 'count': int(r.get('qty', 1)), 'price': int(r['price'])} for r in rungs_input]
+        try:
+            batch_results = create_orders_batch(rung_specs)
+        except Exception as batch_err:
+            return jsonify({'error': f'Failed to place rungs: {batch_err}'}), 500
+
         placed_rungs = []
-        for r in rungs_input:
-            price = int(r['price'])
-            qty = int(r.get('qty', 1))
-            try:
-                resp, actual_price = create_order_maker(
-                    ticker=ticker, side=dog_side, action='buy',
-                    count=qty, price=price
-                )
-                placed_rungs.append({
-                    'price': actual_price,
-                    'qty': qty,
-                    'order_id': resp['order']['order_id'],
-                    'fill_qty': 0,
-                    'filled_at': None,
-                })
-            except Exception as rung_err:
-                # Cancel already-placed rungs on failure
-                for pr in placed_rungs:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(pr['order_id'])
-                    except Exception:
-                        pass
-                return jsonify({'error': f'Failed to place rung at {price}¢: {rung_err}'}), 500
+        for i, (resp, actual_price) in enumerate(batch_results):
+            placed_rungs.append({
+                'price': actual_price,
+                'qty': rung_specs[i]['count'],
+                'order_id': resp['order']['order_id'],
+                'fill_qty': 0,
+                'filled_at': None,
+            })
 
         total_dog_qty = sum(r['qty'] for r in placed_rungs)
         bot_id = f'ladder_{ticker}_{int(time.time() * 1000)}'
@@ -5292,6 +5254,67 @@ def simulate_ladder():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ─── BATCH ORDER PLACEMENT ─────────────────────────────────────────
+def create_orders_batch(order_specs):
+    """Place multiple orders in a single API call.
+    order_specs: list of dicts with keys: ticker, side, action, count, price
+    Returns: list of (response_dict, actual_price) tuples.
+    On batch failure, falls back to individual create_order_maker calls.
+    """
+    if not order_specs:
+        return []
+
+    # Build batch payload
+    batch_orders = []
+    for spec in order_specs:
+        price_key = 'yes_price' if spec['side'] == 'yes' else 'no_price'
+        order = {
+            'ticker': spec['ticker'],
+            'side': spec['side'],
+            'action': spec.get('action', 'buy'),
+            'count': spec['count'],
+            'type': 'limit',
+            'post_only': True,
+            price_key: spec['price'],
+        }
+        batch_orders.append(order)
+
+    try:
+        api_rate_limiter.wait()
+        t0 = time.time()
+        resp = kalshi_client.create_orders_batch(batch_orders)
+        _record_latency('order_place', (time.time() - t0) * 1000,
+                        {'ticker': order_specs[0]['ticker'], 'batch': len(batch_orders)})
+        results = resp.get('orders', [])
+        out = []
+        for i, spec in enumerate(order_specs):
+            if i < len(results) and results[i].get('order', {}).get('order_id'):
+                order_data = results[i]['order']
+                price_key = 'yes_price' if spec['side'] == 'yes' else 'no_price'
+                actual_price = order_data.get(price_key, spec['price'])
+                out.append((results[i], actual_price))
+            else:
+                # This order failed in the batch — fall back to individual
+                r, p = create_order_maker(
+                    ticker=spec['ticker'], side=spec['side'],
+                    action=spec.get('action', 'buy'),
+                    count=spec['count'], price=spec['price'],
+                )
+                out.append((r, p))
+        return out
+    except Exception as e:
+        print(f'⚠ Batch order failed ({len(batch_orders)} orders): {e} — falling back to individual')
+        out = []
+        for spec in order_specs:
+            r, p = create_order_maker(
+                ticker=spec['ticker'], side=spec['side'],
+                action=spec.get('action', 'buy'),
+                count=spec['count'], price=spec['price'],
+            )
+            out.append((r, p))
+        return out
 
 
 # ─── POST-ONLY AWARE ORDER PLACEMENT ──────────────────────────────
@@ -7087,8 +7110,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
             fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
             if fresh_yes_bid <= 0 or fresh_no_bid <= 0 or fresh_yes_bid + fresh_no_bid >= 100:
                 return  # No market — wait
-            new_rungs = []
             use_scaling = bot.get('width_scaling', False)
+            valid_specs = []
             for rung in bot.get('rungs', []):
                 w = rung['width']
                 ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
@@ -7096,19 +7119,29 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if profit <= 0:
                     continue
                 rung_qty = _scale_qty_for_width(qty_per, w) if use_scaling else qty_per
-                try:
-                    yr, ya = create_order_maker(ticker=ticker, side='yes', action='buy', count=rung_qty, price=ty)
-                    nr, na = create_order_maker(ticker=ticker, side='no', action='buy', count=rung_qty, price=tn)
-                    new_rungs.append({
-                        'width': w, 'yes_price': ya, 'no_price': na,
-                        'yes_order_id': yr['order']['order_id'],
-                        'no_order_id': nr['order']['order_id'],
-                        'yes_fill_qty': 0, 'no_fill_qty': 0,
-                        'yes_filled_at': None, 'no_filled_at': None,
-                        'quantity': rung_qty,
-                    })
-                except Exception:
-                    pass
+                valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn, 'rung_qty': rung_qty})
+            if valid_specs:
+                yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in valid_specs]
+                no_specs  = [{'ticker': ticker, 'side': 'no',  'count': s['rung_qty'], 'price': s['no_price']}  for s in valid_specs]
+                yes_results = create_orders_batch(yes_specs)
+                no_results  = create_orders_batch(no_specs)
+                new_rungs = []
+                for idx, spec in enumerate(valid_specs):
+                    try:
+                        yr, ya = yes_results[idx]
+                        nr, na = no_results[idx]
+                        new_rungs.append({
+                            'width': spec['width'], 'yes_price': ya, 'no_price': na,
+                            'yes_order_id': yr['order']['order_id'],
+                            'no_order_id': nr['order']['order_id'],
+                            'yes_fill_qty': 0, 'no_fill_qty': 0,
+                            'yes_filled_at': None, 'no_filled_at': None,
+                            'quantity': spec['rung_qty'],
+                        })
+                    except Exception:
+                        pass
+            else:
+                new_rungs = []
             if new_rungs:
                 bot['rungs'] = new_rungs
                 bot['total_rungs'] = len(new_rungs)
@@ -7265,26 +7298,34 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     save_state()
                     return
 
-                new_rungs = []
+                valid_specs = []
                 for rung in bot.get('rungs', []):
                     w = rung['width']
                     ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
                     profit = 100 - ty - tn
                     if profit <= 0:
                         continue
-                    try:
-                        yr, ya = create_order_maker(ticker=ticker, side='yes', action='buy', count=qty_per, price=ty)
-                        nr, na = create_order_maker(ticker=ticker, side='no', action='buy', count=qty_per, price=tn)
-                        new_rungs.append({
-                            'width': w, 'yes_price': ya, 'no_price': na,
-                            'yes_order_id': yr['order']['order_id'],
-                            'no_order_id': nr['order']['order_id'],
-                            'yes_fill_qty': 0, 'no_fill_qty': 0,
-                            'yes_filled_at': None, 'no_filled_at': None,
-                            'quantity': qty_per,
-                        })
-                    except Exception:
-                        pass
+                    valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn})
+                new_rungs = []
+                if valid_specs:
+                    yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]
+                    no_specs  = [{'ticker': ticker, 'side': 'no',  'count': qty_per, 'price': s['no_price']}  for s in valid_specs]
+                    yes_results = create_orders_batch(yes_specs)
+                    no_results  = create_orders_batch(no_specs)
+                    for idx, spec in enumerate(valid_specs):
+                        try:
+                            yr, ya = yes_results[idx]
+                            nr, na = no_results[idx]
+                            new_rungs.append({
+                                'width': spec['width'], 'yes_price': ya, 'no_price': na,
+                                'yes_order_id': yr['order']['order_id'],
+                                'no_order_id': nr['order']['order_id'],
+                                'yes_fill_qty': 0, 'no_fill_qty': 0,
+                                'yes_filled_at': None, 'no_filled_at': None,
+                                'quantity': qty_per,
+                            })
+                        except Exception:
+                            pass
 
                 if new_rungs:
                     bot['rungs'] = new_rungs
@@ -7441,7 +7482,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         if fill_at:
                             f2h_ms = (time.time() - fill_at) * 1000
                             bot['hedge_latency_ms'] = round(f2h_ms, 1)
-                            _record_latency('fill_to_hedge', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
+                            _record_latency('fill_to_hedge_arb', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
                             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
                     except Exception as e:
                         print(f'❌ LADDER-ARB CONSOLIDATE {bot_id}: hedge placement failed: {e}')
@@ -9043,13 +9084,15 @@ def _run_monitor():
                             kalshi_client.cancel_order(bot['yes_order_id'])
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
-                            api_rate_limiter.wait()
-                            ny = kalshi_client.create_order(ticker=ticker, side='yes', action='buy', count=qty, yes_price=new_yes, post_only=True)
-                            api_rate_limiter.wait()
-                            nn = kalshi_client.create_order(ticker=ticker, side='no',  action='buy', count=qty, no_price=new_no, post_only=True)
+                            batch_r = create_orders_batch([
+                                {'ticker': ticker, 'side': 'yes', 'count': qty, 'price': new_yes},
+                                {'ticker': ticker, 'side': 'no',  'count': qty, 'price': new_no},
+                            ])
+                            ny_resp, new_yes = batch_r[0]
+                            nn_resp, new_no  = batch_r[1]
                             bot.update({
-                                'yes_order_id': ny['order']['order_id'],
-                                'no_order_id':  nn['order']['order_id'],
+                                'yes_order_id': ny_resp['order']['order_id'],
+                                'no_order_id':  nn_resp['order']['order_id'],
                                 'yes_price':    new_yes,
                                 'no_price':     new_no,
                                 'profit_per':   100 - new_yes - new_no,
@@ -11582,7 +11625,8 @@ def get_latency():
     return jsonify({
         'order_place':   _latency_stats('order_place'),
         'orderbook':     _latency_stats('orderbook'),
-        'fill_to_hedge': _latency_stats('fill_to_hedge'),
+        'fill_to_hedge_dog': _latency_stats('fill_to_hedge_dog'),
+        'fill_to_hedge_arb': _latency_stats('fill_to_hedge_arb'),
         'api_ping':      _latency_stats('api_ping'),
         'live_ping_ms':  ping_ms,
         'raw_ping_ms':   raw_ping_ms,

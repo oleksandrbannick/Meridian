@@ -225,6 +225,15 @@ class KalshiAPI:
 
         return self._make_request('POST', '/portfolio/orders', data=data, authenticated=True)
 
+    def create_orders_batch(self, orders: list) -> Dict:
+        """Place multiple orders in a single API call.
+        Each order dict should have: ticker, side, action, count, type,
+        and one of yes_price/no_price. Optional: post_only, order_group_id.
+        Returns: {'orders': [{'order': {...}}, ...]}
+        """
+        return self._make_request('POST', '/portfolio/orders/batched',
+                                  data={'orders': orders}, authenticated=True)
+
     def cancel_order_group(self, order_group_id: str) -> Dict:
         """Cancel all orders in a group atomically."""
         return self._make_request('DELETE', f'/portfolio/order_groups/{order_group_id}', authenticated=True)

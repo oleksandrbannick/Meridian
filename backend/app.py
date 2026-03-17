@@ -2132,10 +2132,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['dog_filled_at'] = time.time()
                 threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
             elif not bot.get('_sweep_timer_started'):
-                # First fill — start 2s sweep window, then hedge with whatever filled
+                # Partial fill — hedge immediately with whatever is filled, cancel remainder after
                 bot['_sweep_timer_started'] = True
                 bot['first_fill_at'] = time.time()
-                print(f'⏱ WS PHANTOM SWEEP: {bot_id} first fill detected — 2s sweep window started')
+                print(f'⚡ WS PHANTOM SWEEP: {bot_id} first partial fill — hedging immediately')
                 threading.Thread(target=_ladder_sweep_then_hedge, args=(bot_id,), daemon=True).start()
             save_state()
             break
@@ -2337,7 +2337,7 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['no_price'] = actual_fav_price
             bot['no_order_id'] = fav_order_id
 
-        print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={actual_dog_price + actual_fav_price}¢ + fees')
+        print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={dog_price + actual_fav_price}¢ + fees')
         # Track fill-to-hedge latency
         fill_at = bot.get('dog_filled_at')
         if fill_at:

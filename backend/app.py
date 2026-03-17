@@ -1427,25 +1427,35 @@ def load_state():
 
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
-    """Token bucket — keeps us under Kalshi's ~10 req/sec API limit."""
-    def __init__(self, rate: float = 8.0, per: float = 1.0):
-        self.rate, self.per = rate, per
-        self._tokens = float(rate)
-        self._last = time.time()
+    """Burst rate limiter — fires up to `burst` requests instantly within a
+    1-second window, then hard-blocks until the next window starts.
+    No delay between requests within the burst (preserves 1ms latency)."""
+    def __init__(self, burst: int = 10):
+        self.burst = burst
+        self._count = 0
+        self._window_start = time.time()
         self._lock = threading.Lock()
 
     def wait(self):
         with self._lock:
             now = time.time()
-            self._tokens = min(self.rate, self._tokens + (now - self._last) * (self.rate / self.per))
-            self._last = now
-            if self._tokens < 1.0:
-                time.sleep((1.0 - self._tokens) * (self.per / self.rate))
-                self._tokens = 0.0
-            else:
-                self._tokens -= 1.0
+            elapsed = now - self._window_start
+            if elapsed >= 1.0:
+                # New window — reset counter
+                self._window_start = now
+                self._count = 1
+                return
+            if self._count < self.burst:
+                # Within burst — no delay
+                self._count += 1
+                return
+            # Burst exhausted — sleep until next window
+            sleep_time = 1.0 - elapsed
+            time.sleep(sleep_time)
+            self._window_start = time.time()
+            self._count = 1
 
-api_rate_limiter = RateLimiter(rate=25.0)  # Kalshi allows higher burst; 25/s is safe
+api_rate_limiter = RateLimiter(burst=10)  # Kalshi basic tier: 10 writes/s burst
 
 # ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
 import websocket as _ws_lib
@@ -4330,17 +4340,21 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 rung[f'{unfilled_side}_order_id'] = None
         save_state()
 
-    # Cancel opposite-side orders IN PARALLEL outside the lock
-    def _cancel_safe(oid):
-        try:
-            kalshi_client.cancel_order(oid)
-        except Exception:
-            pass
-    if unfilled_oids:
-        with ThreadPoolExecutor(max_workers=min(len(unfilled_oids), 12)) as pool:
-            pool.map(_cancel_safe, unfilled_oids)
+    # Cancel opposite-side orders SEQUENTIALLY with rate limiting + retry
+    def _cancel_with_retry(oid, max_retries=2):
+        for attempt in range(max_retries + 1):
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(oid)
+                return True
+            except Exception as e:
+                if '429' in str(e) and attempt < max_retries:
+                    time.sleep(0.5)
+                    continue
+                return False
+    cancel_ok = sum(1 for oid in unfilled_oids if _cancel_with_retry(oid))
 
-    print(f'⚡ WS SWEEP PHASE1: {bot_id} — instantly cancelled {len(unfilled_oids)} {unfilled_side} orders')
+    print(f'⚡ WS SWEEP PHASE1: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
 
     # ── Phase 2: 1s sweep window — let more anchor fills accumulate ──
     time.sleep(1.0)
@@ -4374,10 +4388,13 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 oid = rung.get(f'{side}_order_id')
                 if oid:
                     remaining_oids.append(oid)
-                    rung[f'{side}_order_id'] = None
-        if remaining_oids:
-            with ThreadPoolExecutor(max_workers=min(len(remaining_oids), 12)) as pool:
-                pool.map(_cancel_safe, remaining_oids)
+        # Cancel sequentially with retry — only clear rung ref on success
+        for oid in remaining_oids:
+            if _cancel_with_retry(oid):
+                for rung in bot.get('rungs', []):
+                    for side in ('yes', 'no'):
+                        if rung.get(f'{side}_order_id') == oid:
+                            rung[f'{side}_order_id'] = None
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)
@@ -4436,7 +4453,6 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 hedge_resp, actual_hedge = create_order_maker(
                     ticker=ticker, side=unfilled_side, action='buy',
                     count=total_filled_qty, price=hedge_price,
-                    skip_rate_limit=True
                 )
                 hedge_oid = hedge_resp['order']['order_id']
                 bot['hedge_order_id'] = hedge_oid

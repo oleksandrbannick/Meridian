@@ -12209,12 +12209,38 @@ if __name__ == '__main__':
 
         client = anthropic.Anthropic(api_key=api_key)
 
+        # Build system prompt with live context
+        context = body.get('context', {})
+        system_parts = ['You are Claude, an AI assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi. Be concise, helpful, and knowledgeable about sports betting, arbitrage, and market analysis. Use a friendly but professional tone.']
+        if context:
+            system_parts.append('\n\n--- LIVE MERIDIAN STATE ---')
+            if 'balance' in context:
+                bal = context['balance']
+                if isinstance(bal, dict):
+                    system_parts.append(f"Balance: ${bal.get('balance', 0)/100:.2f}")
+                else:
+                    system_parts.append(f"Balance: {bal}")
+            if 'active_bots' in context:
+                bots = context['active_bots']
+                system_parts.append(f"Active bots: {len(bots)}")
+                for b in bots[:15]:
+                    system_parts.append(f"  - {b.get('ticker','?')} | {b.get('type','?')} | status={b.get('status','?')} | yes={b.get('yes_price','?')}¢ no={b.get('no_price','?')}¢ x{b.get('count','?')} | pnl={b.get('pnl','?')}")
+            if 'positions' in context and context['positions']:
+                system_parts.append(f"Open positions: {json.dumps(context['positions'][:10], default=str)}")
+            if 'visible_markets' in context:
+                mkts = context['visible_markets']
+                system_parts.append(f"Markets on screen ({len(mkts)}):")
+                for m in mkts[:10]:
+                    system_parts.append(f"  - {m.get('ticker','?')}: {m.get('title','')} bid={m.get('yes_bid','?')}¢ ask={m.get('yes_ask','?')}¢ vol={m.get('volume','?')}")
+            system_parts.append('--- END STATE ---')
+        system_prompt = '\n'.join(system_parts)
+
         def generate():
             try:
                 with client.messages.stream(
                     model='claude-sonnet-4-20250514',
                     max_tokens=4096,
-                    system='You are Claude, an AI assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi. Be concise, helpful, and knowledgeable about sports betting, arbitrage, and market analysis. Use a friendly but professional tone.',
+                    system=system_prompt,
                     messages=messages,
                 ) as stream:
                     for text in stream.text_stream:

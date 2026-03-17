@@ -1701,6 +1701,41 @@
                 .replace(/\n/g, '<br>');
         }
 
+        // Gather live Meridian state to give Claude context
+        async function gatherMeridianContext() {
+            const ctx = {};
+            try {
+                const [balRes, botsRes, posRes] = await Promise.allSettled([
+                    fetch(`${API_BASE}/ws/balance`).then(r => r.json()),
+                    fetch(`${API_BASE}/bots`).then(r => r.json()),
+                    fetch(`${API_BASE}/positions/active`).then(r => r.json()),
+                ]);
+                if (balRes.status === 'fulfilled') ctx.balance = balRes.value;
+                if (botsRes.status === 'fulfilled') {
+                    const bots = botsRes.value;
+                    const ids = Object.keys(bots);
+                    const active = ids.filter(id => ['pending_fills','yes_filled','no_filled','watching'].includes(bots[id].status));
+                    ctx.active_bots = active.map(id => {
+                        const b = bots[id];
+                        return { id, ticker: b.ticker, type: b.type, status: b.status,
+                                 yes_price: b.yes_price, no_price: b.no_price, count: b.count,
+                                 pnl: b.pnl, bot_category: b.bot_category };
+                    });
+                    ctx.total_bots = ids.length;
+                    ctx.completed_bots = ids.filter(id => bots[id].status === 'complete').length;
+                }
+                if (posRes.status === 'fulfilled') ctx.positions = posRes.value;
+            } catch(e) {}
+            // Current markets on screen
+            if (typeof allMarkets !== 'undefined' && allMarkets.length > 0) {
+                ctx.visible_markets = allMarkets.slice(0, 20).map(m => ({
+                    ticker: m.ticker, title: m.title || m.event_ticker,
+                    yes_bid: m.yes_bid, yes_ask: m.yes_ask, volume: m.volume
+                }));
+            }
+            return ctx;
+        }
+
         window.sendClaudeMsg = async function() {
             const text = input.value.trim();
             if (!text || chatStreaming) return;
@@ -1714,11 +1749,14 @@
             const assistantEl = appendMsg('assistant', '', true);
             const bubbleEl = assistantEl.querySelector('.claude-msg-bubble');
 
+            // Gather live context in parallel with UI update
+            const context = await gatherMeridianContext();
+
             try {
                 const resp = await fetch(`${API_BASE}/chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatMessages }),
+                    body: JSON.stringify({ messages: chatMessages, context }),
                 });
                 if (!resp.ok) {
                     const err = await resp.json();

@@ -4483,12 +4483,18 @@ def _execute_ladder_arb_full_completion(bot_id):
                     except Exception:
                         pass
                     rung[f'{side}_order_id'] = None
-        # Cancel ALL hedge orders (current + any additional from updates)
+        # Cancel ALL hedge orders (current + any additional from updates + history)
         cancelled_hedge_ids = set()
         if bot.get('hedge_order_id'):
             cancelled_hedge_ids.add(bot['hedge_order_id'])
         for oid in bot.get('_all_hedge_order_ids', []):
             cancelled_hedge_ids.add(oid)
+        # Also cancel any orders from completed hedge generations (refs cleared by rung completion)
+        for hg in bot.get('hedge_history', []):
+            if hg.get('order_id'):
+                cancelled_hedge_ids.add(hg['order_id'])
+            for oid in hg.get('order_ids', []):
+                cancelled_hedge_ids.add(oid)
         for oid in cancelled_hedge_ids:
             try:
                 api_rate_limiter.wait()
@@ -6932,6 +6938,23 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                 kalshi_client.cancel_order(oid)
                             except Exception:
                                 pass
+                # Also cancel hedge orders (bot-level + history)
+                settle_cancel_ids = set()
+                if bot.get('hedge_order_id'):
+                    settle_cancel_ids.add(bot['hedge_order_id'])
+                for oid in bot.get('_all_hedge_order_ids', []):
+                    settle_cancel_ids.add(oid)
+                for hg in bot.get('hedge_history', []):
+                    if hg.get('order_id'):
+                        settle_cancel_ids.add(hg['order_id'])
+                    for oid in hg.get('order_ids', []):
+                        settle_cancel_ids.add(oid)
+                for oid in settle_cancel_ids:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(oid)
+                    except Exception:
+                        pass
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_settled', 'result': mkt_la_result})
@@ -6955,6 +6978,23 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             kalshi_client.cancel_order(oid)
                         except Exception:
                             pass
+            # Also cancel hedge orders
+            repeat_cancel_ids = set()
+            if bot.get('hedge_order_id'):
+                repeat_cancel_ids.add(bot['hedge_order_id'])
+            for oid in bot.get('_all_hedge_order_ids', []):
+                repeat_cancel_ids.add(oid)
+            for hg in bot.get('hedge_history', []):
+                if hg.get('order_id'):
+                    repeat_cancel_ids.add(hg['order_id'])
+                for oid in hg.get('order_ids', []):
+                    repeat_cancel_ids.add(oid)
+            for oid in repeat_cancel_ids:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(oid)
+                except Exception:
+                    pass
             bot['status'] = 'completed'
             bot['completed_at'] = now
             print(f'🏁 LADDER-ARB REPEAT DONE: {bot_id} repeats_done={bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — completing')
@@ -7457,10 +7497,20 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                 print(f'📈 LADDER-ARB WALK ATTEMPT: {bot_id} {unfilled_side.upper()} {current_price}¢ → {new_price}¢ (bid={unfilled_bid}¢ max_hedge={max_hedge}¢ avg_anchor={anchor_price_for_ceiling}¢)')
                                 try:
                                     api_rate_limiter.wait()
-                                    kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
+                                    amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
                                                               count=rq, **{f'{unfilled_side}_price': new_price})
                                     bot['hedge_price'] = new_price
                                     walked_any = True
+                                    # Track order_id change if Kalshi does cancel+replace
+                                    new_oid_from_amend = (amend_resp.get('order', {}).get('order_id') if isinstance(amend_resp, dict) else None)
+                                    if new_oid_from_amend and new_oid_from_amend != oid:
+                                        bot['hedge_order_id'] = new_oid_from_amend
+                                        all_ids = bot.get('_all_hedge_order_ids', [])
+                                        all_ids.append(new_oid_from_amend)
+                                        bot['_all_hedge_order_ids'] = all_ids
+                                        if bot.get('rungs'):
+                                            bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid_from_amend
+                                        print(f'🔄 LADDER-ARB WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
                                 except Exception as e:
                                     if '404' in str(e):
                                         # Order gone — place a new one at the walk price

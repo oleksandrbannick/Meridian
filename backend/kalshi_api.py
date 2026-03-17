@@ -93,7 +93,7 @@ class KalshiAPI:
             headers = {'Content-Type': 'application/json'}
         
         # Make request
-        timeout = 15  # seconds
+        timeout = 5  # seconds — keep tight for latency
         try:
             if method.upper() == 'GET':
                 response = self.session.get(url, headers=headers, params=params, timeout=timeout)

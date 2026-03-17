@@ -94,7 +94,8 @@
       "Bash(ssh root@104.223.8.231 'ls /root/meridian/frontend/app.js && ls /root/meridian/backend/ | head -10 && curl -s http://localhost:5001/app.js | head -3')",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" --connect-timeout 5 http://104.223.8.231:5001/)",
       "Read(//Applications/Programs/Meridian/**)",
-      "Read(//^def _run_monitor/,/^def [a-z_]+\\\\\\(/**)"
+      "Read(//^def _run_monitor/,/^def [a-z_]+\\\\\\(/**)",
+      "Bash(grep -E '\\\\.\\(js|html|json\\)$')"
     ],
     "additionalDirectories": [
       "/Users/Sasha/.claude/projects/-Applications-Programs-Meridian",

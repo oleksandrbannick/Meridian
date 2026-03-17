@@ -12194,10 +12194,311 @@ if __name__ == '__main__':
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
 
+    # ── Claude Chat: Tool definitions ────────────────────────────────────────
+    CLAUDE_TOOLS = [
+        {
+            "name": "place_bet",
+            "description": "Place a straight limit-order bet on a Kalshi market. Optionally attach a watch-bot for stop-loss/take-profit.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker, e.g. KXMLB-25MAR17-NYY-BOS-NY"},
+                    "side": {"type": "string", "enum": ["yes", "no"], "description": "Side to buy"},
+                    "price": {"type": "integer", "description": "Limit price in cents (1-99)"},
+                    "count": {"type": "integer", "description": "Number of contracts"},
+                    "stop_loss": {"type": "integer", "description": "Optional stop-loss price in cents"},
+                    "take_profit": {"type": "integer", "description": "Optional take-profit price in cents"}
+                },
+                "required": ["ticker", "side", "price", "count"]
+            }
+        },
+        {
+            "name": "create_arb_bot",
+            "description": "Create a dual arb bot: simultaneously place YES and NO limit orders on a market to capture the spread.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "yes_price": {"type": "integer", "description": "YES buy price in cents"},
+                    "no_price": {"type": "integer", "description": "NO buy price in cents"},
+                    "count": {"type": "integer", "description": "Contracts per side"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 300)"}
+                },
+                "required": ["ticker", "yes_price", "no_price", "count"]
+            }
+        },
+        {
+            "name": "create_ladder_arb",
+            "description": "Create a multi-width ladder arb bot with multiple rungs at different YES/NO price widths.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "widths": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "yes_price": {"type": "integer"},
+                                "no_price": {"type": "integer"},
+                                "count": {"type": "integer"}
+                            },
+                            "required": ["yes_price", "no_price", "count"]
+                        },
+                        "description": "Array of {yes_price, no_price, count} rungs"
+                    },
+                    "timeout": {"type": "integer", "description": "Timeout in seconds"}
+                },
+                "required": ["ticker", "widths"]
+            }
+        },
+        {
+            "name": "create_anchor_dog",
+            "description": "Create an anchor-dog arb bot: posts a cheap maker order on the underdog side, hedges at the favorite bid on fill.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "Which side is the underdog"},
+                    "dog_price": {"type": "integer", "description": "Maker price for dog side in cents"},
+                    "count": {"type": "integer", "description": "Number of contracts"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds"}
+                },
+                "required": ["ticker", "dog_side", "dog_price", "count"]
+            }
+        },
+        {
+            "name": "create_anchor_ladder",
+            "description": "Create a multi-rung anchor-ladder dog bot with multiple price levels.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "dog_side": {"type": "string", "enum": ["yes", "no"]},
+                    "rungs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "dog_price": {"type": "integer"},
+                                "count": {"type": "integer"}
+                            },
+                            "required": ["dog_price", "count"]
+                        }
+                    },
+                    "timeout": {"type": "integer"}
+                },
+                "required": ["ticker", "dog_side", "rungs"]
+            }
+        },
+        {
+            "name": "cancel_bot",
+            "description": "Cancel a specific bot by ID. Filled positions will be sold at market.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "bot_id": {"type": "string", "description": "Bot ID to cancel"}
+                },
+                "required": ["bot_id"]
+            }
+        },
+        {
+            "name": "cancel_bots_bulk",
+            "description": "Cancel multiple bots at once.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "bot_ids": {"type": "array", "items": {"type": "string"}, "description": "List of bot IDs to cancel"}
+                },
+                "required": ["bot_ids"]
+            }
+        },
+        {
+            "name": "close_position",
+            "description": "Emergency-close a position by selling at market bid.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "side": {"type": "string", "enum": ["yes", "no"]},
+                    "count": {"type": "integer", "description": "Number of contracts to sell"}
+                },
+                "required": ["ticker", "side", "count"]
+            }
+        },
+        {
+            "name": "scan_arbs",
+            "description": "Scan markets for current arbitrage opportunities. Returns list of markets where YES+NO prices sum to less than 100.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+            }
+        },
+        {
+            "name": "scan_middles",
+            "description": "Scan for middle opportunities across spread markets.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+            }
+        },
+        {
+            "name": "get_orderbook",
+            "description": "Get the full orderbook (bids and asks) for a specific market.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"}
+                },
+                "required": ["ticker"]
+            }
+        },
+        {
+            "name": "get_market",
+            "description": "Get detailed info about a specific market (prices, volume, status, event details).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"}
+                },
+                "required": ["ticker"]
+            }
+        },
+        {
+            "name": "get_pnl",
+            "description": "Get P&L dashboard — daily and lifetime profit/loss from trade history.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+            }
+        },
+        {
+            "name": "get_balance",
+            "description": "Get current account balance and portfolio value.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+            }
+        },
+        {
+            "name": "get_positions",
+            "description": "Get all current open positions with live market data.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+            }
+        },
+        {
+            "name": "get_active_bots",
+            "description": "Get all bots with their current status, P&L, and market data.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+            }
+        },
+    ]
+
+    def _execute_chat_tool(tool_name, tool_input):
+        """Execute a Claude chat tool by calling the internal API."""
+        try:
+            base = 'http://127.0.0.1:5001/api'
+            if tool_name == 'place_bet':
+                r = requests.post(f'{base}/order/place', json={
+                    'ticker': tool_input['ticker'],
+                    'side': tool_input['side'],
+                    'price': tool_input['price'],
+                    'count': tool_input['count'],
+                    'stop_loss': tool_input.get('stop_loss'),
+                    'take_profit': tool_input.get('take_profit'),
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'create_arb_bot':
+                r = requests.post(f'{base}/bot/create', json={
+                    'ticker': tool_input['ticker'],
+                    'yes_price': tool_input['yes_price'],
+                    'no_price': tool_input['no_price'],
+                    'count': tool_input['count'],
+                    'timeout': tool_input.get('timeout', 300),
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'create_ladder_arb':
+                r = requests.post(f'{base}/bot/ladder-arb', json={
+                    'ticker': tool_input['ticker'],
+                    'widths': tool_input['widths'],
+                    'timeout': tool_input.get('timeout', 300),
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'create_anchor_dog':
+                r = requests.post(f'{base}/bot/anchor', json={
+                    'ticker': tool_input['ticker'],
+                    'dog_side': tool_input['dog_side'],
+                    'dog_price': tool_input['dog_price'],
+                    'count': tool_input['count'],
+                    'timeout': tool_input.get('timeout', 300),
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'create_anchor_ladder':
+                r = requests.post(f'{base}/bot/ladder', json={
+                    'ticker': tool_input['ticker'],
+                    'dog_side': tool_input['dog_side'],
+                    'rungs': tool_input['rungs'],
+                    'timeout': tool_input.get('timeout', 300),
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'cancel_bot':
+                r = requests.delete(f'{base}/bot/cancel/{tool_input["bot_id"]}', timeout=15)
+                return r.json()
+            elif tool_name == 'cancel_bots_bulk':
+                r = requests.post(f'{base}/bot/cancel-bulk', json={
+                    'bot_ids': tool_input['bot_ids'],
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'close_position':
+                r = requests.post(f'{base}/position/close', json={
+                    'ticker': tool_input['ticker'],
+                    'side': tool_input['side'],
+                    'count': tool_input['count'],
+                }, timeout=15)
+                return r.json()
+            elif tool_name == 'scan_arbs':
+                r = requests.get(f'{base}/bot/scan', timeout=15)
+                return r.json()
+            elif tool_name == 'scan_middles':
+                r = requests.get(f'{base}/scan/middles', timeout=15)
+                return r.json()
+            elif tool_name == 'get_orderbook':
+                r = requests.get(f'{base}/orderbook/{tool_input["ticker"]}', timeout=10)
+                return r.json()
+            elif tool_name == 'get_market':
+                r = requests.get(f'{base}/market/{tool_input["ticker"]}', timeout=10)
+                return r.json()
+            elif tool_name == 'get_pnl':
+                r = requests.get(f'{base}/pnl', timeout=10)
+                return r.json()
+            elif tool_name == 'get_balance':
+                r = requests.get(f'{base}/ws/balance', timeout=10)
+                return r.json()
+            elif tool_name == 'get_positions':
+                r = requests.get(f'{base}/positions/active', timeout=10)
+                return r.json()
+            elif tool_name == 'get_active_bots':
+                r = requests.get(f'{base}/bot/list', timeout=10)
+                data = r.json()
+                # Summarize to avoid token bloat
+                summary = {}
+                for bid, b in data.items():
+                    if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching', 'complete'):
+                        summary[bid] = {k: b.get(k) for k in ('ticker','type','status','yes_price','no_price','count','pnl','bot_category','created_at')}
+                return summary
+            else:
+                return {'error': f'Unknown tool: {tool_name}'}
+        except Exception as e:
+            return {'error': str(e)}
+
     # ── Claude Chat Endpoint ─────────────────────────────────────────────────
     @app.route('/api/chat', methods=['POST'])
     def claude_chat():
-        """Stream a Claude response back to the frontend via SSE."""
+        """Claude chat with tool-use: can read data and execute trading actions."""
         body = request.json or {}
         messages = body.get('messages', [])
         if not messages:
@@ -12211,9 +12512,17 @@ if __name__ == '__main__':
 
         # Build system prompt with live context
         context = body.get('context', {})
-        system_parts = ['You are Claude, an AI assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi. Be concise, helpful, and knowledgeable about sports betting, arbitrage, and market analysis. Use a friendly but professional tone.']
+        system_parts = [
+            'You are Claude, an AI trading assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi.',
+            'You can READ live data (balance, positions, bots, orderbooks, P&L) and EXECUTE actions (place bets, create arb/dog bots, cancel bots, close positions, scan for opportunities).',
+            'Be concise and action-oriented. When the user asks you to do something, use your tools to do it. Confirm before placing real trades by briefly stating what you will do.',
+            'For arb bots: YES + NO prices must sum to < 99 to be profitable after fees. Wider spreads = more profit but less likely to fill.',
+            'For anchor/dog bots: the dog side is the underdog (lower probability). You post a cheap maker order and hedge on fill.',
+            'Prices are always in CENTS (1-99). Count = number of contracts.',
+            'IMPORTANT: Always confirm with the user before executing trades or cancellations. State the action, ticker, prices, and count, then proceed.',
+        ]
         if context:
-            system_parts.append('\n\n--- LIVE MERIDIAN STATE ---')
+            system_parts.append('\n--- LIVE MERIDIAN STATE ---')
             if 'balance' in context:
                 bal = context['balance']
                 if isinstance(bal, dict):
@@ -12237,16 +12546,59 @@ if __name__ == '__main__':
 
         def generate():
             try:
-                with client.messages.stream(
-                    model='claude-sonnet-4-20250514',
-                    max_tokens=4096,
-                    system=system_prompt,
-                    messages=messages,
-                ) as stream:
-                    for text in stream.text_stream:
-                        yield f"data: {json.dumps({'text': text})}\n\n"
+                api_messages = list(messages)
+                max_tool_rounds = 5  # prevent infinite loops
+
+                for _round in range(max_tool_rounds + 1):
+                    # Call Claude (non-streaming when tools might be used, streaming on final)
+                    response = client.messages.create(
+                        model='claude-sonnet-4-20250514',
+                        max_tokens=4096,
+                        system=system_prompt,
+                        messages=api_messages,
+                        tools=CLAUDE_TOOLS,
+                    )
+
+                    # Check if Claude wants to use tools
+                    tool_uses = [b for b in response.content if b.type == 'tool_use']
+                    text_blocks = [b for b in response.content if b.type == 'text']
+
+                    # Stream any text that came before tool calls
+                    for tb in text_blocks:
+                        if tb.text:
+                            yield f"data: {json.dumps({'text': tb.text})}\n\n"
+
+                    if not tool_uses or response.stop_reason == 'end_turn':
+                        # No more tool calls — done
+                        break
+
+                    # Execute tool calls and build tool results
+                    api_messages.append({'role': 'assistant', 'content': [
+                        {'type': 'text', 'text': tb.text} if tb.type == 'text' else
+                        {'type': 'tool_use', 'id': tb.id, 'name': tb.name, 'input': tb.input}
+                        for tb in response.content
+                    ]})
+
+                    tool_results = []
+                    for tu in tool_uses:
+                        yield f"data: {json.dumps({'action': tu.name, 'input': tu.input})}\n\n"
+                        result = _execute_chat_tool(tu.name, tu.input)
+                        # Truncate large results to save tokens
+                        result_str = json.dumps(result, default=str)
+                        if len(result_str) > 4000:
+                            result_str = result_str[:4000] + '...(truncated)'
+                        tool_results.append({
+                            'type': 'tool_result',
+                            'tool_use_id': tu.id,
+                            'content': result_str,
+                        })
+
+                    api_messages.append({'role': 'user', 'content': tool_results})
+
                 yield "data: [DONE]\n\n"
             except anthropic.APIError as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
         return Response(stream_with_context(generate()), mimetype='text/event-stream',

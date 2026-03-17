@@ -1778,6 +1778,21 @@
                         try {
                             const data = JSON.parse(payload);
                             if (data.error) fullText += '\n[Error: ' + data.error + ']';
+                            else if (data.action) {
+                                // Claude is executing a tool
+                                const actionNames = {
+                                    place_bet: 'Placing bet', create_arb_bot: 'Creating arb bot',
+                                    create_ladder_arb: 'Creating ladder arb', create_anchor_dog: 'Creating dog bot',
+                                    create_anchor_ladder: 'Creating anchor ladder', cancel_bot: 'Cancelling bot',
+                                    cancel_bots_bulk: 'Cancelling bots', close_position: 'Closing position',
+                                    scan_arbs: 'Scanning for arbs', scan_middles: 'Scanning middles',
+                                    get_orderbook: 'Checking orderbook', get_market: 'Looking up market',
+                                    get_pnl: 'Checking P&L', get_balance: 'Checking balance',
+                                    get_positions: 'Checking positions', get_active_bots: 'Checking bots'
+                                };
+                                const label = actionNames[data.action] || data.action;
+                                fullText += '\n\n`⚡ ' + label + '...`\n\n';
+                            }
                             else if (data.text) fullText += data.text;
                             bubbleEl.innerHTML = renderMd(fullText);
                             scrollChat();

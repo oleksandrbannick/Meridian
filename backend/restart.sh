@@ -1,10 +1,19 @@
 #!/bin/bash
 # Restart the Meridian server + Cloudflare tunnel
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
 lsof -ti:5001 | xargs kill -9 2>/dev/null
 pkill -f "cloudflared tunnel" 2>/dev/null
 sleep 1
-cd /Applications/Programs/Meridian/backend
-nohup /Applications/Programs/Meridian/backend/venv/bin/python -u app.py > server.log 2>&1 &
+cd "$SCRIPT_DIR"
+# Use venv python if available, else system python3
+if [ -x "$SCRIPT_DIR/venv/bin/python" ]; then
+    PYTHON="$SCRIPT_DIR/venv/bin/python"
+else
+    PYTHON="python3"
+fi
+nohup "$PYTHON" -u app.py > server.log 2>&1 &
 echo "Server PID: $!"
-nohup /Applications/Programs/Meridian/bin/cloudflared tunnel run > cloudflared.log 2>&1 &
+nohup "$PROJECT_DIR/bin/cloudflared" tunnel run meridian > cloudflared.log 2>&1 &
 echo "Cloudflared PID: $!"

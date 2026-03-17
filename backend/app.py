@@ -2099,11 +2099,19 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if not bot.get('first_fill_at'):
                 bot['first_fill_at'] = time.time()
                 bot['first_fill_side'] = 'yes'
+                if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
+                    bot['_sweep_thread_running'] = True
+                    threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
+                    print(f'⚡ WS SWEEP SPAWNED: {bot_id} YES fill detected — sweep thread launched')
         elif total_no > 0 and total_yes == 0:
             bot['status'] = 'ladder_arb_no_filled'
             if not bot.get('first_fill_at'):
                 bot['first_fill_at'] = time.time()
                 bot['first_fill_side'] = 'no'
+                if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
+                    bot['_sweep_thread_running'] = True
+                    threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
+                    print(f'⚡ WS SWEEP SPAWNED: {bot_id} NO fill detected — sweep thread launched')
         elif total_yes > 0 and total_no > 0:
             # Both sides have some fills — keep the current status or set based on which has more
             if bot['status'] == 'ladder_arb_posted':
@@ -2111,6 +2119,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if not bot.get('first_fill_at'):
                     bot['first_fill_at'] = time.time()
                     bot['first_fill_side'] = 'yes' if total_yes >= total_no else 'no'
+                    if not bot.get('_sweep_thread_running') and not bot.get('_consolidated'):
+                        bot['_sweep_thread_running'] = True
+                        threading.Thread(target=_execute_ladder_arb_sweep_and_hedge, args=(bot_id,), daemon=True).start()
+                        print(f'⚡ WS SWEEP SPAWNED: {bot_id} mixed fills — sweep thread launched')
 
         save_state()
         break
@@ -4284,6 +4296,122 @@ def _check_and_record_rung_completions(bot_id, bot):
             break
 
     return all_resolved
+
+
+def _execute_ladder_arb_sweep_and_hedge(bot_id):
+    """Spawned from WS fill handler — wait 1s sweep window, cancel ALL remaining orders, post ONE consolidated hedge."""
+    time.sleep(1.0)  # sweep window: let more fills accumulate
+
+    with ws_fill_lock:
+        bot = active_bots.get(bot_id)
+        if not bot:
+            return
+        status = bot.get('status', '')
+        if status not in ('ladder_arb_yes_filled', 'ladder_arb_no_filled'):
+            return
+        if bot.get('_consolidated'):
+            bot.pop('_sweep_thread_running', None)
+            save_state()
+            return
+
+        filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'
+        unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+        ticker = bot['ticker']
+        qty_per = bot.get('quantity', 1)
+
+        print(f'⚡ WS SWEEP: {bot_id} — 1s elapsed, cancelling all remaining orders')
+        for rung in bot.get('rungs', []):
+            for side in ('yes', 'no'):
+                rung_qty_c = rung.get('quantity', qty_per)
+                # Keep fully-filled anchor-side orders (they already filled, nothing to cancel)
+                if rung.get(f'{filled_side}_fill_qty', 0) >= rung_qty_c and side == filled_side:
+                    continue
+                oid = rung.get(f'{side}_order_id')
+                if oid:
+                    try:
+                        kalshi_client.cancel_order(oid)
+                    except Exception:
+                        pass
+                    rung[f'{side}_order_id'] = None
+
+        # Clear monitor's sweep flag so it doesn't double-cancel
+        bot.pop('_sweep_at', None)
+        _recompute_ladder_arb_fills(bot)
+
+        total_filled_qty = sum(
+            min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+            for r in bot.get('rungs', [])
+            if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+        )
+
+        if total_filled_qty <= 0:
+            bot.pop('_sweep_thread_running', None)
+            save_state()
+            return
+
+        # Hedge price from WS cache (fast path)
+        ws_data = ws_manager.get_price(ticker, max_age_s=5) if ws_manager else None
+        if ws_data:
+            fresh_yes_bid = ws_data.get('yes_bid', 0)
+            fresh_no_bid = ws_data.get('no_bid', 0)
+        else:
+            try:
+                api_rate_limiter.wait()
+                ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
+                ob = ob_data.get('orderbook', ob_data)
+                yes_lvl = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                no_lvl  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                fresh_yes_bid = (yes_lvl[0][0] if isinstance(yes_lvl[0], list) else yes_lvl[0].get('price', 0)) if yes_lvl else 0
+                fresh_no_bid  = (no_lvl[0][0]  if isinstance(no_lvl[0], list)  else no_lvl[0].get('price', 0))  if no_lvl  else 0
+            except Exception:
+                fresh_yes_bid = bot.get('live_yes_bid', 0)
+                fresh_no_bid = bot.get('live_no_bid', 0)
+
+        unfilled_bid = fresh_yes_bid if unfilled_side == 'yes' else fresh_no_bid
+        avg_filled_price = bot.get(f'avg_{filled_side}_price', 0) or 0
+
+        total_width_x_qty = sum(
+            r.get('width', 0) * min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+            for r in bot.get('rungs', [])
+            if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
+        )
+        weighted_avg_width = total_width_x_qty / total_filled_qty if total_filled_qty > 0 else 0
+        target_hedge = round(100 - avg_filled_price - weighted_avg_width)
+        hedge_price = max(1, min(target_hedge, unfilled_bid)) if unfilled_bid > 0 else max(target_hedge, 1)
+        bot['_target_hedge_price'] = target_hedge
+
+        max_safe = HARD_CEILING_CENTS - avg_filled_price
+        if hedge_price > max_safe:
+            hedge_price = max(max_safe, 1)
+
+        print(f'📊 WS SWEEP HEDGE: {bot_id} avg_anchor={avg_filled_price}¢ width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ placing@{hedge_price}¢ × {total_filled_qty}')
+
+        if hedge_price > 0:
+            try:
+                hedge_resp, actual_hedge = create_order_maker(
+                    ticker=ticker, side=unfilled_side, action='buy',
+                    count=total_filled_qty, price=hedge_price,
+                    skip_rate_limit=True
+                )
+                hedge_oid = hedge_resp['order']['order_id']
+                bot['hedge_order_id'] = hedge_oid
+                bot['hedge_price'] = actual_hedge
+                bot['hedge_qty'] = total_filled_qty
+                bot['_hedge_fill_count'] = 0
+                all_ids = bot.get('_all_hedge_order_ids', [])
+                all_ids.append(hedge_oid)
+                bot['_all_hedge_order_ids'] = all_ids
+                if bot.get('rungs'):
+                    bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
+                    for r in bot['rungs'][1:]:
+                        r[f'{unfilled_side}_order_id'] = None
+                bot['_consolidated'] = True
+                print(f'🎯 WS SWEEP CONSOLIDATE: {bot_id} {filled_side.upper()} avg={avg_filled_price}¢ → {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+            except Exception as e:
+                print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
+
+        bot.pop('_sweep_thread_running', None)
+        save_state()
 
 
 def _execute_ladder_arb_full_completion(bot_id):
@@ -7036,6 +7164,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
             # Fall through to consolidation below
 
         # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
+        # Skip if sweep thread is still running (it will do the cancel+hedge)
+        if bot.get('_sweep_thread_running'):
+            save_state()
+            return
+
         if not bot.get('_consolidated'):
             total_filled_qty = sum(
                 min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))

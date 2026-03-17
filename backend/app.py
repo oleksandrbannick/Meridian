@@ -2212,10 +2212,10 @@ def _execute_anchor_fav_hedge(bot_id):
             hedge_price = safe_hedge
             print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}¢ (total was {total_cost}¢) — will walk up toward bid')
 
-        # Post fav hedge at capped price — skip rate limiter for speed
+        # Post fav hedge at capped price
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=qty, price=hedge_price, skip_rate_limit=True
+            count=qty, price=hedge_price
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -2365,10 +2365,10 @@ def _execute_ladder_fav_hedge(bot_id):
             print(f'   ⚠ CEILING CAP: capped hedge {hedge_price}→{safe_hedge}¢ — will walk up toward bid')
             hedge_price = safe_hedge
 
-        # Post single fav hedge for total filled qty — skip rate limiter for speed
+        # Post single fav hedge for total filled qty
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
-            count=total_fill_qty, price=hedge_price, skip_rate_limit=True
+            count=total_fill_qty, price=hedge_price
         )
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
@@ -4456,7 +4456,6 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 hedge_resp, actual_hedge = create_order_maker(
                     ticker=ticker, side=unfilled_side, action='buy',
                     count=total_filled_qty, price=hedge_price,
-                    skip_rate_limit=True
                 )
                 hedge_oid = hedge_resp['order']['order_id']
                 bot['hedge_order_id'] = hedge_oid
@@ -7423,7 +7422,6 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         hedge_resp, actual_hedge = create_order_maker(
                             ticker=ticker, side=unfilled_side, action='buy',
                             count=total_filled_qty, price=hedge_price,
-                            skip_rate_limit=True
                         )
                         hedge_oid = hedge_resp['order']['order_id']
                         bot['hedge_order_id'] = hedge_oid

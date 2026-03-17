@@ -27,6 +27,7 @@ wheels/
 *.pem
 *.key
 .env
+backend/.env
 config.ini
 config.json
 credentials.txt

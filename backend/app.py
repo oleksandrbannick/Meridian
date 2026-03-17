@@ -3,7 +3,7 @@ Kalshi Arbitrage Bot Backend
 Flask server providing API endpoints for the trading bot
 """
 
-from flask import Flask, jsonify, request, send_from_directory, make_response
+from flask import Flask, jsonify, request, send_from_directory, make_response, Response, stream_with_context
 from flask_cors import CORS
 from kalshi_api import KalshiAPI
 import os
@@ -16,6 +16,7 @@ import math as _math
 import re
 from datetime import datetime, date, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
+import anthropic
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
@@ -12192,5 +12193,37 @@ if __name__ == '__main__':
                 print('⚠ config.json found but missing api_key_id or private key — skipping auto-login')
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
+
+    # ── Claude Chat Endpoint ─────────────────────────────────────────────────
+    @app.route('/api/chat', methods=['POST'])
+    def claude_chat():
+        """Stream a Claude response back to the frontend via SSE."""
+        body = request.json or {}
+        messages = body.get('messages', [])
+        if not messages:
+            return jsonify({'error': 'No messages provided'}), 400
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        if not api_key:
+            return jsonify({'error': 'ANTHROPIC_API_KEY not set on server'}), 500
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        def generate():
+            try:
+                with client.messages.stream(
+                    model='claude-sonnet-4-20250514',
+                    max_tokens=4096,
+                    system='You are Claude, an AI assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi. Be concise, helpful, and knowledgeable about sports betting, arbitrage, and market analysis. Use a friendly but professional tone.',
+                    messages=messages,
+                ) as stream:
+                    for text in stream.text_stream:
+                        yield f"data: {json.dumps({'text': text})}\n\n"
+                yield "data: [DONE]\n\n"
+            except anthropic.APIError as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
     app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

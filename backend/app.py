@@ -1445,7 +1445,7 @@ class RateLimiter:
             else:
                 self._tokens -= 1.0
 
-api_rate_limiter = RateLimiter(rate=10.0)  # 10 calls/sec (Kalshi limit)
+api_rate_limiter = RateLimiter(rate=25.0)  # Kalshi allows higher burst; 25/s is safe
 
 # ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
 import websocket as _ws_lib
@@ -4639,41 +4639,49 @@ def create_ladder_arb_bot():
         if not rung_specs:
             return jsonify({'error': 'No valid widths after price computation'}), 400
 
-        # Place orders for all rungs
+        # Place orders for all rungs IN PARALLEL (2 orders per rung, all rungs at once)
         placed_rungs = []
         total_scaled_qty = 0
-        for spec in rung_specs:
+
+        def _place_rung(spec):
             rung_qty = spec['rung_qty']
-            try:
-                yes_resp, yes_actual = create_order_maker(
-                    ticker=ticker, side='yes', action='buy',
-                    count=rung_qty, price=spec['yes_price'],
-                )
-                no_resp, no_actual = create_order_maker(
-                    ticker=ticker, side='no', action='buy',
-                    count=rung_qty, price=spec['no_price'],
-                )
-                total_scaled_qty += rung_qty
-                placed_rungs.append({
-                    'width': spec['width'],
-                    'yes_price': yes_actual,
-                    'no_price': no_actual,
-                    'yes_order_id': yes_resp['order']['order_id'],
-                    'no_order_id': no_resp['order']['order_id'],
-                    'yes_fill_qty': 0,
-                    'no_fill_qty': 0,
-                    'yes_filled_at': None,
-                    'no_filled_at': None,
-                    'quantity': rung_qty,
-                })
-            except Exception as rung_err:
-                print(f'⚠ LADDER-ARB rung width={spec["width"]}¢ failed: {rung_err} — continuing with {len(placed_rungs)} placed rungs')
-                # Don't cancel placed rungs — continue with what we have
-                # A single rung failure (e.g. post_only cross) shouldn't kill the whole bot
-                continue
+            yes_resp, yes_actual = create_order_maker(
+                ticker=ticker, side='yes', action='buy',
+                count=rung_qty, price=spec['yes_price'], skip_rate_limit=True,
+            )
+            no_resp, no_actual = create_order_maker(
+                ticker=ticker, side='no', action='buy',
+                count=rung_qty, price=spec['no_price'], skip_rate_limit=True,
+            )
+            return {
+                'width': spec['width'],
+                'yes_price': yes_actual,
+                'no_price': no_actual,
+                'yes_order_id': yes_resp['order']['order_id'],
+                'no_order_id': no_resp['order']['order_id'],
+                'yes_fill_qty': 0,
+                'no_fill_qty': 0,
+                'yes_filled_at': None,
+                'no_filled_at': None,
+                'quantity': rung_qty,
+            }
+
+        with ThreadPoolExecutor(max_workers=min(len(rung_specs), 12)) as pool:
+            futures = {pool.submit(_place_rung, spec): spec for spec in rung_specs}
+            for future in futures:
+                spec = futures[future]
+                try:
+                    rung_data = future.result()
+                    placed_rungs.append(rung_data)
+                    total_scaled_qty += rung_data['quantity']
+                except Exception as rung_err:
+                    print(f'⚠ LADDER-ARB rung width={spec["width"]}¢ failed: {rung_err} — continuing')
+                    continue
 
         if not placed_rungs:
             return jsonify({'error': 'No rungs placed successfully'}), 500
+        # Sort rungs by width for consistent display
+        placed_rungs.sort(key=lambda r: r['width'])
 
         # Subscribe WS
         if ws_manager and ws_manager.connected:
@@ -7026,28 +7034,30 @@ def _handle_ladder_arb(bot_id, bot, actions):
             bot['status'] = 'completed'
             return
 
-        # Poll fill counts (backup for WS misses)
-        for rung in bot.get('rungs', []):
-            for side in ('yes', 'no'):
-                fk = f'{side}_fill_qty'
-                if rung.get(fk, 0) >= rung.get('quantity', qty_per):
-                    continue
-                oid = rung.get(f'{side}_order_id')
-                if not oid:
-                    continue
-                try:
-                    api_rate_limiter.wait()
-                    resp = kalshi_client.get_order(oid)
-                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                    filled = _parse_fill_count(ord_data)
-                    rung[fk] = max(rung.get(fk, 0), filled)
-                    if filled >= rung.get('quantity', qty_per) and not rung.get(f'{side}_filled_at'):
-                        rung[f'{side}_filled_at'] = now
-                    # Update bot-level hedge fill count from API poll
-                    if oid in bot.get('_all_hedge_order_ids', []):
-                        bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), filled)
-                except Exception:
-                    pass
+        # Poll fill counts (backup for WS misses) — skip if WS is healthy
+        ws_healthy = ws_manager and ws_manager.connected and (time.time() - ws_manager.ticker_cache.get(ticker, {}).get('_local_ts', 0)) < 30
+        if not ws_healthy:
+            for rung in bot.get('rungs', []):
+                for side in ('yes', 'no'):
+                    fk = f'{side}_fill_qty'
+                    if rung.get(fk, 0) >= rung.get('quantity', qty_per):
+                        continue
+                    oid = rung.get(f'{side}_order_id')
+                    if not oid:
+                        continue
+                    try:
+                        api_rate_limiter.wait()
+                        resp = kalshi_client.get_order(oid)
+                        ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                        filled = _parse_fill_count(ord_data)
+                        rung[fk] = max(rung.get(fk, 0), filled)
+                        if filled >= rung.get('quantity', qty_per) and not rung.get(f'{side}_filled_at'):
+                            rung[f'{side}_filled_at'] = now
+                        # Update bot-level hedge fill count from API poll
+                        if oid in bot.get('_all_hedge_order_ids', []):
+                            bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), filled)
+                    except Exception:
+                        pass
 
         _recompute_ladder_arb_fills(bot)
         total_yes = bot['filled_yes_qty']
@@ -7238,7 +7248,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if not r.get('completed') and r.get(f'{filled_side}_fill_qty', 0) > 0
             )
             if total_filled_qty > 0:
-                # Cancel ALL remaining orders (sweep may not have run if WS detected fill first)
+                # Cancel ALL remaining orders in parallel
+                cancel_oids = []
                 for _rung in bot.get('rungs', []):
                     for _side in ('yes', 'no'):
                         _rq = _rung.get('quantity', qty_per)
@@ -7246,11 +7257,16 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             continue
                         _oid = _rung.get(f'{_side}_order_id')
                         if _oid:
-                            try:
-                                kalshi_client.cancel_order(_oid)
-                            except Exception:
-                                pass
+                            cancel_oids.append(_oid)
                             _rung[f'{_side}_order_id'] = None
+                if cancel_oids:
+                    def _cancel_safe_mon(oid):
+                        try:
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+                    with ThreadPoolExecutor(max_workers=min(len(cancel_oids), 12)) as pool:
+                        pool.map(_cancel_safe_mon, cancel_oids)
                 _recompute_ladder_arb_fills(bot)
                 # Recompute total after any last-second fills during cancellation
                 total_filled_qty = sum(
@@ -7328,61 +7344,61 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 save_state()
                 return
 
-        # Re-poll fills (backup) + update bot-level hedge fill tracking
-        # 1) Poll per-rung anchor orders
-        for rung in bot.get('rungs', []):
-            fk = f'{filled_side}_fill_qty'
-            if rung.get(fk, 0) >= rung.get('quantity', qty_per):
-                continue
-            oid = rung.get(f'{filled_side}_order_id')
-            if not oid:
-                continue
-            try:
-                api_rate_limiter.wait()
-                resp = kalshi_client.get_order(oid)
-                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                filled = _parse_fill_count(ord_data)
-                rung[fk] = max(rung.get(fk, 0), filled)
-                if filled >= rung.get('quantity', qty_per) and not rung.get(f'{filled_side}_filled_at'):
-                    rung[f'{filled_side}_filled_at'] = now
-            except Exception:
-                pass
+        # Re-poll fills (backup) — ONLY if WS is unhealthy (saves ~1s of REST calls per cycle)
+        ws_healthy_la = ws_manager and ws_manager.connected and (time.time() - ws_manager.ticker_cache.get(ticker, {}).get('_local_ts', 0)) < 30
+        if not ws_healthy_la:
+            # 1) Poll per-rung anchor orders
+            for rung in bot.get('rungs', []):
+                fk = f'{filled_side}_fill_qty'
+                if rung.get(fk, 0) >= rung.get('quantity', qty_per):
+                    continue
+                oid = rung.get(f'{filled_side}_order_id')
+                if not oid:
+                    continue
+                try:
+                    api_rate_limiter.wait()
+                    resp = kalshi_client.get_order(oid)
+                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                    filled = _parse_fill_count(ord_data)
+                    rung[fk] = max(rung.get(fk, 0), filled)
+                    if filled >= rung.get('quantity', qty_per) and not rung.get(f'{filled_side}_filled_at'):
+                        rung[f'{filled_side}_filled_at'] = now
+                except Exception:
+                    pass
 
-        # 2) Poll ALL hedge orders (not just rung[0]) for accurate fill tracking
-        total_hedge_polled = 0
-        orders_polled_ok = 0
-        for hedge_oid in bot.get('_all_hedge_order_ids', []):
-            try:
-                api_rate_limiter.wait()
-                resp = kalshi_client.get_order(hedge_oid)
-                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                filled = _parse_fill_count(ord_data)
-                total_hedge_polled += filled
-                orders_polled_ok += 1
-            except Exception as poll_err:
-                # 404 = order gone from Kalshi (fully filled or cancelled+filled)
-                # Can't determine fills — skip but flag for position reconciliation
-                if '404' in str(poll_err):
-                    print(f'⚠ LADDER-ARB hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
-                pass
-        if total_hedge_polled > bot.get('_hedge_fill_count', 0):
-            bot['_hedge_fill_count'] = total_hedge_polled
-            print(f'📊 LADDER-ARB {bot_id} hedge fills updated: {total_hedge_polled} (from {orders_polled_ok} orders)')
+            # 2) Poll ALL hedge orders for fill tracking
+            total_hedge_polled = 0
+            orders_polled_ok = 0
+            for hedge_oid in bot.get('_all_hedge_order_ids', []):
+                try:
+                    api_rate_limiter.wait()
+                    resp = kalshi_client.get_order(hedge_oid)
+                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                    filled = _parse_fill_count(ord_data)
+                    total_hedge_polled += filled
+                    orders_polled_ok += 1
+                except Exception as poll_err:
+                    if '404' in str(poll_err):
+                        print(f'⚠ LADDER-ARB hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
+                    pass
+            if total_hedge_polled > bot.get('_hedge_fill_count', 0):
+                bot['_hedge_fill_count'] = total_hedge_polled
+                print(f'📊 LADDER-ARB {bot_id} hedge fills updated: {total_hedge_polled} (from {orders_polled_ok} orders)')
 
-        # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
-        if orders_polled_ok == 0 and len(bot.get('_all_hedge_order_ids', [])) > 0:
-            try:
-                api_rate_limiter.wait()
-                positions = kalshi_client.get_positions(ticker=ticker)
-                pos_list = positions.get('market_positions', positions.get('positions', []))
-                if isinstance(pos_list, list):
-                    for pos in pos_list:
-                        side_pos = pos.get(f'{unfilled_side}_contracts', 0) or pos.get('position', 0)
-                        if side_pos > bot.get('_hedge_fill_count', 0):
-                            bot['_hedge_fill_count'] = side_pos
-                            print(f'📊 LADDER-ARB {bot_id} hedge fills from positions: {side_pos}')
-            except Exception:
-                pass
+            # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
+            if orders_polled_ok == 0 and len(bot.get('_all_hedge_order_ids', [])) > 0:
+                try:
+                    api_rate_limiter.wait()
+                    positions = kalshi_client.get_positions(ticker=ticker)
+                    pos_list = positions.get('market_positions', positions.get('positions', []))
+                    if isinstance(pos_list, list):
+                        for pos in pos_list:
+                            side_pos = pos.get(f'{unfilled_side}_contracts', 0) or pos.get('position', 0)
+                            if side_pos > bot.get('_hedge_fill_count', 0):
+                                bot['_hedge_fill_count'] = side_pos
+                                print(f'📊 LADDER-ARB {bot_id} hedge fills from positions: {side_pos}')
+                except Exception:
+                    pass
 
         _recompute_ladder_arb_fills(bot)
         total_yes = bot['filled_yes_qty']

@@ -5016,8 +5016,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         // Per-rung breakdown (compact, shows width + fill status)
         const rungRows = rungs.filter(r => {
-            // Hide cancelled rungs (swept without filling — no orders, no fills)
-            return r.completed || (r.yes_fill_qty || 0) > 0 || (r.no_fill_qty || 0) > 0 || r.yes_order_id || r.no_order_id;
+            // Only show rungs that have fills on the anchor side (or are completed)
+            return r.completed || (r[`${filledSideKey}_fill_qty`] || 0) > 0;
         }).map((r, i) => {
             const fill = r[`${filledSideKey}_fill_qty`] || 0;
             const rQty = r.quantity || qtyPer;
@@ -5093,7 +5093,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Filled but not yet consolidated — show per-rung with fills (hide cancelled rungs)
         const filledLabel = filledSideKey === 'yes' ? 'YES' : 'NO';
         rungsHTML = rungs.filter(r => {
-            return (r.yes_fill_qty || 0) > 0 || (r.no_fill_qty || 0) > 0 || r.yes_order_id || r.no_order_id;
+            // Only show rungs that have fills on the anchor side
+            return (r[`${filledSideKey}_fill_qty`] || 0) > 0 || r.yes_order_id || r.no_order_id;
         }).map((r, i) => {
             const fill = r[`${filledSideKey}_fill_qty`] || 0;
             const rQty = r.quantity || qtyPer;

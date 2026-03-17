@@ -4593,7 +4593,7 @@ def _execute_ladder_arb_full_completion(bot_id):
 
 @app.route('/api/bot/ladder-arb', methods=['POST'])
 def create_ladder_arb_bot():
-    """Unified multi-width arb bot: places YES+NO at each selected width as rungs.
+    """Apex bot: unified multi-width arb, places YES+NO at each selected width as rungs.
     One bot watches all fills, computes weighted averages, and walks the unfilled side."""
     try:
         if not kalshi_client:
@@ -12229,7 +12229,7 @@ if __name__ == '__main__':
         },
         {
             "name": "create_ladder_arb",
-            "description": "Create a multi-width ladder arb bot with multiple rungs at different YES/NO price widths.",
+            "description": "Create an Apex bot — multi-width arb with multiple rungs at different YES/NO price widths. Places both sides simultaneously and hedges on fill.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -12254,7 +12254,7 @@ if __name__ == '__main__':
         },
         {
             "name": "create_anchor_dog",
-            "description": "Create an anchor-dog arb bot: posts a cheap maker order on the underdog side, hedges at the favorite bid on fill.",
+            "description": "Create a Phantom bot — posts a stealth maker order on the underdog side, instantly hedges at the favorite bid on fill.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -12269,7 +12269,7 @@ if __name__ == '__main__':
         },
         {
             "name": "create_anchor_ladder",
-            "description": "Create a multi-rung anchor-ladder dog bot with multiple price levels.",
+            "description": "Create a Phantom Ladder bot — multi-rung stealth anchor with multiple price levels, hedges on fill.",
             "input_schema": {
                 "type": "object",
                 "properties": {

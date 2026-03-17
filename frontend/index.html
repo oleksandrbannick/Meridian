@@ -410,7 +410,7 @@
                 </div>
                 <div id="legend-body" class="hidden" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
 
-                    <div style="color:#8892a6;margin-bottom:10px;">These signals read the live score and clock to tell you how volatile prices are right now. For the simultaneous dual-arb bot (posts YES + NO at the same time), <strong style="color:#ccc;">close games are best</strong> — both sides bounce. Blowouts are worst — the dog side dies.</div>
+                    <div style="color:#8892a6;margin-bottom:10px;">These signals read the live score and clock to tell you how volatile prices are right now. For the Apex bot (posts YES + NO at the same time), <strong style="color:#ccc;">close games are best</strong> — both sides bounce. Blowouts are worst — the dog side dies.</div>
 
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px 24px;margin-top:8px;">
                         <div>
@@ -477,7 +477,7 @@
                     <button class="btn btn-primary" onclick="toggleAutoMonitor()" title="Auto-Monitor checks active bots every 2s: fills, reposts, stop-losses">
                         <span id="auto-monitor-text">▶️ Monitor</span>
                     </button>
-                    <button class="btn btn-secondary" onclick="openScanModal()" title="Arb Scanner — finds wide YES/NO spreads to anchor arb bots">⚡ Arb Scanner</button>
+                    <button class="btn btn-secondary" onclick="openScanModal()" title="Apex Scanner — finds wide YES/NO spreads for Apex bots">△ Apex Scanner</button>
                     <button class="btn btn-secondary" onclick="openMiddlesModal()" title="Middle Scanner — finds NO+NO opposing-spread opportunities">📐 Middles</button>
                     <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
                             style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓</button>
@@ -537,8 +537,8 @@
                 <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
                 <!-- ARB / MIDDLE / DOG toggle -->
                 <div style="display:flex;gap:0;margin-bottom:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
-                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">🤖 ARB</button>
-                    <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">🎯 DOG</button>
+                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">△ APEX</button>
+                    <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">👻 PHANTOM</button>
                     <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">↔️ MIDDLE</button>
                     <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">💰 BETS</button>
                 </div>
@@ -569,7 +569,7 @@
                 </div>
                 <div style="display:grid;gap:12px;">
                     <div><strong style="color:#fff;">▶️ Auto-Monitor</strong> — <strong style="color:#ff6666;">Must be enabled for bots to work.</strong> Runs every 2 seconds: fills, reposts, flip stop-losses, and watch-bot management.</div>
-                    <div><strong style="color:#fff;">🔍 Arb Scanner</strong> — Opens scanner with your settings. Set Min Width (minimum gap in cents) and Qty, then hit Scan. Places both YES+NO limit orders at bid+1 (front of queue). Profit = gap - 2¢ when both fill. Use All Widths to run bots at every profitable width simultaneously.</div>
+                    <div><strong style="color:#fff;">△ Apex Scanner</strong> — Opens scanner with your settings. Set Min Width (minimum gap in cents) and Qty, then hit Scan. Places both YES+NO limit orders at bid+1 (front of queue). Profit = gap - 2¢ when both fill. Use All Widths to run bots at every profitable width simultaneously.</div>
                     <div><strong style="color:#fff;">📐 Middles</strong> — Finds games with opposing-team spread lines. You bet NO on both sides — only one team can cover, so you always win at least one. Win both if the game lands in the middle.</div>
                     <div><strong style="color:#fff;">🛡 Flip (Stop-Loss)</strong> — If one leg fills and the market moves against you (bid falls below entry-15¢, floor 55¢), the bot market-sells the filled leg to exit and cancels the other. This limits loss to ~15-25¢ per contract.</div>
                     <div><strong style="color:#fff;">💼 Positions Tab</strong> — Your real Kalshi positions. Click Watch to attach a bot that monitors with stop-loss + take-profit targets.</div>
@@ -607,11 +607,11 @@
             <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:20px;">
                 <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
                     <button id="histmode-arb" onclick="setHistoryMode('arb')"
-                        style="flex:1;background:#253555;border:none;color:#00ff88;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🤖 ARB BOTS</button>
+                        style="flex:1;background:#253555;border:none;color:#00ff88;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">△ APEX</button>
                     <button id="histmode-middle" onclick="setHistoryMode('middle')"
                         style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">↔️ MIDDLES</button>
                     <button id="histmode-dog" onclick="setHistoryMode('dog')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🎯 DOG</button>
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">👻 PHANTOM</button>
                 </div>
                 <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
                     <button id="histmode-bets" onclick="setHistoryMode('bets')"
@@ -627,7 +627,7 @@
                 </div>
                 <div id="sport-breakdown-panel" style="margin-bottom:20px;"></div>
                 <div id="width-breakdown-panel" style="margin-bottom:20px;"></div>
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Arb Trade Log</h3>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Apex Trade Log</h3>
                 <div id="trade-history-list">
                     <div class="empty-state">
                         <div class="icon">📜</div>
@@ -658,14 +658,14 @@
                 </div>
             </div>
 
-            <!-- DOG BOT SECTION -->
+            <!-- PHANTOM BOT SECTION -->
             <div id="hist-dog-section" style="display:none;">
                 <div id="dog-pnl-calendar-panel" style="margin-bottom:20px;"></div>
                 <div id="dog-stats-panel" style="margin-bottom:20px;">
                     <p style="color:#555;text-align:center;font-size:12px;">Loading analytics...</p>
                 </div>
                 <div id="dog-width-panel" style="margin-bottom:20px;"></div>
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Dog Bot Trade Log</h3>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Phantom Trade Log</h3>
                 <div id="dog-history-list">
                     <div class="empty-state">
                         <div class="icon">🎯</div>
@@ -709,11 +709,11 @@
                     </button>
                     <button id="mode-arb" onclick="setTradeMode('arb')"
                         style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        ⚡ Arb Bot
+                        △ Apex Bot
                     </button>
                     <button id="mode-anchor" onclick="setTradeMode('anchor')"
                         style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        🎯 Anchor Dog
+                        👻 Phantom
                     </button>
                 </div>
                 <!-- Market card (shared) -->
@@ -931,7 +931,7 @@
 
                     <!-- Action buttons -->
                     <div style="display:flex;gap:10px;">
-                        <button id="deploy-btn" onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">⚡ Deploy Arb Bot</button>
+                        <button id="deploy-btn" onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">△ Deploy Apex Bot</button>
                         <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
@@ -1033,12 +1033,12 @@
                 <!-- ═══════ ANCHOR DOG SECTION (LADDER) ═══════ -->
                 <div id="anchor-section" style="display:none;">
                     <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#6a7488;line-height:1.4;">
-                        <strong style="color:#ffaa00;">🎯 Snap-Back Bot:</strong> Posts dog limit deep below market. When a whale dumps and your dog fills, instantly hedges the fav. Walk-up system bumps fav price +1¢/20s if snap-back is slow. Halftime-aware.
+                        <strong style="color:#ffaa00;">👻 Phantom Bot:</strong> Posts stealth limit deep below market. When a whale dumps and your anchor fills, instantly hedges the fav. Walk-up system bumps fav price +1¢/20s if snap-back is slow. Halftime-aware.
                     </div>
                     <!-- Auto-detected sides -->
                     <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:12px;">
                         <div style="background:#060a14;border:1px solid #ffaa0044;border-radius:8px;padding:8px;text-align:center;">
-                            <div style="color:#ffaa00;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">DOG (ANCHOR)</div>
+                            <div style="color:#ffaa00;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">PHANTOM (ANCHOR)</div>
                             <div id="anchor-auto-dog-side" style="color:#ffaa00;font-weight:800;font-size:18px;">—</div>
                             <div id="anchor-auto-dog-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: —</div>
                         </div>
@@ -1126,7 +1126,7 @@
                     </div>
                     <!-- Deploy button -->
                     <button id="anchor-deploy-btn" onclick="deployAnchorBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#ffaa00 0%,#ff8800 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
-                        🎯 Deploy Anchor Dog
+                        👻 Deploy Phantom Bot
                     </button>
                 </div>
 
@@ -1139,7 +1139,7 @@
         <div class="modal-content" style="max-width:660px;max-height:82vh;display:flex;flex-direction:column;">
             <!-- Row 1: title + count + scan/close -->
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <h2 class="modal-header" style="margin:0;">🔍 Arb Scanner</h2>
+                <h2 class="modal-header" style="margin:0;">△ Apex Scanner</h2>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <span id="scan-count" style="color:#8892a6;font-size:12px;"></span>
                     <button class="btn btn-primary" onclick="runScan()" style="padding:.4rem .9rem;font-size:13px;">🔍 Scan</button>
@@ -1796,9 +1796,9 @@
                             else if (data.action) {
                                 // Claude is executing a tool
                                 const actionNames = {
-                                    place_bet: 'Placing bet', create_arb_bot: 'Creating arb bot',
-                                    create_ladder_arb: 'Creating ladder arb', create_anchor_dog: 'Creating dog bot',
-                                    create_anchor_ladder: 'Creating anchor ladder', cancel_bot: 'Cancelling bot',
+                                    place_bet: 'Placing bet', create_arb_bot: 'Deploying Apex bot',
+                                    create_ladder_arb: 'Deploying Apex bot', create_anchor_dog: 'Deploying Phantom bot',
+                                    create_anchor_ladder: 'Deploying Phantom ladder', cancel_bot: 'Cancelling bot',
                                     cancel_bots_bulk: 'Cancelling bots', close_position: 'Closing position',
                                     scan_arbs: 'Scanning for arbs', scan_middles: 'Scanning middles',
                                     get_orderbook: 'Checking orderbook', get_market: 'Looking up market',

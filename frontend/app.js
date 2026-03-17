@@ -2897,7 +2897,7 @@ function setTradeMode(mode) {
         if (anchorSection) anchorSection.style.display = 'block';
         if (anchorBtn) { anchorBtn.style.background = '#ffaa0022'; anchorBtn.style.color = '#ffaa00'; anchorBtn.style.borderBottom = '2px solid #ffaa00'; }
         iconEl.textContent = '🎯';
-        titleEl.textContent = 'Anchor Dog';
+        titleEl.textContent = 'Phantom Bot';
         subtitleEl.textContent = 'Volatility Capture · Maker Only';
         // Reset depth to auto (0) each time modal opens
         const depthEl = document.getElementById('anchor-depth');
@@ -2908,7 +2908,7 @@ function setTradeMode(mode) {
         if (arbSection) arbSection.style.display = 'block';
         if (arbBtn) { arbBtn.style.background = '#00ff8822'; arbBtn.style.color = '#00ff88'; arbBtn.style.borderBottom = '2px solid #00ff88'; }
         iconEl.textContent = '⚡';
-        titleEl.textContent = 'Dual-Arb Bot';
+        titleEl.textContent = 'Apex Bot';
         subtitleEl.textContent = 'Settlement Arbitrage Engine';
         // Recalculate arb prices when switching to arb mode
         recalcArbPrices();
@@ -3207,11 +3207,11 @@ function updateAnchorPreview() {
     const btn = document.getElementById('anchor-deploy-btn');
     if (btn) {
         if (_anchorRungs.length > 1) {
-            btn.textContent = `⚡ Deploy ${_anchorRungs.length}-Rung Arb Bot`;
+            btn.textContent = `👻 Deploy ${_anchorRungs.length}-Rung Phantom`;
             btn.style.background = 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
             btn.style.color = '#fff';
         } else {
-            btn.textContent = '🎯 Deploy Dog Bot';
+            btn.textContent = '👻 Deploy Phantom Bot';
             btn.style.background = 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
             btn.style.color = '#000';
         }
@@ -3246,7 +3246,7 @@ async function deployAnchorBot() {
     const avgLine = isLadder ? `\nAvg dog price: ${avgPrice}¢` : '';
 
     const repeatLine = repeatCount > 0 ? `\nRepeat: ${repeatCount}× (${repeatCount + 1} total runs)` : '\nRepeat: single shot';
-    if (!confirm(`${isLadder ? '⚡ Deploy Arb Bot' : '🎯 Deploy Dog Bot'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
+    if (!confirm(`${isLadder ? '👻 Deploy Phantom Ladder' : '👻 Deploy Phantom Bot'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
         const endpoint = isLadder ? 'bot/ladder' : 'bot/anchor';
@@ -3280,7 +3280,7 @@ async function deployAnchorBot() {
         if (data.success) {
             const msg = isLadder
                 ? `⚡ ARB BOT deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢`
-                : `🎯 DOG BOT deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢`;
+                : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢`;
             showNotification(msg);
             closeModal();
             loadBots();
@@ -4285,16 +4285,16 @@ function _updateDeployButton() {
     if (!deployBtn) return;
     const count = _selectedWidths.size;
     if (count > 1) {
-        deployBtn.textContent = `⚡ Deploy ${count} Widths`;
+        deployBtn.textContent = `△ Deploy ${count} Widths`;
         deployBtn.style.background = 'linear-gradient(135deg,#818cf8 0%,#6366f1 100%)';
         deployBtn.style.color = '#fff';
     } else if (count === 1) {
         const w = [..._selectedWidths][0];
-        deployBtn.textContent = `⚡ Deploy ${w}¢ Width`;
+        deployBtn.textContent = `△ Deploy ${w}¢ Width`;
         deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
         deployBtn.style.color = '#000';
     } else {
-        deployBtn.textContent = '⚡ Deploy Arb Bot';
+        deployBtn.textContent = '△ Deploy Apex Bot';
         deployBtn.style.background = 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)';
         deployBtn.style.color = '#000';
     }
@@ -4431,7 +4431,7 @@ async function createBot() {
     const profitPer = 100 - yes_price - no_price;
     const totalCost = (yes_price + no_price) * quantity;
     const repeatMsg = repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    if (!confirm(`⚡ Deploy Dual-Arb Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nWalk-up if one fills (+1¢/20s toward bid, maker only)${repeatMsg}\n\nConfirm order?`)) return;
+    if (!confirm(`△ Deploy Apex Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nWalk-up if one fills (+1¢/20s toward bid, maker only)${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
@@ -4548,13 +4548,13 @@ async function placeSelectedWidthsBots() {
     }
 
     if (validWidths.length === 0) {
-        alert(`⚡ Deploy ${selectedArr.length} Widths — ${currentArbMarket.ticker}\n\nNo valid widths to deploy (all skipped).\n\n${skipReasons.join('\n')}`);
+        alert(`△ Deploy ${selectedArr.length} Widths — ${currentArbMarket.ticker}\n\nNo valid widths to deploy (all skipped).\n\n${skipReasons.join('\n')}`);
         return;
     }
 
     // Build order table string
     const pad = (s, n) => String(s).padStart(n);
-    let orderLines = [`⚡ Deploy ${validWidths.length} Widths — ${currentArbMarket.ticker}`, ''];
+    let orderLines = [`△ Apex: Deploy ${validWidths.length} Widths — ${currentArbMarket.ticker}`, ''];
     orderLines.push('  WIDTH   QTY   YES    NO    PROFIT   COST');
     orderLines.push('  ────────────────────────────────────────');
     for (const { w, arb, yesPrice, noPrice, profit, rungQty } of validWidths) {
@@ -4604,12 +4604,12 @@ async function placeSelectedWidthsBots() {
             const data = await resp.json();
             if (data.bot_id) {
                 const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
-                notifMsg = `⚡ Arb Bot placed: ${data.rungs} rungs · ${qtyDesc}`;
+                notifMsg = `△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`;
             } else {
-                notifMsg = `❌ Arb Bot failed: ${data.error || 'Unknown error'}`;
+                notifMsg = `❌ Apex failed: ${data.error || 'Unknown error'}`;
             }
         } catch (err) {
-            notifMsg = `❌ Arb Bot failed: Network error`;
+            notifMsg = `❌ Apex failed: Network error`;
         }
     } else {
         // ── SINGLE WIDTH: use legacy bot/create endpoint ──────────────────────
@@ -4667,7 +4667,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
 
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
-        'dog_filled': '🐕 DOG FILLED — HEDGING', 'ladder_filled_no_fav': '🐕 FILLED — HEDGING',
+        'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': '🔄 REPEATING',
         'completed': '✅ COMPLETE', 'stopped': '🛑 STOPPED',
     };
@@ -4770,6 +4770,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #ffaa0066);"><path d="M12 2C8 2 5 5 5 9c0 2 .8 3.5 2 4.5V16c0 1 .5 2 1.5 2.5L10 22h4l1.5-3.5C16.5 18 17 17 17 16v-2.5c1.2-1 2-2.5 2-4.5 0-4-3-7-7-7z" fill="#ffaa0022" stroke="#ffaa00" stroke-width="1.5"/><circle cx="9.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><circle cx="14.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><path d="M9 13c1.5 1.5 4.5 1.5 6 0" stroke="#ffaa00" stroke-width="1" fill="none" stroke-linecap="round" opacity=".6"/></svg>
+                <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">PHANTOM</span>
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
@@ -4779,9 +4781,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <!-- DOG SIDE -->
+            <!-- ANCHOR SIDE -->
             <div style="background:#060a14;border:1px solid #ffaa0033;border-radius:8px;padding:10px;">
-                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">🐕 DOG · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
+                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`}</div>
                 ${isLadder && dogFillQty === 0 ? '<div style="color:#ffaa00;font-size:10px;">Waiting for fill</div>' : ''}
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
@@ -5238,6 +5240,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #00aaff66);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>
+                <span style="color:#00aaff;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">APEX</span>
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 <span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">🪜 ${rungs.length} RUNGS</span>
@@ -5558,7 +5562,7 @@ function _renderPnlDisplay(mode) {
         const loss  = ((pnl.dog_loss_cents   || 0) / 100).toFixed(2);
         const dayLabel = pnl.day_key || _localDateStr();
         el.innerHTML = `
-            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Dog Bots Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Phantom Bots Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
             <span style="color:${color};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${color}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
             <span style="font-size:11px;">
                 <span style="color:#ffaa00;">↑ $${gross}</span>
@@ -5624,7 +5628,7 @@ function _renderPnlDisplay(mode) {
         const losses   = pnl.arb_losses || 0;
         const dayLabel = pnl.day_key || _localDateStr();
         el.innerHTML = `
-            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
+            <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Apex Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
             <span style="color:${netColor};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${netColor}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
             <span style="font-size:11px;">
                 <span style="color:#00cc66;">↑ $${gross}</span>
@@ -5670,7 +5674,7 @@ async function loadBots() {
 
         // Update dog bots tab badge
         const dogBtn = document.getElementById('bots-tab-dog');
-        if (dogBtn) dogBtn.textContent = `🎯 DOG${dogBotIds.length > 0 ? ' (' + dogBotIds.length + ')' : ''}`;
+        if (dogBtn) dogBtn.textContent = `👻 PHANTOM${dogBotIds.length > 0 ? ' (' + dogBotIds.length + ')' : ''}`;
 
         // Update bets tab badge
         const betsBtn = document.getElementById('bots-tab-bets');
@@ -5706,7 +5710,7 @@ async function loadBots() {
         // Render dog bots list
         if (dogList) {
             if (dogBotIds.length === 0) {
-                dogList.innerHTML = '<div class="empty-state"><div class="icon">🎯</div><div class="title">No active dog bots</div><div class="desc">Deploy an anchor dog from the Markets tab</div></div>';
+                dogList.innerHTML = '<div class="empty-state"><div class="icon">👻</div><div class="title">No active Phantom bots</div><div class="desc">Deploy a Phantom bot from the Markets tab</div></div>';
             } else {
                 dogList.innerHTML = '';
                 // Group dog bots by game (same logic as arb bots)
@@ -5747,7 +5751,7 @@ async function loadBots() {
         }
 
         if (arbBotIds.length === 0) {
-            botsList.innerHTML = `<div class="empty-state"><div class="icon">🤖</div><div class="title">No active bots</div><div class="desc">Deploy a bot from the Markets tab or use the Arb Scanner</div></div>`;
+            botsList.innerHTML = `<div class="empty-state"><div class="icon">△</div><div class="title">No active Apex bots</div><div class="desc">Deploy an Apex bot from the Markets tab or use the Apex Scanner</div></div>`;
             updateBotBuddy(0, 0);
             updateBotsBadge(arbBotIds.length + middleBotIds.length + dogBotIds.length + betsBotIds.length);
             return;
@@ -5897,7 +5901,7 @@ async function loadBots() {
                 flipping:             '⚡ EXITING',
                 drift_cancelled:      '🚫 DRIFT GUARD',
                 awaiting_settlement:  '⏳ AWAITING SETTLEMENT',
-                dog_anchor_posted:    '🎯 DOG ANCHORED',
+                dog_anchor_posted:    '👻 ANCHORED',
                 fav_hedge_posted:     '🔒 HEDGING FAV',
                 dog_filled:           '⚡ DOG FILLED',
                 ladder_posted:        '🪜 LADDER ACTIVE',
@@ -6401,7 +6405,7 @@ async function loadBots() {
                             return `
                             <div>
                                 <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
-                                    <span>🎯 DOG ${dogSide.toUpperCase()} @ <strong style="color:${dogColor};">${dogPrice}¢</strong></span>
+                                    <span>👻 ANCHOR ${dogSide.toUpperCase()} @ <strong style="color:${dogColor};">${dogPrice}¢</strong></span>
                                     <span style="color:${dogFill >= qty ? dogColor : '#8892a6'};font-weight:${dogFill >= qty ? '700' : '400'};">${dogFill >= qty ? `${dogFill}/${qty} ✓` : `${dogFill}/${qty}`}</span>
                                 </div>
                                 <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${dogFill >= qty ? `box-shadow:0 0 8px ${dogColor}44;` : ''}">
@@ -6458,7 +6462,7 @@ async function loadBots() {
 
                             return `
                             <div>
-                                <div style="color:#ff6600;font-weight:700;font-size:10px;margin-bottom:4px;">🪜 LADDER · ${dogSide.toUpperCase()}</div>
+                                <div style="color:#ff6600;font-weight:700;font-size:10px;margin-bottom:4px;">👻 PHANTOM · ${dogSide.toUpperCase()}</div>
                                 ${rungsHtml}
                             </div>
                             <div style="opacity:${isFavWaiting ? '0.4' : '1'};transition:opacity .5s;">
@@ -6834,7 +6838,7 @@ const botBuddyMessages = {
         `<strong>Temporary.</strong> Red days happen — the edge is long-term`,
     ],
     dog_anchored: [
-        `<strong>🎯 Dog anchored.</strong> Deep limit posted — waiting for volatility to bite`,
+        `<strong>👻 Phantom anchored.</strong> Deep limit posted — waiting for volatility to bite`,
         `<strong>Anchor set.</strong> Cheap leg in the book — if it fills, I hedge instantly`,
         `<strong>Patience mode.</strong> Dog is out there — one spike and we hedge the fav`,
         `<strong>Anchored deep.</strong> Low cost, low risk — let the market come to us`,
@@ -7366,9 +7370,9 @@ async function monitorBots() {
                     } else if (action.action === 'take_profit_watch') {
                         showNotification(`🎯 Watch TP hit: ${action.bot_id} | profit: +${(action.profit_cents/100).toFixed(2)}`);
                     } else if (action.action === 'dog_filled_hedging') {
-                        showNotification(`🎯 DOG FILLED! Hedging fav on ${action.ticker || action.bot_id}`);
+                        showNotification(`👻 PHANTOM FILLED! Hedging fav on ${action.ticker || action.bot_id}`);
                         playArbCompleteSound();
-                        sendPushNotification('🎯 Dog Filled!', 'Anchor dog filled — posting fav hedge');
+                        sendPushNotification('👻 Phantom Filled!', 'Phantom anchor filled — posting fav hedge');
                     } else if (action.action === 'anchor_complete' || action.action === 'ladder_complete') {
                         // Sound only, no notification (profit_cents was unreliable)
                         playArbCompleteSound();
@@ -7679,7 +7683,7 @@ async function quickBot(ticker, yesPrice, noPrice) {
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
-    if (!confirm(`⚡ Place Dual-Arb Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n8-min timeout if one leg fills\n\nConfirm?`)) return;
+    if (!confirm(`△ Deploy Apex Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n8-min timeout if one leg fills\n\nConfirm?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
@@ -8651,7 +8655,7 @@ async function loadHistoryStats() {
                     return `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key || ''}</span></div>
                         <div style="color:${dColor};font-size:24px;font-weight:800;">${dNet >= 0 ? '+' : ''}$${dDollars}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today (arb bots)</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today (Apex bots)</div>
                     </div>`;
                 })()}
             </div>
@@ -9160,9 +9164,10 @@ async function loadTradeHistoryList() {
                 <div style="background:#0f1419;border:1px solid ${pnl >= 0 ? '#00ff8822' : '#ff444422'};border-left:3px solid ${pnlCol};border-radius:8px;padding:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <svg width="18" height="18" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 3px #00aaff44);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>
                             <span style="font-size:14px;">${icon}</span>
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
-                            <span style="background:#00aaff22;color:#00aaff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">LADDER ARB</span>
+                            <span style="background:#00aaff22;color:#00aaff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">△ APEX</span>
                             <span style="background:#ffaa0022;color:#ffaa00;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t._rungs_completed}/${t._rungs_total} rungs</span>
                             ${t._width_range ? `<span style="color:#555;font-size:9px;">Widths: ${t._width_range}</span>` : ''}
                         </div>
@@ -9240,7 +9245,7 @@ async function loadTradeHistoryList() {
             // Trade type
             const isAnchorTrade = t.bot_category === 'anchor_dog' || t.fill_source === 'anchor_dog';
             const isLadderArbTrade = t.bot_category === 'ladder_arb' || t.fill_source === 'ladder_arb';
-            const tradeType = t.type === 'watch' ? 'WATCH' : (isAnchorTrade ? 'ANCHOR' : 'ARB');
+            const tradeType = t.type === 'watch' ? 'WATCH' : (isAnchorTrade ? 'PHANTOM' : 'APEX');
             const typeColor = t.type === 'watch' ? '#ffaa00' : (isAnchorTrade ? '#ffaa00' : '#00aaff');
 
             // ─── New analytics fields ───
@@ -9796,7 +9801,7 @@ async function loadDogHistory() {
             const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.arb_width||0), 0) / trades.length).toFixed(1) : '—';
             const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
             statsPanel.innerHTML = trades.length === 0
-                ? '<p style="color:#555;text-align:center;font-size:12px;">No dog bot trades yet.</p>'
+                ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
                 : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&L</div>
@@ -9848,7 +9853,7 @@ async function loadDogHistory() {
 
         // ── Trade log ──
         if (trades.length === 0) {
-            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No dog bot trades yet. Deploy an anchor dog to get started.</p>';
+            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No Phantom trades yet. Deploy a Phantom bot to get started.</p>';
             return;
         }
 
@@ -9879,6 +9884,7 @@ async function loadDogHistory() {
             return `<div style="background:#0f1419;border:1px solid ${borderCol};border-radius:10px;padding:14px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 3px #ffaa0044);"><path d="M12 2C8 2 5 5 5 9c0 2 .8 3.5 2 4.5V16c0 1 .5 2 1.5 2.5L10 22h4l1.5-3.5C16.5 18 17 17 17 16v-2.5c1.2-1 2-2.5 2-4.5 0-4-3-7-7-7z" fill="#ffaa0022" stroke="#ffaa00" stroke-width="1.5"/><circle cx="9.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><circle cx="14.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/></svg>
                         <span style="font-size:14px;">${icon}</span>
                         <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
                         ${phaseBadge}
@@ -9891,7 +9897,7 @@ async function loadDogHistory() {
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                     <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${dogCol}22;">
-                        <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">🐕 DOG · BOUGHT</div>
+                        <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">👻 ANCHOR · BOUGHT</div>
                         <div style="color:${dogCol};font-weight:700;font-size:12px;">${dogSide.toUpperCase()} @ ${dogPrice}¢</div>
                         <div style="color:#8892a6;font-size:10px;">×${t.quantity||1}</div>
                         ${rungsHtml}

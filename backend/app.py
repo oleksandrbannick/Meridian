@@ -18,6 +18,8 @@ from datetime import datetime, date, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import anthropic
 
+AZ_TZ = timezone(timedelta(hours=-7))  # Arizona = UTC-7, no DST
+
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
 
@@ -2750,7 +2752,7 @@ session_pnl = {
     'completed_bots':     0,
     'stopped_bots':       0,
     'session_start':      time.time(),
-    'day_key':            date.today().isoformat(),  # for daily auto-reset
+    'day_key':            datetime.now(AZ_TZ).date().isoformat(),  # for daily auto-reset
 }
 
 # ─── LATENCY TRACKER ──────────────────────────────────────────────────────────
@@ -2817,7 +2819,7 @@ def _pnl_reset_for_day(day: str) -> float:
 def auto_reset_daily_pnl():
     """Reset P&L counters if the day has changed since last check."""
     global session_pnl
-    today = date.today().isoformat()
+    today = datetime.now(AZ_TZ).date().isoformat()
     if session_pnl.get('day_key') != today:
         print(f'📅 New day detected ({session_pnl.get("day_key")} → {today}) — resetting daily P&L')
         session_pnl = {
@@ -6337,7 +6339,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
             save_state()
-            actions.append({'bot_id': bot_id, 'action': 'anchor_complete', 'profit_cents': pnl_cents})
+            actions.append({'bot_id': bot_id, 'action': 'anchor_complete', 'profit_cents': net_pnl})
             return
 
         # Fav not filled yet — check if game/market is over
@@ -6918,7 +6920,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 bot['completed_at'] = now
                 print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done')
             save_state()
-            actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'profit_cents': pnl_cents})
+            actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'profit_cents': net_pnl})
             return
 
         # ── Fav Walk-Up (same system as anchor_dog) ──
@@ -11424,12 +11426,14 @@ def _compute_pnl_bucket(trades, category=None):
             trades = [t for t in trades if t.get('bot_category', 'arb') == category]
     gross_profit = 0
     gross_loss   = 0
+    total_fees   = 0
     completed    = 0
     stopped      = 0
     sport_pnl    = {}
     for t in trades:
         result = t.get('result', '')
         pnl = 0
+        fees = t.get('fee_cents', 0) or 0
         if result in PNL_WIN_RESULTS:
             p = t.get('profit_cents', 0) or 0
             l = t.get('loss_cents', 0) or 0
@@ -11441,6 +11445,8 @@ def _compute_pnl_bucket(trades, category=None):
                 gross_profit += p
                 gross_loss += l
                 pnl = p - l
+            total_fees += fees
+            pnl -= fees
             # Amended arbs that lost money count as losses, not wins
             if pnl < 0:
                 stopped += 1
@@ -11455,14 +11461,16 @@ def _compute_pnl_bucket(trades, category=None):
                 p = 0
             gross_profit += p
             gross_loss   += l
+            total_fees += fees
             stopped += 1
-            pnl = p - l
+            pnl = p - l - fees
         sport = t.get('sport', 'Other')
         sport_pnl[sport] = sport_pnl.get(sport, 0) + pnl
-    net_cents = gross_profit - gross_loss
+    net_cents = gross_profit - gross_loss - total_fees
     return {
         'gross_profit_cents': gross_profit,
         'gross_loss_cents':   gross_loss,
+        'total_fee_cents':    total_fees,
         'net_cents':          net_cents,
         'net_dollars':        net_cents / 100,
         'completed_bots':     completed,
@@ -11472,17 +11480,17 @@ def _compute_pnl_bucket(trades, category=None):
 
 
 def _trade_day_key(t):
-    """Return ISO date string for a trade's timestamp (local timezone)."""
+    """Return ISO date string for a trade's timestamp (Arizona time)."""
     ts = t.get('timestamp')
     if ts:
-        return datetime.fromtimestamp(ts).date().isoformat()
-    return date.today().isoformat()
+        return datetime.fromtimestamp(ts, tz=AZ_TZ).date().isoformat()
+    return datetime.now(AZ_TZ).date().isoformat()
 
 
 @app.route('/api/pnl', methods=['GET'])
 def get_pnl():
     """P&L dashboard — daily & lifetime, computed from trade history."""
-    today = date.today().isoformat()
+    today = datetime.now(AZ_TZ).date().isoformat()
 
     # Split into today vs all-time
     # pnl_resets: per-day reset timestamps — trades before that day's reset are excluded.
@@ -11665,7 +11673,7 @@ def reset_pnl():
     Stores a per-day reset timestamp so the reset persists even on future days."""
     global session_pnl, pnl_resets
     now = time.time()
-    today = date.today().isoformat()
+    today = datetime.now(AZ_TZ).date().isoformat()
     pnl_resets[today] = now  # persist for this day permanently
     session_pnl = {
         'gross_profit_cents': 0, 'gross_loss_cents': 0,

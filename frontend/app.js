@@ -6730,7 +6730,7 @@ function toggleAutoMonitor() {
 const botBuddyMessages = {
     idle: [
         `<strong>Offline.</strong> Hit Auto-Monitor and I'll run the whole show`,
-        `<strong>Sleeping...</strong> Wake me up — these arbs won't catch themselves 🥱`,
+        `<strong>Sleeping...</strong> Wake me up — these markets won't trade themselves 🥱`,
         `<strong>Standing by</strong> — your bots aren't being watched right now`,
         `<strong>Nothing to do...</strong> I live for this, just press the button`,
         `<strong>Bench mode.</strong> Put me in coach, I'm ready`,
@@ -6742,53 +6742,92 @@ const botBuddyMessages = {
         `<strong>Patrolling</strong> — DriftGuard, amend retries, repost logic all active`,
         `<strong>Steady.</strong> Watching spreads, queuing reposts, tracking timeouts`,
         `<strong>Eyes open.</strong> I'll catch the fill before you even look up`,
-        `<strong>Working.</strong> Every anchor, every bot, every 2 seconds`,
+        `<strong>Working.</strong> Apex, Phantom, middles, bets — all monitored`,
         `<strong>All systems green</strong> — keeping your orders fresh and alive`,
         `<strong>Meridian active.</strong> Markets are moving — I'm right here`,
     ],
     both_posted: [
-        `<strong>⚡ Both sides live.</strong> YES and NO resting simultaneously — first fill starts the clock`,
-        `<strong>Dual orders active</strong> — both legs posted, whichever fills first I'll guard the other`,
-        `<strong>Simultaneous mode</strong> — YES and NO both in the book, timeout starts on first fill`,
+        `<strong>△ Both sides live.</strong> YES and NO resting — first fill starts the clock`,
+        `<strong>Apex dual post</strong> — both legs in the book, whichever fills first I guard the other`,
+        `<strong>Simultaneous mode</strong> — YES and NO both posted, timeout starts on first fill`,
         `<strong>Two orders out.</strong> Waiting for fills — I've got the timer ready`,
     ],
     fav_posted: [
-        `<strong>🎯 Fav posted.</strong> Liquid side is in the book — dog queued for after fill`,
+        `<strong>△ Fav posted.</strong> Liquid side is in the book — other leg queued for after fill`,
         `<strong>Sequencing.</strong> Higher-bid side out first, waiting for the bite`,
-        `<strong>Fav-first mode</strong> — watching for fill, then I post the underdog instantly`,
-        `<strong>Waiting on the fav</strong> — order's live, arb clock starts on fill`,
+        `<strong>Fav-first mode</strong> — watching for fill, then I post the other side instantly`,
+        `<strong>Waiting on the fav</strong> — order's live, Apex clock starts on fill`,
     ],
     fav_filled: [
-        `<strong>Fav filled!</strong> Posting the dog side now — almost locked 🔒`,
-        `<strong>Phase 2.</strong> Liquid side eaten — underdog going in right now`,
+        `<strong>△ Fav filled!</strong> Posting the other side now — almost locked 🔒`,
+        `<strong>Phase 2.</strong> Liquid side eaten — other leg going in right now`,
         `<strong>One leg in.</strong> Fav filled, deploying the other side. Don't touch anything`,
-        `<strong>Halfway there.</strong> Dog order going up — sit tight, I've got this`,
+        `<strong>Halfway there.</strong> Other side going up — sit tight, I've got this`,
     ],
     filled: [
         `<strong>Leg filled!</strong> Holding for the other side — timeout clock running`,
-        `<strong>One side in.</strong> No panic — arb completes naturally or via amend exit`,
+        `<strong>One side in.</strong> No panic — completes naturally or via amend exit`,
         `<strong>In position.</strong> Waiting on the other leg — amend exit is the backstop`,
-        `<strong>Anchored.</strong> One leg locked, watching for the other side to fill`,
+        `<strong>Locked in.</strong> One leg filled, watching for the other side`,
     ],
     amending: [
-        `<strong>🔧 Amending order.</strong> Moving the price to match the current bid — filling the arb`,
-        `<strong>Price adjustment.</strong> Amending the pending leg to complete the arb`,
-        `<strong>Completing the arb.</strong> Amended price sent — waiting for Kalshi to fill it`,
+        `<strong>🔧 Amending order.</strong> Moving the price to match the current bid`,
+        `<strong>Price adjustment.</strong> Amending the pending leg to complete the trade`,
+        `<strong>Completing via amend.</strong> Price sent — waiting for Kalshi to fill it`,
         `<strong>🔧 Working on it.</strong> Amend submitted, polling for fill confirmation`,
     ],
     timeout_retry: [
-        `<strong>⏳ Retrying amend.</strong> Didn't fill yet — adjusting to the new bid and trying again`,
+        `<strong>⏳ Retrying amend.</strong> Didn't fill yet — adjusting to the new bid`,
         `<strong>Still on it.</strong> Amend retry in progress — I'll keep going until it fills`,
-        `<strong>Persistence mode.</strong> Order being re-amended to fresh bid — arb must complete`,
+        `<strong>Persistence mode.</strong> Order being re-amended to fresh bid`,
         `<strong>Not giving up.</strong> Re-amending with updated price — this will fill`,
     ],
-    completed: [
-        `<strong>LET'S GO!</strong> Both legs filled — profit locked at settlement 🎉`,
-        `<strong>That's a W.</strong> Clean arb, clean profit. Love to see it 💰`,
-        `<strong>Locked in!</strong> Dual fill confirmed — collecting at settlement`,
-        `<strong>We ate.</strong> Both sides filled, profit secured. Easy money 😎`,
-        `<strong>Arb complete!</strong> Settlement will close this out. Nice trade`,
+    // ── Apex-specific completions ──
+    apex_win: [
+        `<strong>△ APEX WIN!</strong> Both legs filled — profit locked at settlement 🎉`,
+        `<strong>△ That's a W.</strong> Clean Apex fill, clean profit 💰`,
+        `<strong>△ Locked in!</strong> Dual fill confirmed — collecting at settlement`,
+        `<strong>△ We ate.</strong> Apex complete, profit secured. Easy money 😎`,
+        `<strong>△ Apex complete!</strong> Settlement will close this out. Nice trade`,
     ],
+    apex_loss: [
+        `<strong>△ Apex loss.</strong> Both legs filled but fees ate the spread`,
+        `<strong>△ Tough one.</strong> Apex complete at a loss — width was too tight`,
+        `<strong>△ Red fill.</strong> Apex closed negative — on to the next one`,
+    ],
+    // ── Phantom-specific completions ──
+    phantom_win: [
+        `<strong>👻 PHANTOM WIN!</strong> Anchor + hedge locked — profit secured 🎉`,
+        `<strong>👻 Phantom cashed.</strong> Deep anchor paid off — hedge filled clean 💰`,
+        `<strong>👻 That's the play.</strong> Volatility spike → anchor fill → hedge profit`,
+        `<strong>👻 Phantom complete!</strong> Patience rewarded. Love to see it`,
+    ],
+    phantom_loss: [
+        `<strong>👻 Phantom loss.</strong> Hedge didn't cover — small hit, move on`,
+        `<strong>👻 Red phantom.</strong> Anchor filled but hedge cost too much`,
+        `<strong>👻 Tough break.</strong> Phantom cycle closed negative — risk managed`,
+    ],
+    // ── Middle bot completions ──
+    middle_win: [
+        `<strong>⚖️ Middle hit!</strong> Both legs filled — locked profit at settlement`,
+        `<strong>⚖️ Sandwiched.</strong> Middle bot caught both sides — easy money`,
+        `<strong>⚖️ Clean middle.</strong> YES and NO both in, guaranteed profit`,
+    ],
+    middle_loss: [
+        `<strong>⚖️ Middle loss.</strong> One leg expired — taking the hit`,
+        `<strong>⚖️ Incomplete middle.</strong> Only one side filled — settled negative`,
+    ],
+    // ── Straight bet completions ──
+    bet_win: [
+        `<strong>🎯 Bet won!</strong> Called it right — collecting at settlement`,
+        `<strong>🎯 Winner.</strong> Straight bet paid off — nice read`,
+        `<strong>🎯 That's money.</strong> Bet settled in your favor 💰`,
+    ],
+    bet_loss: [
+        `<strong>🎯 Bet lost.</strong> Wrong side — it happens. On to the next`,
+        `<strong>🎯 Tough call.</strong> Bet settled against you — risk was sized right`,
+    ],
+    // ── Generic celebrating (fallback) ──
     celebrating: [
         `<strong>LET'S GO!</strong> Profit locked — love when a plan comes together 🎉`,
         `<strong>That's money.</strong> Another one in the books 💰`,
@@ -6796,11 +6835,16 @@ const botBuddyMessages = {
         `<strong>Bag secured.</strong> That's what we built Meridian for`,
         `<strong>Cash.</strong> Settlement incoming — this one's a wrap 🏆`,
     ],
+    loss_complete: [
+        `<strong>Red close.</strong> Both sides filled but net negative — fees or slippage`,
+        `<strong>Loss locked.</strong> Not every trade hits — discipline means taking the L`,
+        `<strong>Negative fill.</strong> Width wasn't enough — review and adjust`,
+    ],
     flip_triggered: [
-        `<strong>Timeout amend.</strong> Timer ran out — amending to fill and complete the arb 🛡️`,
-        `<strong>Amend exit.</strong> Couldn't fill naturally — completing via bid amend`,
-        `<strong>Clock expired.</strong> Moving to amend exit — this arb will still complete`,
-        `<strong>Timeout path.</strong> Amending the pending leg to settle the arb cleanly`,
+        `<strong>△ Timeout amend.</strong> Timer ran out — amending to fill and complete 🛡️`,
+        `<strong>△ Amend exit.</strong> Couldn't fill naturally — completing via bid amend`,
+        `<strong>Clock expired.</strong> Moving to amend exit — trade will still complete`,
+        `<strong>Timeout path.</strong> Amending the pending leg to settle cleanly`,
     ],
     stop_loss: [
         `<strong>Stop-loss fired.</strong> Hit the limit — exiting to protect the bag`,
@@ -6808,9 +6852,9 @@ const botBuddyMessages = {
         `<strong>Out.</strong> Position stopped. Risk managed, next trade`,
     ],
     take_profit: [
-        `<strong>Cha-ching!</strong> Take-profit hit — locking those gains 🎯`,
-        `<strong>Target hit.</strong> Sold for profit. Discipline pays`,
-        `<strong>TP triggered.</strong> That's why we set targets — secured at the top`,
+        `<strong>🎯 Cha-ching!</strong> Take-profit hit — locking those gains`,
+        `<strong>🎯 Target hit.</strong> Sold for profit. Discipline pays`,
+        `<strong>🎯 TP triggered.</strong> That's why we set targets — secured at the top`,
     ],
     watching: [
         `<strong>Eyes on it</strong> — monitoring your position vs SL/TP levels`,
@@ -6823,7 +6867,7 @@ const botBuddyMessages = {
     ],
     holding: [
         `<strong>Holding steady</strong> — one leg filled, waiting for the other side`,
-        `<strong>Riding it out</strong> — this is normal. Bid moves, arb stays on track`,
+        `<strong>Riding it out</strong> — this is normal. Bid moves, trade stays on track`,
         `<strong>Patient mode.</strong> Timeout amend is the safety net — no rush`,
         `<strong>Sitting tight.</strong> Both orders are working, just need the fill`,
         `<strong>All good.</strong> Plenty of time left — watching for the second leg`,
@@ -6840,20 +6884,26 @@ const botBuddyMessages = {
     ],
     dog_anchored: [
         `<strong>👻 Phantom anchored.</strong> Deep limit posted — waiting for volatility to bite`,
-        `<strong>Anchor set.</strong> Cheap leg in the book — if it fills, I hedge instantly`,
-        `<strong>Patience mode.</strong> Dog is out there — one spike and we hedge the fav`,
-        `<strong>Anchored deep.</strong> Low cost, low risk — let the market come to us`,
+        `<strong>👻 Anchor set.</strong> Cheap leg in the book — if it fills, I hedge instantly`,
+        `<strong>👻 Patience mode.</strong> Phantom is out there — one spike and we hedge`,
+        `<strong>👻 Anchored deep.</strong> Low cost, low risk — let the market come to us`,
     ],
     dog_filled_hedging: [
-        `<strong>⚡ Dog filled!</strong> Posting fav hedge NOW — locking the arb`,
-        `<strong>Volatility bite!</strong> Dog leg eaten — fav going up at current bid`,
-        `<strong>Phase 2.</strong> Dog filled, deploying fav hedge. Don't touch anything`,
-        `<strong>Got the fill!</strong> Hedging immediately — this is what we anchored for`,
+        `<strong>👻 Phantom filled!</strong> Posting fav hedge NOW — locking the spread`,
+        `<strong>👻 Volatility bite!</strong> Anchor eaten — fav going up at current bid`,
+        `<strong>👻 Phase 2.</strong> Anchor filled, deploying fav hedge. Don't touch anything`,
+        `<strong>👻 Got the fill!</strong> Hedging immediately — this is what we anchored for`,
     ],
     anchor_sellback: [
-        `<strong>🛡️ Ceiling breach.</strong> Sold dog back — small loss, risk managed`,
-        `<strong>Hard ceiling hit.</strong> Fav too expensive — sold back the dog leg`,
-        `<strong>Safety net caught it.</strong> Ceiling breached, dog sold. Discipline > hope`,
+        `<strong>👻 Ceiling breach.</strong> Sold anchor back — small loss, risk managed`,
+        `<strong>👻 Hard ceiling hit.</strong> Fav too expensive — sold back the anchor`,
+        `<strong>👻 Safety net caught it.</strong> Ceiling breached, anchor sold. Discipline > hope`,
+    ],
+    // ── Straight bet filled ──
+    bet_filled: [
+        `<strong>🎯 Limit filled!</strong> Your straight bet just got eaten`,
+        `<strong>🎯 Order filled.</strong> Position is live — watching for SL/TP`,
+        `<strong>🎯 In the market.</strong> Bet filled, now we ride`,
     ],
 };
 
@@ -6892,9 +6942,13 @@ function updateBotBuddyMsg(state, force = false) {
     if (idx === lastBuddyMsgIdx && pool.length > 1) idx = (idx + 1) % pool.length;
     lastBuddyMsgIdx = idx;
     const dotColor = state === 'idle' ? '#555' :
-                     state === 'stop_loss' || state === 'near_sl' || state === 'losing' ? '#ffaa33' :
+                     state === 'stop_loss' || state === 'near_sl' || state === 'losing' ||
+                     state === 'apex_loss' || state === 'phantom_loss' || state === 'middle_loss' ||
+                     state === 'bet_loss' || state === 'loss_complete' || state === 'anchor_sellback' ? '#ff4444' :
                      state === 'amending' || state === 'timeout_retry' ? '#ff8800' :
-                     state === 'celebrating' || state === 'take_profit' ? '#ffdd00' : '#00ff88';
+                     state === 'celebrating' || state === 'take_profit' ||
+                     state === 'apex_win' || state === 'phantom_win' || state === 'middle_win' || state === 'bet_win' ? '#ffdd00' :
+                     state === 'dog_filled_hedging' || state === 'bet_filled' ? '#ffaa00' : '#00ff88';
     const dotAnim = state === 'idle' ? 'animation:none;' : '';
     // Fade transition so text doesn't snap
     el.style.transition = 'opacity 0.25s';
@@ -7108,13 +7162,13 @@ function buddyReactToEvent(action) {
 
     if (action.action === 'completed') {
         const pnl = action.profit_cents ?? action.pnl_cents ?? 0;
-        if (pnl >= 0) {
+        if (pnl > 0) {
             setBuddyMood('celebrating');
-            updateBotBuddyMsg('celebrating', true);
+            updateBotBuddyMsg('apex_win', true);
             triggerConfetti();
         } else {
             setBuddyMood('alert');
-            updateBotBuddyMsg('loss_complete', true);
+            updateBotBuddyMsg('apex_loss', true);
         }
         lockThen(12000);
     } else if (action.action === 'flip_yes' || action.action === 'flip_no') {
@@ -7145,19 +7199,18 @@ function buddyReactToEvent(action) {
             updateBotBuddyMsg('holding', true);
         }
     } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
-        // Timeout amend exits complete the arb but aren't natural fills — softer celebration
+        // Timeout amend exits complete the trade but aren't natural fills — softer celebration
         setBuddyMood('happy');
         updateBotBuddyMsg('flip_triggered', true);
         triggerAmendFlash();
         lockThen(8000);
     } else if (action.action === 'timeout_amend_retry') {
-        // Amend didn't fill — retrying next cycle
         setBuddyMood('focused');
         updateBotBuddyMsg('timeout_retry', true);
         lockThen(6000);
     } else if (action.action === 'straight_bet_filled') {
         setBuddyMood('happy');
-        updateBotBuddyMsg('filled', true);
+        updateBotBuddyMsg('bet_filled', true);
         lockThen(8000);
     } else if (action.action === 'reposted') {
         updateBotBuddyMsg('scanning');
@@ -7166,13 +7219,41 @@ function buddyReactToEvent(action) {
         updateBotBuddyMsg('dog_filled_hedging', true);
         lockThen(10000);
     } else if (action.action === 'anchor_complete' || action.action === 'ladder_complete') {
-        setBuddyMood('celebrating');
-        updateBotBuddyMsg('celebrating', true);
+        const pnl = action.profit_cents ?? 0;
+        if (pnl > 0) {
+            setBuddyMood('celebrating');
+            updateBotBuddyMsg('phantom_win', true);
+            triggerConfetti();
+        } else {
+            setBuddyMood('alert');
+            updateBotBuddyMsg('phantom_loss', true);
+        }
         lockThen(12000);
     } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback') {
         setBuddyMood('alert');
         updateBotBuddyMsg('anchor_sellback', true);
         lockThen(8000);
+    } else if (action.action === 'middle_complete') {
+        const pnl = action.profit_cents ?? 0;
+        if (pnl > 0) {
+            setBuddyMood('celebrating');
+            updateBotBuddyMsg('middle_win', true);
+            triggerConfetti();
+        } else {
+            setBuddyMood('alert');
+            updateBotBuddyMsg('middle_loss', true);
+        }
+        lockThen(10000);
+    } else if (action.action === 'bet_settled') {
+        const pnl = action.profit_cents ?? 0;
+        if (pnl > 0) {
+            setBuddyMood('celebrating');
+            updateBotBuddyMsg('bet_win', true);
+        } else {
+            setBuddyMood('alert');
+            updateBotBuddyMsg('bet_loss', true);
+        }
+        lockThen(10000);
     }
 
     updateBuddyStats();
@@ -7333,12 +7414,12 @@ async function monitorBots() {
                     console.log('Bot action:', action);
                     buddyReactToEvent(action);
                     if (action.action === 'completed') {
-                        const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
-                        const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;
-                        if (pnlKey >= 0) {
+                        const netPnl = action.profit_cents ?? action.pnl_cents ?? 0;
+                        const profitStr = netPnl >= 0 ? `+$${(netPnl/100).toFixed(2)}` : `-$${(Math.abs(netPnl)/100).toFixed(2)}`;
+                        if (netPnl > 0) {
                             playArbCompleteSound();
-                            sendPushNotification('💰 ARB COMPLETE!', `${profitStr} profit locked — Meridian`);
-                            showNotification(`✅ ARB COMPLETE! ${profitStr} profit locked`);
+                            sendPushNotification('💰 APEX COMPLETE!', `${profitStr} profit locked — Meridian`);
+                            showNotification(`✅ APEX COMPLETE! ${profitStr} profit locked`);
                         } else {
                             playAmendCompleteSound();
                             sendPushNotification('🔧 FILL LOSS', `${profitStr} — filled at worse price`);
@@ -7375,8 +7456,14 @@ async function monitorBots() {
                         playArbCompleteSound();
                         sendPushNotification('👻 Phantom Filled!', 'Phantom anchor filled — posting fav hedge');
                     } else if (action.action === 'anchor_complete' || action.action === 'ladder_complete') {
-                        // Sound only, no notification (profit_cents was unreliable)
-                        playArbCompleteSound();
+                        const anchorPnl = action.profit_cents ?? 0;
+                        if (anchorPnl > 0) {
+                            playArbCompleteSound();
+                            showNotification(`✅ PHANTOM COMPLETE! +$${(anchorPnl/100).toFixed(2)} profit`);
+                        } else {
+                            playAmendCompleteSound();
+                            showNotification(`🔧 PHANTOM LOSS: -$${(Math.abs(anchorPnl)/100).toFixed(2)}`);
+                        }
                     } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback') {
                         const loss = action.loss_cents ?? 0;
                         const lossStr = `-$${(loss/100).toFixed(2)}`;

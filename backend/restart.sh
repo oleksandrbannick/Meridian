@@ -15,5 +15,14 @@ else
 fi
 nohup "$PYTHON" -u app.py > server.log 2>&1 &
 echo "Server PID: $!"
-nohup "$PROJECT_DIR/bin/cloudflared" tunnel run meridian > cloudflared.log 2>&1 &
+# Use system cloudflared if available, else project-local binary
+if command -v cloudflared &>/dev/null; then
+    CF="cloudflared"
+elif [ -x "$PROJECT_DIR/bin/cloudflared" ]; then
+    CF="$PROJECT_DIR/bin/cloudflared"
+else
+    echo "ERROR: cloudflared not found"
+    exit 1
+fi
+nohup "$CF" tunnel run meridian > cloudflared.log 2>&1 &
 echo "Cloudflared PID: $!"

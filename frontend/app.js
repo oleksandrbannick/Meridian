@@ -887,18 +887,13 @@ function isKalshiLive(market) {
             return isOpen && hoursUntilExp > -0.5 && hoursUntilExp < 120;
         }
         
-        // Tennis: estimate match start from expected_expiration minus ~2.5h match duration.
-        // Only count as "live" if the estimated start has passed.
+        // Tennis: Kalshi sets expiration far ahead (up to 20h) for long matches.
+        // No reliable ESPN live scores for tennis, so use a wide window matching backend.
         const isTennis = /KXATP|KXWTA/i.test(ticker);
         if (isTennis) {
-            // estimated start = expiration - 2.5h (generous for a tennis match)
-            const estStartMs = expTime.getTime() - (2.5 * 60 * 60 * 1000);
-            const hasStarted = now >= estStartMs;
-            if (!hasStarted) return false;
-            // If market is still active + unresolved, it's live regardless of expiration overshoot
             const isActive = market.status === 'active' && (!market.result || market.result === '');
-            // Cap at 4h ahead; only use -0.5h floor if market isn't confirmed active
-            if (hoursUntilExp > 4.0) return false;
+            // Match backend: 20h window. Tennis has no ESPN scores so this is our only signal.
+            if (hoursUntilExp > 20.0) return false;
             if (hoursUntilExp < -0.5 && !isActive) return false;
         } else {
             const isActive = market.status === 'active' && (!market.result || market.result === '');

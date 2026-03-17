@@ -2343,7 +2343,7 @@ def _execute_anchor_fav_hedge(bot_id):
         if fill_at:
             f2h_ms = (time.time() - fill_at) * 1000
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
-            _record_latency('fill_to_hedge_dog', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_dog', 'fav_price': actual_fav_price})
+            _record_latency('fill_to_hedge_phantom', f2h_ms, {'bot_id': bot_id, 'type': 'phantom', 'fav_price': actual_fav_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
 
         # Async: verify actual dog fill price (non-blocking, after hedge is already placed)
@@ -2476,7 +2476,7 @@ def _execute_ladder_fav_hedge(bot_id):
         if fill_at:
             f2h_ms = (time.time() - fill_at) * 1000
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
-            _record_latency('fill_to_hedge_dog', f2h_ms, {'bot_id': bot_id, 'type': 'anchor_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
+            _record_latency('fill_to_hedge_phantom', f2h_ms, {'bot_id': bot_id, 'type': 'phantom_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
 
         # ── THEN cancel unfilled rung orders (lower priority) ──
@@ -4650,7 +4650,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                 if fill_at:
                     f2h_ms = (time.time() - fill_at) * 1000
                     bot['hedge_latency_ms'] = round(f2h_ms, 1)
-                    _record_latency('fill_to_hedge_arb', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_sweep', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
+                    _record_latency('fill_to_hedge_apex', f2h_ms, {'bot_id': bot_id, 'type': 'apex_sweep', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
                     print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
             except Exception as e:
                 print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
@@ -7710,7 +7710,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         if fill_at:
                             f2h_ms = (time.time() - fill_at) * 1000
                             bot['hedge_latency_ms'] = round(f2h_ms, 1)
-                            _record_latency('fill_to_hedge_arb', f2h_ms, {'bot_id': bot_id, 'type': 'ladder_arb_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
+                            _record_latency('fill_to_hedge_apex', f2h_ms, {'bot_id': bot_id, 'type': 'apex_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
                             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
                     except Exception as e:
                         print(f'❌ APEX CONSOLIDATE {bot_id}: hedge placement failed: {e}')
@@ -7838,7 +7838,10 @@ def _handle_ladder_arb(bot_id, bot, actions):
         snap_ready = (unfilled_bid and unfilled_bid > 0 and current_price_for_snap > 0
                       and anchor_for_snap > 0
                       and _arb_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
-        walk_interval = 0 if snap_ready else 20
+        ceiling_ready = (current_price_for_snap > 0 and anchor_for_snap > 0
+                         and anchor_for_snap + current_price_for_snap >= HARD_CEILING_CENTS
+                         and unfilled_bid > current_price_for_snap)
+        walk_interval = 0 if (snap_ready or ceiling_ready) else 20
         last_walk = bot.get('last_walk_at') or first_fill_at or now
         since_walk = now - last_walk
         if since_walk >= walk_interval:

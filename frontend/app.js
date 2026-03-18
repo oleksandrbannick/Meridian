@@ -919,6 +919,25 @@ function isKalshiLive(market) {
             if (diffDays > 1 || diffDays < -1) return false;
         }
 
+        // Cross-check ESPN: Kalshi sometimes sets batch expiration times
+        // (e.g. 8pm UTC for ALL day's games) that fall within the 5-hour
+        // window well before actual tip-off. ESPN is authoritative for
+        // game state when available.
+        const gameId = extractGameId(ticker);
+        const sport = detectSport(ticker);
+        const espnData = getGameScore(gameId, sport);
+        if (espnData) {
+            // ESPN has data — trust it: only live if game is in progress
+            return espnData.state === 'in';
+        }
+        // No ESPN data for this game. For sports ESPN covers (NBA, NCAAB,
+        // NFL, NHL, MLB, MLS, NCAAW), absence means ESPN doesn't list
+        // this game — don't guess from expiration alone.
+        const espnSports = new Set(['NBA','NCAAB','NCAAW','NFL','NHL','MLB','MLS','EPL','UCL']);
+        if (espnSports.has(sport)) return false;
+
+        // For sports ESPN doesn't cover (intl leagues, etc.), the
+        // expiration heuristic is the only signal — trust it.
         return true;
     } catch (e) {
         // Ignore parse errors

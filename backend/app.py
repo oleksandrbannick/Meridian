@@ -4583,27 +4583,17 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
     old_hedge_qty = bot.get('hedge_qty', 0)
     bot['hedge_qty'] = total_qty
     bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
+    old_target = bot.get('_target_hedge_price', new_target)
     bot['_target_hedge_price'] = new_target
 
-    # 2. Price logic: snap to bid if profitable, otherwise target (walk handles upward movement)
-    current_hedge_price = bot.get('hedge_price', 0)
-    ws_data = ws_manager.get_price(bot['ticker'], max_age_s=5) if ws_manager else None
-    unfilled_bid = 0
-    if ws_data:
-        unfilled_bid = ws_data.get(f'{unfilled_side}_bid', 0)
-
+    # 2. Price = new target + walk offset (preserve walk progress, adjust for new avg width)
     hedge_oid = bot.get('hedge_order_id')
     if not hedge_oid:
         return
 
-    # Snap to bid if profitable (same check walk uses)
-    if unfilled_bid > 0 and _arb_snap_check(round(new_avg_price), unfilled_bid, total_qty):
-        amend_price = unfilled_bid
-    else:
-        # Set to new target; if walk already moved price above target, keep walk's price
-        amend_price = max(1, new_target)
-        if current_hedge_price > amend_price:
-            amend_price = current_hedge_price
+    current_hedge_price = bot.get('hedge_price', 0)
+    walk_offset = max(0, current_hedge_price - old_target)
+    amend_price = max(1, new_target + walk_offset)
 
     # 4. DO NOT reset walk timer — walk_start_time / step count preserved
 
@@ -4618,8 +4608,7 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         if amend_price != bot.get('hedge_price'):
             bot['hedge_price'] = amend_price
         print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
-              f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ amend@{amend_price}¢'
-              f'{" SNAP" if unfilled_bid > 0 and amend_price == unfilled_bid else ""}')
+              f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
     except Exception as e:
         print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
 

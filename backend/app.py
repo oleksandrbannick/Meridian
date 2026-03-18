@@ -2908,8 +2908,8 @@ from collections import deque
 _latency_log = {
     'order_place':    deque(maxlen=200),   # ms per create_order call
     'orderbook':      deque(maxlen=200),   # ms per get_market_orderbook call
-    'fill_to_hedge_dog': deque(maxlen=50), # ms from dog fill to hedge posted
-    'fill_to_hedge_arb': deque(maxlen=50), # ms from arb fill to hedge posted
+    'fill_to_hedge_phantom': deque(maxlen=50), # ms from phantom fill to hedge posted
+    'fill_to_hedge_apex':    deque(maxlen=50), # ms from apex fill to hedge posted
     'api_generic':    deque(maxlen=200),   # ms for other API calls
     'api_ping':       deque(maxlen=200),   # ms per live ping (get_balance)
 }

@@ -27,6 +27,101 @@ CORS(app)
 kalshi_client: Optional[KalshiAPI] = None
 stop_loss_percentage = 0.05  # 5% stop loss default
 
+# Cache of last-fetched markets for search tool (populated by /api/markets)
+_markets_cache = {'markets': [], 'ts': 0}
+
+# Team name aliases → ticker codes for natural-language market search
+_TEAM_ALIASES = {
+    # NBA
+    'suns': ['PHX'], 'phoenix suns': ['PHX'], 'lakers': ['LAL'], 'la lakers': ['LAL'],
+    'celtics': ['BOS'], 'boston celtics': ['BOS'], 'warriors': ['GSW'], 'golden state': ['GSW'],
+    'nuggets': ['DEN'], 'denver nuggets': ['DEN'], 'bucks': ['MIL'], 'milwaukee bucks': ['MIL'],
+    'heat': ['MIA'], 'miami heat': ['MIA'], 'sixers': ['PHI'], '76ers': ['PHI'],
+    'knicks': ['NYK'], 'new york knicks': ['NYK'], 'nets': ['BKN'], 'brooklyn nets': ['BKN'],
+    'cavaliers': ['CLE'], 'cavs': ['CLE'], 'bulls': ['CHI'], 'chicago bulls': ['CHI'],
+    'raptors': ['TOR'], 'toronto raptors': ['TOR'], 'pacers': ['IND'], 'indiana pacers': ['IND'],
+    'hawks': ['ATL'], 'atlanta hawks': ['ATL'], 'wizards': ['WAS'], 'washington wizards': ['WAS'],
+    'hornets': ['CHA'], 'charlotte hornets': ['CHA'], 'magic': ['ORL'], 'orlando magic': ['ORL'],
+    'pistons': ['DET'], 'detroit pistons': ['DET'], 'timberwolves': ['MIN'], 'wolves': ['MIN'],
+    'thunder': ['OKC'], 'oklahoma city thunder': ['OKC'], 'clippers': ['LAC'], 'la clippers': ['LAC'],
+    'mavericks': ['DAL'], 'mavs': ['DAL'], 'dallas mavericks': ['DAL'],
+    'rockets': ['HOU'], 'houston rockets': ['HOU'], 'spurs': ['SAS'], 'san antonio spurs': ['SAS'],
+    'grizzlies': ['MEM'], 'memphis grizzlies': ['MEM'], 'pelicans': ['NOP'], 'new orleans pelicans': ['NOP'],
+    'kings': ['SAC'], 'sacramento kings': ['SAC'], 'blazers': ['POR'], 'trail blazers': ['POR'],
+    'jazz': ['UTA'], 'utah jazz': ['UTA'],
+    # NFL
+    'chiefs': ['KC'], 'kansas city chiefs': ['KC'], 'eagles': ['PHI'], 'philadelphia eagles': ['PHI'],
+    'bills': ['BUF'], 'buffalo bills': ['BUF'], '49ers': ['SF'], 'niners': ['SF'],
+    'ravens': ['BAL'], 'baltimore ravens': ['BAL'], 'cowboys': ['DAL'], 'dallas cowboys': ['DAL'],
+    'lions': ['DET'], 'detroit lions': ['DET'], 'dolphins': ['MIA'], 'miami dolphins': ['MIA'],
+    'bengals': ['CIN'], 'cincinnati bengals': ['CIN'], 'steelers': ['PIT'], 'pittsburgh steelers': ['PIT'],
+    'packers': ['GB'], 'green bay packers': ['GB'], 'texans': ['HOU'], 'houston texans': ['HOU'],
+    'chargers': ['LAC'], 'la chargers': ['LAC'], 'broncos': ['DEN'], 'denver broncos': ['DEN'],
+    'bears': ['CHI'], 'chicago bears': ['CHI'], 'seahawks': ['SEA'], 'seattle seahawks': ['SEA'],
+    'vikings': ['MIN'], 'minnesota vikings': ['MIN'], 'commanders': ['WAS'], 'washington commanders': ['WAS'],
+    'jaguars': ['JAX'], 'jacksonville jaguars': ['JAX'], 'raiders': ['LV'], 'las vegas raiders': ['LV'],
+    'colts': ['IND'], 'indianapolis colts': ['IND'], 'falcons': ['ATL'], 'atlanta falcons': ['ATL'],
+    'saints': ['NO'], 'new orleans saints': ['NO'], 'panthers': ['CAR'], 'carolina panthers': ['CAR'],
+    'cardinals': ['ARI'], 'arizona cardinals': ['ARI'], 'giants': ['NYG'], 'new york giants': ['NYG'],
+    'jets': ['NYJ'], 'new york jets': ['NYJ'], 'browns': ['CLE'], 'cleveland browns': ['CLE'],
+    'titans': ['TEN'], 'tennessee titans': ['TEN'], 'patriots': ['NE'], 'new england patriots': ['NE'],
+    'rams': ['LAR'], 'la rams': ['LAR'], 'buccaneers': ['TB'], 'bucs': ['TB'], 'tampa bay': ['TB'],
+    # NHL
+    'bruins': ['BOS'], 'boston bruins': ['BOS'], 'maple leafs': ['TOR'], 'leafs': ['TOR'],
+    'canadiens': ['MTL'], 'habs': ['MTL'], 'red wings': ['DET'],
+    'blackhawks': ['CHI'], 'penguins': ['PIT'], 'pittsburgh penguins': ['PIT'],
+    'rangers': ['NYR'], 'new york rangers': ['NYR'], 'islanders': ['NYI'],
+    'flyers': ['PHI'], 'capitals': ['WAS'], 'lightning': ['TB'], 'tampa bay lightning': ['TB'],
+    'oilers': ['EDM'], 'edmonton oilers': ['EDM'], 'flames': ['CGY'], 'calgary flames': ['CGY'],
+    'canucks': ['VAN'], 'vancouver canucks': ['VAN'], 'avalanche': ['COL'], 'colorado avalanche': ['COL'],
+    'wild': ['MIN'], 'minnesota wild': ['MIN'], 'stars': ['DAL'], 'dallas stars': ['DAL'],
+    'predators': ['NSH'], 'preds': ['NSH'], 'blues': ['STL'], 'st louis blues': ['STL'],
+    'coyotes': ['ARI'], 'kraken': ['SEA'], 'seattle kraken': ['SEA'],
+    'sharks': ['SJ'], 'san jose sharks': ['SJ'], 'ducks': ['ANA'], 'anaheim ducks': ['ANA'],
+    'hurricanes': ['CAR'], 'carolina hurricanes': ['CAR'], 'blue jackets': ['CBJ'],
+    'devils': ['NJ'], 'new jersey devils': ['NJ'], 'sabres': ['BUF'], 'buffalo sabres': ['BUF'],
+    'senators': ['OTT'], 'ottawa senators': ['OTT'], 'panthers': ['FLA'], 'florida panthers': ['FLA'],
+    'golden knights': ['VGK'], 'vegas golden knights': ['VGK'], 'jets': ['WPG'], 'winnipeg jets': ['WPG'],
+    # MLB
+    'yankees': ['NYY'], 'new york yankees': ['NYY'], 'red sox': ['BOS'], 'boston red sox': ['BOS'],
+    'dodgers': ['LAD'], 'la dodgers': ['LAD'], 'mets': ['NYM'], 'new york mets': ['NYM'],
+    'astros': ['HOU'], 'houston astros': ['HOU'], 'braves': ['ATL'], 'atlanta braves': ['ATL'],
+    'phillies': ['PHI'], 'philadelphia phillies': ['PHI'], 'padres': ['SD'], 'san diego padres': ['SD'],
+    'cubs': ['CHC'], 'chicago cubs': ['CHC'], 'white sox': ['CWS'], 'chicago white sox': ['CWS'],
+    'guardians': ['CLE'], 'cleveland guardians': ['CLE'], 'twins': ['MIN'], 'minnesota twins': ['MIN'],
+    'mariners': ['SEA'], 'seattle mariners': ['SEA'], 'orioles': ['BAL'], 'baltimore orioles': ['BAL'],
+    'rays': ['TB'], 'tampa bay rays': ['TB'], 'blue jays': ['TOR'], 'toronto blue jays': ['TOR'],
+    'brewers': ['MIL'], 'milwaukee brewers': ['MIL'], 'reds': ['CIN'], 'cincinnati reds': ['CIN'],
+    'royals': ['KC'], 'kansas city royals': ['KC'], 'tigers': ['DET'], 'detroit tigers': ['DET'],
+    'athletics': ['OAK'], 'as': ['OAK'], 'angels': ['LAA'], 'la angels': ['LAA'],
+    'diamondbacks': ['ARI'], 'dbacks': ['ARI'], 'arizona diamondbacks': ['ARI'],
+    'rockies': ['COL'], 'colorado rockies': ['COL'], 'nationals': ['WAS'], 'washington nationals': ['WAS'],
+    'pirates': ['PIT'], 'pittsburgh pirates': ['PIT'],
+    # NCAAB — major programs
+    'duke': ['DUKE'], 'blue devils': ['DUKE'], 'unc': ['UNC'], 'tar heels': ['UNC'], 'north carolina': ['UNC'],
+    'kentucky': ['UK', 'KENT'], 'wildcats': ['UK', 'KENT', 'ARIZ', 'KSTATE', 'NOVA'],
+    'kansas': ['KU', 'KANS'], 'jayhawks': ['KU', 'KANS'], 'gonzaga': ['GONZ'], 'zags': ['GONZ'],
+    'villanova': ['NOVA'], 'purdue': ['PUR'], 'boilermakers': ['PUR'],
+    'uconn': ['UCONN', 'CONN'], 'huskies': ['UCONN', 'CONN'],
+    'auburn': ['AUB'], 'tigers': ['AUB', 'CLEM', 'LSU', 'MIZ', 'MEM'],
+    'alabama': ['ALA', 'BAMA'], 'crimson tide': ['ALA', 'BAMA'],
+    'houston': ['HOU'], 'cougars': ['HOU', 'BYU'], 'tennessee': ['TENN'], 'volunteers': ['TENN'], 'vols': ['TENN'],
+    'marquette': ['MARQ'], 'golden eagles': ['MARQ'], 'creighton': ['CREI'], 'bluejays': ['CREI'],
+    'baylor': ['BAY'], 'iowa state': ['ISU'], 'cyclones': ['ISU'],
+    'michigan state': ['MSU'], 'spartans': ['MSU'], 'michigan': ['MICH'], 'wolverines': ['MICH'],
+    'florida': ['FLA'], 'gators': ['FLA'], 'texas': ['TEX'], 'longhorns': ['TEX'],
+    'arizona': ['ARIZ'], 'ucla': ['UCLA'], 'oregon': ['ORE'],
+    'st johns': ['STJN'], "st john's": ['STJN'], 'iowa': ['IOWA'], 'hawkeyes': ['IOWA'],
+    'wisconsin': ['WIS'], 'badgers': ['WIS'], 'illinois': ['ILL'], 'fighting illini': ['ILL'],
+    'arkansas': ['ARK'], 'razorbacks': ['ARK'], 'lsu': ['LSU'],
+    'maryland': ['MD'], 'terrapins': ['MD'], 'ohio state': ['OSU'], 'buckeyes': ['OSU'],
+    'clemson': ['CLEM'], 'louisville': ['LOU'], 'pitt': ['PITT'], 'syracuse': ['SYR'],
+    'virginia': ['UVA'], 'cavaliers': ['UVA'], 'wake forest': ['WAKE'],
+    'memphis': ['MEM'], 'xavier': ['XAV'], 'dayton': ['DAY'],
+    'san diego state': ['SDSU'], 'byu': ['BYU'], 'colorado state': ['CSU'],
+    'texas tech': ['TTU'], 'red raiders': ['TTU'], 'tcu': ['TCU'],
+}
+
 
 @app.route('/')
 def index():
@@ -485,11 +580,102 @@ def get_markets():
         if ws_overlaid:
             print(f'📡 Overlaid WS prices on {ws_overlaid}/{len(unique_markets)} markets')
 
+        # Cache markets for search tool
+        _markets_cache['markets'] = unique_markets
+        _markets_cache['ts'] = time.time()
+
         return jsonify({'markets': unique_markets, 'cursor': None})
-    
+
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/markets/search', methods=['GET'])
+def search_markets():
+    """Search markets by team name, sport, or keyword using cached market data."""
+    try:
+        query = request.args.get('q', '').strip().lower()
+        sport = request.args.get('sport', '').strip().lower()
+        limit = int(request.args.get('limit', 20))
+
+        if not query:
+            return jsonify({'error': 'Query parameter q is required'}), 400
+
+        markets = _markets_cache.get('markets', [])
+        if not markets:
+            return jsonify({'markets': [], 'note': 'No cached markets — load the marketplace first'})
+
+        # Expand query via team aliases
+        search_terms = [query]
+        for alias, codes in _TEAM_ALIASES.items():
+            if query == alias or query in alias.split():
+                search_terms.extend(c.lower() for c in codes)
+
+        # Also handle multi-word queries (e.g. "duke vs unc" → search "duke" and "unc")
+        words = re.split(r'\s+(?:vs\.?|@|at|and)\s+', query)
+        if len(words) > 1:
+            for w in words:
+                w = w.strip()
+                if w:
+                    search_terms.append(w)
+                    for alias, codes in _TEAM_ALIASES.items():
+                        if w == alias or w in alias.split():
+                            search_terms.extend(c.lower() for c in codes)
+
+        search_terms = list(set(search_terms))
+
+        # Filter by sport if provided
+        if sport:
+            markets = [m for m in markets
+                       if _detect_sport(m.get('event_ticker') or m.get('ticker', '')) == sport]
+
+        # Score and match markets
+        results = []
+        for m in markets:
+            title = (m.get('title') or '').lower()
+            ticker = (m.get('ticker') or '').lower()
+            event_ticker = (m.get('event_ticker') or '').lower()
+            subtitle = (m.get('subtitle') or '').lower()
+            searchable = f'{title} {ticker} {event_ticker} {subtitle}'
+
+            score = 0
+            for term in search_terms:
+                if term in searchable:
+                    score += 1
+                    # Bonus for title match (more relevant)
+                    if term in title:
+                        score += 1
+
+            if score > 0:
+                results.append((score, m))
+
+        # Sort: highest score first, then by volume
+        results.sort(key=lambda x: (-x[0], -(x[1].get('volume', 0) or 0)))
+
+        matched = [r[1] for r in results[:limit]]
+        # Return compact market info
+        output = []
+        for m in matched:
+            output.append({
+                'ticker': m.get('ticker'),
+                'title': m.get('title') or m.get('event_ticker'),
+                'event_ticker': m.get('event_ticker'),
+                'series_ticker': m.get('series_ticker'),
+                'market_type': m.get('market_type'),
+                'yes_bid': m.get('yes_bid'),
+                'yes_ask': m.get('yes_ask'),
+                'no_bid': m.get('no_bid'),
+                'no_ask': m.get('no_ask'),
+                'volume': m.get('volume'),
+                'status': m.get('status'),
+                'expected_expiration_time': m.get('expected_expiration_time'),
+            })
+
+        return jsonify({'markets': output, 'query': query, 'total': len(output)})
+
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
@@ -4639,7 +4825,6 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
     new_target = round(100 - new_avg_price - new_avg_width)
 
     old_hedge_qty = bot.get('hedge_qty', 0)
-    bot['hedge_qty'] = total_qty
     bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
     old_target = bot.get('_target_hedge_price', new_target)
     bot['_target_hedge_price'] = new_target
@@ -4663,12 +4848,14 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             side=unfilled_side, count=total_qty,
             **amend_kwargs
         )
+        bot['hedge_qty'] = total_qty
         if amend_price != bot.get('hedge_price'):
             bot['hedge_price'] = amend_price
         print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
               f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
     except Exception as e:
         print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
+        bot['hedge_qty'] = old_hedge_qty  # rollback on failure
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
@@ -4882,6 +5069,7 @@ def _execute_ladder_arb_full_completion(bot_id):
             bot['hedge_qty'] = 0
             bot['_hedge_fill_count'] = 0
             bot['_all_hedge_order_ids'] = []
+            bot['_all_placed_order_ids'] = []
             bot['walk_count'] = 0
             for rung in bot.get('rungs', []):
                 rung['completed'] = False
@@ -8426,6 +8614,8 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
+        bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
+        bot['_last_repost_at'] = 0
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
     else:
         bot['status'] = 'stopped'
@@ -11387,6 +11577,15 @@ def cancel_bot(bot_id):
                             kalshi_client.cancel_order(oid)
                         except Exception:
                             pass
+                # Cancel orders from hedge_history (walk-up replacements)
+                for hg in bot.get('hedge_history', []):
+                    for hg_oid in [hg.get('order_id')] + hg.get('order_ids', []):
+                        if hg_oid and hg_oid not in rung_oids:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(hg_oid)
+                            except Exception:
+                                pass
                 # Sell back any filled positions on either side
                 for side in ('yes', 'no'):
                     total_fill = sum(r.get(f'{side}_fill_qty', 0) for r in bot.get('rungs', []))
@@ -13116,6 +13315,18 @@ if __name__ == '__main__':
             }
         },
         {
+            "name": "search_markets",
+            "description": "Search for markets by team name, player name, sport, or keyword. Use this when the user mentions a team or game by name instead of providing an exact ticker. Examples: 'Suns', 'Duke vs UNC', 'NBA spreads', 'next Lakers game'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query — team name, player, or keyword (e.g. 'Suns', 'Duke vs UNC', 'NBA spreads')"},
+                    "sport": {"type": "string", "description": "Optional sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc."}
+                },
+                "required": ["query"]
+            }
+        },
+        {
             "name": "get_pnl",
             "description": "Get P&L dashboard — daily and lifetime profit/loss from trade history.",
             "input_schema": {
@@ -13223,6 +13434,12 @@ if __name__ == '__main__':
             elif tool_name == 'get_market':
                 r = requests.get(f'{base}/market/{tool_input["ticker"]}', timeout=10)
                 return r.json()
+            elif tool_name == 'search_markets':
+                params = {'q': tool_input['query']}
+                if tool_input.get('sport'):
+                    params['sport'] = tool_input['sport']
+                r = requests.get(f'{base}/markets/search', params=params, timeout=10)
+                return r.json()
             elif tool_name == 'get_pnl':
                 r = requests.get(f'{base}/pnl', timeout=10)
                 return r.json()
@@ -13273,6 +13490,8 @@ if __name__ == '__main__':
             'For anchor/dog bots: the dog side is the underdog (lower probability). You post a cheap maker order and hedge on fill.',
             'Prices are always in CENTS (1-99). Count = number of contracts.',
             'IMPORTANT: Always confirm with the user before executing trades or cancellations. State the action, ticker, prices, and count, then proceed.',
+            'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
+            'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
         ]
         if context:
             system_parts.append('\n--- LIVE MERIDIAN STATE ---')
@@ -13292,11 +13511,20 @@ if __name__ == '__main__':
                 if isinstance(pos, dict):
                     pos = pos.get('positions', [])
                 system_parts.append(f"Open positions: {json.dumps(pos[:10], default=str)}")
+            if 'screen' in context:
+                screen = context['screen']
+                system_parts.append(f"User's current view: sport_filter={screen.get('sport_filter','all')}, live_only={screen.get('live_filter',False)}, search='{screen.get('search_query','')}'")
             if 'visible_markets' in context:
                 mkts = context['visible_markets']
                 system_parts.append(f"Markets on screen ({len(mkts)}):")
-                for m in mkts[:10]:
-                    system_parts.append(f"  - {m.get('ticker','?')}: {m.get('title','')} bid={m.get('yes_bid','?')}¢ ask={m.get('yes_ask','?')}¢ vol={m.get('volume','?')}")
+                for m in mkts[:30]:
+                    parts_m = f"  - {m.get('ticker','?')}: {m.get('title','')} bid={m.get('yes_bid','?')}¢ ask={m.get('yes_ask','?')}¢"
+                    if m.get('no_bid') is not None:
+                        parts_m += f" no_bid={m.get('no_bid')}¢ no_ask={m.get('no_ask')}¢"
+                    if m.get('market_type'):
+                        parts_m += f" type={m['market_type']}"
+                    parts_m += f" vol={m.get('volume','?')}"
+                    system_parts.append(parts_m)
             system_parts.append('--- END STATE ---')
         system_prompt = '\n'.join(system_parts)
 

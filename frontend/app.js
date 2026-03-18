@@ -482,6 +482,7 @@ function applyFilters() {
         });
     }
 
+    window._lastFilteredMarkets = filtered;
     displayMarkets(filtered);
 }
 

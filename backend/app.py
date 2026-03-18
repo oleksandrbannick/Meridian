@@ -7692,8 +7692,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
             save_state()
             return
 
-        # Repost stale orders (3 min)
-        REPOST_AFTER_MIN = 3
+        # Repost stale orders (60s — apex needs fresh prices since both sides are at market)
+        REPOST_AFTER_MIN = 1
         age_min = (now - bot.get('posted_at', now)) / 60.0
         if phase == 'live' and age_min >= REPOST_AFTER_MIN and bot.get('filled_yes_qty', 0) == 0 and bot.get('filled_no_qty', 0) == 0:
             # Cancel all, recompute, re-place

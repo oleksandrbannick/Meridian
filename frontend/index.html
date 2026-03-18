@@ -1900,11 +1900,37 @@
                                     cancel_bots_bulk: 'Cancelling bots', close_position: 'Closing position',
                                     scan_arbs: 'Scanning for arbs', scan_middles: 'Scanning middles',
                                     get_orderbook: 'Checking orderbook', get_market: 'Looking up market', search_markets: 'Searching markets',
+                                    get_live_scores: 'Checking scores', get_trade_history: 'Pulling trade history',
+                                    set_alert: 'Setting alert', change_view: 'Updating view',
+                                    get_schedule: 'Checking schedule', analyze_market: 'Analyzing market',
+                                    bulk_deploy: 'Deploying bots', get_leaderboard: 'Checking performance',
                                     get_pnl: 'Checking P&L', get_balance: 'Checking balance',
                                     get_positions: 'Checking positions', get_active_bots: 'Checking bots'
                                 };
                                 const label = actionNames[data.action] || data.action;
                                 fullText += '\n\n`⚡ ' + label + '...`\n\n';
+                            }
+                            else if (data.ui_command) {
+                                // Claude is changing the user's view
+                                const cmd = data.ui_command;
+                                if (cmd.sport_filter && typeof filterBySport === 'function') {
+                                    filterBySport(cmd.sport_filter);
+                                }
+                                if (cmd.live_filter !== undefined && typeof filterBySport === 'function') {
+                                    if ((currentLiveFilter || false) !== cmd.live_filter) {
+                                        filterBySport('live');
+                                    }
+                                }
+                                if (cmd.search_query !== undefined) {
+                                    const searchInput = document.getElementById('search-box');
+                                    if (searchInput) { searchInput.value = cmd.search_query; applyFilters(); }
+                                }
+                            }
+                            else if (data.triggered_alerts) {
+                                // Show triggered alert notifications
+                                for (const a of data.triggered_alerts) {
+                                    fullText += `\n\n**🔔 Alert triggered:** ${a.description || a.ticker} hit ${a.price}¢\n\n`;
+                                }
                             }
                             else if (data.text) fullText += data.text;
                             bubbleEl.innerHTML = renderMd(fullText);
@@ -1943,6 +1969,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260318l"></script>
+    <script src="app.js?v=20260318m"></script>
 </body>
 </html>

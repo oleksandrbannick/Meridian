@@ -2975,7 +2975,7 @@ function initAnchorDogPrices() {
     // Store raw prices for preview calculations
     _anchorDogAsk = dogAsk;
     const spread = dogAsk > 0 ? (dogAsk - _anchorDogBid) : 1;
-    _anchorIsBrokenSpread = spread > 2;
+    _anchorIsBrokenSpread = spread > 1;
     const anchorBase = _anchorIsBrokenSpread ? dogAsk : _anchorDogBid;
 
     // Calculate smart price using current depth setting
@@ -2983,8 +2983,9 @@ function initAnchorDogPrices() {
     const widthSlider = document.getElementById('anchor-target-width');
     const targetWidth = parseInt(widthSlider?.value) || 3;
     let anchorDepth = parseInt(depthSlider?.value) || 0;
-    if (anchorDepth <= 0) {
-        anchorDepth = targetWidth <= 3 ? 5 : Math.max(5, Math.round(targetWidth * 0.8));
+    const isAutoDepth = anchorDepth <= 0;
+    if (isAutoDepth) {
+        anchorDepth = targetWidth <= 3 ? 5 : Math.round(targetWidth * 0.8);
     }
     const smartPrice = Math.max(1, anchorBase - anchorDepth);
 
@@ -3006,9 +3007,10 @@ function initAnchorDogPrices() {
     if (_anchorRungs.length === 0 && anchorBase > 5) {
         _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
     }
-    // Auto-adjust existing rungs to track market
+    // Auto-adjust existing rungs to track market (and update offsets when depth is auto)
     if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
         for (const rung of _anchorRungs) {
+            if (isAutoDepth) rung.offset = anchorDepth;
             const off = rung.offset || anchorDepth;
             rung.price = Math.max(1, anchorBase - off);
         }
@@ -3129,7 +3131,7 @@ function updateAnchorPreview() {
             anchorDepth = 5;
             fav_shave = 0;
         } else {
-            anchorDepth = Math.max(5, Math.round(targetWidth * 0.8));
+            anchorDepth = Math.round(targetWidth * 0.8);
             fav_shave = Math.max(0, targetWidth - anchorDepth);
         }
         if (depthDisplay) depthDisplay.textContent = `auto (${anchorDepth}¢)`;
@@ -3187,8 +3189,8 @@ function updateAnchorPreview() {
 
     // Spread + pricing mode info
     const spreadC = _anchorDogAsk > 0 ? (_anchorDogAsk - _anchorDogBid) : 0;
-    const spreadLabel = spreadC > 2
-        ? `<span style="color:#ff8800;">Broken spread ${spreadC}¢ — priced off ask</span>`
+    const spreadLabel = spreadC > 1
+        ? `<span style="color:#ff8800;">Wide spread ${spreadC}¢ — priced off ask</span>`
         : (spreadC > 0 ? `<span style="color:#00ff88;">Tight spread ${spreadC}¢</span>` : '');
     html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">
         ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge on fill · walk-up to ceiling if slow

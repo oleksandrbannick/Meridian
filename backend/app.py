@@ -11962,7 +11962,6 @@ def _compute_pnl_bucket(trades, category=None):
                 gross_loss += l
                 pnl = p - l
             total_fees += fees
-            pnl -= fees
             # Amended arbs that lost money count as losses, not wins
             if pnl < 0:
                 stopped += 1
@@ -11979,10 +11978,10 @@ def _compute_pnl_bucket(trades, category=None):
             gross_loss   += l
             total_fees += fees
             stopped += 1
-            pnl = p - l - fees
+            pnl = p - l
         sport = t.get('sport', 'Other')
         sport_pnl[sport] = sport_pnl.get(sport, 0) + pnl
-    net_cents = gross_profit - gross_loss - total_fees
+    net_cents = gross_profit - gross_loss
     return {
         'gross_profit_cents': gross_profit,
         'gross_loss_cents':   gross_loss,

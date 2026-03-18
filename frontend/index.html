@@ -1795,12 +1795,16 @@
         };
 
         function renderMd(text) {
-            return text
+            let html = text
                 .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                 .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
                 .replace(/`([^`]+)`/g, '<code>$1</code>')
                 .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
                 .replace(/\n/g, '<br>');
+            // Make tickers clickable — matches KX...-... patterns outside of code blocks
+            html = html.replace(/(?<![<\/\w])(KX[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+(?:-[A-Z0-9]+)*)/g,
+                '<a href="#" onclick="if(typeof scrollToMarket===\'function\')scrollToMarket(\'$1\');return false;" style="color:#00ff88;text-decoration:underline;cursor:pointer;" title="View in marketplace">$1</a>');
+            return html;
         }
 
         // Gather live Meridian state to give Claude context
@@ -2012,6 +2016,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260318o"></script>
+    <script src="app.js?v=20260318p"></script>
 </body>
 </html>

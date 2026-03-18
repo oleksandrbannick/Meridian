@@ -4,6 +4,26 @@ function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 
+// Scroll to a market card in the marketplace and highlight it
+function scrollToMarket(ticker) {
+    // Switch to Markets tab first
+    const marketsTab = document.querySelector('[data-tab="markets"]') || document.getElementById('tab-markets');
+    if (marketsTab) marketsTab.click();
+    setTimeout(() => {
+        const btns = document.querySelectorAll(`button[data-ticker="${ticker}"]`);
+        if (btns.length > 0) {
+            const card = btns[0].closest('[style*="border-radius"]') || btns[0].parentElement?.parentElement?.parentElement;
+            if (card) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const origShadow = card.style.boxShadow;
+                card.style.boxShadow = '0 0 20px rgba(0,255,136,0.5)';
+                card.style.transition = 'box-shadow 0.3s';
+                setTimeout(() => { card.style.boxShadow = origShadow || ''; }, 2500);
+            }
+        }
+    }, 200);
+}
+
 /** Kalshi maker fee in cents: ceil(0.0175 × count × P × (1-P) × 100) */
 function kalshiFeeCents(yesPrice, noPrice, count) {
     const p = yesPrice / 100;
@@ -5736,30 +5756,96 @@ async function loadBots() {
         const arbBtn = document.getElementById('bots-tab-arb');
         if (arbBtn) arbBtn.textContent = `△ APEX${arbBotIds.length > 0 ? ' (' + arbBotIds.length + ')' : ''}`;
 
-        // Render bets (watch bots) list
+        // Render bets (watch bots) list — grouped by game
         const betsList = document.getElementById('bets-bots-list');
         if (betsList) {
             if (betsBotIds.length === 0) {
                 betsList.innerHTML = '<div class="empty-state"><div class="icon">💰</div><div class="title">No active straight bets</div><div class="desc">Place a straight bet from the Markets tab</div></div>';
             } else {
                 betsList.innerHTML = '';
-                for (const botId of betsBotIds) {
+                const betGameGroups = {};
+                betsBotIds.forEach(botId => {
                     const bot = bots[botId];
-                    _renderWatchBotCard(bot, botId, betsList, gameScores);
-                }
+                    const t = bot.ticker || '';
+                    const parts = t.split('-');
+                    const gk = parts.length >= 2 ? parts[1] : parts[0];
+                    if (!betGameGroups[gk]) betGameGroups[gk] = [];
+                    betGameGroups[gk].push(botId);
+                });
+                Object.values(betGameGroups).forEach(ids => ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0)));
+                const sortedBetKeys = Object.keys(betGameGroups).sort((a, b) => {
+                    const fa = Math.min(...betGameGroups[a].map(id => bots[id].created_at || 0));
+                    const fb = Math.min(...betGameGroups[b].map(id => bots[id].created_at || 0));
+                    return fb - fa;
+                });
+                sortedBetKeys.forEach(gk => {
+                    const groupIds = betGameGroups[gk];
+                    const sampleBot = bots[groupIds[0]];
+                    const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+                    const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
+                    const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+                    const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+                    const gs = gameScores[gk] || {};
+                    const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
+                    const header = document.createElement('div');
+                    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00ff88;border-radius:4px;font-size:12px;';
+                    header.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <a href="${kalshiUrl}" target="_blank" style="color:#00ff88;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupName}</a>
+                            ${scoreBadge}
+                        </div>
+                        <span style="color:#555;font-size:10px;">${groupIds.length} bet${groupIds.length > 1 ? 's' : ''}</span>`;
+                    betsList.appendChild(header);
+                    for (const botId of groupIds) {
+                        _renderWatchBotCard(bots[botId], botId, betsList, gameScores);
+                    }
+                });
             }
         }
 
-        // Render middle bots list
+        // Render middle bots list — grouped by game
         if (middleList) {
             if (middleBotIds.length === 0) {
                 middleList.innerHTML = '<div class="empty-state"><div class="icon">↔️</div><div class="title">No active middle bots</div><div class="desc">Open a middle bot from the Middles scanner</div></div>';
             } else {
                 middleList.innerHTML = '';
-                for (const botId of middleBotIds) {
+                const midGameGroups = {};
+                middleBotIds.forEach(botId => {
                     const bot = bots[botId];
-                    _renderMiddleBotCard(bot, botId, middleList, gameScores);
-                }
+                    const t = bot.ticker_a || bot.ticker || '';
+                    const parts = t.split('-');
+                    const gk = parts.length >= 2 ? parts[1] : parts[0];
+                    if (!midGameGroups[gk]) midGameGroups[gk] = [];
+                    midGameGroups[gk].push(botId);
+                });
+                Object.values(midGameGroups).forEach(ids => ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0)));
+                const sortedMidKeys = Object.keys(midGameGroups).sort((a, b) => {
+                    const fa = Math.min(...midGameGroups[a].map(id => bots[id].created_at || 0));
+                    const fb = Math.min(...midGameGroups[b].map(id => bots[id].created_at || 0));
+                    return fb - fa;
+                });
+                sortedMidKeys.forEach(gk => {
+                    const groupIds = midGameGroups[gk];
+                    const sampleBot = bots[groupIds[0]];
+                    const sampleTicker = (sampleBot.ticker_a || sampleBot.ticker || '').toUpperCase();
+                    const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
+                    const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+                    const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+                    const gs = gameScores[gk] || {};
+                    const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
+                    const header = document.createElement('div');
+                    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #60a5fa;border-radius:4px;font-size:12px;';
+                    header.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <a href="${kalshiUrl}" target="_blank" style="color:#60a5fa;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupName}</a>
+                            ${scoreBadge}
+                        </div>
+                        <span style="color:#555;font-size:10px;">${groupIds.length} bot${groupIds.length > 1 ? 's' : ''}</span>`;
+                    middleList.appendChild(header);
+                    for (const botId of groupIds) {
+                        _renderMiddleBotCard(bots[botId], botId, middleList, gameScores);
+                    }
+                });
             }
         }
 
@@ -5787,18 +5873,29 @@ async function loadBots() {
                 });
                 sortedDogGameKeys.forEach(gk => {
                     const groupIds = dogGameGroups[gk];
-                    if (groupIds.length > 1) {
-                        const sampleBot = bots[groupIds[0]];
-                        const groupName = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
-                        const sampleTicker = (sampleBot.ticker || '').toUpperCase();
-                        const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : '📊';
-                        const gs = gameScores[gk] || {};
-                        const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
-                        const header = document.createElement('div');
-                        header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
-                        header.innerHTML = `<span style="color:#ffaa00;font-weight:700;">${sportIcon} ${groupName}</span><span>${scoreBadge} <span style="color:#555;">${groupIds.length} bots</span></span>`;
-                        dogList.appendChild(header);
-                    }
+                    const sampleBot = bots[groupIds[0]];
+                    const groupName = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
+                    const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+                    const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+                    const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+                    const gs = gameScores[gk] || {};
+                    const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
+                    const groupIsLive = groupIds.some(id => bots[id].game_phase === 'live');
+                    const groupPhase = groupIsLive ? '🔴 LIVE' : '⏳ PRE';
+                    const escapedGk = gk.replace(/'/g, "\\'");
+                    const header = document.createElement('div');
+                    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
+                    header.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <a href="${kalshiUrl}" target="_blank" style="color:#ffaa00;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupName}</a>
+                            <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
+                            ${scoreBadge}
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="color:#555;font-size:10px;">${groupIds.length} bot${groupIds.length > 1 ? 's' : ''}</span>
+                            <button onclick="emergencyExitGame('${escapedGk}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;">🚨 Exit</button>
+                        </div>`;
+                    dogList.appendChild(header);
                     for (const botId of groupIds) {
                         _renderDogBotCard(bots[botId], botId, dogList, gameScores);
                     }
@@ -5895,7 +5992,7 @@ async function loadBots() {
             const escapedGameKey = gameKey.replace(/'/g, "\\'");
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <a href="#" onclick="navigateToMarket('${sampleTicker.split('-').slice(0,-1).join('-')}');return false;" style="color:#00aaff;font-weight:700;text-decoration:none;" title="View in Markets tab">${sportIcon} ${groupMatchup}</a>
+                    <a href="https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}" target="_blank" style="color:#00aaff;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupMatchup}</a>
                     <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                     ${groupScoreBadge}
                     ${groupSignalBadge}

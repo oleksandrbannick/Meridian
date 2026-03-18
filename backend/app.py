@@ -732,7 +732,7 @@ def get_markets():
             for m in unique_markets:
                 et = m.get('event_ticker', '')
                 if et in ms_data:
-                    m['milestone_status'] = ms_data[et]
+                    m['milestone_status'] = _get_milestone_status(et)
 
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0

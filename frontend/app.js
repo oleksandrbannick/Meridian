@@ -72,13 +72,18 @@ const _LOGO_CODE_MAP = {
     'LAD': 'lad', 'NYM': 'nym', 'NYY': 'nyy',
 };
 
-function getTeamLogoHtml(code, size = 20) {
+function getTeamLogoHtml(code, size = 20, sportHint = '') {
     if (!code) return '';
     const upper = code.toUpperCase();
-    // Detect sport from ticker context or guess from code membership
+    // Use sport hint if provided, otherwise guess from code membership
     let sport = '';
-    for (const [s, codes] of Object.entries(_ESPN_LOGO_SPORTS)) {
-        if (codes.has(upper)) { sport = s; break; }
+    const hint = sportHint.toLowerCase();
+    if (hint && _ESPN_LOGO_SPORTS[hint] && _ESPN_LOGO_SPORTS[hint].has(upper)) {
+        sport = hint;
+    } else {
+        for (const [s, codes] of Object.entries(_ESPN_LOGO_SPORTS)) {
+            if (codes.has(upper)) { sport = s; break; }
+        }
     }
     if (sport) {
         const espnCode = _LOGO_CODE_MAP[upper] || upper.toLowerCase();
@@ -1646,8 +1651,8 @@ function buildScoreboard(gameScore) {
         // Tennis: show full last name instead of 3-letter code
         const awayLabel = isTennis ? (awayName || awayAbbr) : awayAbbr;
         const homeLabel = isTennis ? (homeName || homeAbbr) : homeAbbr;
-        const awayLg = !isTennis ? getTeamLogoHtml(awayAbbr, 20) : '';
-        const homeLg = !isTennis ? getTeamLogoHtml(homeAbbr, 20) : '';
+        const awayLg = !isTennis ? getTeamLogoHtml(awayAbbr, 20, sport) : '';
+        const homeLg = !isTennis ? getTeamLogoHtml(homeAbbr, 20, sport) : '';
         wrap.innerHTML = `
             ${awayLg} <span style="color:#8892a6;font-size:13px;font-weight:600;">${awayLabel}</span>
             <span style="color:#4a5568;font-size:12px;">vs</span>
@@ -1678,11 +1683,11 @@ function buildScoreboard(gameScore) {
         } else {
             // ── Final: show final score ──
             wrap.innerHTML = `
-                ${getTeamLogoHtml(awayAbbr, 22)} <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
+                ${getTeamLogoHtml(awayAbbr, 22, sport)} <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${awayWon ? '700' : '500'};">${awayAbbr}</span>
                 <span style="color:${awayWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${awayScore}</span>
                 <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
                 <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:20px;font-weight:700;min-width:30px;text-align:center;">${homeScore}</span>
-                ${getTeamLogoHtml(homeAbbr, 22)} <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
+                ${getTeamLogoHtml(homeAbbr, 22, sport)} <span style="color:${homeWon ? '#fff' : '#6a7488'};font-size:14px;font-weight:${homeWon ? '700' : '500'};">${homeAbbr}</span>
                 <span style="color:#2a3447;margin:0 6px;">│</span>
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">${periodLabel || 'Final'}</span>`;
         }
@@ -1715,11 +1720,11 @@ function buildScoreboard(gameScore) {
     } else {
         wrap.innerHTML = `
             <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
-            ${getTeamLogoHtml(awayAbbr, 26)} <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
+            ${getTeamLogoHtml(awayAbbr, 26, sport)} <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${awayAbbr}</span>
             <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${awayScore}</span>
             <span style="color:#4a5568;font-size:18px;margin:0 2px;">–</span>
             <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:26px;font-weight:800;min-width:36px;text-align:center;">${homeScore}</span>
-            ${getTeamLogoHtml(homeAbbr, 26)} <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
+            ${getTeamLogoHtml(homeAbbr, 26, sport)} <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:15px;font-weight:700;">${homeAbbr}</span>
             <span style="color:#2a3447;margin:0 6px;">│</span>
             <span style="color:#00ff88;font-size:12px;font-weight:600;">${clockDisplay}</span>`;
     }

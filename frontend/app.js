@@ -876,13 +876,14 @@ function isKalshiLive(market) {
 
     const ticker = market.event_ticker || market.ticker || '';
 
-    // ── Tennis: Use Kalshi milestone_status (authoritative, from backend cache) ──
+    // ── Tennis: Use Kalshi milestone_status when available, fall back to expiration ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
     if (isTennis) {
         // milestone_status is injected by backend from milestones cache
-        if (market.milestone_status) return market.milestone_status === 'live';
-        // No milestone data — not live (don't guess from expiration)
-        return false;
+        if (market.milestone_status === 'live') return true;
+        if (market.milestone_status === 'ended') return false;
+        // 'not_started' or missing — Kalshi milestones unreliable for ATP,
+        // fall through to expiration-based detection below
     }
 
     const expStr = market.expected_expiration_time;

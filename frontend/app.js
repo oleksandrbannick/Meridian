@@ -2985,7 +2985,7 @@ function initAnchorDogPrices() {
     let anchorDepth = parseInt(depthSlider?.value) || 0;
     const isAutoDepth = anchorDepth <= 0;
     if (isAutoDepth) {
-        anchorDepth = targetWidth <= 3 ? 5 : Math.round(targetWidth * 0.8);
+        anchorDepth = targetWidth <= 3 ? 5 : Math.max(5, Math.round(targetWidth * 0.8));
     }
     const smartPrice = Math.max(1, anchorBase - anchorDepth);
 
@@ -3131,7 +3131,7 @@ function updateAnchorPreview() {
             anchorDepth = 5;
             fav_shave = 0;
         } else {
-            anchorDepth = Math.round(targetWidth * 0.8);
+            anchorDepth = Math.max(5, Math.round(targetWidth * 0.8));
             fav_shave = Math.max(0, targetWidth - anchorDepth);
         }
         if (depthDisplay) depthDisplay.textContent = `auto (${anchorDepth}¢)`;

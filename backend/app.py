@@ -6407,6 +6407,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
             bot['fav_posted_at'] = now
             bot['fav_walk_count'] = 0
             bot['fav_last_walk_at'] = None
+            # Record hedge placement latency (monitor path)
+            dog_fill_at = bot.get('dog_filled_at')
+            if dog_fill_at and not bot.get('hedge_latency_ms'):
+                bot['hedge_latency_ms'] = round((now - dog_fill_at) * 1000, 1)
             if fav_side == 'yes':
                 bot['yes_price'] = actual_fav_price
                 bot['yes_order_id'] = fav_order_id
@@ -7274,7 +7278,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
         # Safety: if no repeats left, cancel orphaned orders and complete
-        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) >= bot.get('repeat_count', 0):
+        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) > bot.get('repeat_count', 0):
             for rung in bot.get('rungs', []):
                 for side in ('yes', 'no'):
                     oid = rung.get(f'{side}_order_id')
@@ -7702,7 +7706,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         fill_at = bot.get('first_fill_at')
                         if fill_at:
                             f2h_ms = (time.time() - fill_at) * 1000
-                            bot['hedge_latency_ms'] = round(f2h_ms, 1)
+                            if not bot.get('hedge_latency_ms'):
+                                bot['hedge_latency_ms'] = round(f2h_ms, 1)
                             _record_latency('fill_to_hedge_apex', f2h_ms, {'bot_id': bot_id, 'type': 'apex_monitor', 'hedge_price': actual_hedge, 'avg_anchor': avg_filled_price})
                             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
                     except Exception as e:
@@ -7840,6 +7845,8 @@ def _handle_ladder_arb(bot_id, bot, actions):
 
         # Walk-up — adaptive interval: 5s when snap is profitable, 20s otherwise
         unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
+        unfilled_ask = bot.get(f'live_{unfilled_side}_ask', 0)
+        wide_spread = unfilled_ask > 0 and (unfilled_ask - unfilled_bid) >= 3
         current_price_for_snap = bot.get('hedge_price', 0)
         anchor_for_snap = bot.get(f'avg_{filled_side}_price', 0)
         rq_for_snap = bot.get('hedge_qty', 1)
@@ -7873,15 +7880,19 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             combined = anchor_price_for_ceiling + current_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
-                                # At ceiling — jump straight to bid
-                                new_price = unfilled_bid
+                                # At ceiling — bid+1 in wide spread to fill faster
+                                new_price = min(unfilled_bid + 1, max_hedge) if wide_spread else unfilled_bid
                             elif (unfilled_bid > current_price
                                   and _arb_snap_check(anchor_price_for_ceiling, unfilled_bid, rq)):
-                                new_price = min(unfilled_bid, max_hedge)
+                                gross = 100 - anchor_price_for_ceiling - unfilled_bid
+                                use_bid_plus = wide_spread and gross >= 5
+                                new_price = min(unfilled_bid + 1, max_hedge) if use_bid_plus else min(unfilled_bid, max_hedge)
                                 print(f'⚡ APEX SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
                                       f'(anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
                             else:
-                                new_price = min(current_price + 1, unfilled_bid, max_hedge)
+                                gross = 100 - anchor_price_for_ceiling - current_price
+                                walk_cap = (unfilled_bid + 1) if (wide_spread and gross >= 5) else unfilled_bid
+                                new_price = min(current_price + 1, walk_cap, max_hedge)
                             # Determine walk type for logging
                             walk_type = 'ceiling_snap' if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price else (
                                 'profit_snap' if unfilled_bid > current_price and _arb_snap_check(anchor_price_for_ceiling, unfilled_bid, rq) else 'normal_walk')
@@ -7981,14 +7992,18 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             combined = rung_anchor + current_price
                             max_hedge = HARD_CEILING_CENTS - rung_anchor
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
-                                new_price = unfilled_bid  # at ceiling — jump to bid
+                                new_price = min(unfilled_bid + 1, max_hedge) if wide_spread else unfilled_bid
                             elif (unfilled_bid > current_price
                                   and _arb_snap_check(rung_anchor, unfilled_bid, rq)):
-                                new_price = min(unfilled_bid, max_hedge)
+                                gross = 100 - rung_anchor - unfilled_bid
+                                use_bid_plus = wide_spread and gross >= 5
+                                new_price = min(unfilled_bid + 1, max_hedge) if use_bid_plus else min(unfilled_bid, max_hedge)
                                 print(f'⚡ APEX SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
                                       f'(anchor={rung_anchor}¢ combined={rung_anchor + new_price}¢)')
                             else:
-                                new_price = min(current_price + 1, unfilled_bid, max_hedge)
+                                gross = 100 - rung_anchor - current_price
+                                walk_cap = (unfilled_bid + 1) if (wide_spread and gross >= 5) else unfilled_bid
+                                new_price = min(current_price + 1, walk_cap, max_hedge)
                             if new_price <= current_price:
                                 continue
                             rung_walk_type = 'ceiling_snap' if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price else (

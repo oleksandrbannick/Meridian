@@ -1898,9 +1898,9 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
 
 def _arb_snap_check(anchor_price, bid_price, qty=1):
     """Return True if snapping to bid is profitable. Simple cents check — no fee math.
-    Uses HARD_CEILING_CENTS as breakeven: snap only if combined is below ceiling."""
+    Snap only if combined <= SNAP_CEILING_CENTS (95¢ = 5¢ minimum profit)."""
     combined = anchor_price + bid_price
-    return combined < HARD_CEILING_CENTS
+    return combined <= SNAP_CEILING_CENTS
 
 # ─── Width-Based Quantity Scaling ────────────────────────────────────────────
 # When deploying multiple widths (ladder-arb), wider spreads are rarer but more
@@ -6849,7 +6849,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 # ANCHOR-DOG MONITOR LOGIC
 # ═══════════════════════════════════════════════════════════════════
 HARD_CEILING_CENTS = 98
-MIN_SNAP_NET_PER_CONTRACT = 3  # jump to bid when arb nets >= 3¢/contract after fees
+SNAP_CEILING_CENTS = 95  # snap to bid only when combined <= 95¢ (5¢ minimum profit)
 
 def _handle_anchor_dog(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""

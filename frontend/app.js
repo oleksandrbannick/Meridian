@@ -5017,14 +5017,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>`;
 
         // Per-rung breakdown (compact, shows width + fill status)
-        const rungRows = rungs.filter(r => {
-            // Only show rungs that have fills on the anchor side (or are completed)
-            return r.completed || (r[`${filledSideKey}_fill_qty`] || 0) > 0;
-        }).map((r, i) => {
+        const rungRows = rungs.map((r, i) => {
             const fill = r[`${filledSideKey}_fill_qty`] || 0;
             const rQty = r.quantity || qtyPer;
             const isCompleted = r.completed;
-            const dimStyle = isCompleted ? 'opacity:0.35;' : '';
+            const isFilled_r = (r[`${filledSideKey}_fill_qty`] || 0) > 0;
+            const dimStyle = isCompleted ? 'opacity:0.35;' : !isFilled_r ? 'opacity:0.4;' : '';
             const anchorPrice = r[`${filledSideKey}_price`] || 0;
             const hedgePriceForRung = isCompleted ? (currentHedgePrice || r[`${hedgeSide}_price`] || 0) : 0;
             const rungTotal = anchorPrice + hedgePriceForRung;
@@ -5035,12 +5033,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ? `<span style="color:${pnlCol};font-size:8px;font-weight:700;">${rungPnl > 0 ? '+' : ''}${rungPnl}¢</span>`
                 : fill >= rQty
                     ? `<span style="color:#ffaa00;font-size:8px;">WAITING</span>`
-                    : `<span style="color:#333;font-size:8px;">—</span>`;
+                    : fill > 0
+                        ? `<span style="color:#ffaa00;font-size:8px;">PARTIAL</span>`
+                        : `<span style="color:#335;font-size:8px;">LIVE</span>`;
             return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:1px 0;${dimStyle}">
                 <span style="color:#ffaa00;font-weight:700;width:22px;">${r.width}¢</span>
                 <span style="color:${filledColor};width:30px;">${filledSideLabel[0]}${anchorPrice}</span>
                 <div style="flex:1;height:3px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${fill >= rQty ? 100 : 0}%;height:100%;background:${fill >= rQty ? filledColor : '#333'};border-radius:2px;"></div>
+                    <div style="width:${fill >= rQty ? 100 : fill > 0 ? Math.round(fill/rQty*100) : 0}%;height:100%;background:${fill >= rQty ? filledColor : fill > 0 ? '#ffaa00' : '#333'};border-radius:2px;${fill >= rQty ? 'box-shadow:0 0 6px ' + filledColor + '66;' : ''}"></div>
                 </div>
                 <span style="color:#555;width:20px;text-align:right;">${fill}/${rQty}</span>
                 ${statusTag}

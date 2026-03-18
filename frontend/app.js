@@ -4859,7 +4859,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const minsLeft = Math.max(0, repostMin - sinceMin).toFixed(1);
                     const repostCt = bot.dog_repost_count || 0;
                     const repostCol = minsLeft <= 0.5 ? '#ff6666' : minsLeft <= 1 ? '#ffaa00' : '#00aaff';
-                    return `<span style="color:${repostCol};">⏱ Repost in ${minsLeft}m${repostCt > 0 ? ` (×${repostCt})` : ''}</span>`;
+                    const repostText = parseFloat(minsLeft) <= 0 ? 'Repost due' : `Repost in ${minsLeft}m`;
+                    return `<span style="color:${repostCol};">⏱ ${repostText}${repostCt > 0 ? ` (×${repostCt})` : ''}</span>`;
                 }
                 if (status === 'fav_hedge_posted') {
                     const hedgeTimeout = bot.hedge_timeout_s || 120;
@@ -9482,6 +9483,16 @@ async function loadTradeHistoryList() {
                             <span style="color:#8892a6;">Closed: <strong style="color:#aaa;">${time}</strong></span>
                             <span style="color:#8892a6;">${date}</span>
                         </div>
+                        ${(() => {
+                            const ids = [
+                                t.yes_order_id && `<span style="color:#00ff88;">Y: ${t.yes_order_id}</span>`,
+                                t.no_order_id && `<span style="color:#ff4444;">N: ${t.no_order_id}</span>`,
+                                t.dog_order_id && `<span style="color:#ffaa00;">Dog: ${t.dog_order_id}</span>`,
+                                t.fav_order_id && `<span style="color:#aa66ff;">Fav: ${t.fav_order_id}</span>`,
+                                t.hedge_order_id && `<span style="color:#00aaff;">Hedge: ${t.hedge_order_id}</span>`,
+                            ].filter(Boolean);
+                            return ids.length ? `<div style="font-size:9px;margin-top:2px;color:#555;word-break:break-all;">${ids.join(' · ')}</div>` : '';
+                        })()}
                         <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;flex-wrap:wrap;">
                             ${isAnchorSellback && t.filled_side && t.avg_fill_price ? `
                                 <span style="color:${t.filled_side==='yes'?'#00ff88':'#ff4444'};">${t.filled_side.toUpperCase()} avg ${t.avg_fill_price}¢</span>

@@ -3336,6 +3336,13 @@ def _record_trade(record: dict, bot: dict = None):
     _enrich_trade_record(record, bot)
     import uuid
     record.setdefault('_trade_id', str(uuid.uuid4()))
+    # Attach order IDs from bot for trade history debugging
+    if bot:
+        record.setdefault('yes_order_id', bot.get('yes_order_id'))
+        record.setdefault('no_order_id', bot.get('no_order_id'))
+        record.setdefault('dog_order_id', bot.get('dog_order_id'))
+        record.setdefault('fav_order_id', bot.get('fav_order_id'))
+        record.setdefault('hedge_order_id', bot.get('hedge_order_id'))
     trade_history.insert(0, record)
     # Crash-safe append — survives server crashes between save_state() calls
     try:
@@ -7034,6 +7041,68 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             if current_dog_bid < lowest:
                 bot['lowest_dog_bid_seen'] = current_dog_bid
                 bot['lowest_dog_bid_at'] = now
+
+        # ── Repost stale rungs to track current bid (mirrors single-phantom repost) ──
+        age_min = (now - bot.get('posted_at', now)) / 60.0
+        DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # 3 min
+        if age_min >= DOG_REPOST_MINUTES and total_fill == 0:
+            anchor_depth = bot.get('anchor_depth', 5)
+            try:
+                api_rate_limiter.wait()
+                ob = kalshi_client.get_market_orderbook(ticker)
+                rp_dog_bid = _best_bid(ob, dog_side)
+                rp_dog_ask = _best_ask(ob, dog_side)
+            except Exception:
+                rp_dog_bid = 0
+                rp_dog_ask = 0
+
+            if rp_dog_bid > 0:
+                # Drift guard: no longer underdog
+                if rp_dog_bid > 50:
+                    for rung in bot.get('rungs', []):
+                        if rung.get('order_id'):
+                            _safe_cancel(rung['order_id'], f'phantom drift {bot_id}')
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    actions.append({'bot_id': bot_id, 'action': 'phantom_ladder_drift_cancel', 'dog_bid': rp_dog_bid})
+                    save_state()
+                    return
+
+                # Smart pricing — same formula as initial placement
+                spread = (rp_dog_ask - rp_dog_bid) if rp_dog_ask > 0 else 1
+                anchor_base = rp_dog_ask if spread > 2 else rp_dog_bid
+                smart_first = max(1, anchor_base - anchor_depth)
+
+                old_first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
+                if abs(smart_first - old_first_price) > 1:
+                    # Cancel + repost all unfilled rungs at new prices
+                    for idx, rung in enumerate(bot.get('rungs', [])):
+                        if rung.get('fill_qty', 0) >= rung['qty']:
+                            continue  # filled, don't touch
+                        new_price = max(1, smart_first - (idx * 2))
+                        old_oid = rung.get('order_id')
+                        if old_oid:
+                            _safe_cancel(old_oid, f'phantom rung repost {bot_id}')
+                        try:
+                            new_resp, actual_price = create_order_maker(
+                                ticker=ticker, side=dog_side, action='buy',
+                                count=rung['qty'], price=new_price
+                            )
+                            new_oid = _extract_order_id(new_resp, f'phantom rung repost {bot_id}')
+                            rung['order_id'] = new_oid
+                            rung['price'] = actual_price
+                        except Exception as e:
+                            print(f'⚠ PHANTOM RUNG REPOST {idx}: {e}')
+
+                    bot['posted_at'] = now
+                    bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
+                    print(f'🔄 PHANTOM REPOST: {bot_id} {old_first_price}¢→{smart_first}¢ '
+                          f'(bid={rp_dog_bid}¢ ask={rp_dog_ask}¢ #{bot["dog_repost_count"]})')
+                    actions.append({'bot_id': bot_id, 'action': 'phantom_rung_repost'})
+                    save_state()
+                    return
+                else:
+                    bot['posted_at'] = now  # reset timer
 
         # All rungs fully filled? → hedge immediately
         if total_fill >= bot['total_dog_qty']:

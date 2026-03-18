@@ -2192,6 +2192,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if order_id in bot.get('_all_hedge_order_ids', []):
             is_hedge_fill = True
             bot['_hedge_fill_count'] = bot.get('_hedge_fill_count', 0) + count
+            hedge_qty = bot.get('hedge_qty', 0)
+            if hedge_qty > 0 and bot['_hedge_fill_count'] > hedge_qty:
+                bot['_hedge_fill_count'] = hedge_qty
             if not bot.get('hedge_fill_at'):
                 bot['hedge_fill_at'] = time.time()
 
@@ -2218,6 +2221,15 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
                 rung[f'{matched_side}_filled_at'] = time.time()
 
+            # Late Fill Protocol: anchor fill arrived after hedge already consolidated
+            if (bot.get('_consolidated') and matched_side == bot.get('first_fill_side')
+                    and not is_hedge_fill):
+                threading.Thread(
+                    target=_handle_late_anchor_fill,
+                    args=(bot_id, bot, matched_rung, count),
+                    daemon=True
+                ).start()
+
         _recompute_ladder_arb_fills(bot)
 
         total_yes = bot['filled_yes_qty']
@@ -2239,12 +2251,18 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             'total_expected': total_expected_per_side,
         })
 
-        if total_yes >= total_expected_per_side and total_no >= total_expected_per_side:
-            # Both sides fully filled — complete!
+        # Check if hedge is fully done (consolidated hedge fills >= hedge_qty)
+        _hedge_fully_done = (bot.get('_consolidated')
+                             and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
+                             and bot.get('hedge_qty', 0) > 0)
+
+        if (total_yes >= total_expected_per_side and total_no >= total_expected_per_side) or _hedge_fully_done:
+            # Both sides fully filled OR hedge fully done — complete!
             if not bot.get('_ws_fill_handling'):
                 bot['_ws_fill_handling'] = True
                 bot_log('LADDER_ARB_BOTH_FILLED', bot_id, {
                     'total_yes': total_yes, 'total_no': total_no,
+                    'hedge_fully_done': _hedge_fully_done,
                     'first_fill_at': bot.get('first_fill_at'),
                     'time_to_complete_s': round(time.time() - bot.get('first_fill_at', time.time()), 1),
                 })
@@ -4285,7 +4303,7 @@ def _recompute_ladder_arb_fills(bot):
             hedge_side = 'no' if filled_side == 'yes' else 'yes'
 
             # Use bot-level hedge fill tracking (not rung-level which caps at qty_per)
-            current_hedge_fills = bot.get('_hedge_fill_count', 0)
+            current_hedge_fills = min(bot.get('_hedge_fill_count', 0), bot.get('hedge_qty', 0) or 999)
             # Completed hedges from previous generations
             history_fills = sum(h.get('fill_qty', 0) for h in bot.get('hedge_history', []))
             # Total REAL hedge fills = current hedge + history
@@ -4539,11 +4557,92 @@ def _cancel_with_retry(oid, max_retries=2):
             return False
 
 
+def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
+    """Late Fill Protocol — recalc weighted avg, amend hedge, preserve walk timer."""
+    filled_side = bot.get('first_fill_side')
+    unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+    qty_per = bot.get('quantity', 1)
+
+    # 1. Recalculate weighted average across ALL filled anchors
+    total_qty = 0
+    total_cost = 0
+    total_width_x_qty = 0
+    for r in bot.get('rungs', []):
+        fq = min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+        if fq > 0:
+            total_qty += fq
+            total_cost += fq * r.get(f'{filled_side}_price', 0)
+            total_width_x_qty += fq * r.get('width', 0)
+    if total_qty <= 0:
+        return
+
+    new_avg_price = total_cost / total_qty
+    new_avg_width = total_width_x_qty / total_qty
+    new_target = round(100 - new_avg_price - new_avg_width)
+
+    old_hedge_qty = bot.get('hedge_qty', 0)
+    bot['hedge_qty'] = total_qty
+    bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
+    bot['_target_hedge_price'] = new_target
+
+    # 2. Check profitability at current bid
+    ws_data = ws_manager.get_price(bot['ticker'], max_age_s=5) if ws_manager else None
+    unfilled_bid = unfilled_ask = 0
+    if ws_data:
+        unfilled_bid = ws_data.get(f'{unfilled_side}_bid', 0)
+        opp = 'no' if unfilled_side == 'yes' else 'yes'
+        opp_bid = ws_data.get(f'{opp}_bid', 0)
+        unfilled_ask = (100 - opp_bid) if opp_bid > 0 else 0
+
+    combined_at_bid = round(new_avg_price) + unfilled_bid
+    is_profitable = unfilled_bid > 0 and combined_at_bid < 100
+
+    hedge_oid = bot.get('hedge_order_id')
+    if not hedge_oid:
+        return
+
+    # 3. Amend price logic:
+    #    - Profitable → snap to bid (or bid+1 if wide spread)
+    #    - Not profitable → set to new target (lower, because wider widths avg down)
+    if is_profitable:
+        spread = (unfilled_ask - unfilled_bid) if unfilled_ask > 0 else 0
+        amend_price = (unfilled_bid + 1) if spread > 3 else unfilled_bid
+        if unfilled_ask > 0 and amend_price >= unfilled_ask:
+            amend_price = unfilled_bid
+    else:
+        # New target is lower because wider widths increase avg_width
+        # Walk continues from this new lower starting position (timer not reset)
+        amend_price = max(1, new_target)
+        # Cap at bid, below ask
+        if unfilled_bid > 0:
+            amend_price = min(amend_price, unfilled_bid)
+        if unfilled_ask > 0 and amend_price >= unfilled_ask:
+            amend_price = max(1, unfilled_bid)
+
+    # 4. DO NOT reset walk timer — walk_start_time / step count preserved
+
+    try:
+        amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
+        api_rate_limiter.wait()
+        kalshi_client.amend_order(
+            hedge_oid, ticker=bot['ticker'],
+            side=unfilled_side, count=total_qty,
+            **amend_kwargs
+        )
+        if amend_price != bot.get('hedge_price'):
+            bot['hedge_price'] = amend_price
+        print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
+              f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ '
+              f'{"SNAP@"+str(amend_price) if is_profitable else "qty-only@"+str(amend_price)}')
+    except Exception as e:
+        print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
+
+
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
     """Spawned from WS fill handler on first anchor fill.
-    Phase 1: IMMEDIATELY cancel all opposite-side orders (prevents unwanted fills)
-    Phase 2: Sleep 1s to accumulate more anchor-side fills
-    Phase 3: Cancel remaining unfilled anchor orders, compute weighted avg, place ONE consolidated hedge"""
+    Phase 1: IMMEDIATELY cancel all opposite-side (hedge-side) orders
+    Phase 2: Compute weighted avg from filled rungs, place ONE consolidated hedge
+    Anchor-side orders stay alive — late fills handled by _handle_late_anchor_fill"""
 
     # ── Phase 1: Immediately cancel opposite-side orders ──
     unfilled_oids = []
@@ -4576,10 +4675,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
 
     print(f'△ APEX SWEEP PHASE1: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
 
-    # ── Phase 2: 1s sweep window — let more anchor fills accumulate ──
-    time.sleep(1.0)
-
-    # ── Phase 3: Cancel remaining anchor orders + compute weighted avg + place consolidated hedge ──
+    # ── Phase 2: Compute weighted avg + place consolidated hedge (no sleep) ──
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
         if not bot:
@@ -4597,8 +4693,6 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
         ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
-
-        print(f'△ APEX SWEEP PHASE3: {bot_id} — 1s elapsed, computing hedge + cancelling remaining')
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)
@@ -4656,7 +4750,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
 
         print(f'📊 WS SWEEP HEDGE: {bot_id} avg_anchor={avg_filled_price}¢ width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ ask={unfilled_ask}¢ placing@{hedge_price}¢ × {total_filled_qty}')
 
-        # ── HEDGE FIRST — gets priority burst token before cancels ──
+        # ── Place hedge immediately — no 1s delay ──
         if hedge_price > 0:
             try:
                 hedge_resp, actual_hedge = create_order_maker(
@@ -4692,27 +4786,8 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             except Exception as e:
                 print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
 
-        # ── THEN cancel remaining orders (lower priority) ──
-        remaining_oids = []
-        for rung in bot.get('rungs', []):
-            for side in ('yes', 'no'):
-                rung_qty_c = rung.get('quantity', qty_per)
-                if rung.get(f'{filled_side}_fill_qty', 0) >= rung_qty_c and side == filled_side:
-                    continue
-                oid = rung.get(f'{side}_order_id')
-                if oid and oid != bot.get('hedge_order_id'):
-                    remaining_oids.append(oid)
-        if remaining_oids:
-            cancel_ok = 0
-            for oid in remaining_oids:
-                if _cancel_with_retry(oid):
-                    cancel_ok += 1
-                # Always clear order_id — if cancel failed, orphan sweeper will catch it
-                for rung in bot.get('rungs', []):
-                    for side in ('yes', 'no'):
-                        if rung.get(f'{side}_order_id') == oid:
-                            rung[f'{side}_order_id'] = None
-            print(f'🔄 WS SWEEP PHASE3: cancelled {cancel_ok}/{len(remaining_oids)} remaining orders')
+        # ── Anchor-side orders stay alive — do NOT cancel them ──
+        # Late fills will be handled by _handle_late_anchor_fill()
 
         bot.pop('_sweep_thread_running', None)
         save_state()

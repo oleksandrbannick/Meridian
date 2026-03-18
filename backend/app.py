@@ -14512,7 +14512,8 @@ if __name__ == '__main__':
             if 'balance' in context:
                 bal = context['balance']
                 if isinstance(bal, dict):
-                    system_parts.append(f"Balance: ${bal.get('balance', 0)/100:.2f}")
+                    # /api/ws/balance already returns dollars (not cents)
+                    system_parts.append(f"Balance: ${bal.get('balance', 0):.2f}")
                 else:
                     system_parts.append(f"Balance: {bal}")
             if 'active_bots' in context:

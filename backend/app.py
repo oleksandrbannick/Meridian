@@ -2998,7 +2998,31 @@ def auto_reset_daily_pnl():
         save_state()
 
 # ─── Bot Config (Upgrades #4, #8) ─────────────────────────────────────────────
-REPOST_AFTER_MINUTES = 3    # Re-post orders that haven't filled after this long
+REPOST_AFTER_MINUTES = 3    # Re-post orders that haven't filled after this long (fallback timer)
+
+
+def _phantom_gap_threshold(bot, current_dog_bid):
+    """Adaptive gap threshold based on recent bid volatility.
+    Calm market (bid moved <3¢ in 60s) → 3¢ gap triggers repost, 15s cooldown
+    Normal (3-8¢ in 60s) → 5¢ gap, 20s cooldown
+    Volatile (>8¢ in 60s) → 8¢ gap, 30s cooldown
+    Returns (gap_threshold, cooldown_seconds)."""
+    bid_history = bot.get('_bid_history', [])
+    now = time.time()
+    bid_history.append((now, current_dog_bid))
+    # Trim to last 60s
+    bid_history = [(t, b) for t, b in bid_history if now - t <= 60]
+    bot['_bid_history'] = bid_history
+    if len(bid_history) < 2:
+        return 3, 15
+    bids = [b for _, b in bid_history]
+    volatility = max(bids) - min(bids)
+    if volatility > 8:
+        return 8, 30
+    elif volatility > 3:
+        return 5, 20
+    else:
+        return 3, 15
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
 # ── Arb Bot Stop-Loss: Flip Threshold ──────────────────────────────────────────
@@ -5225,6 +5249,8 @@ def create_anchor_bot():
             'arb_width':           target_width,
             # Pre-calculated hedge price — ready to fire instantly on dog fill
             '_precalc_hedge_price': _precalc_anchor_hedge(actual_dog_price, target_width, dog_side, quantity),
+            '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
+            '_last_repost_at':     0,
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {
@@ -5395,6 +5421,8 @@ def create_ladder_bot():
                 round(sum(r['price'] * r['qty'] for r in placed_rungs) / total_dog_qty),
                 target_width, dog_side, total_dog_qty
             ),
+            '_bid_at_post': current_dog_bid if current_dog_bid > 0 else 0,
+            '_last_repost_at': 0,
         }
         save_state()
 
@@ -6302,11 +6330,21 @@ def _handle_anchor_dog(bot_id, bot, actions):
             save_state()
             return
 
-        # Repost: if dog order hasn't filled after REPOST_AFTER_MINUTES, readjust
-        # to current market depth (5c below bid/ask depending on spread)
-        # Repost ALSO happens at halftime when unfilled — readjusts for when play resumes
-        DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # same as arb bots (3 min)
-        if age_min >= DOG_REPOST_MINUTES and dog_filled == 0:
+        # Repost: adaptive gap-based (instant when bid drifts) + 3-min timer fallback
+        DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # 3 min fallback
+
+        # Gap detection from WS cache (free, no API call)
+        ws_dog_bid = bot.get(f'live_{dog_side}_bid', 0)
+        gap_thresh, cooldown_s = _phantom_gap_threshold(bot, ws_dog_bid) if ws_dog_bid > 0 else (3, 15)
+        bid_at_post = bot.get('_bid_at_post', 0)
+        gap = abs(ws_dog_bid - bid_at_post) if ws_dog_bid > 0 and bid_at_post > 0 else 0
+        since_last_repost = now - bot.get('_last_repost_at', 0)
+
+        gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
+        timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
+
+        if gap_triggered or timer_triggered:
+            trigger_reason = f'gap={gap}¢≥{gap_thresh}¢' if gap_triggered else f'timer={age_min:.1f}m'
             try:
                 api_rate_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
@@ -6353,6 +6391,8 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 bot['dog_order_id'] = new_order_id
                 bot['dog_price'] = actual_new_price
                 bot['posted_at'] = now
+                bot['_bid_at_post'] = current_dog_bid
+                bot['_last_repost_at'] = now
                 bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
                 # Update compat fields
                 if dog_side == 'yes':
@@ -6363,10 +6403,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     bot['no_price'] = actual_new_price
 
                 print(f'🔄 PHANTOM REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
-                      f'(bid={current_dog_bid}¢ ask={current_dog_ask}¢ repost #{bot["dog_repost_count"]})')
+                      f'({trigger_reason} bid={current_dog_bid}¢ ask={current_dog_ask}¢ #{bot["dog_repost_count"]})')
                 actions.append({'bot_id': bot_id, 'action': 'anchor_dog_repost',
                                 'old_price': old_price, 'new_price': actual_new_price,
-                                'dog_bid': current_dog_bid})
+                                'dog_bid': current_dog_bid, 'trigger': trigger_reason})
                 save_state()
             except Exception as rp_err:
                 print(f'⚠ PHANTOM REPOST {bot_id}: {rp_err}')
@@ -6600,6 +6640,8 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False  # clear so next cycle can hedge
                 bot['_trade_recorded'] = False
+                bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
+                bot['_last_repost_at'] = 0
                 print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total}')
             else:
                 bot['status'] = 'completed'
@@ -6982,6 +7024,9 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 bot['hedge_qty'] = None
                 bot['status'] = 'ladder_posted'
                 bot['posted_at'] = now
+                ws_rp = (ws_manager.get_price(ticker) if ws_manager else None) or {}
+                bot['_bid_at_post'] = ws_rp.get(f'{dog_side}_bid', 0)
+                bot['_last_repost_at'] = 0
                 rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
                 print(f'🔄 PHANTOM LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
                 save_state()
@@ -7042,10 +7087,21 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 bot['lowest_dog_bid_seen'] = current_dog_bid
                 bot['lowest_dog_bid_at'] = now
 
-        # ── Repost stale rungs to track current bid (mirrors single-phantom repost) ──
+        # ── Adaptive gap-based + timer repost for phantom ladder rungs ──
         age_min = (now - bot.get('posted_at', now)) / 60.0
-        DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # 3 min
-        if age_min >= DOG_REPOST_MINUTES and total_fill == 0:
+        DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # 3 min fallback
+
+        # Gap detection from WS bid (free, no API call)
+        gap_thresh, cooldown_s = _phantom_gap_threshold(bot, current_dog_bid) if current_dog_bid > 0 else (3, 15)
+        bid_at_post = bot.get('_bid_at_post', 0)
+        gap = abs(current_dog_bid - bid_at_post) if current_dog_bid > 0 and bid_at_post > 0 else 0
+        since_last_repost = now - bot.get('_last_repost_at', 0)
+
+        gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and total_fill == 0
+        timer_triggered = age_min >= DOG_REPOST_MINUTES and total_fill == 0
+
+        if gap_triggered or timer_triggered:
+            trigger_reason = f'gap={gap}¢≥{gap_thresh}¢' if gap_triggered else f'timer={age_min:.1f}m'
             anchor_depth = bot.get('anchor_depth', 5)
             try:
                 api_rate_limiter.wait()
@@ -7095,10 +7151,12 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                             print(f'⚠ PHANTOM RUNG REPOST {idx}: {e}')
 
                     bot['posted_at'] = now
+                    bot['_bid_at_post'] = rp_dog_bid
+                    bot['_last_repost_at'] = now
                     bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
                     print(f'🔄 PHANTOM REPOST: {bot_id} {old_first_price}¢→{smart_first}¢ '
-                          f'(bid={rp_dog_bid}¢ ask={rp_dog_ask}¢ #{bot["dog_repost_count"]})')
-                    actions.append({'bot_id': bot_id, 'action': 'phantom_rung_repost'})
+                          f'({trigger_reason} bid={rp_dog_bid}¢ ask={rp_dog_ask}¢ #{bot["dog_repost_count"]})')
+                    actions.append({'bot_id': bot_id, 'action': 'phantom_rung_repost', 'trigger': trigger_reason})
                     save_state()
                     return
                 else:

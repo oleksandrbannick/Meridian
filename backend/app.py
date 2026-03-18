@@ -3014,15 +3014,24 @@ def _phantom_gap_threshold(bot, current_dog_bid):
     bid_history = [(t, b) for t, b in bid_history if now - t <= 60]
     bot['_bid_history'] = bid_history
     if len(bid_history) < 2:
+        bot['_volatility'] = 0
+        bot['_market_condition'] = 'calm'
+        bot['_gap_threshold'] = 3
+        bot['_gap_cooldown'] = 15
         return 3, 15
     bids = [b for _, b in bid_history]
     volatility = max(bids) - min(bids)
     if volatility > 8:
-        return 8, 30
+        thresh, cd, cond = 8, 30, 'volatile'
     elif volatility > 3:
-        return 5, 20
+        thresh, cd, cond = 5, 20, 'normal'
     else:
-        return 3, 15
+        thresh, cd, cond = 3, 15, 'calm'
+    bot['_volatility'] = volatility
+    bot['_market_condition'] = cond
+    bot['_gap_threshold'] = thresh
+    bot['_gap_cooldown'] = cd
+    return thresh, cd
 STALE_CANCEL_MINUTES = 10   # Resize to matched fills after this long
 
 # ── Arb Bot Stop-Loss: Flip Threshold ──────────────────────────────────────────

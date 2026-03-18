@@ -4853,14 +4853,40 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${(() => { const lat = bot.hedge_latency_ms != null ? bot.hedge_latency_ms : bot.hedge_fill_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
+                    const repostCt = bot.dog_repost_count || 0;
+                    const dogSide = bot.dog_side || 'no';
+                    const wsBid = bot[`live_${dogSide}_bid`] || 0;
+                    const bidAtPost = bot._bid_at_post || 0;
+                    const gap = wsBid > 0 && bidAtPost > 0 ? Math.abs(wsBid - bidAtPost) : 0;
+                    const gapThresh = bot._gap_threshold || 3;
+                    const cond = bot._market_condition || 'calm';
+                    const cooldown = bot._gap_cooldown || 15;
+                    const lastRepost = bot._last_repost_at || 0;
+                    const sinceRepost = lastRepost > 0 ? Date.now()/1000 - lastRepost : 999;
+                    const cdLeft = Math.max(0, Math.ceil(cooldown - sinceRepost));
+
+                    // Market condition colors
+                    const condCol = cond === 'volatile' ? '#ff4444' : cond === 'normal' ? '#ffaa00' : '#00aaff';
+                    const condLabel = cond === 'volatile' ? '🔴 VOLATILE' : cond === 'normal' ? '🟡 NORMAL' : '🔵 CALM';
+
+                    // Gap fill ratio for visual
+                    const gapPct = Math.min(100, Math.round((gap / gapThresh) * 100));
+                    const gapCol = gapPct >= 100 ? '#ff4444' : gapPct >= 60 ? '#ffaa00' : '#555';
+
+                    // Cooldown or ready
+                    const cdText = cdLeft > 0 && sinceRepost < cooldown ? `⏱ ${cdLeft}s` : '';
+
+                    // Fallback timer
                     const repostMin = 3;
                     const postedAt = bot.posted_at || bot.created_at || 0;
                     const sinceMin = postedAt > 0 ? (Date.now()/1000 - postedAt) / 60 : 0;
                     const minsLeft = Math.max(0, repostMin - sinceMin).toFixed(1);
-                    const repostCt = bot.dog_repost_count || 0;
-                    const repostCol = minsLeft <= 0.5 ? '#ff6666' : minsLeft <= 1 ? '#ffaa00' : '#00aaff';
-                    const repostText = parseFloat(minsLeft) <= 0 ? 'Repost due' : `Repost in ${minsLeft}m`;
-                    return `<span style="color:${repostCol};">⏱ ${repostText}${repostCt > 0 ? ` (×${repostCt})` : ''}</span>`;
+
+                    return `<span style="color:${condCol};font-size:10px;font-weight:600;">${condLabel}</span> `
+                         + `<span style="color:${gapCol};">Gap: ${gap}¢/${gapThresh}¢</span> `
+                         + (cdText ? `<span style="color:#aa66ff;">${cdText}</span> ` : '')
+                         + `<span style="color:#555;font-size:9px;">${parseFloat(minsLeft) <= 0 ? '⏱ 3m✓' : `⏱ ${minsLeft}m`}</span>`
+                         + (repostCt > 0 ? ` <span style="color:#888;font-size:9px;">(×${repostCt})</span>` : '');
                 }
                 if (status === 'fav_hedge_posted') {
                     const hedgeTimeout = bot.hedge_timeout_s || 120;

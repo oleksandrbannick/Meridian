@@ -7853,10 +7853,11 @@ def _handle_ladder_arb(bot_id, bot, actions):
         snap_ready = (unfilled_bid and unfilled_bid > 0 and current_price_for_snap > 0
                       and anchor_for_snap > 0
                       and _arb_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
-        ceiling_ready = (current_price_for_snap > 0 and anchor_for_snap > 0
-                         and anchor_for_snap + current_price_for_snap >= HARD_CEILING_CENTS
-                         and unfilled_bid > current_price_for_snap)
-        walk_interval = 0 if (snap_ready or ceiling_ready) else 20
+        at_ceiling = (current_price_for_snap > 0 and anchor_for_snap > 0
+                      and anchor_for_snap + current_price_for_snap >= HARD_CEILING_CENTS)
+        ceiling_ready = at_ceiling and unfilled_bid > current_price_for_snap
+        # At ceiling: instant snap when bid moved up, 3s poll otherwise. Normal: 20s walk.
+        walk_interval = 0 if (snap_ready or ceiling_ready) else (3 if at_ceiling else 20)
         last_walk = bot.get('last_walk_at') or first_fill_at or now
         since_walk = now - last_walk
         if since_walk >= walk_interval:

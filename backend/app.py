@@ -8042,34 +8042,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
         if not bot.get('first_fill_at'):
             bot['first_fill_at'] = now
 
-        # ── SWEEP CHECK: wait 1s after first fill, then cancel ALL remaining orders ──
-        if bot.get('_sweep_at'):
-            sweep_elapsed = now - bot['_sweep_at']
-            if sweep_elapsed < 1.0:
-                # Still within sweep window — wait for more fills to accumulate
-                return
-            # Sweep done — cancel ALL remaining unfilled orders on ALL rungs
-            anchor_side = bot.get('first_fill_side', filled_side)
-            print(f'⚡ SWEEP DONE: {bot_id} — {sweep_elapsed:.1f}s elapsed, cancelling all remaining orders')
-            for rung in bot.get('rungs', []):
-                for side in ('yes', 'no'):
-                    # Only skip if rung is already fully filled — partial fills still need cancelling
-                    rung_qty_c = rung.get('quantity', qty_per)
-                    if rung.get(f'{anchor_side}_fill_qty', 0) >= rung_qty_c and side == anchor_side:
-                        continue
-                    oid = rung.get(f'{side}_order_id')
-                    if oid:
-                        try:
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
-                        rung[f'{side}_order_id'] = None
-            del bot['_sweep_at']
-            # Recompute fills after cancellation (some may have snuck in during sweep)
-            _recompute_ladder_arb_fills(bot)
-            # Fall through to consolidation below
-
-        # ── Consolidate: cancel all unfilled-side rung orders, place ONE hedge ──
+        # ── Consolidate: cancel unfilled-side rung orders, place ONE hedge ──
         # Skip if sweep thread is still running (it will do the cancel+hedge)
         if bot.get('_sweep_thread_running'):
             save_state()
@@ -10222,13 +10195,14 @@ def _run_monitor():
                         save_state()
                     else:
                         # Neither leg filled — check for stale repost
-                        # Repost if: order is old enough AND current bid has drifted
-                        # (price moved away from target, repost chases it to stay in queue)
-                        # NEVER repost once one leg is filled — that would violate the spread
-                        MIDDLE_REPOST_MINUTES = 8
-                        last_post_time = bot.get('last_repost_at') or bot.get('placed_at') or bot.get('created_at', now_m)
-                        age_since_post = (now_m - last_post_time) / 60
-                        if age_since_post >= MIDDLE_REPOST_MINUTES:
+                        # Distance-based resize: check every 5s via WS cache (free),
+                        # only cancel+replace if NO bid drifted ≥3¢ from posted price.
+                        # NEVER repost once one leg is filled — that would violate the spread.
+                        MIDDLE_GAP_THRESHOLD = 3  # cents
+                        MIDDLE_POLL_S = 5
+                        last_gap_check = bot.get('_last_gap_check', 0)
+                        if now_m - last_gap_check >= MIDDLE_POLL_S:
+                            bot['_last_gap_check'] = now_m
                             reposted = False
                             for leg, order_key, ticker_key, price_key in [
                                 ('a', 'order_a_id', 'ticker_a', 'target_price_a'),
@@ -10240,50 +10214,43 @@ def _run_monitor():
                                 if not ticker_lr or not old_order_id:
                                     continue
                                 try:
-                                    # Get current market bid
+                                    # Check WS cache first (free, no API call)
                                     cur_bid_lr = 0
                                     ws_p_lr = ws_manager.get_price(ticker_lr) if ws_manager else None
                                     if ws_p_lr:
                                         cur_bid_lr = ws_p_lr.get('no_bid', 0) or 0
                                     if not cur_bid_lr:
+                                        continue  # no WS data, skip (don't burn API call)
+                                    gap = abs(cur_bid_lr - cur_target)
+                                    if gap < MIDDLE_GAP_THRESHOLD:
+                                        continue  # within tolerance, don't touch
+                                    # Gap ≥ 3¢ — cancel and replace at current bid
+                                    new_price = max(1, min(90, cur_bid_lr))
+                                    try:
                                         api_rate_limiter.wait()
-                                        mkt_lr = kalshi_client.get_market(ticker_lr)
-                                        mkt_lr_data = mkt_lr.get('market', mkt_lr)
-                                        nb_d = mkt_lr_data.get('no_bid_dollars')
-                                        cur_bid_lr = round(float(nb_d) * 100) if nb_d else mkt_lr_data.get('no_bid', 0)
-                                    if cur_bid_lr <= 0:
-                                        continue  # market dead / game over
-                                    # Only repost if bid has moved away from target by >2¢
-                                    # (bid dropped below our order — it's buried and won't fill)
-                                    if cur_bid_lr < cur_target - 2:
-                                        new_price = max(1, min(90, cur_bid_lr))  # repost at bid
-                                        # Cancel old order
-                                        try:
-                                            api_rate_limiter.wait()
-                                            kalshi_client.cancel_order(old_order_id)
-                                        except Exception:
-                                            pass  # may already be cancelled
-                                        # Place new order at current bid
-                                        api_rate_limiter.wait()
-                                        new_resp = kalshi_client.create_order(
-                                            ticker=ticker_lr, side='no', action='buy',
-                                            count=qty_m, no_price=new_price, post_only=True
-                                        )
-                                        new_order_id = _extract_order_id(new_resp, f'middle repost {bot_id} leg {leg}')
-                                        if not new_order_id:
-                                            continue
-                                        bot[order_key] = new_order_id
-                                        bot[price_key] = new_price
-                                        if leg == 'a':
-                                            bot['target_price'] = new_price  # keep legacy field in sync
-                                        reposted = True
-                                        bot_log('MIDDLE_REPOST', bot_id, {
-                                            'leg': leg, 'old_target': cur_target,
-                                            'new_price': new_price, 'cur_bid': cur_bid_lr,
-                                        })
-                                        print(f'📐 MIDDLE REPOST leg {leg}: {bot_id} {cur_target}¢→{new_price}¢ (bid {cur_bid_lr}¢)')
+                                        kalshi_client.cancel_order(old_order_id)
+                                    except Exception:
+                                        pass
+                                    api_rate_limiter.wait()
+                                    new_resp = kalshi_client.create_order(
+                                        ticker=ticker_lr, side='no', action='buy',
+                                        count=qty_m, no_price=new_price, post_only=True
+                                    )
+                                    new_order_id = _extract_order_id(new_resp, f'middle resize {bot_id} leg {leg}')
+                                    if not new_order_id:
+                                        continue
+                                    bot[order_key] = new_order_id
+                                    bot[price_key] = new_price
+                                    if leg == 'a':
+                                        bot['target_price'] = new_price
+                                    reposted = True
+                                    bot_log('MIDDLE_RESIZE', bot_id, {
+                                        'leg': leg, 'old_target': cur_target,
+                                        'new_price': new_price, 'cur_bid': cur_bid_lr, 'gap': gap,
+                                    })
+                                    print(f'📐 MIDDLE RESIZE leg {leg}: {bot_id} {cur_target}¢→{new_price}¢ (bid={cur_bid_lr}¢ gap={gap}¢)')
                                 except Exception as rp_err:
-                                    bot_log('ERROR', bot_id, {'step': f'middle_repost_{leg}', 'error': str(rp_err)}, level='WARN')
+                                    bot_log('ERROR', bot_id, {'step': f'middle_resize_{leg}', 'error': str(rp_err)}, level='WARN')
                             if reposted:
                                 bot['last_repost_at'] = now_m
                                 bot['repost_count'] = bot.get('repost_count', 0) + 1

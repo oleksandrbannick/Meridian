@@ -13493,13 +13493,19 @@ def watch_position():
         return jsonify({'error': str(e)}), 500
 
 
-if __name__ == '__main__':
+_startup_done = False
+
+def _run_startup():
+    """Initialize state, auto-login, connect WS — works for both python3 app.py and gunicorn."""
+    global kalshi_client, _startup_done
+    if _startup_done:
+        return
+    _startup_done = True
+
     load_state()
     run_migrations()
 
     # ── Auto-login at startup if config.json exists ──
-    # This ensures bots are monitored immediately after a restart,
-    # without waiting for the frontend to call /api/auto-login.
     try:
         config_path = os.path.join(os.path.dirname(__file__), 'config.json')
         if os.path.exists(config_path):
@@ -13547,6 +13553,14 @@ if __name__ == '__main__':
                 print('⚠ config.json found but missing api_key_id or private key — skipping auto-login')
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
+
+    # Start notification monitor thread
+    _start_notification_thread()
+
+# Run startup for both gunicorn (import-time) and python3 app.py
+_run_startup()
+
+if __name__ == '__main__':
 
     # ── Claude Chat: Tool definitions ────────────────────────────────────────
     CLAUDE_TOOLS = [
@@ -14623,8 +14637,5 @@ if __name__ == '__main__':
 
         return Response(stream_with_context(generate()), mimetype='text/event-stream',
                         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-
-    # Start notification monitor thread (alerts, watchlist, smart cancel)
-    _start_notification_thread()
 
     app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

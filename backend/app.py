@@ -13560,1082 +13560,1081 @@ def _run_startup():
 # Run startup for both gunicorn (import-time) and python3 app.py
 _run_startup()
 
-if __name__ == '__main__':
-
-    # ── Claude Chat: Tool definitions ────────────────────────────────────────
-    CLAUDE_TOOLS = [
-        {
-            "name": "place_bet",
-            "description": "Place a straight limit-order bet on a Kalshi market. Optionally attach a watch-bot for stop-loss/take-profit.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker, e.g. KXMLB-25MAR17-NYY-BOS-NY"},
-                    "side": {"type": "string", "enum": ["yes", "no"], "description": "Side to buy"},
-                    "price": {"type": "integer", "description": "Limit price in cents (1-99)"},
-                    "count": {"type": "integer", "description": "Number of contracts"},
-                    "stop_loss": {"type": "integer", "description": "Optional stop-loss price in cents"},
-                    "take_profit": {"type": "integer", "description": "Optional take-profit price in cents"}
-                },
-                "required": ["ticker", "side", "price", "count"]
-            }
-        },
-        {
-            "name": "create_arb_bot",
-            "description": "Create a dual arb bot: simultaneously place YES and NO limit orders on a market to capture the spread.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"},
-                    "yes_price": {"type": "integer", "description": "YES buy price in cents"},
-                    "no_price": {"type": "integer", "description": "NO buy price in cents"},
-                    "count": {"type": "integer", "description": "Contracts per side"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 300)"}
-                },
-                "required": ["ticker", "yes_price", "no_price", "count"]
-            }
-        },
-        {
-            "name": "create_ladder_arb",
-            "description": "Create an Apex bot — multi-width arb with multiple rungs at different YES/NO price widths. Places both sides simultaneously and hedges on fill.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"},
-                    "widths": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "yes_price": {"type": "integer"},
-                                "no_price": {"type": "integer"},
-                                "count": {"type": "integer"}
-                            },
-                            "required": ["yes_price", "no_price", "count"]
-                        },
-                        "description": "Array of {yes_price, no_price, count} rungs"
-                    },
-                    "timeout": {"type": "integer", "description": "Timeout in seconds"}
-                },
-                "required": ["ticker", "widths"]
-            }
-        },
-        {
-            "name": "create_anchor_dog",
-            "description": "Create a Phantom bot — posts a stealth maker order on the underdog side, instantly hedges at the favorite bid on fill.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"},
-                    "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "Which side is the underdog"},
-                    "dog_price": {"type": "integer", "description": "Maker price for dog side in cents"},
-                    "count": {"type": "integer", "description": "Number of contracts"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds"}
-                },
-                "required": ["ticker", "dog_side", "dog_price", "count"]
-            }
-        },
-        {
-            "name": "create_anchor_ladder",
-            "description": "Create a Phantom Ladder bot — multi-rung stealth anchor with multiple price levels, hedges on fill.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"},
-                    "dog_side": {"type": "string", "enum": ["yes", "no"]},
-                    "rungs": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "dog_price": {"type": "integer"},
-                                "count": {"type": "integer"}
-                            },
-                            "required": ["dog_price", "count"]
-                        }
-                    },
-                    "timeout": {"type": "integer"}
-                },
-                "required": ["ticker", "dog_side", "rungs"]
-            }
-        },
-        {
-            "name": "cancel_bot",
-            "description": "Cancel a specific bot by ID. Filled positions will be sold at market.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "bot_id": {"type": "string", "description": "Bot ID to cancel"}
-                },
-                "required": ["bot_id"]
-            }
-        },
-        {
-            "name": "cancel_bots_bulk",
-            "description": "Cancel multiple bots at once.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "bot_ids": {"type": "array", "items": {"type": "string"}, "description": "List of bot IDs to cancel"}
-                },
-                "required": ["bot_ids"]
-            }
-        },
-        {
-            "name": "close_position",
-            "description": "Emergency-close a position by selling at market bid.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"},
-                    "side": {"type": "string", "enum": ["yes", "no"]},
-                    "count": {"type": "integer", "description": "Number of contracts to sell"}
-                },
-                "required": ["ticker", "side", "count"]
-            }
-        },
-        {
-            "name": "scan_arbs",
-            "description": "Scan markets for current arbitrage opportunities. Returns list of markets where YES+NO prices sum to less than 100.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            }
-        },
-        {
-            "name": "scan_middles",
-            "description": "Scan for middle opportunities across spread markets.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            }
-        },
-        {
-            "name": "get_orderbook",
-            "description": "Get the full orderbook (bids and asks) for a specific market.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"}
-                },
-                "required": ["ticker"]
-            }
-        },
-        {
-            "name": "get_market",
-            "description": "Get detailed info about a specific market (prices, volume, status, event details).",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker"}
-                },
-                "required": ["ticker"]
-            }
-        },
-        {
-            "name": "search_markets",
-            "description": "Search for markets by team name, player name, sport, or keyword. Use this when the user mentions a team or game by name instead of providing an exact ticker. Examples: 'Suns', 'Duke vs UNC', 'NBA spreads', 'next Lakers game'.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query — team name, player, or keyword (e.g. 'Suns', 'Duke vs UNC', 'NBA spreads')"},
-                    "sport": {"type": "string", "description": "Optional sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc."}
-                },
-                "required": ["query"]
-            }
-        },
-        {
-            "name": "get_pnl",
-            "description": "Get P&L dashboard — daily and lifetime profit/loss from trade history.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            }
-        },
-        {
-            "name": "get_balance",
-            "description": "Get current account balance and portfolio value.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            }
-        },
-        {
-            "name": "get_positions",
-            "description": "Get all current open positions with live market data.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            }
-        },
-        {
-            "name": "get_active_bots",
-            "description": "Get all bots with their current status, P&L, and market data.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            }
-        },
-        # ── NEW TOOLS ────────────────────────────────────────────────
-        {
-            "name": "get_live_scores",
-            "description": "Get live scores for a specific team or sport. Use when the user asks about game scores, what's happening in a game, or current game status.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Team name or keyword to search (e.g. 'Suns', 'Duke', 'Lakers')"},
-                    "sport": {"type": "string", "description": "Sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc. Helps narrow results."}
-                },
-                "required": ["query"]
-            }
-        },
-        {
-            "name": "get_trade_history",
-            "description": "Get trade history with optional filters. Shows past trades with results, P&L, sport, and timestamps.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "sport": {"type": "string", "description": "Filter by sport: nba, ncaab, nfl, etc."},
-                    "date": {"type": "string", "description": "Filter by date (YYYY-MM-DD). Defaults to today."},
-                    "category": {"type": "string", "description": "Filter by bot type: arb, bet, middle, anchor_dog, anchor_ladder"},
-                    "limit": {"type": "integer", "description": "Max results (default 20)"}
-                },
-            }
-        },
-        {
-            "name": "set_alert",
-            "description": "Set a price alert on a market. You'll be notified when the condition is met. Use search_markets first to find the ticker.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker to watch"},
-                    "side": {"type": "string", "enum": ["yes", "no"], "description": "Which side's price to watch"},
-                    "condition": {"type": "string", "enum": ["above", "below"], "description": "Trigger when price goes above or below target"},
-                    "price": {"type": "integer", "description": "Target price in cents (1-99)"},
-                    "description": {"type": "string", "description": "Human-readable description of what this alert is for"}
-                },
-                "required": ["ticker", "side", "condition", "price"]
-            }
-        },
-        {
-            "name": "change_view",
-            "description": "Change what the user sees on the marketplace. Can switch sport filter, toggle live-only mode, or set a search query. The UI updates immediately.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "sport_filter": {"type": "string", "description": "Sport to filter: all, nba, ncaab, ncaaw, nfl, nhl, mlb, mls, soccer, tennis, golf, intl, other"},
-                    "live_filter": {"type": "boolean", "description": "True = show only live games, False = show all"},
-                    "search_query": {"type": "string", "description": "Text to put in the search box (empty string to clear)"}
-                },
-            }
-        },
-        {
-            "name": "get_schedule",
-            "description": "Get today's game schedule — upcoming, in-progress, and completed games with start times.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "sport": {"type": "string", "description": "Sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc. Omit for all sports."}
-                },
-            }
-        },
-        {
-            "name": "analyze_market",
-            "description": "Deep analysis of a specific market — prices, orderbook depth, line movement from opening, game context, and edge assessment. Use search_markets first to find the ticker.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Market ticker to analyze"}
-                },
-                "required": ["ticker"]
-            }
-        },
-        {
-            "name": "bulk_deploy",
-            "description": "Deploy bots across multiple markets matching criteria. ALWAYS list target markets and get user confirmation before deploying.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "bot_type": {"type": "string", "enum": ["arb", "phantom", "apex"], "description": "Type of bot to deploy"},
-                    "sport": {"type": "string", "description": "Sport filter for target markets"},
-                    "market_type": {"type": "string", "enum": ["winner", "spread", "total"], "description": "Market type filter"},
-                    "live_only": {"type": "boolean", "description": "Only deploy on live games (default true)"},
-                    "count": {"type": "integer", "description": "Contracts per bot"},
-                    "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "For phantom bots: which side is the underdog"},
-                    "dog_price": {"type": "integer", "description": "For phantom bots: maker price for dog side"},
-                    "yes_price": {"type": "integer", "description": "For arb bots: YES price"},
-                    "no_price": {"type": "integer", "description": "For arb bots: NO price"},
-                    "confirm": {"type": "boolean", "description": "Set to true to actually deploy. First call without confirm to preview targets."}
-                },
-                "required": ["bot_type", "sport", "count"]
-            }
-        },
-        {
-            "name": "get_leaderboard",
-            "description": "Performance dashboard — P&L comparison across time periods, win rates, best/worst sports, streaks.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "period": {"type": "string", "enum": ["today", "yesterday", "week", "all"], "description": "Time period to analyze (default: today)"}
-                },
-            }
-        },
-        {
-            "name": "analyze_props",
-            "description": "Analyze player prop markets for a game. Shows pricing breakdown, fair value, edge assessment, and dump-catch limit order suggestions for the NO/under side. Use search_markets first if you need to find the game.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "game_query": {"type": "string", "description": "Team name or game (e.g. 'Suns vs Lakers', 'Duke')"},
-                    "sport": {"type": "string", "description": "nba, ncaab, etc."},
-                    "stat_type": {"type": "string", "enum": ["points","rebounds","assists","threes","steals","blocks","all"], "description": "Which stat (default: all)"}
-                },
-                "required": ["game_query"]
-            }
-        },
-        {
-            "name": "create_smart_bot",
-            "description": "Create a bot with repeat and smart auto-cancel conditions. The bot repeats N times but automatically cancels when conditions are met (game ending, market crash, score blowout). ALWAYS suggest game_ending=true and bid_below=5 as defaults.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "bot_type": {"type": "string", "enum": ["arb", "phantom", "apex"], "description": "Type of bot"},
-                    "ticker": {"type": "string", "description": "Market ticker"},
-                    "repeat_count": {"type": "integer", "description": "How many times to repeat (e.g. 10)"},
-                    "cancel_conditions": {
+# ── Claude Chat: Tool definitions ────────────────────────────────────────
+CLAUDE_TOOLS = [
+    {
+        "name": "place_bet",
+        "description": "Place a straight limit-order bet on a Kalshi market. Optionally attach a watch-bot for stop-loss/take-profit.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker, e.g. KXMLB-25MAR17-NYY-BOS-NY"},
+                "side": {"type": "string", "enum": ["yes", "no"], "description": "Side to buy"},
+                "price": {"type": "integer", "description": "Limit price in cents (1-99)"},
+                "count": {"type": "integer", "description": "Number of contracts"},
+                "stop_loss": {"type": "integer", "description": "Optional stop-loss price in cents"},
+                "take_profit": {"type": "integer", "description": "Optional take-profit price in cents"}
+            },
+            "required": ["ticker", "side", "price", "count"]
+        }
+    },
+    {
+        "name": "create_arb_bot",
+        "description": "Create a dual arb bot: simultaneously place YES and NO limit orders on a market to capture the spread.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "yes_price": {"type": "integer", "description": "YES buy price in cents"},
+                "no_price": {"type": "integer", "description": "NO buy price in cents"},
+                "count": {"type": "integer", "description": "Contracts per side"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds (default 300)"}
+            },
+            "required": ["ticker", "yes_price", "no_price", "count"]
+        }
+    },
+    {
+        "name": "create_ladder_arb",
+        "description": "Create an Apex bot — multi-width arb with multiple rungs at different YES/NO price widths. Places both sides simultaneously and hedges on fill.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "widths": {
+                    "type": "array",
+                    "items": {
                         "type": "object",
-                        "description": "Conditions that auto-cancel the bot and stop repeats",
                         "properties": {
-                            "game_ending": {"type": "boolean", "description": "Cancel if game is in final 2 minutes (default true)"},
-                            "bid_below": {"type": "integer", "description": "Cancel if bid drops below this (e.g. 5 cents)"},
-                            "score_diff_above": {"type": "integer", "description": "Cancel if score difference exceeds this (blowout)"}
-                        }
+                            "yes_price": {"type": "integer"},
+                            "no_price": {"type": "integer"},
+                            "count": {"type": "integer"}
+                        },
+                        "required": ["yes_price", "no_price", "count"]
                     },
-                    "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "For phantom: which side is the dog"},
-                    "dog_price": {"type": "integer", "description": "For phantom: dog anchor price"},
-                    "target_width": {"type": "integer", "description": "For phantom: target arb width"},
-                    "count": {"type": "integer", "description": "Contracts per bot"},
-                    "yes_price": {"type": "integer", "description": "For arb/apex: YES price"},
-                    "no_price": {"type": "integer", "description": "For arb/apex: NO price"},
-                    "widths": {"type": "array", "items": {"type": "integer"}, "description": "For apex: list of widths"}
+                    "description": "Array of {yes_price, no_price, count} rungs"
                 },
-                "required": ["bot_type", "ticker", "repeat_count"]
-            }
-        },
-        {
-            "name": "diagnose_bots",
-            "description": "Health-check all active bots and positions. Detects orphaned positions (contracts with no active bot), orphaned orders, price violations (orders above bid), stuck bots, and lifecycle anomalies.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "bot_id": {"type": "string", "description": "Optional: diagnose a specific bot. Omit to check all."},
-                    "fix": {"type": "boolean", "description": "If true, attempt to fix issues (cancel orphans, etc). Default false = report only."}
+                "timeout": {"type": "integer", "description": "Timeout in seconds"}
+            },
+            "required": ["ticker", "widths"]
+        }
+    },
+    {
+        "name": "create_anchor_dog",
+        "description": "Create a Phantom bot — posts a stealth maker order on the underdog side, instantly hedges at the favorite bid on fill.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "Which side is the underdog"},
+                "dog_price": {"type": "integer", "description": "Maker price for dog side in cents"},
+                "count": {"type": "integer", "description": "Number of contracts"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds"}
+            },
+            "required": ["ticker", "dog_side", "dog_price", "count"]
+        }
+    },
+    {
+        "name": "create_anchor_ladder",
+        "description": "Create a Phantom Ladder bot — multi-rung stealth anchor with multiple price levels, hedges on fill.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "dog_side": {"type": "string", "enum": ["yes", "no"]},
+                "rungs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "dog_price": {"type": "integer"},
+                            "count": {"type": "integer"}
+                        },
+                        "required": ["dog_price", "count"]
+                    }
                 },
-            }
-        },
-        {
-            "name": "watch_game",
-            "description": "Add a game to your watchlist. You'll get proactive notifications about score changes, momentum shifts (8+ unanswered points), game starting/ending, and final scores.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "game_query": {"type": "string", "description": "Team name or game (e.g. 'Suns vs Lakers', 'Duke')"},
-                    "sport": {"type": "string", "description": "nba, ncaab, etc."}
+                "timeout": {"type": "integer"}
+            },
+            "required": ["ticker", "dog_side", "rungs"]
+        }
+    },
+    {
+        "name": "cancel_bot",
+        "description": "Cancel a specific bot by ID. Filled positions will be sold at market.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_id": {"type": "string", "description": "Bot ID to cancel"}
+            },
+            "required": ["bot_id"]
+        }
+    },
+    {
+        "name": "cancel_bots_bulk",
+        "description": "Cancel multiple bots at once.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_ids": {"type": "array", "items": {"type": "string"}, "description": "List of bot IDs to cancel"}
+            },
+            "required": ["bot_ids"]
+        }
+    },
+    {
+        "name": "close_position",
+        "description": "Emergency-close a position by selling at market bid.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "side": {"type": "string", "enum": ["yes", "no"]},
+                "count": {"type": "integer", "description": "Number of contracts to sell"}
+            },
+            "required": ["ticker", "side", "count"]
+        }
+    },
+    {
+        "name": "scan_arbs",
+        "description": "Scan markets for current arbitrage opportunities. Returns list of markets where YES+NO prices sum to less than 100.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "scan_middles",
+        "description": "Scan for middle opportunities across spread markets.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_orderbook",
+        "description": "Get the full orderbook (bids and asks) for a specific market.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"}
+            },
+            "required": ["ticker"]
+        }
+    },
+    {
+        "name": "get_market",
+        "description": "Get detailed info about a specific market (prices, volume, status, event details).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"}
+            },
+            "required": ["ticker"]
+        }
+    },
+    {
+        "name": "search_markets",
+        "description": "Search for markets by team name, player name, sport, or keyword. Use this when the user mentions a team or game by name instead of providing an exact ticker. Examples: 'Suns', 'Duke vs UNC', 'NBA spreads', 'next Lakers game'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query — team name, player, or keyword (e.g. 'Suns', 'Duke vs UNC', 'NBA spreads')"},
+                "sport": {"type": "string", "description": "Optional sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc."}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_pnl",
+        "description": "Get P&L dashboard — daily and lifetime profit/loss from trade history.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_balance",
+        "description": "Get current account balance and portfolio value.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_positions",
+        "description": "Get all current open positions with live market data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_active_bots",
+        "description": "Get all bots with their current status, P&L, and market data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    # ── NEW TOOLS ────────────────────────────────────────────────
+    {
+        "name": "get_live_scores",
+        "description": "Get live scores for a specific team or sport. Use when the user asks about game scores, what's happening in a game, or current game status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Team name or keyword to search (e.g. 'Suns', 'Duke', 'Lakers')"},
+                "sport": {"type": "string", "description": "Sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc. Helps narrow results."}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_trade_history",
+        "description": "Get trade history with optional filters. Shows past trades with results, P&L, sport, and timestamps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "description": "Filter by sport: nba, ncaab, nfl, etc."},
+                "date": {"type": "string", "description": "Filter by date (YYYY-MM-DD). Defaults to today."},
+                "category": {"type": "string", "description": "Filter by bot type: arb, bet, middle, anchor_dog, anchor_ladder"},
+                "limit": {"type": "integer", "description": "Max results (default 20)"}
+            },
+        }
+    },
+    {
+        "name": "set_alert",
+        "description": "Set a price alert on a market. You'll be notified when the condition is met. Use search_markets first to find the ticker.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker to watch"},
+                "side": {"type": "string", "enum": ["yes", "no"], "description": "Which side's price to watch"},
+                "condition": {"type": "string", "enum": ["above", "below"], "description": "Trigger when price goes above or below target"},
+                "price": {"type": "integer", "description": "Target price in cents (1-99)"},
+                "description": {"type": "string", "description": "Human-readable description of what this alert is for"}
+            },
+            "required": ["ticker", "side", "condition", "price"]
+        }
+    },
+    {
+        "name": "change_view",
+        "description": "Change what the user sees on the marketplace. Can switch sport filter, toggle live-only mode, or set a search query. The UI updates immediately.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport_filter": {"type": "string", "description": "Sport to filter: all, nba, ncaab, ncaaw, nfl, nhl, mlb, mls, soccer, tennis, golf, intl, other"},
+                "live_filter": {"type": "boolean", "description": "True = show only live games, False = show all"},
+                "search_query": {"type": "string", "description": "Text to put in the search box (empty string to clear)"}
+            },
+        }
+    },
+    {
+        "name": "get_schedule",
+        "description": "Get today's game schedule — upcoming, in-progress, and completed games with start times.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "description": "Sport filter: nba, ncaab, ncaaw, nfl, nhl, mlb, mls, etc. Omit for all sports."}
+            },
+        }
+    },
+    {
+        "name": "analyze_market",
+        "description": "Deep analysis of a specific market — prices, orderbook depth, line movement from opening, game context, and edge assessment. Use search_markets first to find the ticker.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker to analyze"}
+            },
+            "required": ["ticker"]
+        }
+    },
+    {
+        "name": "bulk_deploy",
+        "description": "Deploy bots across multiple markets matching criteria. ALWAYS list target markets and get user confirmation before deploying.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_type": {"type": "string", "enum": ["arb", "phantom", "apex"], "description": "Type of bot to deploy"},
+                "sport": {"type": "string", "description": "Sport filter for target markets"},
+                "market_type": {"type": "string", "enum": ["winner", "spread", "total"], "description": "Market type filter"},
+                "live_only": {"type": "boolean", "description": "Only deploy on live games (default true)"},
+                "count": {"type": "integer", "description": "Contracts per bot"},
+                "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "For phantom bots: which side is the underdog"},
+                "dog_price": {"type": "integer", "description": "For phantom bots: maker price for dog side"},
+                "yes_price": {"type": "integer", "description": "For arb bots: YES price"},
+                "no_price": {"type": "integer", "description": "For arb bots: NO price"},
+                "confirm": {"type": "boolean", "description": "Set to true to actually deploy. First call without confirm to preview targets."}
+            },
+            "required": ["bot_type", "sport", "count"]
+        }
+    },
+    {
+        "name": "get_leaderboard",
+        "description": "Performance dashboard — P&L comparison across time periods, win rates, best/worst sports, streaks.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "period": {"type": "string", "enum": ["today", "yesterday", "week", "all"], "description": "Time period to analyze (default: today)"}
+            },
+        }
+    },
+    {
+        "name": "analyze_props",
+        "description": "Analyze player prop markets for a game. Shows pricing breakdown, fair value, edge assessment, and dump-catch limit order suggestions for the NO/under side. Use search_markets first if you need to find the game.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "game_query": {"type": "string", "description": "Team name or game (e.g. 'Suns vs Lakers', 'Duke')"},
+                "sport": {"type": "string", "description": "nba, ncaab, etc."},
+                "stat_type": {"type": "string", "enum": ["points","rebounds","assists","threes","steals","blocks","all"], "description": "Which stat (default: all)"}
+            },
+            "required": ["game_query"]
+        }
+    },
+    {
+        "name": "create_smart_bot",
+        "description": "Create a bot with repeat and smart auto-cancel conditions. The bot repeats N times but automatically cancels when conditions are met (game ending, market crash, score blowout). ALWAYS suggest game_ending=true and bid_below=5 as defaults.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_type": {"type": "string", "enum": ["arb", "phantom", "apex"], "description": "Type of bot"},
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "repeat_count": {"type": "integer", "description": "How many times to repeat (e.g. 10)"},
+                "cancel_conditions": {
+                    "type": "object",
+                    "description": "Conditions that auto-cancel the bot and stop repeats",
+                    "properties": {
+                        "game_ending": {"type": "boolean", "description": "Cancel if game is in final 2 minutes (default true)"},
+                        "bid_below": {"type": "integer", "description": "Cancel if bid drops below this (e.g. 5 cents)"},
+                        "score_diff_above": {"type": "integer", "description": "Cancel if score difference exceeds this (blowout)"}
+                    }
                 },
-                "required": ["game_query"]
-            }
-        },
-    ]
+                "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "For phantom: which side is the dog"},
+                "dog_price": {"type": "integer", "description": "For phantom: dog anchor price"},
+                "target_width": {"type": "integer", "description": "For phantom: target arb width"},
+                "count": {"type": "integer", "description": "Contracts per bot"},
+                "yes_price": {"type": "integer", "description": "For arb/apex: YES price"},
+                "no_price": {"type": "integer", "description": "For arb/apex: NO price"},
+                "widths": {"type": "array", "items": {"type": "integer"}, "description": "For apex: list of widths"}
+            },
+            "required": ["bot_type", "ticker", "repeat_count"]
+        }
+    },
+    {
+        "name": "diagnose_bots",
+        "description": "Health-check all active bots and positions. Detects orphaned positions (contracts with no active bot), orphaned orders, price violations (orders above bid), stuck bots, and lifecycle anomalies.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_id": {"type": "string", "description": "Optional: diagnose a specific bot. Omit to check all."},
+                "fix": {"type": "boolean", "description": "If true, attempt to fix issues (cancel orphans, etc). Default false = report only."}
+            },
+        }
+    },
+    {
+        "name": "watch_game",
+        "description": "Add a game to your watchlist. You'll get proactive notifications about score changes, momentum shifts (8+ unanswered points), game starting/ending, and final scores.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "game_query": {"type": "string", "description": "Team name or game (e.g. 'Suns vs Lakers', 'Duke')"},
+                "sport": {"type": "string", "description": "nba, ncaab, etc."}
+            },
+            "required": ["game_query"]
+        }
+    },
+]
 
-    def _execute_chat_tool(tool_name, tool_input):
-        """Execute a Claude chat tool by calling the internal API."""
-        try:
-            base = 'http://127.0.0.1:5001/api'
-            if tool_name == 'place_bet':
-                r = requests.post(f'{base}/order/place', json={
-                    'ticker': tool_input['ticker'],
-                    'side': tool_input['side'],
-                    'price': tool_input['price'],
-                    'count': tool_input['count'],
-                    'stop_loss': tool_input.get('stop_loss'),
-                    'take_profit': tool_input.get('take_profit'),
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'create_arb_bot':
-                r = requests.post(f'{base}/bot/create', json={
-                    'ticker': tool_input['ticker'],
-                    'yes_price': tool_input['yes_price'],
-                    'no_price': tool_input['no_price'],
-                    'count': tool_input['count'],
-                    'timeout': tool_input.get('timeout', 300),
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'create_ladder_arb':
-                r = requests.post(f'{base}/bot/ladder-arb', json={
-                    'ticker': tool_input['ticker'],
-                    'widths': tool_input['widths'],
-                    'timeout': tool_input.get('timeout', 300),
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'create_anchor_dog':
-                r = requests.post(f'{base}/bot/anchor', json={
-                    'ticker': tool_input['ticker'],
-                    'dog_side': tool_input['dog_side'],
-                    'dog_price': tool_input['dog_price'],
-                    'count': tool_input['count'],
-                    'timeout': tool_input.get('timeout', 300),
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'create_anchor_ladder':
-                r = requests.post(f'{base}/bot/ladder', json={
-                    'ticker': tool_input['ticker'],
-                    'dog_side': tool_input['dog_side'],
-                    'rungs': tool_input['rungs'],
-                    'timeout': tool_input.get('timeout', 300),
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'cancel_bot':
-                r = requests.delete(f'{base}/bot/cancel/{tool_input["bot_id"]}', timeout=15)
-                return r.json()
-            elif tool_name == 'cancel_bots_bulk':
-                r = requests.post(f'{base}/bot/cancel-bulk', json={
-                    'bot_ids': tool_input['bot_ids'],
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'close_position':
-                r = requests.post(f'{base}/position/close', json={
-                    'ticker': tool_input['ticker'],
-                    'side': tool_input['side'],
-                    'count': tool_input['count'],
-                }, timeout=15)
-                return r.json()
-            elif tool_name == 'scan_arbs':
-                r = requests.get(f'{base}/bot/scan', timeout=15)
-                return r.json()
-            elif tool_name == 'scan_middles':
-                r = requests.get(f'{base}/scan/middles', timeout=15)
-                return r.json()
-            elif tool_name == 'get_orderbook':
-                r = requests.get(f'{base}/orderbook/{tool_input["ticker"]}', timeout=10)
-                return r.json()
-            elif tool_name == 'get_market':
-                r = requests.get(f'{base}/market/{tool_input["ticker"]}', timeout=10)
-                return r.json()
-            elif tool_name == 'search_markets':
-                params = {'q': tool_input['query']}
-                if tool_input.get('sport'):
-                    params['sport'] = tool_input['sport']
-                r = requests.get(f'{base}/markets/search', params=params, timeout=10)
-                return r.json()
-            elif tool_name == 'get_pnl':
-                r = requests.get(f'{base}/pnl', timeout=10)
-                return r.json()
-            elif tool_name == 'get_balance':
-                r = requests.get(f'{base}/ws/balance', timeout=10)
-                return r.json()
-            elif tool_name == 'get_positions':
-                r = requests.get(f'{base}/positions/active', timeout=10)
-                data = r.json()
-                return data.get('positions', data) if isinstance(data, dict) else data
-            elif tool_name == 'get_active_bots':
-                r = requests.get(f'{base}/bot/list', timeout=10)
-                data = r.json()
-                bots = data.get('bots', data) if isinstance(data, dict) else data
-                # Summarize to avoid token bloat
-                summary = {}
-                for bid, b in bots.items():
-                    if b.get('status') not in ('completed', 'cancelled', 'error', None):
-                        summary[bid] = {k: b.get(k) for k in ('ticker','type','status','yes_price','no_price','count','pnl','bot_category','created_at')}
-                return summary
-            # ── NEW TOOL HANDLERS ────────────────────────────────────
-            elif tool_name == 'get_live_scores':
-                query = tool_input.get('query', '').lower()
-                sport_filter = tool_input.get('sport', '').lower()
-                _refresh_espn_cache()
-                cache = _espn_cache.get('data', {})
-                # Expand query via team aliases
-                search_codes = set()
-                for alias, codes in _TEAM_ALIASES.items():
-                    if query in alias or alias in query:
-                        search_codes.update(c.upper() for c in codes)
-                search_codes.add(query.upper())
-                results = []
-                seen_games = set()
-                for abbr, info in cache.items():
-                    if sport_filter and info.get('espn_sport', '') != sport_filter:
-                        continue
-                    if abbr in search_codes or query in abbr.lower():
-                        game_key = f"{info.get('espn_sport','')}:{info.get('game_time','')}"
-                        if game_key not in seen_games:
-                            seen_games.add(game_key)
-                            results.append({
-                                'team': abbr,
-                                'sport': info.get('espn_sport', ''),
-                                'status': info.get('status', 'unknown'),
-                                'live': info.get('live', False),
-                                'period': info.get('period', 0),
-                                'clock': info.get('clock', ''),
-                                'team_score': info.get('team_score', 0),
-                                'opp_score': info.get('opp_score', 0),
-                                'score_diff': info.get('score_diff', 0),
-                                'game_time': info.get('game_time', ''),
-                                'detail': info.get('status_detail', ''),
-                            })
-                return {'scores': results, 'query': query} if results else {'scores': [], 'message': f'No games found for "{query}"'}
-
-            elif tool_name == 'get_trade_history':
-                params = {'limit': tool_input.get('limit', 20)}
-                if tool_input.get('date'):
-                    params['date'] = tool_input['date']
-                if tool_input.get('category'):
-                    params['category'] = tool_input['category']
-                r = requests.get(f'{base}/bot/history', params=params, timeout=10)
-                data = r.json()
-                trades = data.get('trades', [])
-                # Filter by sport if requested
-                sport = tool_input.get('sport', '').lower()
-                if sport and trades:
-                    trades = [t for t in trades if _detect_sport(t.get('ticker', '')) == sport]
-                # Summarize for token efficiency
-                summary = []
-                for t in trades[:30]:
-                    summary.append({
-                        'ticker': t.get('ticker', ''),
-                        'type': t.get('type', ''),
-                        'result': t.get('result', ''),
-                        'profit_cents': t.get('profit_cents', 0),
-                        'loss_cents': t.get('loss_cents', 0),
-                        'sport': t.get('sport', _detect_sport(t.get('ticker', ''))),
-                        'timestamp': t.get('timestamp', ''),
-                        'bot_category': t.get('bot_category', ''),
-                    })
-                return {'trades': summary, 'total': len(trades)}
-
-            elif tool_name == 'set_alert':
-                global _chat_alert_counter
-                _chat_alert_counter += 1
-                alert = {
-                    'id': f'alert_{_chat_alert_counter}',
-                    'ticker': tool_input['ticker'],
-                    'side': tool_input['side'],
-                    'condition': tool_input['condition'],
-                    'price': tool_input['price'],
-                    'description': tool_input.get('description', ''),
-                    'status': 'watching',
-                    'created_at': time.time(),
-                    'triggered_at': None,
-                }
-                _chat_alerts.append(alert)
-                return {'success': True, 'alert': alert, 'message': f'Alert set: {alert["description"] or alert["ticker"]} {alert["side"]} {alert["condition"]} {alert["price"]}¢'}
-
-            elif tool_name == 'change_view':
-                # Return the command — frontend handles it via ui_command in SSE stream
-                cmd = {}
-                if 'sport_filter' in tool_input:
-                    cmd['sport_filter'] = tool_input['sport_filter']
-                if 'live_filter' in tool_input:
-                    cmd['live_filter'] = tool_input['live_filter']
-                if 'search_query' in tool_input:
-                    cmd['search_query'] = tool_input['search_query']
-                # Store the command so the SSE stream can emit it
-                _execute_chat_tool._pending_ui_command = cmd
-                return {'success': True, 'applied': cmd}
-
-            elif tool_name == 'get_schedule':
-                sport_filter = tool_input.get('sport', '').lower()
-                sports_to_check = [sport_filter] if sport_filter else ['nba', 'ncaab', 'ncaaw', 'nfl', 'nhl', 'mlb', 'mls']
-                schedule = []
-                for sport in sports_to_check:
-                    try:
-                        r = requests.get(f'{base}/scoreboard/{sport}', timeout=8)
-                        data = r.json()
-                        for ev in data.get('events', []):
-                            status_obj = (ev.get('status') or {}).get('type', {})
-                            comp = (ev.get('competitions') or [{}])[0]
-                            competitors = comp.get('competitors', [])
-                            home = next((c for c in competitors if c.get('homeAway') == 'home'), {})
-                            away = next((c for c in competitors if c.get('homeAway') == 'away'), {})
-                            game_date = ev.get('date', '')
-                            game_time = ''
-                            if game_date:
-                                try:
-                                    dt = datetime.fromisoformat(game_date.replace('Z', '+00:00'))
-                                    dt_az = dt + timedelta(hours=-7)
-                                    game_time = dt_az.strftime('%-I:%M %p AZ')
-                                except Exception:
-                                    pass
-                            schedule.append({
-                                'sport': sport.upper(),
-                                'home': (home.get('team') or {}).get('displayName', '?'),
-                                'away': (away.get('team') or {}).get('displayName', '?'),
-                                'home_abbr': (home.get('team') or {}).get('abbreviation', ''),
-                                'away_abbr': (away.get('team') or {}).get('abbreviation', ''),
-                                'time': game_time,
-                                'status': status_obj.get('state', 'pre'),
-                                'detail': status_obj.get('shortDetail', ''),
-                                'home_score': home.get('score', ''),
-                                'away_score': away.get('score', ''),
-                            })
-                    except Exception:
-                        continue
-                # Sort: live first, then by time
-                state_order = {'in': 0, 'pre': 1, 'post': 2}
-                schedule.sort(key=lambda g: (state_order.get(g['status'], 9), g['time']))
-                return {'schedule': schedule, 'total': len(schedule)}
-
-            elif tool_name == 'analyze_market':
-                ticker = tool_input['ticker']
-                analysis = {}
-                # Market data
-                try:
-                    r = requests.get(f'{base}/market/{ticker}', timeout=10)
-                    mkt = r.json()
-                    if 'market' in mkt:
-                        mkt = mkt['market']
-                    analysis['market'] = {
-                        'ticker': mkt.get('ticker'),
-                        'title': mkt.get('title'),
-                        'yes_bid': mkt.get('yes_bid'), 'yes_ask': mkt.get('yes_ask'),
-                        'no_bid': mkt.get('no_bid'), 'no_ask': mkt.get('no_ask'),
-                        'volume': mkt.get('volume'), 'volume_24h': mkt.get('volume_24h'),
-                        'open_interest': mkt.get('open_interest'),
-                        'status': mkt.get('status'),
-                    }
-                except Exception:
-                    analysis['market'] = {'error': 'Could not fetch market data'}
-                # Orderbook depth
-                try:
-                    r = requests.get(f'{base}/orderbook/{ticker}', timeout=10)
-                    ob = r.json()
-                    ob_data = ob.get('orderbook', ob)
-                    yes_levels = ob_data.get('yes', [])
-                    no_levels = ob_data.get('no', [])
-                    analysis['orderbook'] = {
-                        'yes_depth': len(yes_levels),
-                        'no_depth': len(no_levels),
-                        'best_yes_bid': yes_levels[0] if yes_levels else None,
-                        'best_no_bid': no_levels[0] if no_levels else None,
-                        'yes_total_qty': sum(l[1] for l in yes_levels) if yes_levels else 0,
-                        'no_total_qty': sum(l[1] for l in no_levels) if no_levels else 0,
-                    }
-                except Exception:
-                    analysis['orderbook'] = {'error': 'Could not fetch orderbook'}
-                # Opening line movement
-                opening = _opening_lines.get(ticker)
-                if opening:
-                    current_yes = analysis.get('market', {}).get('yes_bid', 0) or 0
-                    opening_yes = opening.get('yes_price', 0)
-                    analysis['line_movement'] = {
-                        'opening_yes': opening_yes,
-                        'current_yes': current_yes,
-                        'movement': current_yes - opening_yes if current_yes and opening_yes else None,
-                        'captured_at': opening.get('captured_at'),
-                    }
-                # Game context from ESPN
-                _refresh_espn_cache()
-                sport = _detect_sport(ticker)
-                game_ticker = ticker.split('-')[1] if '-' in ticker else ''
-                teams_str = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', game_ticker)
-                for abbr, info in _espn_cache.get('data', {}).items():
-                    if abbr in teams_str.upper() and info.get('espn_sport', '') == sport:
-                        analysis['game_context'] = {
-                            'live': info.get('live'),
-                            'status': info.get('status'),
-                            'period': info.get('period'),
-                            'clock': info.get('clock'),
-                            'score_diff': info.get('score_diff'),
-                            'game_time': info.get('game_time'),
-                        }
-                        break
-                # Spread assessment
-                yes_bid = analysis.get('market', {}).get('yes_bid', 0) or 0
-                no_bid = analysis.get('market', {}).get('no_bid', 0) or 0
-                yes_ask = analysis.get('market', {}).get('yes_ask', 0) or 0
-                no_ask = analysis.get('market', {}).get('no_ask', 0) or 0
-                if yes_bid and no_bid:
-                    analysis['edge'] = {
-                        'arb_spread': 100 - yes_bid - no_bid,
-                        'yes_spread': yes_ask - yes_bid if yes_ask else None,
-                        'no_spread': no_ask - no_bid if no_ask else None,
-                        'is_arb': (yes_bid + no_bid) < 99,
-                    }
-                return analysis
-
-            elif tool_name == 'bulk_deploy':
-                sport = tool_input.get('sport', '').lower()
-                market_type = tool_input.get('market_type', '').lower()
-                live_only = tool_input.get('live_only', True)
-                confirm = tool_input.get('confirm', False)
-                bot_type = tool_input['bot_type']
-                count = tool_input['count']
-
-                # Find matching markets
-                markets = _markets_cache.get('markets', [])
-                if not markets:
-                    return {'error': 'No cached markets — load the marketplace first'}
-                # Filter by sport
-                if sport:
-                    markets = [m for m in markets if _detect_sport(m.get('event_ticker') or m.get('ticker', '')) == sport]
-                # Filter by market type
-                if market_type:
-                    markets = [m for m in markets if m.get('market_type', '') == market_type]
-                # Filter to live only
-                if live_only:
-                    markets = [m for m in markets if _is_game_live(m.get('event_ticker') or m.get('ticker', ''))]
-                # Deduplicate by event (one bot per game)
-                seen_events = set()
-                unique = []
-                for m in markets:
-                    et = m.get('event_ticker', '')
-                    if et not in seen_events:
-                        seen_events.add(et)
-                        unique.append(m)
-                markets = unique
-
-                if not confirm:
-                    # Preview mode — show targets without deploying
-                    targets = [{'ticker': m.get('ticker'), 'title': m.get('title', m.get('event_ticker', '')),
-                                'yes_bid': m.get('yes_bid'), 'no_bid': m.get('no_bid')} for m in markets[:20]]
-                    return {'preview': True, 'targets': targets, 'total': len(markets),
-                            'message': f'Found {len(markets)} matching markets. Call again with confirm=true to deploy.'}
-
-                # Deploy bots
-                deployed = []
-                failed = []
-                for m in markets[:20]:  # Safety cap at 20
-                    try:
-                        ticker = m.get('ticker', '')
-                        if bot_type == 'phantom':
-                            r = requests.post(f'{base}/bot/anchor', json={
-                                'ticker': ticker,
-                                'dog_side': tool_input.get('dog_side', 'yes'),
-                                'dog_price': tool_input.get('dog_price', 10),
-                                'count': count,
-                                'timeout': 300,
-                            }, timeout=15)
-                        elif bot_type == 'arb':
-                            r = requests.post(f'{base}/bot/create', json={
-                                'ticker': ticker,
-                                'yes_price': tool_input.get('yes_price', 45),
-                                'no_price': tool_input.get('no_price', 45),
-                                'count': count,
-                                'timeout': 300,
-                            }, timeout=15)
-                        elif bot_type == 'apex':
-                            r = requests.post(f'{base}/bot/ladder-arb', json={
-                                'ticker': ticker,
-                                'widths': [{'yes_price': tool_input.get('yes_price', 45),
-                                           'no_price': tool_input.get('no_price', 45),
-                                           'count': count}],
-                                'timeout': 300,
-                            }, timeout=15)
-                        else:
-                            failed.append({'ticker': ticker, 'error': f'Unknown bot type: {bot_type}'})
-                            continue
-                        result = r.json()
-                        if result.get('bot_id') or result.get('success'):
-                            deployed.append({'ticker': ticker, 'bot_id': result.get('bot_id', '?')})
-                        else:
-                            failed.append({'ticker': ticker, 'error': result.get('error', 'Unknown error')})
-                    except Exception as e:
-                        failed.append({'ticker': m.get('ticker', '?'), 'error': str(e)})
-                return {'deployed': deployed, 'failed': failed, 'total_deployed': len(deployed)}
-
-            elif tool_name == 'get_leaderboard':
-                period = tool_input.get('period', 'today')
-                result = {}
-                # Get full P&L
-                try:
-                    r = requests.get(f'{base}/pnl', timeout=10)
-                    pnl = r.json()
-                    result['lifetime'] = {
-                        'net_cents': pnl.get('net_cents', 0),
-                        'gross_profit': pnl.get('gross_profit_cents', 0),
-                        'gross_loss': pnl.get('gross_loss_cents', 0),
-                        'wins': pnl.get('completed_bots', 0),
-                        'losses': pnl.get('stopped_bots', 0),
-                        'sport_pnl': pnl.get('sport_pnl', {}),
-                    }
-                    total_trades = pnl.get('completed_bots', 0) + pnl.get('stopped_bots', 0)
-                    result['lifetime']['win_rate'] = f"{pnl.get('completed_bots', 0) / total_trades * 100:.1f}%" if total_trades > 0 else 'N/A'
-                except Exception:
-                    result['lifetime'] = {'error': 'Could not fetch P&L'}
-                # Get daily calendar
-                try:
-                    r = requests.get(f'{base}/pnl/calendar', timeout=10)
-                    cal = r.json()
-                    days = cal.get('days', [])
-                    if days:
-                        today_str = date.today().isoformat()
-                        yesterday_str = (date.today() - timedelta(days=1)).isoformat()
-                        today_data = next((d for d in days if d.get('date') == today_str), None)
-                        yesterday_data = next((d for d in days if d.get('date') == yesterday_str), None)
-                        if today_data:
-                            result['today'] = today_data
-                        if yesterday_data:
-                            result['yesterday'] = yesterday_data
-                        # Week summary
-                        week_start = (date.today() - timedelta(days=7)).isoformat()
-                        week_days = [d for d in days if d.get('date', '') >= week_start]
-                        if week_days:
-                            result['week'] = {
-                                'net_cents': sum(d.get('net_cents', 0) for d in week_days),
-                                'days_traded': len(week_days),
-                                'best_day': max(week_days, key=lambda d: d.get('net_cents', 0)),
-                                'worst_day': min(week_days, key=lambda d: d.get('net_cents', 0)),
-                            }
-                except Exception:
-                    pass
-                return result
-
-            # ── NEW TOOL HANDLERS (Phase 2) ──────────────────────────
-            elif tool_name == 'analyze_props':
-                params = {'game': tool_input['game_query']}
-                if tool_input.get('sport'): params['sport'] = tool_input['sport']
-                if tool_input.get('stat_type'): params['stat'] = tool_input['stat_type']
-                r = requests.get(f'{base}/props/analyze', params=params, timeout=15)
-                return r.json()
-
-            elif tool_name == 'create_smart_bot':
-                bot_type = tool_input['bot_type']
-                ticker = tool_input['ticker']
-                repeat_count = tool_input.get('repeat_count', 0)
-                cancel_conditions = tool_input.get('cancel_conditions', {'game_ending': True, 'bid_below': 5})
-                count = tool_input.get('count', 1)
-
-                # Create the bot via existing endpoints
-                if bot_type == 'phantom':
-                    r = requests.post(f'{base}/bot/anchor', json={
-                        'ticker': ticker,
-                        'dog_side': tool_input.get('dog_side', 'no'),
-                        'dog_price': tool_input.get('dog_price', 10),
-                        'target_width': tool_input.get('target_width', 5),
-                        'quantity': count,
-                        'repeat_count': repeat_count,
-                    }, timeout=15)
-                elif bot_type == 'arb':
-                    r = requests.post(f'{base}/bot/create', json={
-                        'ticker': ticker,
-                        'yes_price': tool_input.get('yes_price', 45),
-                        'no_price': tool_input.get('no_price', 45),
-                        'count': count,
-                        'repeat_count': repeat_count,
-                    }, timeout=15)
-                elif bot_type == 'apex':
-                    widths = tool_input.get('widths', [5, 8, 12])
-                    r = requests.post(f'{base}/bot/ladder-arb', json={
-                        'ticker': ticker,
-                        'widths': widths,
-                        'quantity': count,
-                        'repeat_count': repeat_count,
-                    }, timeout=15)
-                else:
-                    return {'error': f'Unknown bot_type: {bot_type}'}
-
-                result = r.json()
-                # Attach cancel conditions to the bot
-                bot_id = result.get('bot_id')
-                if bot_id and bot_id in active_bots:
-                    active_bots[bot_id]['cancel_conditions'] = cancel_conditions
-                    save_state()
-                    result['cancel_conditions'] = cancel_conditions
-                    result['message'] = (result.get('message', '') +
-                        f' | Auto-cancel: game_ending={cancel_conditions.get("game_ending", False)}'
-                        f' bid_below={cancel_conditions.get("bid_below", "off")}'
-                        f' blowout={cancel_conditions.get("score_diff_above", "off")}')
-                return result
-
-            elif tool_name == 'diagnose_bots':
-                params = {}
-                if tool_input.get('bot_id'): params['bot_id'] = tool_input['bot_id']
-                r = requests.get(f'{base}/bots/diagnose', params=params, timeout=15)
-                return r.json()
-
-            elif tool_name == 'watch_game':
-                global _watch_counter
-                query = tool_input['game_query'].lower()
-                sport = tool_input.get('sport', '').lower()
-
-                # Resolve team abbreviations
-                team_abbrs = set()
-                for alias, codes in _TEAM_ALIASES.items():
-                    if query in alias or alias in query:
-                        team_abbrs.update(c.upper() for c in codes)
-                team_abbrs.add(query.upper())
-
-                _watch_counter += 1
-                wg = {
-                    'id': f'watch_{_watch_counter}',
-                    'game_id': query,
-                    'sport': sport,
-                    'teams': query.title(),
-                    'team_abbrs': list(team_abbrs),
-                    'last_score_home': 0,
-                    'last_score_away': 0,
-                    'last_status': 'pre',
-                    'created_at': time.time(),
-                }
-                _watched_games.append(wg)
-                return {'success': True, 'watch_id': wg['id'],
-                        'message': f'Watching {query.title()} — will notify on score runs, game start/end, and momentum shifts'}
-
-            else:
-                return {'error': f'Unknown tool: {tool_name}'}
-        except Exception as e:
-            return {'error': str(e)}
-
-    # ── Claude Chat Endpoint ─────────────────────────────────────────────────
-    @app.route('/api/chat', methods=['POST'])
-    def claude_chat():
-        """Claude chat with tool-use: can read data and execute trading actions."""
-        body = request.json or {}
-        messages = body.get('messages', [])
-        if not messages:
-            return jsonify({'error': 'No messages provided'}), 400
-
-        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
-        if not api_key:
-            return jsonify({'error': 'ANTHROPIC_API_KEY not set on server'}), 500
-
-        client = anthropic.Anthropic(api_key=api_key)
-
-        # Build system prompt with live context
-        context = body.get('context', {})
-        system_parts = [
-            'You are Claude, an AI trading assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi.',
-            'You can READ live data (balance, positions, bots, orderbooks, P&L) and EXECUTE actions (place bets, create arb/dog bots, cancel bots, close positions, scan for opportunities).',
-            'Be concise and action-oriented. When the user asks you to do something, use your tools to do it. Confirm before placing real trades by briefly stating what you will do.',
-            'For arb bots: YES + NO prices must sum to < 99 to be profitable after fees. Wider spreads = more profit but less likely to fill.',
-            'For anchor/dog bots: the dog side is the underdog (lower probability). You post a cheap maker order and hedge on fill.',
-            'Prices are always in CENTS (1-99). Count = number of contracts.',
-            'IMPORTANT: Always confirm with the user before executing trades or cancellations. State the action, ticker, prices, and count, then proceed.',
-            'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
-            'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
-            'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), and performance tracking (get_leaderboard).',
-            'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately.',
-            'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',
-            'For set_alert: alerts check live WebSocket prices. Tell the user what you set up.',
-            'For analyze_props: explain pricing simply. YES bid = market price for "it happens." NO ask = your cost to bet "it misses." Fair value = 100 - YES midpoint. Suggest dump-catch limit orders 3-8¢ below NO ask.',
-            'For create_smart_bot: ALWAYS suggest game_ending=true and bid_below=5 as default safety conditions. Creates a bot with repeat + auto-cancel.',
-            'For diagnose_bots: checks orphaned positions, price violations (orders above bid), stuck bots. Report issues clearly and suggest fixes.',
-            'For watch_game: adds game to watchlist for proactive notifications (score runs, game start/end). Notifications appear as chat badges.',
-            'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Middle posts both NO legs.',
-        ]
-        if context:
-            system_parts.append('\n--- LIVE MERIDIAN STATE ---')
-            if 'balance' in context:
-                bal = context['balance']
-                if isinstance(bal, dict):
-                    # /api/ws/balance already returns dollars (not cents)
-                    system_parts.append(f"Balance: ${bal.get('balance', 0):.2f}")
-                else:
-                    system_parts.append(f"Balance: {bal}")
-            if 'active_bots' in context:
-                bots = context['active_bots']
-                system_parts.append(f"Active bots: {len(bots)}")
-                for b in bots[:15]:
-                    system_parts.append(f"  - {b.get('ticker','?')} | {b.get('type','?')} | status={b.get('status','?')} | yes={b.get('yes_price','?')}¢ no={b.get('no_price','?')}¢ x{b.get('count','?')} | pnl={b.get('pnl','?')}")
-            if 'positions' in context and context['positions']:
-                pos = context['positions']
-                if isinstance(pos, dict):
-                    pos = pos.get('positions', [])
-                system_parts.append(f"Open positions: {json.dumps(pos[:10], default=str)}")
-            if 'screen' in context:
-                screen = context['screen']
-                system_parts.append(f"User's current view: sport_filter={screen.get('sport_filter','all')}, live_only={screen.get('live_filter',False)}, search='{screen.get('search_query','')}'")
-            if 'visible_markets' in context:
-                mkts = context['visible_markets']
-                system_parts.append(f"Markets on screen ({len(mkts)}):")
-                for m in mkts[:30]:
-                    parts_m = f"  - {m.get('ticker','?')}: {m.get('title','')} bid={m.get('yes_bid','?')}¢ ask={m.get('yes_ask','?')}¢"
-                    if m.get('no_bid') is not None:
-                        parts_m += f" no_bid={m.get('no_bid')}¢ no_ask={m.get('no_ask')}¢"
-                    if m.get('market_type'):
-                        parts_m += f" type={m['market_type']}"
-                    parts_m += f" vol={m.get('volume','?')}"
-                    system_parts.append(parts_m)
-            system_parts.append('--- END STATE ---')
-
-        # Check and inject triggered alerts
-        _check_chat_alerts()
-        triggered = [a for a in _chat_alerts if a['status'] == 'triggered']
-        watching = [a for a in _chat_alerts if a['status'] == 'watching']
-        if triggered:
-            system_parts.append('\n⚠️ TRIGGERED ALERTS:')
-            for a in triggered:
-                system_parts.append(f"  - {a['description'] or a['ticker']}: {a['side']} hit {a.get('triggered_price', '?')}¢ ({a['condition']} {a['price']}¢)")
-        if watching:
-            system_parts.append(f"\nActive alerts: {len(watching)} watching")
-        system_prompt = '\n'.join(system_parts)
-
-        def generate():
-            try:
-                api_messages = list(messages)
-                max_tool_rounds = 5  # prevent infinite loops
-
-                for _round in range(max_tool_rounds + 1):
-                    # Call Claude (non-streaming when tools might be used, streaming on final)
-                    response = client.messages.create(
-                        model='claude-sonnet-4-20250514',
-                        max_tokens=4096,
-                        system=system_prompt,
-                        messages=api_messages,
-                        tools=CLAUDE_TOOLS,
-                    )
-
-                    # Check if Claude wants to use tools
-                    tool_uses = [b for b in response.content if b.type == 'tool_use']
-                    text_blocks = [b for b in response.content if b.type == 'text']
-
-                    # Stream any text that came before tool calls
-                    for tb in text_blocks:
-                        if tb.text:
-                            yield f"data: {json.dumps({'text': tb.text})}\n\n"
-
-                    if not tool_uses or response.stop_reason == 'end_turn':
-                        # No more tool calls — done
-                        break
-
-                    # Execute tool calls and build tool results
-                    api_messages.append({'role': 'assistant', 'content': [
-                        {'type': 'text', 'text': tb.text} if tb.type == 'text' else
-                        {'type': 'tool_use', 'id': tb.id, 'name': tb.name, 'input': tb.input}
-                        for tb in response.content
-                    ]})
-
-                    tool_results = []
-                    for tu in tool_uses:
-                        yield f"data: {json.dumps({'action': tu.name, 'input': tu.input})}\n\n"
-                        result = _execute_chat_tool(tu.name, tu.input)
-                        # Emit UI command if change_view was called
-                        if hasattr(_execute_chat_tool, '_pending_ui_command') and _execute_chat_tool._pending_ui_command:
-                            yield f"data: {json.dumps({'ui_command': _execute_chat_tool._pending_ui_command})}\n\n"
-                            _execute_chat_tool._pending_ui_command = None
-                        # Emit triggered alerts if any
-                        triggered = [a for a in _chat_alerts if a['status'] == 'triggered' and a.get('_notified') is not True]
-                        if triggered:
-                            for a in triggered:
-                                a['_notified'] = True
-                            yield f"data: {json.dumps({'triggered_alerts': [{'id': a['id'], 'ticker': a['ticker'], 'description': a['description'], 'price': a['price']} for a in triggered]})}\n\n"
-                        # Truncate large results to save tokens
-                        result_str = json.dumps(result, default=str)
-                        if len(result_str) > 4000:
-                            result_str = result_str[:4000] + '...(truncated)'
-                        tool_results.append({
-                            'type': 'tool_result',
-                            'tool_use_id': tu.id,
-                            'content': result_str,
+def _execute_chat_tool(tool_name, tool_input):
+    """Execute a Claude chat tool by calling the internal API."""
+    try:
+        base = 'http://127.0.0.1:5001/api'
+        if tool_name == 'place_bet':
+            r = requests.post(f'{base}/order/place', json={
+                'ticker': tool_input['ticker'],
+                'side': tool_input['side'],
+                'price': tool_input['price'],
+                'count': tool_input['count'],
+                'stop_loss': tool_input.get('stop_loss'),
+                'take_profit': tool_input.get('take_profit'),
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'create_arb_bot':
+            r = requests.post(f'{base}/bot/create', json={
+                'ticker': tool_input['ticker'],
+                'yes_price': tool_input['yes_price'],
+                'no_price': tool_input['no_price'],
+                'count': tool_input['count'],
+                'timeout': tool_input.get('timeout', 300),
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'create_ladder_arb':
+            r = requests.post(f'{base}/bot/ladder-arb', json={
+                'ticker': tool_input['ticker'],
+                'widths': tool_input['widths'],
+                'timeout': tool_input.get('timeout', 300),
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'create_anchor_dog':
+            r = requests.post(f'{base}/bot/anchor', json={
+                'ticker': tool_input['ticker'],
+                'dog_side': tool_input['dog_side'],
+                'dog_price': tool_input['dog_price'],
+                'count': tool_input['count'],
+                'timeout': tool_input.get('timeout', 300),
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'create_anchor_ladder':
+            r = requests.post(f'{base}/bot/ladder', json={
+                'ticker': tool_input['ticker'],
+                'dog_side': tool_input['dog_side'],
+                'rungs': tool_input['rungs'],
+                'timeout': tool_input.get('timeout', 300),
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'cancel_bot':
+            r = requests.delete(f'{base}/bot/cancel/{tool_input["bot_id"]}', timeout=15)
+            return r.json()
+        elif tool_name == 'cancel_bots_bulk':
+            r = requests.post(f'{base}/bot/cancel-bulk', json={
+                'bot_ids': tool_input['bot_ids'],
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'close_position':
+            r = requests.post(f'{base}/position/close', json={
+                'ticker': tool_input['ticker'],
+                'side': tool_input['side'],
+                'count': tool_input['count'],
+            }, timeout=15)
+            return r.json()
+        elif tool_name == 'scan_arbs':
+            r = requests.get(f'{base}/bot/scan', timeout=15)
+            return r.json()
+        elif tool_name == 'scan_middles':
+            r = requests.get(f'{base}/scan/middles', timeout=15)
+            return r.json()
+        elif tool_name == 'get_orderbook':
+            r = requests.get(f'{base}/orderbook/{tool_input["ticker"]}', timeout=10)
+            return r.json()
+        elif tool_name == 'get_market':
+            r = requests.get(f'{base}/market/{tool_input["ticker"]}', timeout=10)
+            return r.json()
+        elif tool_name == 'search_markets':
+            params = {'q': tool_input['query']}
+            if tool_input.get('sport'):
+                params['sport'] = tool_input['sport']
+            r = requests.get(f'{base}/markets/search', params=params, timeout=10)
+            return r.json()
+        elif tool_name == 'get_pnl':
+            r = requests.get(f'{base}/pnl', timeout=10)
+            return r.json()
+        elif tool_name == 'get_balance':
+            r = requests.get(f'{base}/ws/balance', timeout=10)
+            return r.json()
+        elif tool_name == 'get_positions':
+            r = requests.get(f'{base}/positions/active', timeout=10)
+            data = r.json()
+            return data.get('positions', data) if isinstance(data, dict) else data
+        elif tool_name == 'get_active_bots':
+            r = requests.get(f'{base}/bot/list', timeout=10)
+            data = r.json()
+            bots = data.get('bots', data) if isinstance(data, dict) else data
+            # Summarize to avoid token bloat
+            summary = {}
+            for bid, b in bots.items():
+                if b.get('status') not in ('completed', 'cancelled', 'error', None):
+                    summary[bid] = {k: b.get(k) for k in ('ticker','type','status','yes_price','no_price','count','pnl','bot_category','created_at')}
+            return summary
+        # ── NEW TOOL HANDLERS ────────────────────────────────────
+        elif tool_name == 'get_live_scores':
+            query = tool_input.get('query', '').lower()
+            sport_filter = tool_input.get('sport', '').lower()
+            _refresh_espn_cache()
+            cache = _espn_cache.get('data', {})
+            # Expand query via team aliases
+            search_codes = set()
+            for alias, codes in _TEAM_ALIASES.items():
+                if query in alias or alias in query:
+                    search_codes.update(c.upper() for c in codes)
+            search_codes.add(query.upper())
+            results = []
+            seen_games = set()
+            for abbr, info in cache.items():
+                if sport_filter and info.get('espn_sport', '') != sport_filter:
+                    continue
+                if abbr in search_codes or query in abbr.lower():
+                    game_key = f"{info.get('espn_sport','')}:{info.get('game_time','')}"
+                    if game_key not in seen_games:
+                        seen_games.add(game_key)
+                        results.append({
+                            'team': abbr,
+                            'sport': info.get('espn_sport', ''),
+                            'status': info.get('status', 'unknown'),
+                            'live': info.get('live', False),
+                            'period': info.get('period', 0),
+                            'clock': info.get('clock', ''),
+                            'team_score': info.get('team_score', 0),
+                            'opp_score': info.get('opp_score', 0),
+                            'score_diff': info.get('score_diff', 0),
+                            'game_time': info.get('game_time', ''),
+                            'detail': info.get('status_detail', ''),
                         })
+            return {'scores': results, 'query': query} if results else {'scores': [], 'message': f'No games found for "{query}"'}
 
-                    api_messages.append({'role': 'user', 'content': tool_results})
+        elif tool_name == 'get_trade_history':
+            params = {'limit': tool_input.get('limit', 20)}
+            if tool_input.get('date'):
+                params['date'] = tool_input['date']
+            if tool_input.get('category'):
+                params['category'] = tool_input['category']
+            r = requests.get(f'{base}/bot/history', params=params, timeout=10)
+            data = r.json()
+            trades = data.get('trades', [])
+            # Filter by sport if requested
+            sport = tool_input.get('sport', '').lower()
+            if sport and trades:
+                trades = [t for t in trades if _detect_sport(t.get('ticker', '')) == sport]
+            # Summarize for token efficiency
+            summary = []
+            for t in trades[:30]:
+                summary.append({
+                    'ticker': t.get('ticker', ''),
+                    'type': t.get('type', ''),
+                    'result': t.get('result', ''),
+                    'profit_cents': t.get('profit_cents', 0),
+                    'loss_cents': t.get('loss_cents', 0),
+                    'sport': t.get('sport', _detect_sport(t.get('ticker', ''))),
+                    'timestamp': t.get('timestamp', ''),
+                    'bot_category': t.get('bot_category', ''),
+                })
+            return {'trades': summary, 'total': len(trades)}
 
-                yield "data: [DONE]\n\n"
-            except anthropic.APIError as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        elif tool_name == 'set_alert':
+            global _chat_alert_counter
+            _chat_alert_counter += 1
+            alert = {
+                'id': f'alert_{_chat_alert_counter}',
+                'ticker': tool_input['ticker'],
+                'side': tool_input['side'],
+                'condition': tool_input['condition'],
+                'price': tool_input['price'],
+                'description': tool_input.get('description', ''),
+                'status': 'watching',
+                'created_at': time.time(),
+                'triggered_at': None,
+            }
+            _chat_alerts.append(alert)
+            return {'success': True, 'alert': alert, 'message': f'Alert set: {alert["description"] or alert["ticker"]} {alert["side"]} {alert["condition"]} {alert["price"]}¢'}
 
-        return Response(stream_with_context(generate()), mimetype='text/event-stream',
-                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+        elif tool_name == 'change_view':
+            # Return the command — frontend handles it via ui_command in SSE stream
+            cmd = {}
+            if 'sport_filter' in tool_input:
+                cmd['sport_filter'] = tool_input['sport_filter']
+            if 'live_filter' in tool_input:
+                cmd['live_filter'] = tool_input['live_filter']
+            if 'search_query' in tool_input:
+                cmd['search_query'] = tool_input['search_query']
+            # Store the command so the SSE stream can emit it
+            _execute_chat_tool._pending_ui_command = cmd
+            return {'success': True, 'applied': cmd}
 
+        elif tool_name == 'get_schedule':
+            sport_filter = tool_input.get('sport', '').lower()
+            sports_to_check = [sport_filter] if sport_filter else ['nba', 'ncaab', 'ncaaw', 'nfl', 'nhl', 'mlb', 'mls']
+            schedule = []
+            for sport in sports_to_check:
+                try:
+                    r = requests.get(f'{base}/scoreboard/{sport}', timeout=8)
+                    data = r.json()
+                    for ev in data.get('events', []):
+                        status_obj = (ev.get('status') or {}).get('type', {})
+                        comp = (ev.get('competitions') or [{}])[0]
+                        competitors = comp.get('competitors', [])
+                        home = next((c for c in competitors if c.get('homeAway') == 'home'), {})
+                        away = next((c for c in competitors if c.get('homeAway') == 'away'), {})
+                        game_date = ev.get('date', '')
+                        game_time = ''
+                        if game_date:
+                            try:
+                                dt = datetime.fromisoformat(game_date.replace('Z', '+00:00'))
+                                dt_az = dt + timedelta(hours=-7)
+                                game_time = dt_az.strftime('%-I:%M %p AZ')
+                            except Exception:
+                                pass
+                        schedule.append({
+                            'sport': sport.upper(),
+                            'home': (home.get('team') or {}).get('displayName', '?'),
+                            'away': (away.get('team') or {}).get('displayName', '?'),
+                            'home_abbr': (home.get('team') or {}).get('abbreviation', ''),
+                            'away_abbr': (away.get('team') or {}).get('abbreviation', ''),
+                            'time': game_time,
+                            'status': status_obj.get('state', 'pre'),
+                            'detail': status_obj.get('shortDetail', ''),
+                            'home_score': home.get('score', ''),
+                            'away_score': away.get('score', ''),
+                        })
+                except Exception:
+                    continue
+            # Sort: live first, then by time
+            state_order = {'in': 0, 'pre': 1, 'post': 2}
+            schedule.sort(key=lambda g: (state_order.get(g['status'], 9), g['time']))
+            return {'schedule': schedule, 'total': len(schedule)}
+
+        elif tool_name == 'analyze_market':
+            ticker = tool_input['ticker']
+            analysis = {}
+            # Market data
+            try:
+                r = requests.get(f'{base}/market/{ticker}', timeout=10)
+                mkt = r.json()
+                if 'market' in mkt:
+                    mkt = mkt['market']
+                analysis['market'] = {
+                    'ticker': mkt.get('ticker'),
+                    'title': mkt.get('title'),
+                    'yes_bid': mkt.get('yes_bid'), 'yes_ask': mkt.get('yes_ask'),
+                    'no_bid': mkt.get('no_bid'), 'no_ask': mkt.get('no_ask'),
+                    'volume': mkt.get('volume'), 'volume_24h': mkt.get('volume_24h'),
+                    'open_interest': mkt.get('open_interest'),
+                    'status': mkt.get('status'),
+                }
+            except Exception:
+                analysis['market'] = {'error': 'Could not fetch market data'}
+            # Orderbook depth
+            try:
+                r = requests.get(f'{base}/orderbook/{ticker}', timeout=10)
+                ob = r.json()
+                ob_data = ob.get('orderbook', ob)
+                yes_levels = ob_data.get('yes', [])
+                no_levels = ob_data.get('no', [])
+                analysis['orderbook'] = {
+                    'yes_depth': len(yes_levels),
+                    'no_depth': len(no_levels),
+                    'best_yes_bid': yes_levels[0] if yes_levels else None,
+                    'best_no_bid': no_levels[0] if no_levels else None,
+                    'yes_total_qty': sum(l[1] for l in yes_levels) if yes_levels else 0,
+                    'no_total_qty': sum(l[1] for l in no_levels) if no_levels else 0,
+                }
+            except Exception:
+                analysis['orderbook'] = {'error': 'Could not fetch orderbook'}
+            # Opening line movement
+            opening = _opening_lines.get(ticker)
+            if opening:
+                current_yes = analysis.get('market', {}).get('yes_bid', 0) or 0
+                opening_yes = opening.get('yes_price', 0)
+                analysis['line_movement'] = {
+                    'opening_yes': opening_yes,
+                    'current_yes': current_yes,
+                    'movement': current_yes - opening_yes if current_yes and opening_yes else None,
+                    'captured_at': opening.get('captured_at'),
+                }
+            # Game context from ESPN
+            _refresh_espn_cache()
+            sport = _detect_sport(ticker)
+            game_ticker = ticker.split('-')[1] if '-' in ticker else ''
+            teams_str = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', game_ticker)
+            for abbr, info in _espn_cache.get('data', {}).items():
+                if abbr in teams_str.upper() and info.get('espn_sport', '') == sport:
+                    analysis['game_context'] = {
+                        'live': info.get('live'),
+                        'status': info.get('status'),
+                        'period': info.get('period'),
+                        'clock': info.get('clock'),
+                        'score_diff': info.get('score_diff'),
+                        'game_time': info.get('game_time'),
+                    }
+                    break
+            # Spread assessment
+            yes_bid = analysis.get('market', {}).get('yes_bid', 0) or 0
+            no_bid = analysis.get('market', {}).get('no_bid', 0) or 0
+            yes_ask = analysis.get('market', {}).get('yes_ask', 0) or 0
+            no_ask = analysis.get('market', {}).get('no_ask', 0) or 0
+            if yes_bid and no_bid:
+                analysis['edge'] = {
+                    'arb_spread': 100 - yes_bid - no_bid,
+                    'yes_spread': yes_ask - yes_bid if yes_ask else None,
+                    'no_spread': no_ask - no_bid if no_ask else None,
+                    'is_arb': (yes_bid + no_bid) < 99,
+                }
+            return analysis
+
+        elif tool_name == 'bulk_deploy':
+            sport = tool_input.get('sport', '').lower()
+            market_type = tool_input.get('market_type', '').lower()
+            live_only = tool_input.get('live_only', True)
+            confirm = tool_input.get('confirm', False)
+            bot_type = tool_input['bot_type']
+            count = tool_input['count']
+
+            # Find matching markets
+            markets = _markets_cache.get('markets', [])
+            if not markets:
+                return {'error': 'No cached markets — load the marketplace first'}
+            # Filter by sport
+            if sport:
+                markets = [m for m in markets if _detect_sport(m.get('event_ticker') or m.get('ticker', '')) == sport]
+            # Filter by market type
+            if market_type:
+                markets = [m for m in markets if m.get('market_type', '') == market_type]
+            # Filter to live only
+            if live_only:
+                markets = [m for m in markets if _is_game_live(m.get('event_ticker') or m.get('ticker', ''))]
+            # Deduplicate by event (one bot per game)
+            seen_events = set()
+            unique = []
+            for m in markets:
+                et = m.get('event_ticker', '')
+                if et not in seen_events:
+                    seen_events.add(et)
+                    unique.append(m)
+            markets = unique
+
+            if not confirm:
+                # Preview mode — show targets without deploying
+                targets = [{'ticker': m.get('ticker'), 'title': m.get('title', m.get('event_ticker', '')),
+                            'yes_bid': m.get('yes_bid'), 'no_bid': m.get('no_bid')} for m in markets[:20]]
+                return {'preview': True, 'targets': targets, 'total': len(markets),
+                        'message': f'Found {len(markets)} matching markets. Call again with confirm=true to deploy.'}
+
+            # Deploy bots
+            deployed = []
+            failed = []
+            for m in markets[:20]:  # Safety cap at 20
+                try:
+                    ticker = m.get('ticker', '')
+                    if bot_type == 'phantom':
+                        r = requests.post(f'{base}/bot/anchor', json={
+                            'ticker': ticker,
+                            'dog_side': tool_input.get('dog_side', 'yes'),
+                            'dog_price': tool_input.get('dog_price', 10),
+                            'count': count,
+                            'timeout': 300,
+                        }, timeout=15)
+                    elif bot_type == 'arb':
+                        r = requests.post(f'{base}/bot/create', json={
+                            'ticker': ticker,
+                            'yes_price': tool_input.get('yes_price', 45),
+                            'no_price': tool_input.get('no_price', 45),
+                            'count': count,
+                            'timeout': 300,
+                        }, timeout=15)
+                    elif bot_type == 'apex':
+                        r = requests.post(f'{base}/bot/ladder-arb', json={
+                            'ticker': ticker,
+                            'widths': [{'yes_price': tool_input.get('yes_price', 45),
+                                       'no_price': tool_input.get('no_price', 45),
+                                       'count': count}],
+                            'timeout': 300,
+                        }, timeout=15)
+                    else:
+                        failed.append({'ticker': ticker, 'error': f'Unknown bot type: {bot_type}'})
+                        continue
+                    result = r.json()
+                    if result.get('bot_id') or result.get('success'):
+                        deployed.append({'ticker': ticker, 'bot_id': result.get('bot_id', '?')})
+                    else:
+                        failed.append({'ticker': ticker, 'error': result.get('error', 'Unknown error')})
+                except Exception as e:
+                    failed.append({'ticker': m.get('ticker', '?'), 'error': str(e)})
+            return {'deployed': deployed, 'failed': failed, 'total_deployed': len(deployed)}
+
+        elif tool_name == 'get_leaderboard':
+            period = tool_input.get('period', 'today')
+            result = {}
+            # Get full P&L
+            try:
+                r = requests.get(f'{base}/pnl', timeout=10)
+                pnl = r.json()
+                result['lifetime'] = {
+                    'net_cents': pnl.get('net_cents', 0),
+                    'gross_profit': pnl.get('gross_profit_cents', 0),
+                    'gross_loss': pnl.get('gross_loss_cents', 0),
+                    'wins': pnl.get('completed_bots', 0),
+                    'losses': pnl.get('stopped_bots', 0),
+                    'sport_pnl': pnl.get('sport_pnl', {}),
+                }
+                total_trades = pnl.get('completed_bots', 0) + pnl.get('stopped_bots', 0)
+                result['lifetime']['win_rate'] = f"{pnl.get('completed_bots', 0) / total_trades * 100:.1f}%" if total_trades > 0 else 'N/A'
+            except Exception:
+                result['lifetime'] = {'error': 'Could not fetch P&L'}
+            # Get daily calendar
+            try:
+                r = requests.get(f'{base}/pnl/calendar', timeout=10)
+                cal = r.json()
+                days = cal.get('days', [])
+                if days:
+                    today_str = date.today().isoformat()
+                    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+                    today_data = next((d for d in days if d.get('date') == today_str), None)
+                    yesterday_data = next((d for d in days if d.get('date') == yesterday_str), None)
+                    if today_data:
+                        result['today'] = today_data
+                    if yesterday_data:
+                        result['yesterday'] = yesterday_data
+                    # Week summary
+                    week_start = (date.today() - timedelta(days=7)).isoformat()
+                    week_days = [d for d in days if d.get('date', '') >= week_start]
+                    if week_days:
+                        result['week'] = {
+                            'net_cents': sum(d.get('net_cents', 0) for d in week_days),
+                            'days_traded': len(week_days),
+                            'best_day': max(week_days, key=lambda d: d.get('net_cents', 0)),
+                            'worst_day': min(week_days, key=lambda d: d.get('net_cents', 0)),
+                        }
+            except Exception:
+                pass
+            return result
+
+        # ── NEW TOOL HANDLERS (Phase 2) ──────────────────────────
+        elif tool_name == 'analyze_props':
+            params = {'game': tool_input['game_query']}
+            if tool_input.get('sport'): params['sport'] = tool_input['sport']
+            if tool_input.get('stat_type'): params['stat'] = tool_input['stat_type']
+            r = requests.get(f'{base}/props/analyze', params=params, timeout=15)
+            return r.json()
+
+        elif tool_name == 'create_smart_bot':
+            bot_type = tool_input['bot_type']
+            ticker = tool_input['ticker']
+            repeat_count = tool_input.get('repeat_count', 0)
+            cancel_conditions = tool_input.get('cancel_conditions', {'game_ending': True, 'bid_below': 5})
+            count = tool_input.get('count', 1)
+
+            # Create the bot via existing endpoints
+            if bot_type == 'phantom':
+                r = requests.post(f'{base}/bot/anchor', json={
+                    'ticker': ticker,
+                    'dog_side': tool_input.get('dog_side', 'no'),
+                    'dog_price': tool_input.get('dog_price', 10),
+                    'target_width': tool_input.get('target_width', 5),
+                    'quantity': count,
+                    'repeat_count': repeat_count,
+                }, timeout=15)
+            elif bot_type == 'arb':
+                r = requests.post(f'{base}/bot/create', json={
+                    'ticker': ticker,
+                    'yes_price': tool_input.get('yes_price', 45),
+                    'no_price': tool_input.get('no_price', 45),
+                    'count': count,
+                    'repeat_count': repeat_count,
+                }, timeout=15)
+            elif bot_type == 'apex':
+                widths = tool_input.get('widths', [5, 8, 12])
+                r = requests.post(f'{base}/bot/ladder-arb', json={
+                    'ticker': ticker,
+                    'widths': widths,
+                    'quantity': count,
+                    'repeat_count': repeat_count,
+                }, timeout=15)
+            else:
+                return {'error': f'Unknown bot_type: {bot_type}'}
+
+            result = r.json()
+            # Attach cancel conditions to the bot
+            bot_id = result.get('bot_id')
+            if bot_id and bot_id in active_bots:
+                active_bots[bot_id]['cancel_conditions'] = cancel_conditions
+                save_state()
+                result['cancel_conditions'] = cancel_conditions
+                result['message'] = (result.get('message', '') +
+                    f' | Auto-cancel: game_ending={cancel_conditions.get("game_ending", False)}'
+                    f' bid_below={cancel_conditions.get("bid_below", "off")}'
+                    f' blowout={cancel_conditions.get("score_diff_above", "off")}')
+            return result
+
+        elif tool_name == 'diagnose_bots':
+            params = {}
+            if tool_input.get('bot_id'): params['bot_id'] = tool_input['bot_id']
+            r = requests.get(f'{base}/bots/diagnose', params=params, timeout=15)
+            return r.json()
+
+        elif tool_name == 'watch_game':
+            global _watch_counter
+            query = tool_input['game_query'].lower()
+            sport = tool_input.get('sport', '').lower()
+
+            # Resolve team abbreviations
+            team_abbrs = set()
+            for alias, codes in _TEAM_ALIASES.items():
+                if query in alias or alias in query:
+                    team_abbrs.update(c.upper() for c in codes)
+            team_abbrs.add(query.upper())
+
+            _watch_counter += 1
+            wg = {
+                'id': f'watch_{_watch_counter}',
+                'game_id': query,
+                'sport': sport,
+                'teams': query.title(),
+                'team_abbrs': list(team_abbrs),
+                'last_score_home': 0,
+                'last_score_away': 0,
+                'last_status': 'pre',
+                'created_at': time.time(),
+            }
+            _watched_games.append(wg)
+            return {'success': True, 'watch_id': wg['id'],
+                    'message': f'Watching {query.title()} — will notify on score runs, game start/end, and momentum shifts'}
+
+        else:
+            return {'error': f'Unknown tool: {tool_name}'}
+    except Exception as e:
+        return {'error': str(e)}
+
+# ── Claude Chat Endpoint ─────────────────────────────────────────────────
+@app.route('/api/chat', methods=['POST'])
+def claude_chat():
+    """Claude chat with tool-use: can read data and execute trading actions."""
+    body = request.json or {}
+    messages = body.get('messages', [])
+    if not messages:
+        return jsonify({'error': 'No messages provided'}), 400
+
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'ANTHROPIC_API_KEY not set on server'}), 500
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # Build system prompt with live context
+    context = body.get('context', {})
+    system_parts = [
+        'You are Claude, an AI trading assistant embedded in Meridian — a sports prediction-market trading terminal for Kalshi.',
+        'You can READ live data (balance, positions, bots, orderbooks, P&L) and EXECUTE actions (place bets, create arb/dog bots, cancel bots, close positions, scan for opportunities).',
+        'Be concise and action-oriented. When the user asks you to do something, use your tools to do it. Confirm before placing real trades by briefly stating what you will do.',
+        'For arb bots: YES + NO prices must sum to < 99 to be profitable after fees. Wider spreads = more profit but less likely to fill.',
+        'For anchor/dog bots: the dog side is the underdog (lower probability). You post a cheap maker order and hedge on fill.',
+        'Prices are always in CENTS (1-99). Count = number of contracts.',
+        'IMPORTANT: Always confirm with the user before executing trades or cancellations. State the action, ticker, prices, and count, then proceed.',
+        'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
+        'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
+        'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), and performance tracking (get_leaderboard).',
+        'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately.',
+        'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',
+        'For set_alert: alerts check live WebSocket prices. Tell the user what you set up.',
+        'For analyze_props: explain pricing simply. YES bid = market price for "it happens." NO ask = your cost to bet "it misses." Fair value = 100 - YES midpoint. Suggest dump-catch limit orders 3-8¢ below NO ask.',
+        'For create_smart_bot: ALWAYS suggest game_ending=true and bid_below=5 as default safety conditions. Creates a bot with repeat + auto-cancel.',
+        'For diagnose_bots: checks orphaned positions, price violations (orders above bid), stuck bots. Report issues clearly and suggest fixes.',
+        'For watch_game: adds game to watchlist for proactive notifications (score runs, game start/end). Notifications appear as chat badges.',
+        'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Middle posts both NO legs.',
+    ]
+    if context:
+        system_parts.append('\n--- LIVE MERIDIAN STATE ---')
+        if 'balance' in context:
+            bal = context['balance']
+            if isinstance(bal, dict):
+                # /api/ws/balance already returns dollars (not cents)
+                system_parts.append(f"Balance: ${bal.get('balance', 0):.2f}")
+            else:
+                system_parts.append(f"Balance: {bal}")
+        if 'active_bots' in context:
+            bots = context['active_bots']
+            system_parts.append(f"Active bots: {len(bots)}")
+            for b in bots[:15]:
+                system_parts.append(f"  - {b.get('ticker','?')} | {b.get('type','?')} | status={b.get('status','?')} | yes={b.get('yes_price','?')}¢ no={b.get('no_price','?')}¢ x{b.get('count','?')} | pnl={b.get('pnl','?')}")
+        if 'positions' in context and context['positions']:
+            pos = context['positions']
+            if isinstance(pos, dict):
+                pos = pos.get('positions', [])
+            system_parts.append(f"Open positions: {json.dumps(pos[:10], default=str)}")
+        if 'screen' in context:
+            screen = context['screen']
+            system_parts.append(f"User's current view: sport_filter={screen.get('sport_filter','all')}, live_only={screen.get('live_filter',False)}, search='{screen.get('search_query','')}'")
+        if 'visible_markets' in context:
+            mkts = context['visible_markets']
+            system_parts.append(f"Markets on screen ({len(mkts)}):")
+            for m in mkts[:30]:
+                parts_m = f"  - {m.get('ticker','?')}: {m.get('title','')} bid={m.get('yes_bid','?')}¢ ask={m.get('yes_ask','?')}¢"
+                if m.get('no_bid') is not None:
+                    parts_m += f" no_bid={m.get('no_bid')}¢ no_ask={m.get('no_ask')}¢"
+                if m.get('market_type'):
+                    parts_m += f" type={m['market_type']}"
+                parts_m += f" vol={m.get('volume','?')}"
+                system_parts.append(parts_m)
+        system_parts.append('--- END STATE ---')
+
+    # Check and inject triggered alerts
+    _check_chat_alerts()
+    triggered = [a for a in _chat_alerts if a['status'] == 'triggered']
+    watching = [a for a in _chat_alerts if a['status'] == 'watching']
+    if triggered:
+        system_parts.append('\n⚠️ TRIGGERED ALERTS:')
+        for a in triggered:
+            system_parts.append(f"  - {a['description'] or a['ticker']}: {a['side']} hit {a.get('triggered_price', '?')}¢ ({a['condition']} {a['price']}¢)")
+    if watching:
+        system_parts.append(f"\nActive alerts: {len(watching)} watching")
+    system_prompt = '\n'.join(system_parts)
+
+    def generate():
+        try:
+            api_messages = list(messages)
+            max_tool_rounds = 5  # prevent infinite loops
+
+            for _round in range(max_tool_rounds + 1):
+                # Call Claude (non-streaming when tools might be used, streaming on final)
+                response = client.messages.create(
+                    model='claude-sonnet-4-20250514',
+                    max_tokens=4096,
+                    system=system_prompt,
+                    messages=api_messages,
+                    tools=CLAUDE_TOOLS,
+                )
+
+                # Check if Claude wants to use tools
+                tool_uses = [b for b in response.content if b.type == 'tool_use']
+                text_blocks = [b for b in response.content if b.type == 'text']
+
+                # Stream any text that came before tool calls
+                for tb in text_blocks:
+                    if tb.text:
+                        yield f"data: {json.dumps({'text': tb.text})}\n\n"
+
+                if not tool_uses or response.stop_reason == 'end_turn':
+                    # No more tool calls — done
+                    break
+
+                # Execute tool calls and build tool results
+                api_messages.append({'role': 'assistant', 'content': [
+                    {'type': 'text', 'text': tb.text} if tb.type == 'text' else
+                    {'type': 'tool_use', 'id': tb.id, 'name': tb.name, 'input': tb.input}
+                    for tb in response.content
+                ]})
+
+                tool_results = []
+                for tu in tool_uses:
+                    yield f"data: {json.dumps({'action': tu.name, 'input': tu.input})}\n\n"
+                    result = _execute_chat_tool(tu.name, tu.input)
+                    # Emit UI command if change_view was called
+                    if hasattr(_execute_chat_tool, '_pending_ui_command') and _execute_chat_tool._pending_ui_command:
+                        yield f"data: {json.dumps({'ui_command': _execute_chat_tool._pending_ui_command})}\n\n"
+                        _execute_chat_tool._pending_ui_command = None
+                    # Emit triggered alerts if any
+                    triggered = [a for a in _chat_alerts if a['status'] == 'triggered' and a.get('_notified') is not True]
+                    if triggered:
+                        for a in triggered:
+                            a['_notified'] = True
+                        yield f"data: {json.dumps({'triggered_alerts': [{'id': a['id'], 'ticker': a['ticker'], 'description': a['description'], 'price': a['price']} for a in triggered]})}\n\n"
+                    # Truncate large results to save tokens
+                    result_str = json.dumps(result, default=str)
+                    if len(result_str) > 4000:
+                        result_str = result_str[:4000] + '...(truncated)'
+                    tool_results.append({
+                        'type': 'tool_result',
+                        'tool_use_id': tu.id,
+                        'content': result_str,
+                    })
+
+                api_messages.append({'role': 'user', 'content': tool_results})
+
+            yield "data: [DONE]\n\n"
+        except anthropic.APIError as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

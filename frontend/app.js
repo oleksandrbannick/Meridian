@@ -540,7 +540,7 @@ function _gameIdDateMatchesESPN(gameId, espnGame) {
     return daysDiff >= -1 && daysDiff <= 0;
 }
 
-function _findGameInLookup(lookup, gameId, sport) {
+function _findGameInLookup(lookup, gameId, sport, strict) {
     if (!gameId) return null;
     const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');
     if (!cleaned || cleaned.length < 4) return null;
@@ -576,18 +576,23 @@ function _findGameInLookup(lookup, gameId, sport) {
         }
     }
     // 4. Last resort: find either team individually (longest first)
-    for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
-        const t1 = cleaned.substring(0, i);
-        const t2 = cleaned.substring(i);
-        const g = lookup[`${sport}:${t1}`] || lookup[`${sport}:${t2}`];
-        if (g && _gameIdDateMatchesESPN(gameId, g)) return g;
+    // Skip in strict mode — single-team matching causes false positives during
+    // heavy game days (e.g. March Madness) where short abbreviation substrings
+    // from future games collide with currently-live teams.
+    if (!strict) {
+        for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
+            const t1 = cleaned.substring(0, i);
+            const t2 = cleaned.substring(i);
+            const g = lookup[`${sport}:${t1}`] || lookup[`${sport}:${t2}`];
+            if (g && _gameIdDateMatchesESPN(gameId, g)) return g;
+        }
     }
     
     return null;
 }
 
 function getLiveScoreForGame(gameId, sport) {
-    return _findGameInLookup(liveGames, gameId, sport);
+    return _findGameInLookup(liveGames, gameId, sport, true);
 }
 
 // Get game data for ANY state (pre/in/post) for scoreboard display
@@ -870,20 +875,12 @@ function isKalshiLive(market) {
 
     const ticker = market.event_ticker || market.ticker || '';
 
-    // ── Tennis: Use Kalshi milestone_status + expiration fallback ──
+    // ── Tennis: Use Kalshi milestone_status (authoritative, from backend cache) ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
     if (isTennis) {
         // milestone_status is injected by backend from milestones cache
-        if (market.milestone_status === 'live') return true;
-        // Fallback: Kalshi milestones can lag behind reality.
-        // If expected_expiration is in the past but market is still open/active, it's likely live.
-        const expStr = market.expected_expiration_time;
-        if (expStr && market.status !== 'closed' && market.status !== 'settled') {
-            const expTime = new Date(expStr).getTime();
-            const now = Date.now();
-            // Match was supposed to end already — it's either live or just finished
-            if (expTime < now && (now - expTime) < 24 * 60 * 60 * 1000) return true;
-        }
+        if (market.milestone_status) return market.milestone_status === 'live';
+        // No milestone data — not live (don't guess from expiration)
         return false;
     }
 

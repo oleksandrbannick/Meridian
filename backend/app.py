@@ -3058,18 +3058,23 @@ def _refresh_milestones_cache():
     if not kalshi_client:
         return
     event_status = {}  # event_ticker → milestone status
-    for i, series in enumerate(('KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH')):
-        try:
-            if i > 0:
-                time.sleep(0.15)  # gentle spacing to avoid 429s
-            resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
-            for m in resp.get('milestones', []):
-                ms_status = m.get('details', {}).get('status', 'not_started')
-                for et in m.get('related_event_tickers', []):
-                    event_status[et] = ms_status
-        except Exception as e:
-            print(f'⚠ Milestones fetch failed for {series}: {e}')
-            continue
+    for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH', 'KXATPMATCH', 'KXWTAMATCH')):
+        for attempt in range(2):
+            try:
+                if i > 0 or attempt > 0:
+                    time.sleep(0.5)  # 500ms spacing to avoid 429s
+                resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
+                for m in resp.get('milestones', []):
+                    ms_status = m.get('details', {}).get('status', 'not_started')
+                    for et in m.get('related_event_tickers', []):
+                        event_status[et] = ms_status
+                break  # success
+            except Exception as e:
+                if attempt == 0 and '429' in str(e):
+                    time.sleep(1.0)  # back off on rate limit
+                    continue
+                print(f'⚠ Milestones fetch failed for {series}: {e}')
+                break
     _milestones_cache = {'data': event_status, 'ts': time.time()}
     live_events = [k for k, v in event_status.items() if v == 'live']
     if live_events:

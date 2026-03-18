@@ -3669,7 +3669,7 @@ FLIP_ENTRY_MARGIN   = 15   # Trigger = max(entry-15, min(floor, entry-10)) — a
 MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (65-69¢ entries use entry-10 floor)
 
 # ─── Kalshi Milestones Cache (authoritative live detection for tennis) ────────
-# Maps event_ticker → milestone status ('not_started', 'live', 'ended', etc.)
+# Maps event_ticker → {status, start_date} from milestone data
 _milestones_cache = {'data': {}, 'ts': 0}
 _MILESTONES_CACHE_TTL = 60  # seconds
 
@@ -3680,7 +3680,7 @@ def _refresh_milestones_cache():
         return
     if not kalshi_client:
         return
-    event_status = {}  # event_ticker → milestone status
+    event_info = {}  # event_ticker → {status, start_date}
     for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH', 'KXATPMATCH', 'KXWTAMATCH')):
         for attempt in range(2):
             try:
@@ -3691,19 +3691,20 @@ def _refresh_milestones_cache():
                 events = resp.get('events', [])
                 if not milestones:
                     print(f'🎾 DEBUG {series}: no milestones key. keys={list(resp.keys())[:5]}, events={len(events)}')
-                    # Try extracting milestones from individual events
                     for ev in events:
                         ev_milestones = ev.get('milestones', [])
                         for ms in ev_milestones:
                             ms_status = ms.get('details', {}).get('status', 'not_started')
+                            start_date = ms.get('start_date', '')
                             et = ev.get('event_ticker', '')
                             if et:
-                                event_status[et] = ms_status
+                                event_info[et] = {'status': ms_status, 'start_date': start_date}
                 else:
                     for m in milestones:
                         ms_status = m.get('details', {}).get('status', 'not_started')
+                        start_date = m.get('start_date', '')
                         for et in m.get('related_event_tickers', []):
-                            event_status[et] = ms_status
+                            event_info[et] = {'status': ms_status, 'start_date': start_date}
                 break  # success
             except Exception as e:
                 if attempt == 0 and '429' in str(e):
@@ -3711,16 +3712,48 @@ def _refresh_milestones_cache():
                     continue
                 print(f'⚠ Milestones fetch failed for {series}: {e}')
                 break
-    _milestones_cache = {'data': event_status, 'ts': time.time()}
-    live_events = [k for k, v in event_status.items() if v == 'live']
+    _milestones_cache = {'data': event_info, 'ts': time.time()}
+    live_events = [k for k, v in event_info.items() if _is_milestone_live(v)]
     if live_events:
         print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
 
 
+def _is_milestone_live(info: dict) -> bool:
+    """Determine if a tennis match is live from milestone data.
+    Uses status if reliable, falls back to start_date for ATP/Challenger
+    where Kalshi often leaves status as 'not_started' during live play."""
+    if not info:
+        return False
+    status = info.get('status', '')
+    if status == 'live':
+        return True
+    if status == 'ended':
+        return False
+    # status is 'not_started' but might be wrong — check start_date
+    start_date = info.get('start_date', '')
+    if start_date:
+        try:
+            from datetime import datetime, timezone
+            sd = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            # Match started (start_date in the past) → likely live
+            if sd <= now:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _get_milestone_status(event_ticker: str):
-    """Get milestone status for an event ticker. Returns 'live', 'not_started', etc. or None."""
+    """Get milestone-derived live status for a tennis event.
+    Returns 'live', 'not_started', 'ended', or None."""
     _refresh_milestones_cache()
-    return _milestones_cache['data'].get(event_ticker)
+    info = _milestones_cache['data'].get(event_ticker)
+    if not info:
+        return None
+    if _is_milestone_live(info):
+        return 'live'
+    return info.get('status', 'not_started')
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}

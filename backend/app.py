@@ -1896,14 +1896,11 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
     """Total Kalshi maker fee for both legs of an arb trade, in cents."""
     return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
 
-def _arb_snap_check(anchor_price, bid_price, qty):
-    """Return True if snapping to bid nets >= MIN_SNAP_NET_PER_CONTRACT per contract."""
-    gross_per = 100 - anchor_price - bid_price
-    if gross_per <= 0:
-        return False
-    total_fees = _kalshi_side_fee_cents(anchor_price, qty) + _kalshi_side_fee_cents(bid_price, qty)
-    net_per = gross_per - (total_fees / max(qty, 1))
-    return net_per >= MIN_SNAP_NET_PER_CONTRACT
+def _arb_snap_check(anchor_price, bid_price, qty=1):
+    """Return True if snapping to bid is profitable. Simple cents check — no fee math.
+    Uses HARD_CEILING_CENTS as breakeven: snap only if combined is below ceiling."""
+    combined = anchor_price + bid_price
+    return combined < HARD_CEILING_CENTS
 
 # ─── Width-Based Quantity Scaling ────────────────────────────────────────────
 # When deploying multiple widths (ladder-arb), wider spreads are rarer but more
@@ -2942,25 +2939,11 @@ def _precalc_anchor_hedge(dog_price, target_width, dog_side, qty):
     max_fav_price = 100 - dog_price - target_width
     if max_fav_price < 1:
         return 0
-    # Ceiling cap with fee convergence
-    est_fees = kalshi_fee_cents(
-        dog_price if dog_side == 'yes' else max_fav_price,
-        dog_price if dog_side == 'no' else max_fav_price,
-        qty
-    )
-    if dog_price + max_fav_price + est_fees <= HARD_CEILING_CENTS:
+    # Ceiling cap — no fees in bot logic, 98¢ combined = breakeven
+    max_hedge = HARD_CEILING_CENTS - dog_price
+    if max_fav_price <= max_hedge:
         return max_fav_price
-    safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees
-    for _ in range(3):
-        est_fees = kalshi_fee_cents(
-            dog_price if dog_side == 'yes' else safe_hedge,
-            dog_price if dog_side == 'no' else safe_hedge,
-            qty
-        )
-        safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees
-        if dog_price + safe_hedge + est_fees <= HARD_CEILING_CENTS:
-            break
-    return max(0, safe_hedge)
+    return max(0, max_hedge)
 
 
 def _execute_anchor_fav_hedge(bot_id):
@@ -4794,11 +4777,10 @@ def create_bot():
         if active_on_ticker >= MAX_BOTS_PER_TICKER:
             return jsonify({'error': f'Bot cap: {active_on_ticker} active bots on {ticker} (max {MAX_BOTS_PER_TICKER}). Cancel some first.'}), 400
 
-        # ── FEE-AWARE MINIMUM WIDTH CHECK ──────────────────────
-        est_fees = kalshi_fee_cents(yes_price, no_price, quantity)
-        net_profit = (profit_per * quantity) - est_fees
-        if net_profit <= 0:
-            return jsonify({'error': f'Not profitable after fees: {profit_per}¢ width × {quantity} = {profit_per * quantity}¢ gross, {est_fees}¢ fees → {net_profit}¢ net'}), 400
+        # ── CEILING CHECK — no fees in bot logic, 98¢ = breakeven ──
+        combined = yes_price + no_price
+        if combined >= HARD_CEILING_CENTS:
+            return jsonify({'error': f'Combined {combined}¢ >= {HARD_CEILING_CENTS}¢ ceiling — not profitable'}), 400
 
         # ── PRICE VALIDATION: fetch ORDERBOOK for real-time best bids ──────────
         # The market endpoint returns stale prices; orderbook is real-time
@@ -5646,8 +5628,7 @@ def create_ladder_arb_bot():
             if profit <= 0:
                 continue
             rung_qty = _scale_qty_for_width(quantity, w) if width_scaling else quantity
-            est_fee = kalshi_fee_cents(target_yes, target_no, rung_qty)
-            if (profit * rung_qty) - est_fee <= 0:
+            if target_yes + target_no >= HARD_CEILING_CENTS:
                 continue
             if target_yes >= live_yes_ask and live_yes_ask > 0:
                 continue
@@ -6948,25 +6929,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
                 return
 
-            # Hard ceiling check — cap hedge price instead of selling back
-            est_fees = kalshi_fee_cents(
-                actual_dog_price if dog_side == 'yes' else hedge_price,
-                actual_dog_price if dog_side == 'no' else hedge_price,
-                qty
-            )
-            total_cost = actual_dog_price + hedge_price + est_fees
+            # Hard ceiling check — no fees in bot logic, 98¢ combined = breakeven
+            total_cost = actual_dog_price + hedge_price
             if total_cost > HARD_CEILING_CENTS:
-                # Converge: safe_hedge ↔ fees are circular, iterate until stable
-                safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees
-                for _ in range(3):
-                    est_fees = kalshi_fee_cents(
-                        actual_dog_price if dog_side == 'yes' else safe_hedge,
-                        actual_dog_price if dog_side == 'no' else safe_hedge,
-                        qty
-                    )
-                    safe_hedge = HARD_CEILING_CENTS - actual_dog_price - est_fees
-                    if actual_dog_price + safe_hedge + est_fees <= HARD_CEILING_CENTS:
-                        break
+                safe_hedge = HARD_CEILING_CENTS - actual_dog_price
                 if safe_hedge < 1:
                     print(f'🛑 PHANTOM CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
                     _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
@@ -7191,20 +7157,9 @@ def _handle_anchor_dog(bot_id, bot, actions):
             _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, 999, actions)
             return
 
-        est_fees = kalshi_fee_cents(
-            dog_price if dog_side == 'yes' else hedge_price,
-            dog_price if dog_side == 'no' else hedge_price,
-            qty
-        )
-        total_cost = dog_price + hedge_price + est_fees
+        total_cost = dog_price + hedge_price
         if total_cost > HARD_CEILING_CENTS:
-            safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees
-            est_fees2 = kalshi_fee_cents(
-                dog_price if dog_side == 'yes' else safe_hedge,
-                dog_price if dog_side == 'no' else safe_hedge,
-                qty
-            )
-            safe_hedge = HARD_CEILING_CENTS - dog_price - est_fees2
+            safe_hedge = HARD_CEILING_CENTS - dog_price
             if safe_hedge < 1:
                 _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
                 return

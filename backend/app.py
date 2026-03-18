@@ -57,6 +57,150 @@ def _check_chat_alerts():
             alert['triggered_at'] = time.time()
             alert['triggered_price'] = current
 
+# Notification queue — proactive push to chat
+_notification_queue = []  # [{id, type, message, data, created_at, read}]
+_notification_counter = 0
+
+# Game watchlist — proactive updates
+_watched_games = []  # [{id, game_id, sport, teams, ticker_pattern, notify_on, last_score_home, last_score_away, last_status}]
+_watch_counter = 0
+
+def _push_notification(ntype, message, data=None):
+    """Push a notification to the queue for frontend polling."""
+    global _notification_counter
+    _notification_counter += 1
+    _notification_queue.append({
+        'id': f'notif_{_notification_counter}',
+        'type': ntype,
+        'message': message,
+        'data': data or {},
+        'created_at': time.time(),
+        'read': False,
+    })
+
+def _start_notification_thread():
+    """Background thread: checks alerts, watchlist, bot health every 15s."""
+    def _loop():
+        while True:
+            try:
+                # 1. Check price alerts
+                _check_chat_alerts()
+                for a in _chat_alerts:
+                    if a['status'] == 'triggered' and not a.get('_notified'):
+                        a['_notified'] = True
+                        _push_notification('alert', f"🔔 Alert: {a.get('description') or a['ticker']} {a['side']} hit {a.get('triggered_price', '?')}¢ ({a['condition']} {a['price']}¢)", a)
+
+                # 2. Check watched games
+                _refresh_espn_cache()
+                cache = _espn_cache.get('data', {})
+                for wg in _watched_games:
+                    abbrs = wg.get('team_abbrs', [])
+                    for abbr in abbrs:
+                        info = cache.get(abbr)
+                        if not info:
+                            continue
+                        old_home = wg.get('last_score_home', 0)
+                        old_away = wg.get('last_score_away', 0)
+                        new_home = info.get('home_score', 0) if info.get('status') != 'pre' else 0
+                        new_away = info.get('away_score', 0) if info.get('status') != 'pre' else 0
+                        old_status = wg.get('last_status', 'pre')
+                        new_status = info.get('status', 'pre')
+
+                        # Detect game started
+                        if old_status == 'pre' and new_status == 'in':
+                            _push_notification('game_start', f"🏀 {wg['teams']} has started!", {'game_id': wg['game_id']})
+
+                        # Detect score run (8+ unanswered)
+                        if new_status == 'in' and (old_home + old_away) > 0:
+                            home_run = (new_home - old_home) if (new_away == old_away) else 0
+                            away_run = (new_away - old_away) if (new_home == old_home) else 0
+                            if home_run >= 8:
+                                _push_notification('score_run', f"🔥 {wg['teams']}: Home on {home_run}-0 run! Score: {new_home}-{new_away}", {'game_id': wg['game_id']})
+                            elif away_run >= 8:
+                                _push_notification('score_run', f"🔥 {wg['teams']}: Away on {away_run}-0 run! Score: {new_home}-{new_away}", {'game_id': wg['game_id']})
+
+                        # Detect game ending
+                        if new_status == 'in' and old_status == 'in':
+                            period = info.get('period', 0)
+                            clock = info.get('clock', '')
+                            # NCAA: period 2, clock under 2:00
+                            if period >= 2 and clock and ':' in clock:
+                                mins = int(clock.split(':')[0])
+                                if mins < 2 and not wg.get('_ending_notified'):
+                                    wg['_ending_notified'] = True
+                                    _push_notification('game_ending', f"⏰ {wg['teams']} entering final 2 minutes! {new_home}-{new_away}", {'game_id': wg['game_id']})
+
+                        # Detect game finished
+                        if old_status == 'in' and new_status == 'post':
+                            _push_notification('game_over', f"🏁 {wg['teams']} final: {new_home}-{new_away}", {'game_id': wg['game_id']})
+
+                        wg['last_score_home'] = new_home
+                        wg['last_score_away'] = new_away
+                        wg['last_status'] = new_status
+                        break  # only check first matching abbr
+
+                # 3. Check smart bot cancel conditions
+                for bot_id, bot in list(active_bots.items()):
+                    conditions = bot.get('cancel_conditions')
+                    if not conditions:
+                        continue
+                    if bot.get('status') in ('completed', 'stopped', 'cancelled'):
+                        continue
+                    ticker = bot.get('ticker', '')
+                    cancelled = False
+
+                    # Game ending
+                    if conditions.get('game_ending') and _is_game_ending(ticker):
+                        bot['status'] = 'cancelled'
+                        bot['repeat_count'] = 0  # stop repeats
+                        try:
+                            # Cancel all orders
+                            for key in ('dog_order_id', 'fav_order_id', 'hedge_order_id', 'order_a_id', 'order_b_id'):
+                                oid = bot.get(key)
+                                if oid:
+                                    try: kalshi_client.cancel_order(oid)
+                                    except Exception: pass
+                            for rung in bot.get('rungs', []):
+                                for side in ('yes', 'no'):
+                                    oid = rung.get(f'{side}_order_id')
+                                    if oid:
+                                        try: kalshi_client.cancel_order(oid)
+                                        except Exception: pass
+                        except Exception: pass
+                        _push_notification('auto_cancel', f"🛑 Auto-cancelled {bot_id}: game ending", {'bot_id': bot_id})
+                        cancelled = True
+
+                    # Bid crash
+                    if not cancelled and conditions.get('bid_below'):
+                        price = ws_manager.get_price(ticker) if ws_manager else None
+                        if price:
+                            min_bid = min(price.get('yes_bid', 99), price.get('no_bid', 99))
+                            if min_bid <= conditions['bid_below']:
+                                bot['status'] = 'cancelled'
+                                bot['repeat_count'] = 0
+                                _push_notification('auto_cancel', f"🛑 Auto-cancelled {bot_id}: bid crashed to {min_bid}¢", {'bot_id': bot_id})
+                                cancelled = True
+
+                    # Score blowout
+                    if not cancelled and conditions.get('score_diff_above'):
+                        _refresh_espn_cache()
+                        for abbr, info in _espn_cache.get('data', {}).items():
+                            if abbr in ticker.upper():
+                                diff = info.get('score_diff', 0)
+                                if diff > conditions['score_diff_above']:
+                                    bot['status'] = 'cancelled'
+                                    bot['repeat_count'] = 0
+                                    _push_notification('auto_cancel', f"🛑 Auto-cancelled {bot_id}: blowout ({diff}pt diff)", {'bot_id': bot_id})
+                                break
+
+            except Exception as e:
+                print(f'⚠ Notification thread error: {e}')
+            time.sleep(15)
+
+    t = threading.Thread(target=_loop, daemon=True, name='notification-monitor')
+    t.start()
+    print('📡 Notification monitor thread started')
+
 # Team name aliases → ticker codes for natural-language market search
 _TEAM_ALIASES = {
     # NBA
@@ -718,6 +862,282 @@ def get_market(ticker):
         
         return jsonify(market)
     
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/chat/notifications', methods=['GET'])
+def get_notifications():
+    """Return unread notifications and mark them as read."""
+    unread = [n for n in _notification_queue if not n['read']]
+    for n in unread:
+        n['read'] = True
+    # Trim old notifications (keep last 100)
+    while len(_notification_queue) > 100:
+        _notification_queue.pop(0)
+    return jsonify({'notifications': unread})
+
+
+@app.route('/api/props/analyze', methods=['GET'])
+def analyze_props_endpoint():
+    """Analyze player prop markets for a game."""
+    try:
+        query = request.args.get('game', '').strip().lower()
+        sport = request.args.get('sport', '').strip().lower()
+        stat_filter = request.args.get('stat', 'all').strip().lower()
+
+        if not query:
+            return jsonify({'error': 'game parameter required'}), 400
+
+        markets = _markets_cache.get('markets', [])
+        if not markets:
+            return jsonify({'props': [], 'note': 'No cached markets — load marketplace first'})
+
+        # Map stat types to series prefixes
+        stat_series = {
+            'points': ['PTS'], 'rebounds': ['REB'], 'assists': ['AST'],
+            'threes': ['3PT'], 'steals': ['STL'], 'blocks': ['BLK'],
+        }
+
+        # Expand query via team aliases
+        search_codes = set()
+        for alias, codes in _TEAM_ALIASES.items():
+            if query in alias or alias in query:
+                search_codes.update(c.upper() for c in codes)
+        search_codes.add(query.upper())
+
+        # Filter to prop markets matching the game
+        props = []
+        for m in markets:
+            series = (m.get('series_ticker') or '').upper()
+            # Must be a prop series
+            if not any(s in series for s in ['PTS', 'REB', 'AST', '3PT', 'STL', 'BLK']):
+                continue
+            # Must match sport
+            if sport and _detect_sport(m.get('event_ticker') or m.get('ticker', '')) != sport:
+                continue
+            # Must match game query
+            ticker_upper = (m.get('event_ticker') or m.get('ticker') or '').upper()
+            title_lower = (m.get('title') or '').lower()
+            matched = any(code in ticker_upper for code in search_codes) or query in title_lower
+            if not matched:
+                continue
+            # Stat type filter
+            if stat_filter != 'all':
+                target_prefixes = stat_series.get(stat_filter, [])
+                if target_prefixes and not any(p in series for p in target_prefixes):
+                    continue
+            props.append(m)
+
+        # Analyze each prop
+        results = []
+        for m in props:
+            title = m.get('title', '')
+            yes_bid = m.get('yes_bid', 0) or 0
+            yes_ask = m.get('yes_ask', 0) or 0
+            no_bid = m.get('no_bid', 0) or 0
+            no_ask = m.get('no_ask', 0) or 0
+
+            # Parse player name and line from title
+            # Typical: "Devin Booker (PHX) Over 25.5 Points?"
+            player = title.split('(')[0].strip() if '(' in title else title.split(' Over ')[0].split(' Under ')[0].strip()
+            line_match = re.search(r'(?:Over|Under)\s+([\d.]+)', title, re.I)
+            line = float(line_match.group(1)) if line_match else 0
+
+            # Detect stat type from series
+            series = (m.get('series_ticker') or '').upper()
+            stat = 'points' if 'PTS' in series else 'rebounds' if 'REB' in series else 'assists' if 'AST' in series else 'threes' if '3PT' in series else 'steals' if 'STL' in series else 'blocks' if 'BLK' in series else 'unknown'
+
+            # Pricing analysis
+            yes_mid = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else yes_bid or yes_ask
+            no_mid = (no_bid + no_ask) / 2 if no_bid and no_ask else no_bid or no_ask
+            fair_no = round(100 - yes_mid) if yes_mid else 0
+            vig = round(yes_mid + no_mid - 100) if yes_mid and no_mid else 0
+            buy_no_cost = no_ask if no_ask else 0
+            edge = round(fair_no - buy_no_cost) if fair_no and buy_no_cost else 0
+            dump_catch = max(1, no_ask - 5) if no_ask else max(1, fair_no - 3)
+
+            results.append({
+                'player': player,
+                'line': line,
+                'stat': stat,
+                'ticker': m.get('ticker'),
+                'yes_bid': yes_bid, 'yes_ask': yes_ask,
+                'no_bid': no_bid, 'no_ask': no_ask,
+                'yes_mid': round(yes_mid, 1),
+                'implied_over_pct': round(yes_mid) if yes_mid else 0,
+                'fair_no': fair_no,
+                'buy_no_cost': buy_no_cost,
+                'edge_cents': edge,
+                'vig_cents': vig,
+                'dump_catch_price': dump_catch,
+                'volume': m.get('volume', 0) or m.get('volume_24h', 0) or 0,
+            })
+
+        # Sort by edge (most edge first), then volume
+        results.sort(key=lambda x: (-x['edge_cents'], -(x['volume'] or 0)))
+        return jsonify({'props': results[:30], 'total': len(results), 'query': query})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/bots/diagnose', methods=['GET'])
+def diagnose_bots_endpoint():
+    """Health-check all active bots and positions. Detects orphans, price violations, stuck bots."""
+    try:
+        target_bot_id = request.args.get('bot_id', '')
+        issues = []
+        healthy = 0
+        now_d = time.time()
+
+        # 1. Orphan detection — positions without managing bots
+        try:
+            pos_resp = kalshi_client.get_positions()
+            positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+            bot_tickers = set()
+            for b in active_bots.values():
+                if b.get('status') not in ('completed', 'stopped', 'cancelled'):
+                    bot_tickers.add(b.get('ticker', ''))
+            for pos in positions:
+                ticker = pos.get('ticker', '')
+                qty = pos.get('total_traded', 0) or pos.get('position', 0)
+                if ticker and ticker not in bot_tickers and qty != 0:
+                    issues.append({
+                        'type': 'orphaned_position',
+                        'ticker': ticker,
+                        'qty': qty,
+                        'suggestion': 'No active bot managing this position. Close at market or investigate.',
+                    })
+        except Exception:
+            pass
+
+        # 2. Orphan detection — resting orders without bots
+        try:
+            known_ids = set()
+            for b in active_bots.values():
+                for key in ('dog_order_id', 'fav_order_id', 'hedge_order_id', 'order_a_id', 'order_b_id', 'yes_order_id', 'no_order_id'):
+                    oid = b.get(key)
+                    if oid:
+                        known_ids.add(oid)
+                for oid in b.get('_all_hedge_order_ids', []):
+                    known_ids.add(oid)
+                for oid in b.get('_all_placed_order_ids', []):
+                    known_ids.add(oid)
+                for oid in b.get('_all_dog_order_ids', []):
+                    known_ids.add(oid)
+                for rung in b.get('rungs', []):
+                    for side in ('yes', 'no'):
+                        oid = rung.get(f'{side}_order_id')
+                        if oid:
+                            known_ids.add(oid)
+            resting = kalshi_client.get_orders(status='resting')
+            resting_orders = resting.get('orders', [])
+            for o in resting_orders:
+                oid = o.get('order_id', '')
+                if oid and oid not in known_ids:
+                    issues.append({
+                        'type': 'orphaned_order',
+                        'order_id': oid,
+                        'ticker': o.get('ticker', ''),
+                        'side': o.get('side', ''),
+                        'price': o.get('yes_price') or o.get('no_price', 0),
+                        'suggestion': 'Resting order with no managing bot. Cancel it.',
+                    })
+        except Exception:
+            pass
+
+        # 3. Per-bot health checks
+        bots_to_check = {target_bot_id: active_bots[target_bot_id]} if target_bot_id and target_bot_id in active_bots else active_bots
+        for bot_id, bot in bots_to_check.items():
+            status = bot.get('status', '')
+            if status in ('completed', 'stopped', 'cancelled'):
+                continue
+            category = bot.get('bot_category', bot.get('type', ''))
+            ticker = bot.get('ticker', '')
+            age_s = now_d - (bot.get('created_at') or now_d)
+            bot_healthy = True
+
+            # Price violation check — orders above bid
+            ws_data = ws_manager.get_price(ticker) if ws_manager else None
+            if ws_data:
+                yes_bid = ws_data.get('yes_bid', 0)
+                no_bid = ws_data.get('no_bid', 0)
+
+                if category == 'anchor_dog' and status == 'dog_anchor_posted':
+                    dog_side = bot.get('dog_side', 'no')
+                    dog_price = bot.get('dog_price', 0)
+                    dog_bid = yes_bid if dog_side == 'yes' else no_bid
+                    if dog_price > 0 and dog_bid > 0 and dog_price > dog_bid:
+                        issues.append({'type': 'price_above_bid', 'bot_id': bot_id, 'category': 'phantom_dog',
+                                       'posted_price': dog_price, 'current_bid': dog_bid,
+                                       'suggestion': f'Dog order at {dog_price}¢ but bid is {dog_bid}¢ — should amend down'})
+                        bot_healthy = False
+
+                if category == 'anchor_dog' and status == 'fav_hedge_posted':
+                    fav_side = bot.get('fav_side', 'yes')
+                    fav_price = bot.get('fav_price', 0)
+                    fav_bid = yes_bid if fav_side == 'yes' else no_bid
+                    fav_ask = ws_data.get('yes_ask', 0) if fav_side == 'yes' else ws_data.get('no_ask', 0)
+                    if fav_price > 0 and fav_ask > 0 and fav_price >= fav_ask:
+                        issues.append({'type': 'order_at_ask', 'bot_id': bot_id, 'category': 'phantom_fav',
+                                       'posted_price': fav_price, 'current_ask': fav_ask,
+                                       'suggestion': f'Fav hedge at {fav_price}¢ >= ask {fav_ask}¢ — accidentally taking!'})
+                        bot_healthy = False
+
+            # Stuck bot detection
+            if category == 'anchor_dog':
+                if status == 'dog_anchor_posted' and age_s > 3600:  # 1 hour
+                    issues.append({'type': 'stale_bot', 'bot_id': bot_id, 'status': status,
+                                   'age_min': round(age_s / 60),
+                                   'suggestion': 'Dog posted for over an hour — game may be over'})
+                    bot_healthy = False
+                if status == 'dog_filled' and not bot.get('_hedge_fired'):
+                    fill_age = now_d - (bot.get('dog_filled_at') or now_d)
+                    if fill_age > 10:
+                        issues.append({'type': 'stuck_bot', 'bot_id': bot_id, 'status': 'dog_filled_no_hedge',
+                                       'stuck_s': round(fill_age),
+                                       'suggestion': 'Dog filled but hedge never fired — WS may have missed the fill'})
+                        bot_healthy = False
+                if status == 'fav_hedge_posted':
+                    fav_age = now_d - (bot.get('fav_posted_at') or now_d)
+                    timeout = bot.get('hedge_timeout_s', 120)
+                    if fav_age > timeout + 30:  # 30s grace
+                        issues.append({'type': 'stuck_bot', 'bot_id': bot_id, 'status': 'fav_past_timeout',
+                                       'posted_s': round(fav_age), 'timeout': timeout,
+                                       'suggestion': f'Fav hedge posted {round(fav_age)}s ago (timeout={timeout}s) — should have sold back'})
+                        bot_healthy = False
+
+            elif 'ladder_arb' in (category or '') or status.startswith('ladder_arb'):
+                if status == 'ladder_arb_posted' and age_s > 300:  # 5 min
+                    issues.append({'type': 'stale_bot', 'bot_id': bot_id, 'status': status,
+                                   'age_min': round(age_s / 60),
+                                   'suggestion': 'Apex posted 5+ min with no fills — repost may have failed'})
+                    bot_healthy = False
+                if status in ('ladder_arb_yes_filled', 'ladder_arb_no_filled') and not bot.get('_consolidated'):
+                    fill_age = now_d - (bot.get('first_fill_at') or now_d)
+                    if fill_age > 30:
+                        issues.append({'type': 'stuck_bot', 'bot_id': bot_id, 'status': 'filled_not_consolidated',
+                                       'stuck_s': round(fill_age),
+                                       'suggestion': 'Anchor filled but hedge never consolidated — sweep thread may have crashed'})
+                        bot_healthy = False
+
+            elif category == 'middle':
+                if status == 'one_filled':
+                    fill_age = now_d - (bot.get('one_filled_at') or now_d)
+                    sl = bot.get('stop_loss_cents', 0)
+                    if fill_age > 1800 and sl == 0:  # 30 min
+                        issues.append({'type': 'exposed_position', 'bot_id': bot_id,
+                                       'status': 'one_filled_no_stoploss', 'age_min': round(fill_age / 60),
+                                       'suggestion': f'One leg filled for {round(fill_age/60)}min with no stop-loss — exposed'})
+                        bot_healthy = False
+
+            if bot_healthy:
+                healthy += 1
+
+        summary = f'{healthy} healthy, {len(issues)} issues found'
+        return jsonify({'healthy_bots': healthy, 'issues': issues, 'summary': summary})
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -13446,6 +13866,71 @@ if __name__ == '__main__':
                 },
             }
         },
+        {
+            "name": "analyze_props",
+            "description": "Analyze player prop markets for a game. Shows pricing breakdown, fair value, edge assessment, and dump-catch limit order suggestions for the NO/under side. Use search_markets first if you need to find the game.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "game_query": {"type": "string", "description": "Team name or game (e.g. 'Suns vs Lakers', 'Duke')"},
+                    "sport": {"type": "string", "description": "nba, ncaab, etc."},
+                    "stat_type": {"type": "string", "enum": ["points","rebounds","assists","threes","steals","blocks","all"], "description": "Which stat (default: all)"}
+                },
+                "required": ["game_query"]
+            }
+        },
+        {
+            "name": "create_smart_bot",
+            "description": "Create a bot with repeat and smart auto-cancel conditions. The bot repeats N times but automatically cancels when conditions are met (game ending, market crash, score blowout). ALWAYS suggest game_ending=true and bid_below=5 as defaults.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "bot_type": {"type": "string", "enum": ["arb", "phantom", "apex"], "description": "Type of bot"},
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "repeat_count": {"type": "integer", "description": "How many times to repeat (e.g. 10)"},
+                    "cancel_conditions": {
+                        "type": "object",
+                        "description": "Conditions that auto-cancel the bot and stop repeats",
+                        "properties": {
+                            "game_ending": {"type": "boolean", "description": "Cancel if game is in final 2 minutes (default true)"},
+                            "bid_below": {"type": "integer", "description": "Cancel if bid drops below this (e.g. 5 cents)"},
+                            "score_diff_above": {"type": "integer", "description": "Cancel if score difference exceeds this (blowout)"}
+                        }
+                    },
+                    "dog_side": {"type": "string", "enum": ["yes", "no"], "description": "For phantom: which side is the dog"},
+                    "dog_price": {"type": "integer", "description": "For phantom: dog anchor price"},
+                    "target_width": {"type": "integer", "description": "For phantom: target arb width"},
+                    "count": {"type": "integer", "description": "Contracts per bot"},
+                    "yes_price": {"type": "integer", "description": "For arb/apex: YES price"},
+                    "no_price": {"type": "integer", "description": "For arb/apex: NO price"},
+                    "widths": {"type": "array", "items": {"type": "integer"}, "description": "For apex: list of widths"}
+                },
+                "required": ["bot_type", "ticker", "repeat_count"]
+            }
+        },
+        {
+            "name": "diagnose_bots",
+            "description": "Health-check all active bots and positions. Detects orphaned positions (contracts with no active bot), orphaned orders, price violations (orders above bid), stuck bots, and lifecycle anomalies.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "bot_id": {"type": "string", "description": "Optional: diagnose a specific bot. Omit to check all."},
+                    "fix": {"type": "boolean", "description": "If true, attempt to fix issues (cancel orphans, etc). Default false = report only."}
+                },
+            }
+        },
+        {
+            "name": "watch_game",
+            "description": "Add a game to your watchlist. You'll get proactive notifications about score changes, momentum shifts (8+ unanswered points), game starting/ending, and final scores.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "game_query": {"type": "string", "description": "Team name or game (e.g. 'Suns vs Lakers', 'Duke')"},
+                    "sport": {"type": "string", "description": "nba, ncaab, etc."}
+                },
+                "required": ["game_query"]
+            }
+        },
     ]
 
     def _execute_chat_tool(tool_name, tool_input):
@@ -13889,6 +14374,97 @@ if __name__ == '__main__':
                     pass
                 return result
 
+            # ── NEW TOOL HANDLERS (Phase 2) ──────────────────────────
+            elif tool_name == 'analyze_props':
+                params = {'game': tool_input['game_query']}
+                if tool_input.get('sport'): params['sport'] = tool_input['sport']
+                if tool_input.get('stat_type'): params['stat'] = tool_input['stat_type']
+                r = requests.get(f'{base}/props/analyze', params=params, timeout=15)
+                return r.json()
+
+            elif tool_name == 'create_smart_bot':
+                bot_type = tool_input['bot_type']
+                ticker = tool_input['ticker']
+                repeat_count = tool_input.get('repeat_count', 0)
+                cancel_conditions = tool_input.get('cancel_conditions', {'game_ending': True, 'bid_below': 5})
+                count = tool_input.get('count', 1)
+
+                # Create the bot via existing endpoints
+                if bot_type == 'phantom':
+                    r = requests.post(f'{base}/bot/anchor', json={
+                        'ticker': ticker,
+                        'dog_side': tool_input.get('dog_side', 'no'),
+                        'dog_price': tool_input.get('dog_price', 10),
+                        'target_width': tool_input.get('target_width', 5),
+                        'quantity': count,
+                        'repeat_count': repeat_count,
+                    }, timeout=15)
+                elif bot_type == 'arb':
+                    r = requests.post(f'{base}/bot/create', json={
+                        'ticker': ticker,
+                        'yes_price': tool_input.get('yes_price', 45),
+                        'no_price': tool_input.get('no_price', 45),
+                        'count': count,
+                        'repeat_count': repeat_count,
+                    }, timeout=15)
+                elif bot_type == 'apex':
+                    widths = tool_input.get('widths', [5, 8, 12])
+                    r = requests.post(f'{base}/bot/ladder-arb', json={
+                        'ticker': ticker,
+                        'widths': widths,
+                        'quantity': count,
+                        'repeat_count': repeat_count,
+                    }, timeout=15)
+                else:
+                    return {'error': f'Unknown bot_type: {bot_type}'}
+
+                result = r.json()
+                # Attach cancel conditions to the bot
+                bot_id = result.get('bot_id')
+                if bot_id and bot_id in active_bots:
+                    active_bots[bot_id]['cancel_conditions'] = cancel_conditions
+                    save_state()
+                    result['cancel_conditions'] = cancel_conditions
+                    result['message'] = (result.get('message', '') +
+                        f' | Auto-cancel: game_ending={cancel_conditions.get("game_ending", False)}'
+                        f' bid_below={cancel_conditions.get("bid_below", "off")}'
+                        f' blowout={cancel_conditions.get("score_diff_above", "off")}')
+                return result
+
+            elif tool_name == 'diagnose_bots':
+                params = {}
+                if tool_input.get('bot_id'): params['bot_id'] = tool_input['bot_id']
+                r = requests.get(f'{base}/bots/diagnose', params=params, timeout=15)
+                return r.json()
+
+            elif tool_name == 'watch_game':
+                global _watch_counter
+                query = tool_input['game_query'].lower()
+                sport = tool_input.get('sport', '').lower()
+
+                # Resolve team abbreviations
+                team_abbrs = set()
+                for alias, codes in _TEAM_ALIASES.items():
+                    if query in alias or alias in query:
+                        team_abbrs.update(c.upper() for c in codes)
+                team_abbrs.add(query.upper())
+
+                _watch_counter += 1
+                wg = {
+                    'id': f'watch_{_watch_counter}',
+                    'game_id': query,
+                    'sport': sport,
+                    'teams': query.title(),
+                    'team_abbrs': list(team_abbrs),
+                    'last_score_home': 0,
+                    'last_score_away': 0,
+                    'last_status': 'pre',
+                    'created_at': time.time(),
+                }
+                _watched_games.append(wg)
+                return {'success': True, 'watch_id': wg['id'],
+                        'message': f'Watching {query.title()} — will notify on score runs, game start/end, and momentum shifts'}
+
             else:
                 return {'error': f'Unknown tool: {tool_name}'}
         except Exception as e:
@@ -13925,6 +14501,11 @@ if __name__ == '__main__':
             'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately.',
             'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',
             'For set_alert: alerts check live WebSocket prices. Tell the user what you set up.',
+            'For analyze_props: explain pricing simply. YES bid = market price for "it happens." NO ask = your cost to bet "it misses." Fair value = 100 - YES midpoint. Suggest dump-catch limit orders 3-8¢ below NO ask.',
+            'For create_smart_bot: ALWAYS suggest game_ending=true and bid_below=5 as default safety conditions. Creates a bot with repeat + auto-cancel.',
+            'For diagnose_bots: checks orphaned positions, price violations (orders above bid), stuck bots. Report issues clearly and suggest fixes.',
+            'For watch_game: adds game to watchlist for proactive notifications (score runs, game start/end). Notifications appear as chat badges.',
+            'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Middle posts both NO legs.',
         ]
         if context:
             system_parts.append('\n--- LIVE MERIDIAN STATE ---')
@@ -14041,5 +14622,8 @@ if __name__ == '__main__':
 
         return Response(stream_with_context(generate()), mimetype='text/event-stream',
                         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+    # Start notification monitor thread (alerts, watchlist, smart cancel)
+    _start_notification_thread()
 
     app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

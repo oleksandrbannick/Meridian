@@ -4640,42 +4640,12 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
     """Spawned from WS fill handler on first anchor fill.
-    Phase 1: IMMEDIATELY cancel all opposite-side (hedge-side) orders
-    Phase 2: Compute weighted avg from filled rungs, place ONE consolidated hedge
+    Phase 1: HEDGE FIRST — compute weighted avg, place consolidated hedge (priority token)
+    Phase 2: Cancel all opposite-side (hedge-side) orders
     Anchor-side orders stay alive — late fills handled by _handle_late_anchor_fill"""
 
-    # ── Phase 1: Immediately cancel opposite-side orders ──
+    # ── Phase 1: Compute weighted avg + place consolidated hedge FIRST ──
     unfilled_oids = []
-    with ws_fill_lock:
-        bot = active_bots.get(bot_id)
-        if not bot:
-            return
-        status = bot.get('status', '')
-        if status not in ('ladder_arb_yes_filled', 'ladder_arb_no_filled'):
-            bot.pop('_sweep_thread_running', None)
-            return
-        if bot.get('_consolidated'):
-            bot.pop('_sweep_thread_running', None)
-            save_state()
-            return
-
-        filled_side = 'yes' if status == 'ladder_arb_yes_filled' else 'no'
-        unfilled_side = 'no' if filled_side == 'yes' else 'yes'
-
-        # Collect opposite-side order IDs and clear them from rungs immediately
-        for rung in bot.get('rungs', []):
-            oid = rung.get(f'{unfilled_side}_order_id')
-            if oid:
-                unfilled_oids.append(oid)
-                rung[f'{unfilled_side}_order_id'] = None
-        save_state()
-
-    # Cancel opposite-side orders SEQUENTIALLY with rate limiting + retry
-    cancel_ok = sum(1 for oid in unfilled_oids if _cancel_with_retry(oid))
-
-    print(f'△ APEX SWEEP PHASE1: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
-
-    # ── Phase 2: Compute weighted avg + place consolidated hedge (no sleep) ──
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
         if not bot:
@@ -4693,6 +4663,13 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
         ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
+
+        # Collect opposite-side order IDs (will cancel AFTER hedge is placed)
+        for rung in bot.get('rungs', []):
+            oid = rung.get(f'{unfilled_side}_order_id')
+            if oid:
+                unfilled_oids.append(oid)
+                rung[f'{unfilled_side}_order_id'] = None
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)
@@ -4791,6 +4768,11 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
 
         bot.pop('_sweep_thread_running', None)
         save_state()
+
+    # ── Phase 2: Cancel opposite-side orders AFTER hedge is placed ──
+    if unfilled_oids:
+        cancel_ok = sum(1 for oid in unfilled_oids if _cancel_with_retry(oid))
+        print(f'△ APEX SWEEP PHASE2: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {unfilled_side} orders')
 
 
 def _execute_ladder_arb_full_completion(bot_id):

@@ -1910,19 +1910,9 @@ class KalshiWSManager:
             print(f'❌ WS reconnect failed: {e}')
 
     def _subscribe_portfolio(self):
-        """Subscribe to the Kalshi portfolio channel for live balance updates."""
-        if not self._connected or not self._ws:
-            return
-        try:
-            cmd = {
-                'id': self._next_id(),
-                'cmd': 'subscribe',
-                'params': {'channels': ['balance']},
-            }
-            self._ws.send(json.dumps(cmd))
-            print('📡 WS subscribed to balance channel')
-        except Exception as e:
-            print(f'⚠ WS balance subscribe failed: {e}')
+        """No-op: Kalshi WS doesn't support a 'balance' channel (returns error 8).
+        Balance updates are handled by start_balance_poll() via REST instead."""
+        pass
 
     def start_balance_poll(self, kalshi_api_client):
         """Start a background thread that polls balance + positions every 15s via REST.

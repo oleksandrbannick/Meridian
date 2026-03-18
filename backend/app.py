@@ -12063,8 +12063,8 @@ def get_latency():
     return jsonify({
         'order_place':   _latency_stats('order_place'),
         'orderbook':     _latency_stats('orderbook'),
-        'fill_to_hedge_dog': _latency_stats('fill_to_hedge_dog'),
-        'fill_to_hedge_arb': _latency_stats('fill_to_hedge_arb'),
+        'fill_to_hedge_phantom': _latency_stats('fill_to_hedge_phantom'),
+        'fill_to_hedge_apex':    _latency_stats('fill_to_hedge_apex'),
         'api_ping':      _latency_stats('api_ping'),
         'live_ping_ms':  ping_ms,
         'raw_ping_ms':   raw_ping_ms,

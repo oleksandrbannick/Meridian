@@ -4585,39 +4585,25 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
     bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
     bot['_target_hedge_price'] = new_target
 
-    # 2. Check profitability at current bid
+    # 2. Price logic: snap to bid if profitable, otherwise target (walk handles upward movement)
+    current_hedge_price = bot.get('hedge_price', 0)
     ws_data = ws_manager.get_price(bot['ticker'], max_age_s=5) if ws_manager else None
-    unfilled_bid = unfilled_ask = 0
+    unfilled_bid = 0
     if ws_data:
         unfilled_bid = ws_data.get(f'{unfilled_side}_bid', 0)
-        opp = 'no' if unfilled_side == 'yes' else 'yes'
-        opp_bid = ws_data.get(f'{opp}_bid', 0)
-        unfilled_ask = (100 - opp_bid) if opp_bid > 0 else 0
-
-    combined_at_bid = round(new_avg_price) + unfilled_bid
-    is_profitable = unfilled_bid > 0 and combined_at_bid < 100
 
     hedge_oid = bot.get('hedge_order_id')
     if not hedge_oid:
         return
 
-    # 3. Amend price logic:
-    #    - Profitable → snap to bid (or bid+1 if wide spread)
-    #    - Not profitable → set to new target (lower, because wider widths avg down)
-    if is_profitable:
-        spread = (unfilled_ask - unfilled_bid) if unfilled_ask > 0 else 0
-        amend_price = (unfilled_bid + 1) if spread > 3 else unfilled_bid
-        if unfilled_ask > 0 and amend_price >= unfilled_ask:
-            amend_price = unfilled_bid
+    # Snap to bid if profitable (same check walk uses)
+    if unfilled_bid > 0 and _arb_snap_check(round(new_avg_price), unfilled_bid, total_qty):
+        amend_price = unfilled_bid
     else:
-        # New target is lower because wider widths increase avg_width
-        # Walk continues from this new lower starting position (timer not reset)
+        # Set to new target; if walk already moved price above target, keep walk's price
         amend_price = max(1, new_target)
-        # Cap at bid, below ask
-        if unfilled_bid > 0:
-            amend_price = min(amend_price, unfilled_bid)
-        if unfilled_ask > 0 and amend_price >= unfilled_ask:
-            amend_price = max(1, unfilled_bid)
+        if current_hedge_price > amend_price:
+            amend_price = current_hedge_price
 
     # 4. DO NOT reset walk timer — walk_start_time / step count preserved
 
@@ -4632,8 +4618,8 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         if amend_price != bot.get('hedge_price'):
             bot['hedge_price'] = amend_price
         print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
-              f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ '
-              f'{"SNAP@"+str(amend_price) if is_profitable else "qty-only@"+str(amend_price)}')
+              f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ amend@{amend_price}¢'
+              f'{" SNAP" if unfilled_bid > 0 and amend_price == unfilled_bid else ""}')
     except Exception as e:
         print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
 

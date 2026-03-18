@@ -7922,12 +7922,12 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             # Cap walk at 98¢ combined (anchor + hedge), fees excluded from ceiling
                             combined = anchor_price_for_ceiling + current_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
-                            # Already past ceiling? Don't cap — need to exit
+                            # Already past ceiling? Don't cap — need to exit (even at a loss)
                             past_ceiling = current_price >= max_hedge
                             # bid+1 cap: never at or above ask
                             bid_plus = min(unfilled_bid + 1, unfilled_ask - 1) if unfilled_ask > 0 and unfilled_ask > unfilled_bid else unfilled_bid
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
-                                # At ceiling — bid+1 in wide spread to fill faster
+                                # At ceiling — jump to bid to exit
                                 if past_ceiling:
                                     new_price = bid_plus if wide_spread else unfilled_bid
                                 else:

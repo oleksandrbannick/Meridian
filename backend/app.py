@@ -7881,7 +7881,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             combined = anchor_price_for_ceiling + current_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
                             # Already past ceiling? Don't cap — need to exit
-                            past_ceiling = current_price > max_hedge
+                            past_ceiling = current_price >= max_hedge
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
                                 # At ceiling — bid+1 in wide spread to fill faster
                                 if past_ceiling:
@@ -7891,7 +7891,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             elif (unfilled_bid > current_price
                                   and _arb_snap_check(anchor_price_for_ceiling, unfilled_bid, rq)):
                                 gross = 100 - anchor_price_for_ceiling - unfilled_bid
-                                use_bid_plus = wide_spread and gross >= 5
+                                use_bid_plus = wide_spread and gross >= 2
                                 if past_ceiling:
                                     new_price = (unfilled_bid + 1) if use_bid_plus else unfilled_bid
                                 else:
@@ -7900,7 +7900,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                       f'(anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
                             else:
                                 gross = 100 - anchor_price_for_ceiling - current_price
-                                walk_cap = (unfilled_bid + 1) if (wide_spread and gross >= 5) else unfilled_bid
+                                walk_cap = (unfilled_bid + 1) if (wide_spread and gross >= 2) else unfilled_bid
                                 if past_ceiling:
                                     new_price = min(current_price + 1, walk_cap)
                                 else:
@@ -8003,7 +8003,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             rung_anchor = rung.get(f'{filled_side}_price', avg_filled)
                             combined = rung_anchor + current_price
                             max_hedge = HARD_CEILING_CENTS - rung_anchor
-                            past_ceiling = current_price > max_hedge
+                            past_ceiling = current_price >= max_hedge
                             if combined >= HARD_CEILING_CENTS and unfilled_bid > current_price:
                                 if past_ceiling:
                                     new_price = (unfilled_bid + 1) if wide_spread else unfilled_bid
@@ -8012,7 +8012,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             elif (unfilled_bid > current_price
                                   and _arb_snap_check(rung_anchor, unfilled_bid, rq)):
                                 gross = 100 - rung_anchor - unfilled_bid
-                                use_bid_plus = wide_spread and gross >= 5
+                                use_bid_plus = wide_spread and gross >= 2
                                 if past_ceiling:
                                     new_price = (unfilled_bid + 1) if use_bid_plus else unfilled_bid
                                 else:
@@ -8021,7 +8021,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                                       f'(anchor={rung_anchor}¢ combined={rung_anchor + new_price}¢)')
                             else:
                                 gross = 100 - rung_anchor - current_price
-                                walk_cap = (unfilled_bid + 1) if (wide_spread and gross >= 5) else unfilled_bid
+                                walk_cap = (unfilled_bid + 1) if (wide_spread and gross >= 2) else unfilled_bid
                                 if past_ceiling:
                                     new_price = min(current_price + 1, walk_cap)
                                 else:

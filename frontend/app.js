@@ -4995,7 +4995,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const combined = avgFilled + currentHedgePrice;
     const firstFillAt = bot.first_fill_at || 0;
     const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
-    const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(20 - (nowSec - lastWalkAt))) : 20;
+    const atCeiling = combined >= 98;
+    const walkInterval = atCeiling ? 3 : 20;
+    const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(walkInterval - (nowSec - lastWalkAt))) : walkInterval;
     const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
     const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
     // Ceiling distance
@@ -5165,8 +5167,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const walkStartPrice = bot.walk_start_price || currentHedgePrice;
             const prevPrice = walkCount > 1 ? currentHedgePrice - 1 : walkStartPrice;
             const nextPrice = atBid ? currentHedgePrice : currentHedgePrice + 1;
-            const walkPct = Math.min(100, ((20 - nextWalkIn) / 20) * 100);
-            const atCeiling = combined >= 98;
+            const walkPct = Math.min(100, ((walkInterval - nextWalkIn) / walkInterval) * 100);
             const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '📈';
             const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atBid ? 'AT BID' : 'WALKING';
             const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
@@ -6067,8 +6068,9 @@ async function loadBots() {
                 const urgColor = isAmending ? '#ff8800' : isHalftime ? '#818cf8' : walkCount > 0 ? '#00aaff' : '#ffaa00';
                 const bidDisplay = liveBidFilled != null ? `${liveBidFilled}¢` : '?';
                 const lastWalkAt = bot.last_walk_at || bot.first_fill_at || 0;
-                const nextWalkIn = lastWalkAt > 0 ? Math.max(0, 20 - (Date.now()/1000 - lastWalkAt)) : 20;
-                const nextWalkPct = Math.min(100, ((20 - nextWalkIn) / 20) * 100);
+                const _walkInterval = combined >= 98 ? 3 : 20;
+                const nextWalkIn = lastWalkAt > 0 ? Math.max(0, _walkInterval - (Date.now()/1000 - lastWalkAt)) : _walkInterval;
+                const nextWalkPct = Math.min(100, ((_walkInterval - nextWalkIn) / _walkInterval) * 100);
                 const nextWalkStr = Math.ceil(nextWalkIn) + 's';
                 const walkStartPrice = bot.walk_start_price || pendingPrice;
                 const prevPrice = walkCount > 0 ? pendingPrice - 1 : walkStartPrice;

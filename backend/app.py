@@ -3064,10 +3064,23 @@ def _refresh_milestones_cache():
                 if i > 0 or attempt > 0:
                     time.sleep(0.5)  # 500ms spacing to avoid 429s
                 resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
-                for m in resp.get('milestones', []):
-                    ms_status = m.get('details', {}).get('status', 'not_started')
-                    for et in m.get('related_event_tickers', []):
-                        event_status[et] = ms_status
+                milestones = resp.get('milestones', [])
+                events = resp.get('events', [])
+                if not milestones:
+                    print(f'🎾 DEBUG {series}: no milestones key. keys={list(resp.keys())[:5]}, events={len(events)}')
+                    # Try extracting milestones from individual events
+                    for ev in events:
+                        ev_milestones = ev.get('milestones', [])
+                        for ms in ev_milestones:
+                            ms_status = ms.get('details', {}).get('status', 'not_started')
+                            et = ev.get('event_ticker', '')
+                            if et:
+                                event_status[et] = ms_status
+                else:
+                    for m in milestones:
+                        ms_status = m.get('details', {}).get('status', 'not_started')
+                        for et in m.get('related_event_tickers', []):
+                            event_status[et] = ms_status
                 break  # success
             except Exception as e:
                 if attempt == 0 and '429' in str(e):
@@ -5265,6 +5278,7 @@ def create_anchor_bot():
             '_precalc_hedge_price': _precalc_anchor_hedge(actual_dog_price, target_width, dog_side, quantity),
             '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
             '_last_repost_at':     0,
+            '_all_dog_order_ids':  [dog_order_id],
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {
@@ -6298,6 +6312,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 print(f'⚠ PHANTOM CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
                 hedge_price = safe_hedge
 
+            # Guard: WS handler may have already posted the fav hedge
+            if bot.get('_hedge_fired') and bot.get('fav_order_id'):
+                return
+
             # Post the fav hedge at target-width-capped price (maker)
             try:
                 fav_resp, actual_fav_price = create_order_maker(
@@ -6390,6 +6408,11 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 if abs(new_dog_price - bot['dog_price']) <= 1:
                     bot['posted_at'] = now  # reset timer so we check again later
                     return
+
+                # Track old order ID before overwriting (in case cancel fails)
+                all_dog_ids = bot.get('_all_dog_order_ids', [])
+                all_dog_ids.append(dog_order_id)
+                bot['_all_dog_order_ids'] = all_dog_ids
 
                 # Cancel old, place new
                 _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
@@ -6525,6 +6548,10 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 return
             print(f'⚠ PHANTOM CEILING CAP: {bot_id} capped hedge {hedge_price}→{safe_hedge}¢')
             hedge_price = safe_hedge
+
+        # Guard: WS handler may have already posted the fav hedge
+        if bot.get('_hedge_fired') and bot.get('fav_order_id'):
+            return
 
         try:
             fav_resp, actual_fav_price = create_order_maker(
@@ -6866,6 +6893,14 @@ def _handle_anchor_dog(bot_id, bot, actions):
             new_dog_price = max(1, anchor_base - anchor_depth)
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
+
+        # Defensive: cancel old dog order and track it before placing new one
+        old_dog_oid = bot.get('dog_order_id')
+        if old_dog_oid:
+            _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
+            all_dog_ids = bot.get('_all_dog_order_ids', [])
+            all_dog_ids.append(old_dog_oid)
+            bot['_all_dog_order_ids'] = all_dog_ids
 
         try:
             dog_resp, actual_price = create_order_maker(
@@ -11284,6 +11319,14 @@ def cancel_bot(bot_id):
                         cancelled.append(f'DOG_{dog_side.upper()}')
                     except Exception as e:
                         print(f'⚠ cancel_bot({bot_id}): cancel dog order failed: {e}')
+                # Cancel all historically tracked dog orders (from reposts)
+                for oid in bot.get('_all_dog_order_ids', []):
+                    if oid and oid != bot.get('dog_order_id'):
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
                 # Cancel unfilled fav order
                 if bot.get('fav_order_id') and fav_fill < qty:
                     try:
@@ -11323,6 +11366,27 @@ def cancel_bot(bot_id):
                                 cancelled.append(f'{side.upper()}@{rung.get(f"{side}_price", "?")}c')
                             except Exception as e:
                                 print(f'⚠ cancel_bot({bot_id}): cancel {side} rung failed: {e}')
+                # Cancel all historically tracked hedge/placed orders
+                rung_oids = set()
+                for rung in bot.get('rungs', []):
+                    for sk in ('yes_order_id', 'no_order_id'):
+                        if rung.get(sk):
+                            rung_oids.add(rung[sk])
+                for oid in bot.get('_all_hedge_order_ids', []):
+                    if oid and oid not in rung_oids:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                            cancelled.append(f'HEDGE_{oid[:8]}')
+                        except Exception:
+                            pass
+                for oid in bot.get('_all_placed_order_ids', []):
+                    if oid and oid not in rung_oids:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
                 # Sell back any filled positions on either side
                 for side in ('yes', 'no'):
                     total_fill = sum(r.get(f'{side}_fill_qty', 0) for r in bot.get('rungs', []))
@@ -11751,6 +11815,14 @@ def _sweep_orphaned_orders():
         for oid in bot.get('_all_hedge_order_ids', []):
             if oid:
                 known_ids.add(oid)
+        # All placed order IDs (master list)
+        for oid in bot.get('_all_placed_order_ids', []):
+            if oid:
+                known_ids.add(oid)
+        # All dog order IDs (anchor-dog reposts)
+        for oid in bot.get('_all_dog_order_ids', []):
+            if oid:
+                known_ids.add(oid)
 
     try:
         resp = kalshi_client.get_orders(status='resting')
@@ -12118,8 +12190,13 @@ def _compute_pnl_bucket(trades, category=None):
             gross_profit += p
             gross_loss   += l
             total_fees += fees
-            stopped += 1
             pnl = p - l
+            # Mirror win logic: classify by actual P&L, not just result string
+            # A sellback that netted positive is still a win
+            if pnl >= 0 and p > 0:
+                completed += 1
+            else:
+                stopped += 1
         sport = t.get('sport', 'Other')
         sport_pnl[sport] = sport_pnl.get(sport, 0) + pnl
     net_cents = gross_profit - gross_loss

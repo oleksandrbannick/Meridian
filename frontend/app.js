@@ -870,12 +870,20 @@ function isKalshiLive(market) {
 
     const ticker = market.event_ticker || market.ticker || '';
 
-    // ── Tennis: Use Kalshi milestone_status (authoritative, from backend cache) ──
+    // ── Tennis: Use Kalshi milestone_status + expiration fallback ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
     if (isTennis) {
         // milestone_status is injected by backend from milestones cache
-        if (market.milestone_status) return market.milestone_status === 'live';
-        // No milestone data — not live (don't guess from expiration)
+        if (market.milestone_status === 'live') return true;
+        // Fallback: Kalshi milestones can lag behind reality.
+        // If expected_expiration is in the past but market is still open/active, it's likely live.
+        const expStr = market.expected_expiration_time;
+        if (expStr && market.status !== 'closed' && market.status !== 'settled') {
+            const expTime = new Date(expStr).getTime();
+            const now = Date.now();
+            // Match was supposed to end already — it's either live or just finished
+            if (expTime < now && (now - expTime) < 24 * 60 * 60 * 1000) return true;
+        }
         return false;
     }
 
@@ -9954,8 +9962,8 @@ async function loadDogHistory() {
             const totalFees   = trades.reduce((s,t) => s + (t.fee_cents||0), 0);
             const net = totalProfit - totalLoss - totalFees;
             const netCol = net >= 0 ? '#00ff88' : '#ff4444';
-            const wins  = trades.filter(t => t.result === 'completed' || (t.profit_cents||0) > 0).length;
-            const losses = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback' || t.result === 'amended' || t.result === 'arb_loss' || ((t.loss_cents||0) > 0 && (t.profit_cents||0) === 0)).length;
+            const wins  = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n >= 0 && (t.profit_cents||0) > 0; }).length;
+            const losses = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n < 0; }).length;
             const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.arb_width||0), 0) / trades.length).toFixed(1) : '—';
             const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
             statsPanel.innerHTML = trades.length === 0

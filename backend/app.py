@@ -4453,16 +4453,46 @@ def _check_and_record_rung_completions(bot_id, bot):
     # When a single consolidated hedge covers all rungs, the individual rungs don't
     # get {hedge_side}_filled_at set automatically — we back-fill it here.
     if bot.get('_consolidated') and bot.get('_hedge_fill_count', 0) > 0:
-        _fs = bot.get('first_fill_side', 'yes')
-        _hs = 'no' if _fs == 'yes' else 'yes'
-        _hedge_fill_ts = bot.get('hedge_fill_at') or time.time()
-        _filled_count = 0
-        for _r in bot.get('rungs', []):
-            _rq = _r.get('quantity', qty_per)
-            if _r.get(f'{_fs}_fill_qty', 0) >= _rq and not _r.get(f'{_hs}_filled_at'):
-                if _filled_count + _rq <= bot.get('_hedge_fill_count', 0):
-                    _r[f'{_hs}_filled_at'] = _hedge_fill_ts
-                    _filled_count += _rq
+        # Verify hedge order actually exists on Kalshi before backfilling
+        hedge_oid = bot.get('hedge_order_id')
+        if hedge_oid and not bot.get('_hedge_verified'):
+            try:
+                api_rate_limiter.wait()
+                order_resp = kalshi_client.get_order(hedge_oid)
+                order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
+                actual_fills = order_data.get('fill_count', 0) or order_data.get('filled_count', 0) or 0
+                order_status = order_data.get('status', '')
+                if actual_fills == 0 and order_status in ('canceled', 'cancelled', 'expired', ''):
+                    print(f'🚨 HEDGE VERIFICATION FAILED: {bot_id} order {hedge_oid[:12]} has 0 fills (status={order_status}) — clearing phantom fills')
+                    bot['_hedge_fill_count'] = 0
+                    bot['_hedge_verified'] = True
+                    bot['_hedge_phantom'] = True
+                else:
+                    if actual_fills != bot.get('_hedge_fill_count', 0):
+                        print(f'🔧 HEDGE FILL CORRECTION: {bot_id} local={bot.get("_hedge_fill_count", 0)} actual={actual_fills}')
+                    bot['_hedge_fill_count'] = actual_fills
+                    bot['_hedge_verified'] = True
+            except Exception as e:
+                if '404' in str(e):
+                    print(f'🚨 HEDGE ORDER GONE: {bot_id} order {hedge_oid[:12]} — 404, clearing phantom fills')
+                    bot['_hedge_fill_count'] = 0
+                    bot['_hedge_verified'] = True
+                    bot['_hedge_phantom'] = True
+                else:
+                    print(f'⚠ Hedge verification failed for {bot_id}: {e}')
+
+        # Only backfill timestamps if verified fills > 0
+        if bot.get('_hedge_fill_count', 0) > 0 and not bot.get('_hedge_phantom'):
+            _fs = bot.get('first_fill_side', 'yes')
+            _hs = 'no' if _fs == 'yes' else 'yes'
+            _hedge_fill_ts = bot.get('hedge_fill_at') or time.time()
+            _filled_count = 0
+            for _r in bot.get('rungs', []):
+                _rq = _r.get('quantity', qty_per)
+                if _r.get(f'{_fs}_fill_qty', 0) >= _rq and not _r.get(f'{_hs}_filled_at'):
+                    if _filled_count + _rq <= bot.get('_hedge_fill_count', 0):
+                        _r[f'{_hs}_filled_at'] = _hedge_fill_ts
+                        _filled_count += _rq
 
     # NOTE: Hedge gen completion + state reset is handled by
     # _execute_ladder_arb_full_completion which properly clears rung fill counts.
@@ -4471,12 +4501,19 @@ def _check_and_record_rung_completions(bot_id, bot):
 
     # Check if ALL rungs are resolved
     all_resolved = True
+    # When hedge is fully filled (consolidated), partial rungs are resolved
+    hedge_fully_done = (bot.get('_consolidated')
+                        and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
+                        and bot.get('hedge_qty', 0) > 0)
     for rung in bot.get('rungs', []):
         if rung.get('completed'):
             continue
         rq = rung.get('quantity', qty_per)
         filled_side = bot.get('first_fill_side')
         if filled_side and rung.get(f'{filled_side}_fill_qty', 0) > 0:
+            if hedge_fully_done:
+                # Partial fill but hedge is done — treat as resolved
+                continue
             # Has anchor fill but not completed — not resolved
             all_resolved = False
             break
@@ -5241,15 +5278,12 @@ def create_ladder_bot():
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             smart_first = max(1, anchor_base - anchor_depth)
 
-            # Get the frontend's first rung price to compute the offset
-            frontend_first = max(r.get('price', 0) for r in rungs_input)
-            price_shift = smart_first - frontend_first
-
-            if price_shift != 0:
-                print(f'👻 PHANTOM SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
-                      f'base={"ask" if spread > 2 else "bid"} → shifting all rungs by {price_shift:+d}¢')
-                for r in rungs_input:
-                    r['price'] = max(1, int(r['price']) + price_shift)
+            # Apply per-rung 2¢ ladder stagger from smart_first
+            print(f'👻 PHANTOM SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
+                  f'base={"ask" if spread > 2 else "bid"} anchor_depth={anchor_depth} smart_first={smart_first}')
+            for idx, r in enumerate(rungs_input):
+                r['price'] = max(1, smart_first - (idx * 2))
+                print(f'   rung[{idx}] → {r["price"]}¢ (depth={anchor_depth + idx * 2}¢)')
 
         # Place all rung orders via batch
         rung_specs = [{'ticker': ticker, 'side': dog_side, 'count': int(r.get('qty', 1)), 'price': int(r['price'])} for r in rungs_input]

@@ -1703,6 +1703,47 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ── Tool Status Pill ──────────────────────────────────── */
+        .tool-status-pill {
+            display: inline-flex; align-items: center; gap: 6px;
+            margin-top: 8px; padding: 4px 12px 4px 8px;
+            background: #0d1525; border: 1px solid #1e2740;
+            border-radius: 100px; font-size: 11px;
+            position: relative; overflow: hidden;
+            animation: toolPillIn 0.2s ease-out;
+        }
+        @keyframes toolPillIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .tool-dot {
+            width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+            animation: toolDotPulse 1.5s ease-in-out infinite;
+        }
+        @keyframes toolDotPulse {
+            0%, 100% { opacity: 0.6; transform: scale(1); }
+            50%      { opacity: 1;   transform: scale(1.3); }
+        }
+        .tool-label {
+            color: #8892a6; font-weight: 500; letter-spacing: 0.02em;
+        }
+        .tool-context {
+            color: #555; font-style: italic; max-width: 120px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .tool-count {
+            background: #1e2740; color: #6b7fa3;
+            font-size: 9px; font-weight: 700;
+            padding: 1px 5px; border-radius: 8px;
+        }
+        .tool-shimmer {
+            position: absolute; top: 0; left: -100%; width: 100%; height: 100%;
+            background: linear-gradient(110deg, transparent 25%, rgba(217,119,6,0.06) 50%, transparent 75%);
+            animation: shimmerSlide 2s linear infinite;
+            pointer-events: none;
+        }
+        @keyframes shimmerSlide { to { left: 100%; } }
+
         /* ── Mobile ─────────────────────────────────────────────── */
         @media (max-width: 768px) {
             #claude-chat-panel {
@@ -2063,6 +2104,25 @@
             sendClaudeMsg();
         };
 
+        // ── Tool status pill helpers ──
+        let _toolCallCount = 0;
+
+        function getToolCategory(action) {
+            const cats = {
+                market: ['search_markets','get_market','get_orderbook','get_live_scores','get_schedule','analyze_market','get_opening_lines','get_live_kalshi_markets','get_boxscore','analyze_props'],
+                trade: ['place_bet','close_position','amend_order'],
+                bot: ['create_arb_bot','create_ladder_arb','create_anchor_dog','create_anchor_ladder','create_middle_bot','create_smart_bot','bulk_deploy','cancel_bot','cancel_bots_bulk','modify_bot','set_bot_phase','diagnose_bots'],
+                portfolio: ['get_pnl','get_balance','get_positions','get_orders','get_order_status','get_fills','get_pnl_calendar','get_bot_stats','get_risk_exposure','get_leaderboard','get_trade_history'],
+                system: ['get_ws_status','get_latency','sweep_orphans','get_orphaned_positions','reconcile_positions','read_activity_log','get_system_status','get_active_bots','get_notifications'],
+                ui: ['change_view','set_alert','watch_game']
+            };
+            const colors = { market: '#f59e0b', trade: '#00ff88', bot: '#00cc6a', portfolio: '#60a5fa', system: '#8892a6', ui: '#d97706' };
+            for (const [cat, tools] of Object.entries(cats)) {
+                if (tools.includes(action)) return colors[cat];
+            }
+            return '#8892a6';
+        }
+
         function renderMd(text) {
             let html = text
                 .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -2154,6 +2214,7 @@
             input.value = ''; input.style.height = 'auto';
             sendBtn.disabled = true;
             chatStreaming = true;
+            _toolCallCount = 0;
             const assistantEl = appendMsg('assistant', '', true);
             const bubbleEl = assistantEl.querySelector('.claude-msg-bubble');
 
@@ -2197,7 +2258,7 @@
                                 continue;
                             }
                             else if (data.action) {
-                                // Claude is executing a tool — show as subtle transient status, not permanent text
+                                // Claude is executing a tool — show as animated pill badge
                                 const actionNames = {
                                     place_bet: 'Placing bet', create_arb_bot: 'Deploying arb bot',
                                     create_ladder_arb: 'Deploying Apex bot', create_anchor_dog: 'Deploying Phantom bot',
@@ -2225,10 +2286,20 @@
                                     get_opening_lines: 'Checking lines', get_notifications: 'Checking alerts',
                                     get_live_kalshi_markets: 'Checking live markets'
                                 };
+                                _toolCallCount++;
                                 const label = actionNames[data.action] || data.action;
-                                // Show as transient status below any existing text — replaced on next action or text
+                                const dotColor = getToolCategory(data.action);
+                                const ctx = data.input ? (data.input.query || data.input.ticker || data.input.bot_id || '') : '';
+                                const ctxHtml = ctx ? '<span class="tool-context"> \u2014 ' + ctx + '</span>' : '';
+                                const countHtml = _toolCallCount > 1 ? '<span class="tool-count">' + _toolCallCount + '</span>' : '';
                                 const existingHtml = fullText ? renderMd(fullText) : '';
-                                bubbleEl.innerHTML = existingHtml + '<div style="color:#555;font-size:11px;margin-top:6px;display:flex;align-items:center;gap:5px;"><div class="spinner" style="width:10px;height:10px;border:1.5px solid #1e2740;border-top-color:#555;border-radius:50%;animation:spin 0.8s linear infinite;"></div>' + label + '</div>';
+                                bubbleEl.innerHTML = existingHtml
+                                    + '<div class="tool-status-pill">'
+                                    + '<span class="tool-dot" style="background:' + dotColor + '"></span>'
+                                    + '<span class="tool-label">' + label + '</span>'
+                                    + ctxHtml + countHtml
+                                    + '<div class="tool-shimmer"></div>'
+                                    + '</div>';
                                 continue;
                             }
                             else if (data.ui_command) {
@@ -2332,6 +2403,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260319f"></script>
+    <script src="app.js?v=20260319g"></script>
 </body>
 </html>

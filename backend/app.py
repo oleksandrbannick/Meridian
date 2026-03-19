@@ -15460,7 +15460,8 @@ def claude_chat():
         'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
         'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',
         'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts).',
-        'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately.',
+        'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately. Do NOT call change_view repeatedly — one call is enough.',
+        'EFFICIENCY: The visible_markets in your context already shows what the user sees. If they ask "what games are live" or "what can I trade", check the visible_markets context FIRST before calling search_markets. Only search if you need a specific team/ticker not in the context. Do NOT search every sport one by one — use get_schedule() for a full overview.',
         'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',
         'For set_alert: alerts check live WebSocket prices. Tell the user what you set up.',
         'For analyze_props: explain pricing simply. YES bid = market price for "it happens." NO ask = your cost to bet "it misses." Fair value = 100 - YES midpoint. Suggest dump-catch limit orders 3-8¢ below NO ask.',
@@ -15545,7 +15546,7 @@ def claude_chat():
     def generate():
         try:
             api_messages = list(messages)
-            max_tool_rounds = 5  # prevent infinite loops
+            max_tool_rounds = 12  # allow complex multi-tool queries
 
             for _round in range(max_tool_rounds + 1):
                 # Build API kwargs

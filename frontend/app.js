@@ -3324,7 +3324,7 @@ async function deployAnchorBot() {
         const data = await resp.json();
         if (data.success) {
             const msg = isLadder
-                ? `⚡ ARB BOT deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢`
+                ? `👻 Phantom deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢`
                 : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢`;
             showNotification(msg);
             closeModal();

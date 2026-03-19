@@ -8095,21 +8095,30 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 api_rate_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
                 current_fav_bid = _best_bid(ob, fav_side)
+                current_fav_ask = _best_ask(ob, fav_side)
             except Exception:
                 current_fav_bid = 0
+                current_fav_ask = 0
 
             if current_fav_bid <= 0:
                 bot['fav_last_walk_at'] = now
                 return
 
-            new_fav_price = min(current_fav_price + 1, current_fav_bid)
+            # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
+            fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
+            if fav_spread >= 2 and current_fav_ask > current_fav_bid:
+                walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
+            else:
+                walk_target = current_fav_bid
+
+            new_fav_price = min(current_fav_price + 1, walk_target)
             combined = avg_dog + new_fav_price  # fees excluded from ceiling
 
             if combined > WALK_CEILING:
-                # At ceiling — jump to bid instead of holding
-                if current_fav_bid > current_fav_price:
-                    new_fav_price = current_fav_bid
-                    print(f'📈 PHANTOM WALK CEILING → BID: {bot_id} | dog={dog_side.upper()} avg@{avg_dog}¢ — jumping to bid {current_fav_bid}¢')
+                # Apex: past ceiling — jump to walk_target to exit ASAP, even at a loss
+                if walk_target > current_fav_price:
+                    new_fav_price = walk_target
+                    print(f'📈 APEX WALK CEILING → EXIT: {bot_id} | dog={dog_side.upper()} avg@{avg_dog}¢ + fav@{new_fav_price}¢ = {avg_dog + new_fav_price}¢ — jumping to target {walk_target}¢ (bid={current_fav_bid}¢ ask={current_fav_ask}¢)')
                 else:
                     bot['fav_last_walk_at'] = now
                     return
@@ -8123,8 +8132,8 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 api_rate_limiter.wait()
                 kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
                 walk_count = bot.get('fav_walk_count', 0) + 1
-                print(f'📈 PHANTOM WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
-                      f'(bid={current_fav_bid}¢ combined={combined}¢ step #{walk_count})')
+                print(f'📈 APEX WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                      f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
                 bot['fav_last_walk_at'] = now

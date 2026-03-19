@@ -1644,6 +1644,62 @@
         #claude-chat-send:disabled { opacity: 0.3; cursor: not-allowed; transform: none; box-shadow: none; }
         #claude-chat-send svg { width: 16px; height: 16px; }
 
+        /* ── Model Selector & Controls ─────────────────────────── */
+        .claude-chat-controls {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 16px; border-top: 1px solid #1e2740;
+            background: #0a0e1a; flex-shrink: 0;
+        }
+        .claude-model-select {
+            background: #111827; border: 1px solid #1e2740; border-radius: 8px;
+            color: #8892a6; font-size: 11px; padding: 4px 8px;
+            cursor: pointer; outline: none; font-family: inherit;
+        }
+        .claude-model-select:focus { border-color: #d97706; }
+        .claude-model-select option { background: #111827; color: #e2e8f0; }
+        .claude-toggle-btn {
+            background: #111827; border: 1px solid #1e2740; border-radius: 8px;
+            color: #8892a6; font-size: 11px; padding: 4px 8px;
+            cursor: pointer; transition: all 0.15s; font-family: inherit;
+            display: flex; align-items: center; gap: 4px;
+        }
+        .claude-toggle-btn:hover { border-color: #d97706; color: #f59e0b; }
+        .claude-toggle-btn.active { border-color: #d97706; color: #f59e0b; background: #1a1500; }
+        .claude-controls-spacer { flex: 1; }
+        .claude-img-upload {
+            background: none; border: 1px solid #1e2740; border-radius: 8px;
+            color: #8892a6; width: 28px; height: 28px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s; flex-shrink: 0;
+        }
+        .claude-img-upload:hover { border-color: #d97706; color: #f59e0b; }
+        .claude-img-preview {
+            display: flex; gap: 6px; padding: 6px 16px; flex-wrap: wrap;
+        }
+        .claude-img-preview-item {
+            position: relative; width: 60px; height: 60px; border-radius: 8px;
+            overflow: hidden; border: 1px solid #1e2740;
+        }
+        .claude-img-preview-item img {
+            width: 100%; height: 100%; object-fit: cover;
+        }
+        .claude-img-preview-item .remove-img {
+            position: absolute; top: 2px; right: 2px;
+            background: rgba(0,0,0,0.7); color: #ff4444; border: none;
+            border-radius: 50%; width: 18px; height: 18px; font-size: 11px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .claude-thinking-indicator {
+            display: flex; align-items: center; gap: 6px; padding: 4px 0;
+            color: #d97706; font-size: 12px; font-style: italic;
+        }
+        .claude-thinking-indicator .spinner {
+            width: 12px; height: 12px; border: 2px solid #1e2740;
+            border-top-color: #d97706; border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
         /* ── Mobile ─────────────────────────────────────────────── */
         @media (max-width: 768px) {
             #claude-chat-panel {
@@ -1655,16 +1711,11 @@
         }
     </style>
 
-    <!-- FAB: Claude starburst logo bubble -->
+    <!-- FAB: Claude logo bubble -->
     <button id="claude-chat-fab" onclick="toggleClaudeChat()" aria-label="Chat with Claude">
         <svg class="claude-blob" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- Claude starburst/sparkle logo -->
-            <g transform="translate(50,50)">
-                <line x1="0" y1="-18" x2="0" y2="18" stroke="#0c1020" stroke-width="6" stroke-linecap="round"/>
-                <line x1="-15.6" y1="-9" x2="15.6" y2="9" stroke="#0c1020" stroke-width="6" stroke-linecap="round"/>
-                <line x1="-15.6" y1="9" x2="15.6" y2="-9" stroke="#0c1020" stroke-width="6" stroke-linecap="round"/>
-                <circle cx="0" cy="0" r="4.5" fill="#0c1020"/>
-            </g>
+            <!-- Claude asterisk/blob logo -->
+            <path d="M50 10 C53 10, 56 28, 56 40 C56 28, 72 16, 75 18 C78 20, 68 36, 60 44 C72 40, 88 38, 89 42 C90 46, 72 48, 60 50 C72 52, 90 54, 89 58 C88 62, 72 60, 60 56 C68 64, 78 80, 75 82 C72 84, 56 72, 56 60 C56 72, 53 90, 50 90 C47 90, 44 72, 44 60 C44 72, 28 84, 25 82 C22 80, 32 64, 40 56 C28 60, 10 62, 11 58 C12 54, 28 52, 40 50 C28 48, 12 46, 11 42 C10 38, 28 40, 40 44 C32 36, 22 20, 25 18 C28 16, 44 28, 44 40 C44 28, 47 10, 50 10Z" fill="#0c1020"/>
         </svg>
     </button>
 
@@ -1673,31 +1724,40 @@
         <div class="claude-chat-header">
             <div class="claude-chat-header-avatar">
                 <svg width="20" height="20" viewBox="0 0 100 100" fill="none">
-                    <g transform="translate(50,50)">
-                        <line x1="0" y1="-20" x2="0" y2="20" stroke="#0c1020" stroke-width="7" stroke-linecap="round"/>
-                        <line x1="-17.3" y1="-10" x2="17.3" y2="10" stroke="#0c1020" stroke-width="7" stroke-linecap="round"/>
-                        <line x1="-17.3" y1="10" x2="17.3" y2="-10" stroke="#0c1020" stroke-width="7" stroke-linecap="round"/>
-                        <circle cx="0" cy="0" r="5" fill="#0c1020"/>
-                    </g>
+                    <path d="M50 10 C53 10, 56 28, 56 40 C56 28, 72 16, 75 18 C78 20, 68 36, 60 44 C72 40, 88 38, 89 42 C90 46, 72 48, 60 50 C72 52, 90 54, 89 58 C88 62, 72 60, 60 56 C68 64, 78 80, 75 82 C72 84, 56 72, 56 60 C56 72, 53 90, 50 90 C47 90, 44 72, 44 60 C44 72, 28 84, 25 82 C22 80, 32 64, 40 56 C28 60, 10 62, 11 58 C12 54, 28 52, 40 50 C28 48, 12 46, 11 42 C10 38, 28 40, 40 44 C32 36, 22 20, 25 18 C28 16, 44 28, 44 40 C44 28, 47 10, 50 10Z" fill="#0c1020"/>
                 </svg>
             </div>
             <div class="claude-chat-header-info">
                 <div class="claude-chat-header-title">Claude</div>
                 <div class="claude-chat-header-sub"><span class="dot"></span> Meridian AI Assistant</div>
             </div>
+            <button class="claude-chat-close" onclick="clearClaudeChat()" aria-label="New chat" title="New chat" style="margin-right:4px;font-size:15px;">&#8635;</button>
             <button class="claude-chat-close" onclick="toggleClaudeChat()" aria-label="Close chat">&#10005;</button>
         </div>
         <div class="claude-chat-messages" id="claude-chat-messages">
             <div class="claude-chat-welcome" id="claude-chat-welcome">
                 <canvas id="pixel-claude-canvas" width="48" height="48" style="image-rendering:pixelated;width:120px;height:120px;"></canvas>
                 <h3>Hey, I'm Claude</h3>
-                <p>Your AI copilot for Meridian. Ask me about markets, trading strategy, arbitrage setups, or anything else.</p>
-                <div class="suggestions">
-                    <div class="suggestion-chip" onclick="claudeSuggest('What arb opportunities should I look for today?')">What arb opportunities should I look for?</div>
-                    <div class="suggestion-chip" onclick="claudeSuggest('Explain how the middle strategy works')">Explain the middle strategy</div>
-                    <div class="suggestion-chip" onclick="claudeSuggest('How do Kalshi maker fees work?')">How do Kalshi maker fees work?</div>
-                </div>
+                <p id="claude-welcome-subtitle">Your AI copilot for Meridian.</p>
+                <div class="suggestions" id="claude-suggestions"></div>
             </div>
+        </div>
+        <div class="claude-img-preview" id="claude-img-preview" style="display:none;"></div>
+        <div class="claude-chat-controls">
+            <select class="claude-model-select" id="claude-model-select" title="Select model">
+                <option value="sonnet" selected>Sonnet 4 &#9733;</option>
+                <option value="haiku">Haiku 4.5</option>
+                <option value="opus">Opus 4</option>
+            </select>
+            <button class="claude-toggle-btn" id="claude-thinking-toggle" onclick="toggleClaudeThinking(event)" title="Extended thinking — Claude reasons step-by-step before answering">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                Think
+            </button>
+            <div class="claude-controls-spacer"></div>
+            <input type="file" id="claude-img-input" accept="image/*" multiple style="display:none;" onchange="handleClaudeImgUpload(this)">
+            <button class="claude-img-upload" onclick="document.getElementById('claude-img-input').click()" title="Upload image for Claude to analyze">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            </button>
         </div>
         <div class="claude-chat-input-area">
             <div class="claude-chat-input-wrap">
@@ -1714,8 +1774,106 @@
     <script>
     // ── Claude Chat Widget ─────────────────────────────────────────────────
     (function() {
-        const chatMessages = [];
+        // ── Chat persistence via localStorage ──
+        const CHAT_STORAGE_KEY = 'meridian_claude_chat';
+        let chatMessages = [];
         let chatStreaming = false;
+
+        function saveChatToStorage() {
+            try {
+                // Keep last 50 messages to avoid bloat
+                const toSave = chatMessages.slice(-50);
+                localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(toSave));
+            } catch(e) {}
+        }
+
+        function loadChatFromStorage() {
+            try {
+                const saved = localStorage.getItem(CHAT_STORAGE_KEY);
+                if (saved) {
+                    chatMessages = JSON.parse(saved);
+                    return chatMessages.length > 0;
+                }
+            } catch(e) {}
+            return false;
+        }
+
+        function clearChatHistory() {
+            chatMessages = [];
+            localStorage.removeItem(CHAT_STORAGE_KEY);
+            const msgsEl = document.getElementById('claude-chat-messages');
+            msgsEl.innerHTML = '';
+            const welcome = document.getElementById('claude-chat-welcome');
+            if (welcome) { welcome.style.display = ''; msgsEl.appendChild(welcome); }
+            initWelcomeScreen();
+        }
+
+        // ── Rotating suggestions ──
+        const suggestionSets = [
+            [
+                { text: 'What arb opportunities are live right now?', q: 'Scan for arb opportunities on live games right now' },
+                { text: 'Show me my risk exposure', q: 'What\'s my total risk exposure across all active bots?' },
+                { text: 'How are my bots performing today?', q: 'Show me my bot stats and P&L for today' },
+            ],
+            [
+                { text: 'Run a full system health check', q: 'Run a system health check - WebSocket, API, bots, everything' },
+                { text: 'Any orphaned positions or orders?', q: 'Check for orphaned positions and run a position reconciliation' },
+                { text: 'What games are on the schedule today?', q: 'Show me today\'s game schedule' },
+            ],
+            [
+                { text: 'Analyze a specific market for me', q: 'What live games have the best spreads for arb bots right now? Analyze the top pick.' },
+                { text: 'Check my P&L this week', q: 'Show me my P&L calendar for this week - how am I trending?' },
+                { text: 'Deploy phantom bots on live games', q: 'Scan for good phantom bot opportunities on live games' },
+            ],
+            [
+                { text: 'What\'s my balance and open positions?', q: 'Show me my current balance, open positions, and any active bots' },
+                { text: 'Show me recent fills from Kalshi', q: 'Get my recent trade fills from Kalshi' },
+                { text: 'Any middle opportunities on spreads?', q: 'Scan for middle opportunities across spread markets' },
+            ],
+            [
+                { text: 'Check my resting orders on Kalshi', q: 'Show me all my resting orders on Kalshi - are any orphaned?' },
+                { text: 'Which bot types make the most money?', q: 'Break down my bot performance by type - which strategies are most profitable?' },
+                { text: 'Read the activity log for recent events', q: 'Show me the last 30 minutes of the activity log' },
+            ],
+        ];
+
+        const welcomeSubtitles = [
+            'Your AI copilot for Meridian. I can trade, analyze, and manage your bots.',
+            'I can scan for arbs, deploy bots, check your P&L, and run diagnostics.',
+            'Ask me to place trades, analyze markets, or check on your active bots.',
+            'I have 49 tools at my disposal. Let\'s find some edge.',
+            'I can monitor your system health, track performance, and manage risk.',
+        ];
+
+        function initWelcomeScreen() {
+            const setIndex = Math.floor(Math.random() * suggestionSets.length);
+            const chips = suggestionSets[setIndex];
+            const container = document.getElementById('claude-suggestions');
+            const subtitle = document.getElementById('claude-welcome-subtitle');
+            if (container) {
+                container.innerHTML = chips.map(c =>
+                    `<div class="suggestion-chip" onclick="claudeSuggest('${c.q.replace(/'/g, "\\'")}')">${c.text}</div>`
+                ).join('');
+            }
+            if (subtitle) {
+                subtitle.textContent = welcomeSubtitles[Math.floor(Math.random() * welcomeSubtitles.length)];
+            }
+        }
+
+        // ── Restore previous chat on load ──
+        const hasHistory = loadChatFromStorage();
+        if (hasHistory) {
+            const welcome = document.getElementById('claude-chat-welcome');
+            if (welcome) welcome.style.display = 'none';
+            // Rebuild message DOM from saved messages (after canvas init below)
+            setTimeout(() => {
+                for (const msg of chatMessages) {
+                    appendMsg(msg.role, msg.content, false);
+                }
+            }, 50);
+        } else {
+            initWelcomeScreen();
+        }
 
         // Draw pixel Claude Code ghost character (the >_ pac-man ghost)
         const canvas = document.getElementById('pixel-claude-canvas');
@@ -1788,7 +1946,7 @@
         input.addEventListener('input', () => {
             input.style.height = 'auto';
             input.style.height = Math.min(input.scrollHeight, 100) + 'px';
-            sendBtn.disabled = !input.value.trim() || chatStreaming;
+            sendBtn.disabled = (!input.value.trim() && pendingImages.length === 0) || chatStreaming;
         });
 
         window.toggleClaudeChat = function() {
@@ -1803,6 +1961,87 @@
                 fab.classList.add('open');
                 setTimeout(() => input.focus(), 350);
             }
+        };
+
+        window.clearClaudeChat = function() {
+            clearChatHistory();
+        };
+
+        // ── Model & thinking state ──
+        let claudeModel = localStorage.getItem('meridian_claude_model') || 'sonnet';
+        let claudeThinking = localStorage.getItem('meridian_claude_thinking') === 'true';
+        let pendingImages = []; // {base64, media_type}
+
+        // Init model select
+        const modelSelect = document.getElementById('claude-model-select');
+        if (modelSelect) {
+            modelSelect.value = claudeModel;
+            modelSelect.addEventListener('change', () => {
+                claudeModel = modelSelect.value;
+                localStorage.setItem('meridian_claude_model', claudeModel);
+            });
+        }
+
+        // Init thinking toggle
+        const thinkingBtn = document.getElementById('claude-thinking-toggle');
+        if (thinkingBtn && claudeThinking) thinkingBtn.classList.add('active');
+
+        window.toggleClaudeThinking = function(e) {
+            if (e) e.stopPropagation();
+            claudeThinking = !claudeThinking;
+            localStorage.setItem('meridian_claude_thinking', String(claudeThinking));
+            const btn = document.getElementById('claude-thinking-toggle');
+            if (btn) {
+                if (claudeThinking) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            }
+        };
+
+        // ── Image upload handling ──
+        window.handleClaudeImgUpload = function(input) {
+            const files = Array.from(input.files);
+            for (const file of files) {
+                if (pendingImages.length >= 4) break; // max 4 images
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const base64 = e.target.result.split(',')[1];
+                    const media_type = file.type || 'image/png';
+                    pendingImages.push({ base64, media_type, name: file.name });
+                    renderImagePreview();
+                    const sendBtn = document.getElementById('claude-chat-send');
+                    if (sendBtn) sendBtn.disabled = false;
+                };
+                reader.readAsDataURL(file);
+            }
+            input.value = ''; // reset file input
+        };
+
+        function renderImagePreview() {
+            const container = document.getElementById('claude-img-preview');
+            if (!container) return;
+            if (pendingImages.length === 0) {
+                container.style.display = 'none';
+                container.innerHTML = '';
+                return;
+            }
+            container.style.display = 'flex';
+            container.innerHTML = pendingImages.map((img, i) =>
+                `<div class="claude-img-preview-item">
+                    <img src="data:${img.media_type};base64,${img.base64}" alt="${img.name}">
+                    <button class="remove-img" onclick="removeClaudeImg(${i})">&#10005;</button>
+                </div>`
+            ).join('');
+        }
+
+        window.removeClaudeImg = function(index) {
+            pendingImages.splice(index, 1);
+            renderImagePreview();
+            const sendBtn = document.getElementById('claude-chat-send');
+            const inputEl = document.getElementById('claude-chat-input');
+            if (sendBtn && inputEl) sendBtn.disabled = !inputEl.value.trim() && pendingImages.length === 0;
         };
 
         window.claudeSuggest = function(text) {
@@ -1872,11 +2111,33 @@
 
         window.sendClaudeMsg = async function() {
             const text = input.value.trim();
-            if (!text || chatStreaming) return;
+            if (!text && pendingImages.length === 0 || chatStreaming) return;
             const welcome = document.getElementById('claude-chat-welcome');
             if (welcome) welcome.style.display = 'none';
-            chatMessages.push({ role: 'user', content: text });
-            appendMsg('user', text);
+
+            // Build message content — text + optional images
+            const hasImages = pendingImages.length > 0;
+            let userContent;
+            let displayText = text || '(image)';
+            if (hasImages) {
+                userContent = [];
+                for (const img of pendingImages) {
+                    userContent.push({
+                        type: 'image',
+                        source: { type: 'base64', media_type: img.media_type, data: img.base64 }
+                    });
+                }
+                if (text) userContent.push({ type: 'text', text });
+                displayText = text ? `[${pendingImages.length} image${pendingImages.length > 1 ? 's' : ''}] ${text}` : `[${pendingImages.length} image${pendingImages.length > 1 ? 's' : ''}]`;
+            } else {
+                userContent = text;
+            }
+
+            chatMessages.push({ role: 'user', content: userContent });
+            saveChatToStorage();
+            appendMsg('user', displayText);
+            pendingImages = [];
+            renderImagePreview();
             input.value = ''; input.style.height = 'auto';
             sendBtn.disabled = true;
             chatStreaming = true;
@@ -1890,7 +2151,12 @@
                 const resp = await fetch(`${API_BASE}/chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatMessages, context }),
+                    body: JSON.stringify({
+                        messages: chatMessages,
+                        context,
+                        model: claudeModel,
+                        thinking: claudeThinking,
+                    }),
                 });
                 if (!resp.ok) {
                     const err = await resp.json();
@@ -1912,6 +2178,11 @@
                         try {
                             const data = JSON.parse(payload);
                             if (data.error) fullText += '\n[Error: ' + data.error + ']';
+                            else if (data.thinking) {
+                                // Extended thinking indicator
+                                bubbleEl.innerHTML = '<div class="claude-thinking-indicator"><div class="spinner"></div> Thinking deeply...</div>';
+                                continue;
+                            }
                             else if (data.action) {
                                 // Claude is executing a tool
                                 const actionNames = {
@@ -1928,7 +2199,17 @@
                                     analyze_props: 'Analyzing player props', create_smart_bot: 'Creating smart bot',
                                     diagnose_bots: 'Diagnosing bots', watch_game: 'Adding to watchlist',
                                     get_pnl: 'Checking P&L', get_balance: 'Checking balance',
-                                    get_positions: 'Checking positions', get_active_bots: 'Checking bots'
+                                    get_positions: 'Checking positions', get_active_bots: 'Checking bots',
+                                    get_orders: 'Checking resting orders', get_order_status: 'Checking order status',
+                                    amend_order: 'Amending order price', get_fills: 'Checking recent fills',
+                                    set_bot_phase: 'Switching bot phase', modify_bot: 'Modifying bot settings',
+                                    sweep_orphans: 'Sweeping orphaned orders', get_orphaned_positions: 'Checking orphaned positions',
+                                    reconcile_positions: 'Reconciling positions', get_ws_status: 'Checking WebSocket health',
+                                    get_latency: 'Checking latency', create_middle_bot: 'Deploying middle bot',
+                                    get_pnl_calendar: 'Loading P&L calendar', get_bot_stats: 'Analyzing bot performance',
+                                    get_risk_exposure: 'Calculating risk exposure', read_activity_log: 'Reading activity log',
+                                    get_system_status: 'Running system health check', get_boxscore: 'Loading boxscore',
+                                    get_opening_lines: 'Checking opening lines', get_notifications: 'Checking notifications'
                                 };
                                 const label = actionNames[data.action] || data.action;
                                 fullText += '\n\n`⚡ ' + label + '...`\n\n';
@@ -1962,11 +2243,12 @@
                     }
                 }
                 chatMessages.push({ role: 'assistant', content: fullText });
+                saveChatToStorage();
             } catch (e) {
                 bubbleEl.innerHTML = '<span style="color:#ff4444">Connection error: ' + e.message + '</span>';
             }
             chatStreaming = false;
-            sendBtn.disabled = !input.value.trim();
+            sendBtn.disabled = !input.value.trim() && pendingImages.length === 0;
         };
 
         function appendMsg(role, text, typing) {
@@ -1974,7 +2256,7 @@
             const div = document.createElement('div');
             div.className = 'claude-msg ' + role;
             const avatarContent = role === 'assistant'
-                ? '<svg width="14" height="14" viewBox="0 0 100 100" fill="none"><g transform="translate(50,50)"><line x1="0" y1="-20" x2="0" y2="20" stroke="#0c1020" stroke-width="8" stroke-linecap="round"/><line x1="-17.3" y1="-10" x2="17.3" y2="10" stroke="#0c1020" stroke-width="8" stroke-linecap="round"/><line x1="-17.3" y1="10" x2="17.3" y2="-10" stroke="#0c1020" stroke-width="8" stroke-linecap="round"/><circle cx="0" cy="0" r="5" fill="#0c1020"/></g></svg>'
+                ? '<svg width="14" height="14" viewBox="0 0 100 100" fill="none"><path d="M50 10 C53 10, 56 28, 56 40 C56 28, 72 16, 75 18 C78 20, 68 36, 60 44 C72 40, 88 38, 89 42 C90 46, 72 48, 60 50 C72 52, 90 54, 89 58 C88 62, 72 60, 60 56 C68 64, 78 80, 75 82 C72 84, 56 72, 56 60 C56 72, 53 90, 50 90 C47 90, 44 72, 44 60 C44 72, 28 84, 25 82 C22 80, 32 64, 40 56 C28 60, 10 62, 11 58 C12 54, 28 52, 40 50 C28 48, 12 46, 11 42 C10 38, 28 40, 40 44 C32 36, 22 20, 25 18 C28 16, 44 28, 44 40 C44 28, 47 10, 50 10Z" fill="#0c1020"/></svg>'
                 : '<span style="font-size:11px;color:#000;font-weight:800;">You</span>';
             const bubbleContent = typing
                 ? '<div class="claude-typing"><span></span><span></span><span></span></div>'
@@ -2033,6 +2315,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260319c"></script>
+    <script src="app.js?v=20260319d"></script>
 </body>
 </html>

@@ -13915,6 +13915,219 @@ def _run_startup():
 # Run startup for both gunicorn (import-time) and python3 app.py
 _run_startup()
 
+# ── New API endpoints for Claude tools ────────────────────────────────────
+
+@app.route('/api/order/<order_id>', methods=['GET'])
+def get_order_status_endpoint(order_id):
+    """Get a specific order's current state from Kalshi."""
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+        result = kalshi_client.get_order(order_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/order/<order_id>/amend', methods=['POST'])
+def amend_order_endpoint(order_id):
+    """Amend a resting order's price on Kalshi."""
+    try:
+        if not kalshi_client:
+            return jsonify({'error': 'Not authenticated'}), 401
+        data = request.json or {}
+        ticker = data.get('ticker', '')
+        side = data.get('side', '')
+        count = int(data.get('count', 1))
+        price = int(data.get('price', 0))
+        if not ticker or not side or price < 1 or price > 99:
+            return jsonify({'error': 'Missing/invalid: ticker, side, count, price (1-99)'}), 400
+        price_kwargs = {'yes_price': price} if side == 'yes' else {'no_price': price}
+        result = kalshi_client.amend_order(order_id, ticker, side, count, **price_kwargs)
+        return jsonify({'success': True, 'result': result})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/bot/modify/<bot_id>', methods=['POST'])
+def modify_bot_endpoint(bot_id):
+    """Modify an active bot's settings without recreating it."""
+    if bot_id not in active_bots:
+        return jsonify({'error': f'Bot {bot_id} not found'}), 404
+    data = request.json or {}
+    bot = active_bots[bot_id]
+    changed = []
+    if 'repeat_count' in data:
+        bot['repeat_count'] = int(data['repeat_count'])
+        changed.append(f"repeat_count={bot['repeat_count']}")
+    if 'timeout' in data:
+        bot['timeout_seconds'] = int(data['timeout'])
+        changed.append(f"timeout={bot['timeout_seconds']}s")
+    if 'stop_loss' in data:
+        sl = int(data['stop_loss'])
+        bot['stop_loss_cents'] = sl if sl > 0 else 0
+        changed.append(f"stop_loss={sl}¢" if sl > 0 else "stop_loss=off")
+    if 'cancel_conditions' in data:
+        cc = data['cancel_conditions']
+        bot['cancel_conditions'] = {**bot.get('cancel_conditions', {}), **cc}
+        changed.append(f"cancel_conditions={bot['cancel_conditions']}")
+    if changed:
+        save_state()
+        return jsonify({'success': True, 'bot_id': bot_id, 'changed': changed})
+    return jsonify({'error': 'No valid fields to modify'}), 400
+
+
+@app.route('/api/risk/exposure', methods=['GET'])
+def get_risk_exposure_endpoint():
+    """Calculate total capital at risk across all active bots and positions."""
+    try:
+        exposure_by_ticker = {}
+        exposure_by_type = {}
+        total_at_risk = 0
+
+        for bot_id, bot in active_bots.items():
+            if bot.get('status') in ('completed', 'cancelled', 'error', None):
+                continue
+            ticker = bot.get('ticker', '?')
+            cat = bot.get('bot_category', bot.get('type', '?'))
+            count = bot.get('count', bot.get('quantity', 1))
+
+            # Calculate capital at risk for this bot
+            if cat in ('anchor_dog', 'anchor_ladder'):
+                dog_price = bot.get('dog_price', 0)
+                risk = dog_price * count
+            elif cat == 'middle':
+                price_a = bot.get('target_price_a', 49)
+                price_b = bot.get('target_price_b', 49)
+                risk = (price_a + price_b) * count
+            else:
+                yes_p = bot.get('yes_price', 0)
+                no_p = bot.get('no_price', 0)
+                risk = (yes_p + no_p) * count
+
+            total_at_risk += risk
+            exposure_by_ticker[ticker] = exposure_by_ticker.get(ticker, 0) + risk
+            exposure_by_type[cat] = exposure_by_type.get(cat, 0) + risk
+
+        # Get balance for context
+        balance_cents = 0
+        try:
+            if ws_manager and ws_manager.balance_cache:
+                balance_cents = int(ws_manager.balance_cache.get('balance', 0) * 100)
+        except Exception:
+            pass
+
+        return jsonify({
+            'total_at_risk_cents': total_at_risk,
+            'total_at_risk_dollars': round(total_at_risk / 100, 2),
+            'by_ticker': {k: round(v / 100, 2) for k, v in sorted(exposure_by_ticker.items(), key=lambda x: -x[1])},
+            'by_bot_type': {k: round(v / 100, 2) for k, v in sorted(exposure_by_type.items(), key=lambda x: -x[1])},
+            'active_bot_count': sum(1 for b in active_bots.values() if b.get('status') not in ('completed', 'cancelled', 'error', None)),
+            'balance_dollars': round(balance_cents / 100, 2) if balance_cents else 'unknown',
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/activity-log', methods=['GET'])
+def read_activity_log_endpoint():
+    """Search activity log for recent bot events."""
+    import json as _json
+    bot_id_filter = request.args.get('bot_id', '').strip()
+    event_filter = request.args.get('event', '').strip().upper()
+    minutes = int(request.args.get('minutes', 30))
+    limit = int(request.args.get('limit', 50))
+    cutoff = time.time() - (minutes * 60)
+
+    results = []
+    try:
+        log_path = os.path.join(os.path.dirname(__file__), 'activity_log.jsonl')
+        if os.path.exists(log_path):
+            with open(log_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = _json.loads(line)
+                    except Exception:
+                        continue
+                    epoch = entry.get('epoch', 0)
+                    if epoch < cutoff:
+                        continue
+                    if bot_id_filter and bot_id_filter not in entry.get('bot_id', ''):
+                        continue
+                    if event_filter and entry.get('event', '') != event_filter:
+                        continue
+                    results.append(entry)
+        # Return most recent first, capped at limit
+        results = results[-limit:][::-1]
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({'events': results, 'count': len(results), 'filter': {
+        'bot_id': bot_id_filter or 'all', 'event': event_filter or 'all',
+        'minutes': minutes, 'limit': limit
+    }})
+
+
+@app.route('/api/system/status', methods=['GET'])
+def get_system_status_endpoint():
+    """Full system health check."""
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+    now = time.time()
+
+    # WS status
+    ws_connected = False
+    ws_subs = 0
+    try:
+        if ws_manager:
+            ws_connected = ws_manager.connected
+            ws_subs = len(getattr(ws_manager, '_subscribed_tickers', set()))
+    except Exception:
+        pass
+
+    # Kalshi API check
+    kalshi_ok = kalshi_client is not None
+
+    # Monitor timing
+    monitor_info = {}
+    try:
+        if hasattr(app, '_last_monitor_time'):
+            monitor_info['last_cycle_ago'] = f"{now - app._last_monitor_time:.1f}s"
+    except Exception:
+        pass
+
+    # Memory
+    mem_info = {}
+    if psutil:
+        try:
+            process = psutil.Process(os.getpid())
+            mem = process.memory_info()
+            mem_info = {'rss_mb': round(mem.rss / 1024 / 1024, 1), 'vms_mb': round(mem.vms / 1024 / 1024, 1)}
+        except Exception:
+            mem_info = {'note': 'psutil error'}
+    else:
+        mem_info = {'note': 'psutil not installed'}
+
+    active_count = sum(1 for b in active_bots.values() if b.get('status') not in ('completed', 'cancelled', 'error', None))
+
+    return jsonify({
+        'healthy': ws_connected and kalshi_ok,
+        'kalshi_api': 'connected' if kalshi_ok else 'disconnected',
+        'websocket': 'connected' if ws_connected else 'disconnected',
+        'ws_subscriptions': ws_subs,
+        'active_bots': active_count,
+        'total_bots_in_memory': len(active_bots),
+        'memory': mem_info,
+        'monitor': monitor_info,
+        'uptime_note': 'check systemd: systemctl status meridian',
+    })
+
+
 # ── Claude Chat: Tool definitions ────────────────────────────────────────
 CLAUDE_TOOLS = [
     {
@@ -14296,6 +14509,224 @@ CLAUDE_TOOLS = [
                 "sport": {"type": "string", "description": "nba, ncaab, etc."}
             },
             "required": ["game_query"]
+        }
+    },
+    # ── EXPANDED TOOLS ────────────────────────────────────────────────
+    {
+        "name": "get_orders",
+        "description": "Get all resting orders on Kalshi — includes orders not managed by any bot. Filter by status (resting/canceled/filled) or ticker. Use this to find orphaned orders or verify order state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["resting", "canceled", "filled"], "description": "Filter by order status (default: resting)"},
+                "ticker": {"type": "string", "description": "Filter by market ticker"}
+            },
+        }
+    },
+    {
+        "name": "get_order_status",
+        "description": "Check a specific order's current state on Kalshi — fill count, remaining quantity, status. Use when you need to verify if an order filled or is still resting.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "The Kalshi order ID to look up"}
+            },
+            "required": ["order_id"]
+        }
+    },
+    {
+        "name": "amend_order",
+        "description": "Amend a resting limit order's price on Kalshi. Changes the price without canceling and re-placing. Use to adjust orders that aren't filling or to improve position.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "The Kalshi order ID to amend"},
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "side": {"type": "string", "enum": ["yes", "no"], "description": "Order side"},
+                "count": {"type": "integer", "description": "New contract count"},
+                "price": {"type": "integer", "description": "New price in cents (1-99)"}
+            },
+            "required": ["order_id", "ticker", "side", "count", "price"]
+        }
+    },
+    {
+        "name": "get_fills",
+        "description": "Get recent trade fills from Kalshi — actual executed trades with prices, quantities, and timestamps. Filter by ticker. Use to verify what actually filled vs what was ordered.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Optional: filter fills by market ticker"}
+            },
+        }
+    },
+    {
+        "name": "set_bot_phase",
+        "description": "Switch a bot between 'pregame' and 'live' phases. Live phase enables reposting stale orders and stop-loss. Use when a game goes live or to force pregame patience.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_id": {"type": "string", "description": "Bot ID to update"},
+                "phase": {"type": "string", "enum": ["pregame", "live"], "description": "Target phase"}
+            },
+            "required": ["bot_id", "phase"]
+        }
+    },
+    {
+        "name": "modify_bot",
+        "description": "Modify an active bot's settings — change repeat count, timeout, stop-loss, or cancel conditions without recreating the bot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_id": {"type": "string", "description": "Bot ID to modify"},
+                "repeat_count": {"type": "integer", "description": "New repeat count (how many more cycles)"},
+                "timeout": {"type": "integer", "description": "New timeout in seconds"},
+                "stop_loss": {"type": "integer", "description": "New stop-loss in cents (0 to disable)"},
+                "cancel_conditions": {
+                    "type": "object",
+                    "description": "Updated auto-cancel conditions",
+                    "properties": {
+                        "game_ending": {"type": "boolean"},
+                        "bid_below": {"type": "integer"},
+                        "score_diff_above": {"type": "integer"}
+                    }
+                }
+            },
+            "required": ["bot_id"]
+        }
+    },
+    {
+        "name": "sweep_orphans",
+        "description": "Sweep and cancel orphaned orders — resting orders on Kalshi that aren't managed by any active bot. Returns what was found and cleaned up.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_orphaned_positions",
+        "description": "Get positions detected as orphaned on server startup — contracts with no active bot managing them. These may need manual attention or selling.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "reconcile_positions",
+        "description": "Compare Meridian's bot-level tracking vs Kalshi's actual positions. Shows discrepancies where bots think they have positions but Kalshi disagrees, or vice versa. Critical for catching leaks.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_ws_status",
+        "description": "Get WebSocket connection health — connection state, subscribed tickers, cache ages, last heartbeat. Use to diagnose real-time data issues.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_latency",
+        "description": "Get API and pipeline latency stats — Kalshi API ping, fill-to-hedge times, order placement speed. Use to check if the system is running fast enough.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "create_middle_bot",
+        "description": "Create a middle bot — places NO limit orders on two opposing spread markets (e.g. LAL -4.5 and HOU +4.5). Profit if both fill since combined cost < 100¢. Requires two tickers from opposing sides of the same spread.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker_a": {"type": "string", "description": "First spread ticker (e.g. team A spread)"},
+                "ticker_b": {"type": "string", "description": "Second spread ticker (opposing side)"},
+                "target_price_a": {"type": "integer", "description": "NO buy price for leg A in cents"},
+                "target_price_b": {"type": "integer", "description": "NO buy price for leg B in cents"},
+                "qty": {"type": "integer", "description": "Contracts per leg"},
+                "stop_loss_cents": {"type": "integer", "description": "Stop-loss in cents (0 to disable)"},
+                "team_a_name": {"type": "string", "description": "Team A display name"},
+                "team_b_name": {"type": "string", "description": "Team B display name"}
+            },
+            "required": ["ticker_a", "ticker_b", "target_price_a", "target_price_b", "qty"]
+        }
+    },
+    {
+        "name": "get_pnl_calendar",
+        "description": "Get daily P&L breakdown as a calendar — shows profit/loss for each day with trades. Use for tracking performance over time.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_bot_stats",
+        "description": "Get detailed bot performance analytics — win rates, avg profit, best/worst strategies, performance by sport, by bot type, and by time of day. Powered by trade history.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "Optional date filter (YYYY-MM-DD). Omit for all-time stats."}
+            },
+        }
+    },
+    {
+        "name": "get_risk_exposure",
+        "description": "Get total capital at risk — breaks down exposure by ticker, bot type, and side. Shows how much money is tied up in active bots and open positions, and how much is available.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "read_activity_log",
+        "description": "Search the activity log for recent bot events — fills, reposts, errors, cancellations. Filter by bot_id, event type, or time range. Use for debugging what happened to a specific bot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_id": {"type": "string", "description": "Filter by bot ID"},
+                "event": {"type": "string", "description": "Filter by event type (BOT_CREATED, ORDER_FILLED, REPOST, SL_TRIGGERED, etc.)"},
+                "minutes": {"type": "integer", "description": "Only show events from the last N minutes (default: 30)"},
+                "limit": {"type": "integer", "description": "Max events to return (default: 50)"}
+            },
+        }
+    },
+    {
+        "name": "get_system_status",
+        "description": "Full system health check — server uptime, WebSocket state, active bot count, monitor cycle timing, memory usage, Kalshi API connectivity, and any errors. One-stop shop for 'is everything running?'",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_boxscore",
+        "description": "Get detailed live boxscore for a game — per-player stats (points, rebounds, assists, etc). Use when you need player-level detail for prop analysis or game context.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "description": "Sport: nba, ncaab, nfl, nhl, mlb, etc."},
+                "game_id": {"type": "string", "description": "ESPN game ID (get this from get_live_scores or get_schedule)"}
+            },
+            "required": ["sport", "game_id"]
+        }
+    },
+    {
+        "name": "get_opening_lines",
+        "description": "Get captured opening lines for markets — the prices when markets first opened. Use for line movement analysis (how far has the line moved from open?).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Optional: get opening line for a specific ticker"}
+            },
+        }
+    },
+    {
+        "name": "get_notifications",
+        "description": "Get pending notification queue — score alerts, game watches, bot completions, and other events waiting to be shown. Use to check if anything needs attention.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
         }
     },
 ]
@@ -14832,6 +15263,159 @@ def _execute_chat_tool(tool_name, tool_input):
             return {'success': True, 'watch_id': wg['id'],
                     'message': f'Watching {query.title()} — will notify on score runs, game start/end, and momentum shifts'}
 
+        # ── EXPANDED TOOL HANDLERS ────────────────────────────────
+        elif tool_name == 'get_orders':
+            params = {}
+            if tool_input.get('status'): params['status'] = tool_input['status']
+            if tool_input.get('ticker'): params['ticker'] = tool_input['ticker']
+            r = requests.get(f'{base}/orders', params=params, timeout=10)
+            data = r.json()
+            # Summarize to avoid token bloat
+            orders = data.get('orders', data) if isinstance(data, dict) else data
+            if isinstance(orders, list):
+                summary = []
+                for o in orders[:30]:
+                    summary.append({
+                        'order_id': o.get('order_id', ''),
+                        'ticker': o.get('ticker', ''),
+                        'side': o.get('side', ''),
+                        'type': o.get('type', ''),
+                        'price': o.get('yes_price') or o.get('no_price', 0),
+                        'remaining': o.get('remaining_count', o.get('count', 0)),
+                        'filled': o.get('count', 0) - o.get('remaining_count', o.get('count', 0)),
+                        'status': o.get('status', ''),
+                        'created': o.get('created_time', ''),
+                    })
+                return {'orders': summary, 'total': len(orders)}
+            return data
+
+        elif tool_name == 'get_order_status':
+            r = requests.get(f'{base}/order/{tool_input["order_id"]}', timeout=10)
+            return r.json()
+
+        elif tool_name == 'amend_order':
+            r = requests.post(f'{base}/order/{tool_input["order_id"]}/amend', json={
+                'ticker': tool_input['ticker'],
+                'side': tool_input['side'],
+                'count': tool_input['count'],
+                'price': tool_input['price'],
+            }, timeout=15)
+            return r.json()
+
+        elif tool_name == 'get_fills':
+            params = {}
+            if tool_input.get('ticker'): params['ticker'] = tool_input['ticker']
+            r = requests.get(f'{base}/fills', params=params, timeout=10)
+            data = r.json()
+            fills = data.get('fills', data) if isinstance(data, dict) else data
+            if isinstance(fills, list):
+                summary = []
+                for f in fills[:30]:
+                    summary.append({
+                        'trade_id': f.get('trade_id', ''),
+                        'ticker': f.get('ticker', ''),
+                        'side': f.get('side', ''),
+                        'price': f.get('yes_price') or f.get('no_price', f.get('price', 0)),
+                        'count': f.get('count', 0),
+                        'action': f.get('action', ''),
+                        'is_taker': f.get('is_taker', False),
+                        'created': f.get('created_time', ''),
+                    })
+                return {'fills': summary, 'total': len(fills)}
+            return data
+
+        elif tool_name == 'set_bot_phase':
+            r = requests.post(f'{base}/bot/set_phase/{tool_input["bot_id"]}',
+                            json={'phase': tool_input['phase']}, timeout=10)
+            return r.json()
+
+        elif tool_name == 'modify_bot':
+            payload = {k: v for k, v in tool_input.items() if k != 'bot_id'}
+            r = requests.post(f'{base}/bot/modify/{tool_input["bot_id"]}',
+                            json=payload, timeout=10)
+            return r.json()
+
+        elif tool_name == 'sweep_orphans':
+            r = requests.post(f'{base}/bot/sweep-orphans', timeout=15)
+            return r.json()
+
+        elif tool_name == 'get_orphaned_positions':
+            r = requests.get(f'{base}/orphaned-positions', timeout=10)
+            return r.json()
+
+        elif tool_name == 'reconcile_positions':
+            r = requests.get(f'{base}/positions/reconcile', timeout=15)
+            return r.json()
+
+        elif tool_name == 'get_ws_status':
+            r = requests.get(f'{base}/ws/status', timeout=10)
+            return r.json()
+
+        elif tool_name == 'get_latency':
+            r = requests.get(f'{base}/latency', timeout=15)
+            return r.json()
+
+        elif tool_name == 'create_middle_bot':
+            r = requests.post(f'{base}/middle/bot/create', json={
+                'ticker_a': tool_input['ticker_a'],
+                'ticker_b': tool_input['ticker_b'],
+                'target_price_a': tool_input['target_price_a'],
+                'target_price_b': tool_input['target_price_b'],
+                'qty': tool_input['qty'],
+                'stop_loss_cents': tool_input.get('stop_loss_cents', 0),
+                'team_a_name': tool_input.get('team_a_name', ''),
+                'team_b_name': tool_input.get('team_b_name', ''),
+            }, timeout=15)
+            return r.json()
+
+        elif tool_name == 'get_pnl_calendar':
+            r = requests.get(f'{base}/pnl/calendar', timeout=10)
+            return r.json()
+
+        elif tool_name == 'get_bot_stats':
+            params = {}
+            if tool_input.get('date'): params['date'] = tool_input['date']
+            r = requests.get(f'{base}/bot/history/stats', params=params, timeout=10)
+            return r.json()
+
+        elif tool_name == 'get_risk_exposure':
+            r = requests.get(f'{base}/risk/exposure', timeout=10)
+            return r.json()
+
+        elif tool_name == 'read_activity_log':
+            params = {}
+            if tool_input.get('bot_id'): params['bot_id'] = tool_input['bot_id']
+            if tool_input.get('event'): params['event'] = tool_input['event']
+            if tool_input.get('minutes'): params['minutes'] = tool_input['minutes']
+            if tool_input.get('limit'): params['limit'] = tool_input['limit']
+            r = requests.get(f'{base}/activity-log', params=params, timeout=10)
+            return r.json()
+
+        elif tool_name == 'get_system_status':
+            r = requests.get(f'{base}/system/status', timeout=10)
+            return r.json()
+
+        elif tool_name == 'get_boxscore':
+            r = requests.get(f'{base}/boxscore/{tool_input["sport"]}/{tool_input["game_id"]}', timeout=10)
+            return r.json()
+
+        elif tool_name == 'get_opening_lines':
+            if tool_input.get('ticker'):
+                line = _opening_lines.get(tool_input['ticker'])
+                if line:
+                    return {'ticker': tool_input['ticker'], 'opening_line': line}
+                return {'error': f'No opening line captured for {tool_input["ticker"]}'}
+            # Return all, summarized
+            summary = {}
+            for t, info in list(_opening_lines.items())[:50]:
+                summary[t] = {'yes_price': info.get('yes_price'), 'no_price': info.get('no_price'),
+                              'captured_at': info.get('captured_at')}
+            return {'opening_lines': summary, 'total': len(_opening_lines)}
+
+        elif tool_name == 'get_notifications':
+            r = requests.get(f'{base}/chat/notifications', timeout=10)
+            return r.json()
+
         else:
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
@@ -14850,6 +15434,16 @@ def claude_chat():
     if not api_key:
         return jsonify({'error': 'ANTHROPIC_API_KEY not set on server'}), 500
 
+    # Model selection — default to Sonnet
+    AVAILABLE_MODELS = {
+        'sonnet': 'claude-sonnet-4-20250514',
+        'haiku': 'claude-haiku-4-5-20251001',
+        'opus': 'claude-opus-4-20250514',
+    }
+    selected_model_key = body.get('model', 'sonnet')
+    selected_model = AVAILABLE_MODELS.get(selected_model_key, AVAILABLE_MODELS['sonnet'])
+    use_thinking = body.get('thinking', False)
+
     client = anthropic.Anthropic(api_key=api_key)
 
     # Build system prompt with live context
@@ -14864,7 +15458,8 @@ def claude_chat():
         'IMPORTANT: Always confirm with the user before executing trades or cancellations. State the action, ticker, prices, and count, then proceed.',
         'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
         'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
-        'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), and performance tracking (get_leaderboard).',
+        'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',
+        'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts).',
         'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately.',
         'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',
         'For set_alert: alerts check live WebSocket prices. Tell the user what you set up.',
@@ -14873,6 +15468,8 @@ def claude_chat():
         'For diagnose_bots: checks orphaned positions, price violations (orders above bid), stuck bots. Report issues clearly and suggest fixes.',
         'For watch_game: adds game to watchlist for proactive notifications (score runs, game start/end). Notifications appear as chat badges.',
         'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Middle posts both NO legs.',
+        'BOT STATE: Phantom and ladder bots only post ONE side (the dog/underdog). The other side shows as 0¢ or "pending" in bot state — this is NOT a real order. There is no such thing as a 0¢ limit order on Kalshi. A 0¢ price means that side has not been posted yet and is waiting for the dog to fill before hedging. Do NOT flag 0¢ prices as errors on phantom/anchor bots.',
+        'SMART BOT MANAGEMENT: When the user asks you to manage a bot\'s lifecycle, use modify_bot and set_bot_phase. If a repeating bot is profitable over its cycles, keep it running (increase repeat_count). If it\'s losing money on cycles, stop it (set repeat_count to 0). If the game is close to ending (final 5 min), reduce repeats or stop the bot. Use read_activity_log to check a bot\'s recent cycle history. Use get_bot_stats to compare strategy performance. When the user says "keep it going" or "let it ride", increase repeat_count. When they say "shut it down" or "stop that bot", cancel it. You can also use amend_order to adjust resting order prices if a bot\'s orders aren\'t filling.',
     ]
     if context:
         system_parts.append('\n--- LIVE MERIDIAN STATE ---')
@@ -14887,7 +15484,22 @@ def claude_chat():
             bots = context['active_bots']
             system_parts.append(f"Active bots: {len(bots)}")
             for b in bots[:15]:
-                system_parts.append(f"  - {b.get('ticker','?')} | {b.get('type','?')} | status={b.get('status','?')} | yes={b.get('yes_price','?')}¢ no={b.get('no_price','?')}¢ x{b.get('count','?')} | pnl={b.get('pnl','?')}")
+                cat = b.get('bot_category', b.get('type', '?'))
+                status = b.get('status', '?')
+                # Format prices based on bot type — phantom/ladder bots only post one side
+                if cat in ('anchor_dog', 'anchor_ladder'):
+                    dog_side = b.get('dog_side', 'no')
+                    dog_price = b.get('dog_price', b.get('yes_price' if dog_side == 'yes' else 'no_price', '?'))
+                    fav_price = b.get('fav_price', 0)
+                    if fav_price and fav_price > 0:
+                        price_str = f"dog({dog_side})={dog_price}¢ fav={fav_price}¢"
+                    else:
+                        price_str = f"dog({dog_side})={dog_price}¢ fav=pending"
+                else:
+                    yes_p = b.get('yes_price', '?')
+                    no_p = b.get('no_price', '?')
+                    price_str = f"yes={yes_p}¢ no={no_p}¢"
+                system_parts.append(f"  - {b.get('ticker','?')} | {cat} | status={status} | {price_str} x{b.get('count','?')} | pnl={b.get('pnl','?')}")
         if 'positions' in context and context['positions']:
             pos = context['positions']
             if isinstance(pos, dict):
@@ -14919,7 +15531,16 @@ def claude_chat():
             system_parts.append(f"  - {a['description'] or a['ticker']}: {a['side']} hit {a.get('triggered_price', '?')}¢ ({a['condition']} {a['price']}¢)")
     if watching:
         system_parts.append(f"\nActive alerts: {len(watching)} watching")
-    system_prompt = '\n'.join(system_parts)
+    # Build system prompt with prompt caching — static instructions cached, live state uncached
+    static_prompt = '\n'.join(system_parts[:system_parts.index('--- END STATE ---') if '--- END STATE ---' in system_parts else len(system_parts)])
+    live_state = '\n'.join(system_parts[system_parts.index('--- END STATE ---'):] if '--- END STATE ---' in system_parts else [])
+
+    # Use cache_control on static system prompt block for prompt caching
+    system_blocks = [
+        {"type": "text", "text": static_prompt, "cache_control": {"type": "ephemeral"}},
+    ]
+    if live_state:
+        system_blocks.append({"type": "text", "text": live_state})
 
     def generate():
         try:
@@ -14927,18 +15548,31 @@ def claude_chat():
             max_tool_rounds = 5  # prevent infinite loops
 
             for _round in range(max_tool_rounds + 1):
-                # Call Claude (non-streaming when tools might be used, streaming on final)
-                response = client.messages.create(
-                    model='claude-sonnet-4-20250514',
-                    max_tokens=4096,
-                    system=system_prompt,
-                    messages=api_messages,
-                    tools=CLAUDE_TOOLS,
-                )
+                # Build API kwargs
+                api_kwargs = {
+                    'model': selected_model,
+                    'max_tokens': 16384 if use_thinking else 4096,
+                    'system': system_blocks,
+                    'messages': api_messages,
+                    'tools': CLAUDE_TOOLS,
+                }
+                # Extended thinking — only supported on Sonnet 4+ and Opus 4+
+                if use_thinking and selected_model_key in ('sonnet', 'opus'):
+                    api_kwargs['thinking'] = {"type": "enabled", "budget_tokens": 8192}
+
+                response = client.messages.create(**api_kwargs)
 
                 # Check if Claude wants to use tools
                 tool_uses = [b for b in response.content if b.type == 'tool_use']
                 text_blocks = [b for b in response.content if b.type == 'text']
+                thinking_blocks = [b for b in response.content if b.type == 'thinking']
+
+                # Stream thinking summary if extended thinking was used
+                if thinking_blocks and use_thinking:
+                    thinking_text = thinking_blocks[0].thinking
+                    # Send a condensed thinking indicator (not the full chain of thought)
+                    if len(thinking_text) > 100:
+                        yield f"data: {json.dumps({'thinking': True})}\n\n"
 
                 # Stream any text that came before tool calls
                 for tb in text_blocks:
@@ -14950,11 +15584,15 @@ def claude_chat():
                     break
 
                 # Execute tool calls and build tool results
-                api_messages.append({'role': 'assistant', 'content': [
-                    {'type': 'text', 'text': tb.text} if tb.type == 'text' else
-                    {'type': 'tool_use', 'id': tb.id, 'name': tb.name, 'input': tb.input}
-                    for tb in response.content
-                ]})
+                assistant_content = []
+                for tb in response.content:
+                    if tb.type == 'text':
+                        assistant_content.append({'type': 'text', 'text': tb.text})
+                    elif tb.type == 'tool_use':
+                        assistant_content.append({'type': 'tool_use', 'id': tb.id, 'name': tb.name, 'input': tb.input})
+                    elif tb.type == 'thinking':
+                        assistant_content.append({'type': 'thinking', 'thinking': tb.thinking})
+                api_messages.append({'role': 'assistant', 'content': assistant_content})
 
                 tool_results = []
                 for tu in tool_uses:
@@ -14990,6 +15628,18 @@ def claude_chat():
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+@app.route('/api/chat/models', methods=['GET'])
+def get_chat_models():
+    """Return available models for the Claude chat."""
+    return jsonify({
+        'models': [
+            {'id': 'sonnet', 'name': 'Sonnet 4', 'description': 'Fast & capable (recommended)', 'recommended': True},
+            {'id': 'haiku', 'name': 'Haiku 4.5', 'description': 'Fastest, cheapest', 'recommended': False},
+            {'id': 'opus', 'name': 'Opus 4', 'description': 'Most intelligent, slower', 'recommended': False},
+        ],
+        'default': 'sonnet',
+    })
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)

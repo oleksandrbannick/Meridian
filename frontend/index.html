@@ -247,14 +247,14 @@
         .bot-buddy-eyes { transition: gap 0.4s ease; }
 
         /* △ APEX — Sharp diamond/crystal shape, blue theme, precision energy */
-        /* △ APEX — Diamond crystal shape, blue theme */
+        /* △ APEX — Rounded hex/shield shape, blue theme, scope tool */
         .buddy-apex .bot-buddy-body {
-            width:34px; height:38px; border-radius:4px 4px 14px 14px;
+            width:36px; height:38px; border-radius:8px 8px 12px 12px;
             background:linear-gradient(135deg, #00aaff, #0077dd) !important;
             box-shadow:0 0 16px rgba(0,170,255,0.5) !important;
-            clip-path: polygon(50% 0%, 100% 30%, 100% 100%, 0% 100%, 0% 30%);
+            clip-path: polygon(20% 0%, 80% 0%, 100% 25%, 100% 100%, 0% 100%, 0% 25%);
         }
-        .buddy-apex .bot-buddy-face { margin-top:6px; }
+        .buddy-apex .bot-buddy-face { margin-top:4px; }
         .buddy-apex .bot-buddy-eye { width:4px; height:7px; border-radius:2px; }
         .buddy-apex .bot-buddy-eyes { gap:7px; }
         .buddy-apex .bot-buddy-mouth { width:6px; height:2px; border-radius:1px; }
@@ -265,6 +265,17 @@
         .buddy-apex .bot-buddy-antenna::after { background:#00ddff !important; box-shadow:0 0 10px #00ddff !important; }
         .buddy-apex .bot-buddy-name { color:#00aaff !important; }
         .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
+        /* Apex tool: small scope/telescope on right side */
+        .buddy-apex .bot-buddy-tool {
+            position:absolute; right:-2px; top:14px;
+            width:10px; height:4px; background:#00aaff; border-radius:2px;
+            box-shadow: 0 0 4px rgba(0,170,255,0.5);
+        }
+        .buddy-apex .bot-buddy-tool::after {
+            content:''; position:absolute; right:-3px; top:-1px;
+            width:6px; height:6px; border-radius:50%; border:1.5px solid #00ddff;
+            background: transparent;
+        }
 
         /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats */
         .buddy-phantom .bot-buddy-body {
@@ -282,6 +293,7 @@
         .buddy-phantom .bot-buddy-antenna { opacity:0; height:0; }
         .buddy-phantom .bot-buddy-name { color:#ffaa00 !important; }
         .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
+        .buddy-phantom .bot-buddy-tool { display:none; }
         @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
 
         /* ◈ MERIDIAN — Wide rounded pill, calm/stable, purple theme, crown */
@@ -309,6 +321,19 @@
         .buddy-middle .bot-buddy-antenna::after { background:#cc88ff !important; box-shadow:0 0 8px #cc88ff !important; }
         .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
         .buddy-middle .bot-buddy-msg strong { color:#aa66ff !important; }
+        /* Meridian tool: small balance/scale on right side */
+        .buddy-middle .bot-buddy-tool {
+            position:absolute; right:-4px; top:20px;
+            width:12px; height:1.5px; background:#aa66ff; border-radius:1px;
+        }
+        .buddy-middle .bot-buddy-tool::before {
+            content:''; position:absolute; left:0; top:-4px;
+            width:3px; height:4px; background:#cc88ff; border-radius:1px 1px 0 0;
+        }
+        .buddy-middle .bot-buddy-tool::after {
+            content:''; position:absolute; right:0; top:-3px;
+            width:3px; height:3px; background:#cc88ff; border-radius:1px 1px 0 0;
+        }
 
         /* ◎ SCOUT — Normal body, green theme, alert eyes */
         .buddy-bet .bot-buddy-body {
@@ -328,6 +353,19 @@
         .buddy-bet .bot-buddy-antenna::after { background:#00ff88 !important; box-shadow:0 0 8px #00ff88 !important; }
         .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
+        /* Scout tool: binoculars on right side */
+        .buddy-bet .bot-buddy-tool {
+            position:absolute; right:-3px; top:16px;
+            display:flex; gap:1px;
+        }
+        .buddy-bet .bot-buddy-tool::before {
+            content:''; width:5px; height:5px; border-radius:50%;
+            border:1.5px solid #00ff88; background:transparent;
+        }
+        .buddy-bet .bot-buddy-tool::after {
+            content:''; width:5px; height:5px; border-radius:50%;
+            border:1.5px solid #00ff88; background:transparent;
+        }
 
         /* Morph flash on shape change */
         .buddy-morphing .bot-buddy-body { animation: buddyMorph 0.4s ease-out !important; }
@@ -336,6 +374,7 @@
         /* Pet reaction */
         .bot-buddy-avatar.petted .bot-buddy-body { animation: botPetReact 0.5s ease-out !important; }
         .bot-buddy-avatar.petted .bot-buddy-eye { animation: none !important; transform:scaleY(0.3) scaleX(1.4); }
+        .bot-buddy-tool { position:absolute; pointer-events:none; transition: opacity 0.4s ease; }
         .bot-buddy-hearts { position:absolute; top:-5px; left:50%; transform:translateX(-50%); pointer-events:none; }
         .bot-buddy-heart { position:absolute; font-size:12px; opacity:0; animation: heartFloat 1s ease-out forwards; }
         .bot-buddy-heart:nth-child(1) { left:-8px; animation-delay:0s; }
@@ -604,6 +643,7 @@
                         </div>
                         <div class="bot-buddy-arm left"></div>
                         <div class="bot-buddy-arm right"></div>
+                        <div class="bot-buddy-tool"></div>
                         <div class="bot-buddy-hearts" id="buddy-hearts"></div>
                     </div>
                     <div class="bot-buddy-content">

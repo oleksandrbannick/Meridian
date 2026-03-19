@@ -5007,6 +5007,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             })()}
         </div>
         <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+            <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>
+            <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
+        </div>
     `;
     container.appendChild(item);
 }
@@ -5374,6 +5378,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${bot.repost_count ? `<span style="color:#555;">Repost #${bot.repost_count}</span>` : ''}
         </div>
         <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+            <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>
+            <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
+        </div>
     `;
     container.appendChild(item);
 }

@@ -286,7 +286,7 @@
 
         /* ◈ MERIDIAN — Wide rounded pill, calm/stable, purple theme, crown */
         .buddy-middle .bot-buddy-body {
-            width:42px; height:32px; border-radius:16px;
+            width:38px; height:36px; border-radius:14px;
             background:linear-gradient(135deg, #aa66ff, #7744cc) !important;
             box-shadow:0 0 14px rgba(170,102,255,0.4) !important;
             clip-path: none;
@@ -577,6 +577,11 @@
                     <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
                             style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓</button>
                 </div>
+                <div style="margin-top:6px;">
+                    <button class="btn btn-secondary" onclick="toggleBotLegend()" title="Meet the bots — learn about each bot's personality and strategy" style="padding:0.5rem 1rem;font-size:12px;width:100%;">
+                        🤖 Meet the Bots <span id="bot-legend-chevron" style="transition:transform .2s;display:inline-block;">▼</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Active Bots Section -->
@@ -637,23 +642,20 @@
                     <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="meridian" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> MERIDIAN</button>
                     <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="scout" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> SCOUT</button>
                 </div>
-                <!-- Bot Legend Panel -->
-                <button id="bot-legend-toggle" onclick="toggleBotLegend()" style="background:none;border:1px solid #1e2740;border-radius:8px;color:#555;font-size:10px;padding:4px 10px;cursor:pointer;margin:8px 0 4px 0;display:flex;align-items:center;gap:4px;transition:all .15s;letter-spacing:.04em;">
-                    Meet the Bots <span id="bot-legend-chevron" style="transition:transform .2s;">▼</span>
-                </button>
-                <div id="bot-legend-panel" style="display:none;margin-bottom:8px;">
+                <!-- Bot Legend Panel (toggled from "Meet the Bots" button in toolbar) -->
+                <div id="bot-legend-panel" style="display:none;margin:12px 0;">
                     <div style="display:flex;gap:0;margin-bottom:8px;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
-                        <button class="legend-tab active" data-legend="apex" onclick="showLegendBot('apex')" style="flex:1;background:#253555;border:none;color:#00aaff;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">APEX</button>
-                        <button class="legend-tab" data-legend="phantom" onclick="showLegendBot('phantom')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">PHANTOM</button>
-                        <button class="legend-tab" data-legend="meridian" onclick="showLegendBot('meridian')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">MERIDIAN</button>
-                        <button class="legend-tab" data-legend="scout" onclick="showLegendBot('scout')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">SCOUT</button>
+                        <button class="legend-tab active" data-legend="apex" onclick="showLegendBot('apex')" style="flex:1;background:#253555;border:none;color:#00aaff;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">APEX</button>
+                        <button class="legend-tab" data-legend="phantom" onclick="showLegendBot('phantom')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">PHANTOM</button>
+                        <button class="legend-tab" data-legend="meridian" onclick="showLegendBot('meridian')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">MERIDIAN</button>
+                        <button class="legend-tab" data-legend="scout" onclick="showLegendBot('scout')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">SCOUT</button>
                     </div>
-                    <div id="legend-content" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:16px;display:flex;gap:16px;align-items:flex-start;">
+                    <div id="legend-content" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:12px;padding:20px;display:flex;gap:20px;align-items:flex-start;">
                         <canvas id="legend-bot-canvas" width="48" height="48" style="image-rendering:pixelated;width:96px;height:96px;flex-shrink:0;"></canvas>
                         <div style="flex:1;min-width:0;">
-                            <div id="legend-bot-name" style="font-size:16px;font-weight:700;margin-bottom:2px;color:#00aaff;">Apex</div>
-                            <div id="legend-bot-tagline" style="font-size:11px;font-style:italic;color:#8892a6;margin-bottom:8px;">"Every angle. Every rung. No edge left behind."</div>
-                            <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.5;">Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated — Apex covers every price level so nothing slips through.</div>
+                            <div id="legend-bot-name" style="font-size:18px;font-weight:700;margin-bottom:4px;color:#00aaff;">Apex</div>
+                            <div id="legend-bot-tagline" style="font-size:12px;font-style:italic;color:#8892a6;margin-bottom:10px;">"Every angle. Every rung. No edge left behind."</div>
+                            <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.6;">Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated — Apex covers every price level so nothing slips through.</div>
                         </div>
                     </div>
                 </div>

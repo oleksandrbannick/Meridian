@@ -190,7 +190,7 @@
         }
         .bot-buddy-arm { position:absolute; width:8px; height:3px; background:#00cc6a; border-radius:2px; transition: background 0.5s ease; }
         .bot-buddy-arm.left { bottom:12px; left:0; animation: botArmL 0.8s ease-in-out infinite; transform-origin: right center; }
-        .bot-buddy-arm.right { bottom:12px; right:0; animation: botArmR 0.8s ease-in-out infinite alternate; transform-origin: left center; }
+        .bot-buddy-arm.right { bottom:12px; left:42px; animation: botArmR 0.8s ease-in-out infinite alternate; transform-origin: left center; }
         .bot-buddy-content { flex:1; min-width:0; }
         .bot-buddy-name { font-size:10px; color:#00ff88; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:2px; }
         .bot-buddy-msg { color:#8892a6; font-size:12px; line-height:1.4; }
@@ -260,14 +260,14 @@
         .buddy-apex .bot-buddy-mouth { width:6px; height:2px; border-radius:1px; }
         .buddy-apex .bot-buddy-arm { background:#0088cc !important; width:10px; height:3px; }
         .buddy-apex .bot-buddy-arm.left { bottom:10px; }
-        .buddy-apex .bot-buddy-arm.right { bottom:10px; }
+        .buddy-apex .bot-buddy-arm.right { bottom:10px; left:40px; }
         .buddy-apex .bot-buddy-antenna { background:#00aaff !important; height:12px; }
         .buddy-apex .bot-buddy-antenna::after { background:#00ddff !important; box-shadow:0 0 10px #00ddff !important; }
         .buddy-apex .bot-buddy-name { color:#00aaff !important; }
         .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
-        /* Apex tool: ladder on right side */
+        /* Apex tool: ladder past right arm */
         .buddy-apex .bot-buddy-tool {
-            position:absolute; right:2px; bottom:0;
+            position:absolute; left:52px; bottom:0;
             width:16px; height:28px;
             background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAOCAYAAAAWo42rAAAAIElEQVR4nGNgAIFV//8z4AIociQpvIsDk2/iqNWDy2oA7beO6UVVoCoAAAAASUVORK5CYII=') no-repeat center/contain;
             image-rendering: pixelated;
@@ -289,9 +289,9 @@
         .buddy-phantom .bot-buddy-antenna { opacity:0; height:0; }
         .buddy-phantom .bot-buddy-name { color:#ffaa00 !important; }
         .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
-        /* Phantom tool: side-view cat */
+        /* Phantom tool: side-view cat past body (no arms on phantom) */
         .buddy-phantom .bot-buddy-tool {
-            position:absolute; right:0; bottom:2px;
+            position:absolute; left:48px; bottom:2px;
             width:28px; height:24px;
             background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAKCAYAAACALL/6AAAARUlEQVR4nGNgQAL/VzH8B2EGYsCZcohiEI1LDdwwkCJ0TFDD/7v4NcDFsJmO10aSFMNARyjDf3yYJA1YgwubJEENxIoDAJa6fS5G21ksAAAAAElFTkSuQmCC') no-repeat center/contain;
             image-rendering: pixelated;
@@ -318,7 +318,7 @@
         .buddy-middle .bot-buddy-mouth { width:10px; height:2px; border-radius:1px; }
         .buddy-middle .bot-buddy-arm { background:#8855cc !important; width:12px; height:3px; }
         .buddy-middle .bot-buddy-arm.left { bottom:8px; left:-2px; animation:none !important; transform:rotate(-5deg); }
-        .buddy-middle .bot-buddy-arm.right { bottom:8px; right:-2px; animation:none !important; transform:rotate(5deg); }
+        .buddy-middle .bot-buddy-arm.right { bottom:8px; left:42px; animation:none !important; transform:rotate(5deg); }
         .buddy-middle .bot-buddy-antenna { background:#aa66ff !important; }
         .buddy-middle .bot-buddy-antenna::after { background:#cc88ff !important; box-shadow:0 0 8px #cc88ff !important; }
         .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
@@ -339,16 +339,16 @@
         .buddy-bet .bot-buddy-mouth { width:8px; height:3px; border-radius:0 0 4px 4px; }
         .buddy-bet .bot-buddy-arm { background:#00cc6a !important; }
         .buddy-bet .bot-buddy-arm.left { bottom:12px; }
-        .buddy-bet .bot-buddy-arm.right { bottom:12px; }
+        .buddy-bet .bot-buddy-arm.right { bottom:12px; left:42px; }
         .buddy-bet .bot-buddy-antenna { background:#00ff88 !important; }
         .buddy-bet .bot-buddy-antenna::after { background:#00ff88 !important; box-shadow:0 0 8px #00ff88 !important; }
         .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
-        /* Scout tool: binoculars */
+        /* Scout tool: compass */
         .buddy-bet .bot-buddy-tool {
-            position:absolute; right:0; bottom:6px;
-            width:26px; height:20px;
-            background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAKCAYAAACALL/6AAAAPUlEQVR4nGNgAIH/Hf/hGB1gyAEZq/6f+Y9VE1Y5ZA4In8lCxejyGAJoNmCXI8kPIIDsBHSAVW4QaiABAADC+KSZd0UBRQAAAABJRU5ErkJggg==') no-repeat center/contain;
+            position:absolute; left:52px; bottom:4px;
+            width:24px; height:24px;
+            background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAVElEQVR4nGNgoAj87/gPwv9dXMAYxsermEdAAa4BxMauCUkxmAuzAQiwa0JSjA3ANaHbAOdCAS558jSQ5SS4pjNZ/8EYp6fRNUE14FaM7lZ0TAkAAGk9lpFJC2NTAAAAAElFTkSuQmCC') no-repeat center/contain;
             image-rendering: pixelated;
         }
 
@@ -2774,6 +2774,6 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260319j"></script>
+    <script src="app.js?v=20260319k"></script>
 </body>
 </html>

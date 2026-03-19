@@ -5292,6 +5292,8 @@ def _check_and_record_rung_completions(bot_id, bot):
             break
         # Has active orders? Check if order IDs exist
         if rung.get('yes_order_id') or rung.get('no_order_id'):
+            if hedge_fully_done:
+                continue  # Hedge done — unfilled anchors will be cancelled by full completion
             all_resolved = False
             break
 

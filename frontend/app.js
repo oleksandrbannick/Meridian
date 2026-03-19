@@ -10148,11 +10148,11 @@ async function loadDogHistory() {
             const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
             const net = (t.profit_cents||0) - (t.loss_cents||0);
             const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
-            const isWin = net >= 0 && !isSellback;
-            const netCol = isSellback ? '#ff4444' : net >= 0 ? '#00ff88' : '#ff4444';
-            const icon = isSellback ? '🔄' : isWin ? '✅' : '⛔';
-            const statusLabel = isSellback ? 'SELLBACK' : isWin ? 'COMPLETED' : 'LOSS';
-            const borderCol = isSellback ? '#ff444422' : net >= 0 ? '#00ff8822' : '#ff444422';
+            const isWin = net > 0;
+            const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
+            const icon = isSellback ? (isWin ? '🔄✅' : '🔄') : isWin ? '✅' : '⛔';
+            const statusLabel = isSellback ? (isWin ? 'SELLBACK +' : 'SELLBACK') : isWin ? 'COMPLETED' : 'LOSS';
+            const borderCol = net > 0 ? '#00ff8822' : net < 0 ? '#ff444422' : '#1e2740';
             const teamName = formatBotDisplayName(t.ticker||'', '');
             const dogSide = t.dog_side || t.first_leg || (t.exit_via === 'sell_back_yes' ? 'yes' : t.exit_via === 'sell_back_no' ? 'no' : 'no');
             const favSide = dogSide === 'yes' ? 'no' : 'yes';
@@ -10191,8 +10191,8 @@ async function loadDogHistory() {
                     <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${isSellback ? '#ff444422' : favCol+'22'};">
                         <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">${isSellback ? '🔙 SOLD BACK' : '⭐ FAV HEDGE'}</div>
                         ${isSellback
-                            ? `<div style="color:#ff4444;font-weight:700;font-size:12px;">${t.sell_back_price > 0 ? dogSide.toUpperCase() + ' sold @ ' + t.sell_back_price + '¢' : 'Sell failed — full loss'}</div>
-                               <div style="color:#ff6644;font-size:10px;">Dog cost: ${dogPrice}¢ · Lost ${t.loss_cents||0}¢</div>
+                            ? `<div style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:700;font-size:12px;">${t.sell_back_price > 0 ? dogSide.toUpperCase() + ' sold @ ' + t.sell_back_price + '¢' : 'Sell failed — full loss'}</div>
+                               <div style="color:${net > 0 ? '#00ff88' : '#ff6644'};font-size:10px;">Dog cost: ${dogPrice}¢ · ${net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢'}</div>
                                <div style="color:#8892a6;font-size:9px;margin-top:2px;">Fav ${favSide.toUpperCase()} was ${favPrice}¢</div>`
                             : `<div style="color:${favCol};font-weight:700;font-size:12px;">${favSide.toUpperCase()} @ ${favPrice}¢</div>
                                <div style="color:#00ff88;font-size:10px;">Total: ${typeof dogPrice === 'number' && typeof favPrice === 'number' ? dogPrice + favPrice : '?'}¢ · Profit: +${t.profit_cents||0}¢</div>`

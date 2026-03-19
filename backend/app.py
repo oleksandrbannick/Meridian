@@ -3269,7 +3269,15 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
     total_fees = buy_fee + sell_fee
     loss_cents += total_fees
 
-    session_pnl['gross_loss_cents'] += loss_cents
+    # Handle profitable sellbacks (sell_price > avg_price minus fees)
+    if loss_cents < 0:
+        profit_cents = abs(loss_cents)
+        loss_cents = 0
+        session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + profit_cents
+    else:
+        profit_cents = 0
+        session_pnl['gross_loss_cents'] += loss_cents
+
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
 
@@ -3300,15 +3308,15 @@ def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions)
         for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0
     ]
 
-    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss_cents
-    print(f'🔙 PHANTOM SELLBACK: {bot_id} | dog={dog_side.upper()} avg@{avg_price}¢ → sold@{sell_price}¢ | qty={total_fill_qty} | loss={loss_cents}¢ | fav_bid={fav_bid}¢ ceiling={total_cost}¢')
+    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + (profit_cents - loss_cents)
+    print(f'🔙 PHANTOM SELLBACK: {bot_id} | dog={dog_side.upper()} avg@{avg_price}¢ → sold@{sell_price}¢ | qty={total_fill_qty} | {"profit" if profit_cents else "loss"}={profit_cents or loss_cents}¢ | fav_bid={fav_bid}¢ ceiling={total_cost}¢')
 
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,
         'yes_price': avg_price if dog_side == 'yes' else (sell_price or fav_bid),
         'no_price': avg_price if dog_side == 'no' else (sell_price or fav_bid),
         'quantity': total_fill_qty,
-        'profit_cents': 0, 'loss_cents': loss_cents, 'fee_cents': total_fees,
+        'profit_cents': profit_cents, 'loss_cents': loss_cents, 'fee_cents': total_fees,
         'result': 'ladder_sellback',
         'exit_via': f'sell_back_{dog_side}',
         'first_leg': dog_side,
@@ -7481,13 +7489,15 @@ def _handle_anchor_dog(bot_id, bot, actions):
             if current_fav_price <= 0:
                 return
 
-            # Fetch current bid to know upper bound
+            # Fetch current bid + ask to know upper bound and gap
             try:
                 api_rate_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
                 current_fav_bid = _best_bid(ob, fav_side)
+                current_fav_ask = _best_ask(ob, fav_side)
             except Exception:
                 current_fav_bid = 0
+                current_fav_ask = 0
 
             if current_fav_bid <= 0:
                 # No bid — check if we should bail
@@ -7499,17 +7509,22 @@ def _handle_anchor_dog(bot_id, bot, actions):
                     _anchor_sell_dog_back(bot_id, bot, dog_price, 0, 999, actions)
                 return
 
-            # New price: +1c, but never above current bid
-            new_fav_price = min(current_fav_price + 1, current_fav_bid)
+            # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
+            fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
+            if fav_spread >= 2 and current_fav_ask > current_fav_bid:
+                walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
+            else:
+                walk_target = current_fav_bid
+            new_fav_price = min(current_fav_price + 1, walk_target)
 
             # Check walk ceiling — fees excluded, 98¢ combined (dog + fav)
             combined = dog_price + new_fav_price
 
             if combined > WALK_CEILING:
-                # At ceiling — jump to bid instead of holding
-                if current_fav_bid > current_fav_price:
-                    new_fav_price = current_fav_bid
-                    print(f'📈 PHANTOM WALK CEILING → BID: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ = {dog_price + new_fav_price}¢ — jumping to bid {current_fav_bid}¢')
+                # At ceiling — jump to walk_target (bid+1 in gaps) instead of holding
+                if walk_target > current_fav_price:
+                    new_fav_price = walk_target
+                    print(f'📈 PHANTOM WALK CEILING → BID: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ = {dog_price + new_fav_price}¢ — jumping to target {walk_target}¢ (bid={current_fav_bid}¢ ask={current_fav_ask}¢)')
                 else:
                     bot['fav_last_walk_at'] = now
                     return
@@ -8737,7 +8752,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
         # ── Bidirectional walk + snap system ──
         unfilled_bid = yes_bid if unfilled_side == 'yes' else no_bid
         unfilled_ask = bot.get(f'live_{unfilled_side}_ask', 0)
-        wide_spread = unfilled_ask > 0 and (unfilled_ask - unfilled_bid) >= 3
+        wide_spread = unfilled_ask > 0 and (unfilled_ask - unfilled_bid) >= 2
         current_price_for_snap = bot.get('hedge_price', 0)
         anchor_for_snap = bot.get(f'avg_{filled_side}_price', 0)
         rq_for_snap = bot.get('hedge_qty', 1)
@@ -9021,10 +9036,19 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     total_fees = buy_fee + sell_fee
     loss_cents += total_fees
 
-    session_pnl['gross_loss_cents'] += loss_cents
+    # Handle profitable sellbacks (sell_price > dog_price minus fees)
+    if loss_cents < 0:
+        profit_cents = abs(loss_cents)
+        loss_cents = 0
+        session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + profit_cents
+        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
+    else:
+        profit_cents = 0
+        session_pnl['gross_loss_cents'] += loss_cents
+        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss_cents
+
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
-    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss_cents
 
     yes_p = dog_price if dog_side == 'yes' else (sell_price or fav_bid)
     no_p = dog_price if dog_side == 'no' else (sell_price or fav_bid)
@@ -9033,7 +9057,7 @@ def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'bot_id': bot_id, 'ticker': ticker,
         'yes_price': yes_p, 'no_price': no_p,
         'quantity': qty,
-        'profit_cents': 0,
+        'profit_cents': profit_cents,
         'loss_cents': loss_cents,
         'fee_cents': total_fees,
         'result': 'anchor_sellback',

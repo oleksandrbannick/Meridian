@@ -14890,12 +14890,57 @@ def _execute_chat_tool(tool_name, tool_input):
             r = requests.get(f'{base}/bot/list', timeout=10)
             data = r.json()
             bots = data.get('bots', data) if isinstance(data, dict) else data
-            # Summarize to avoid token bloat
+            # Summarize with computed P&L
             summary = {}
+            active_count = 0
+            stopped_count = 0
             for bid, b in bots.items():
-                if b.get('status') not in ('completed', 'cancelled', 'error', None):
-                    summary[bid] = {k: b.get(k) for k in ('ticker','type','status','yes_price','no_price','count','pnl','bot_category','created_at')}
-            return summary
+                st = b.get('status', '')
+                if st in ('completed', 'cancelled', 'error', None):
+                    continue
+                cat = b.get('bot_category', b.get('type', '?'))
+                info = {
+                    'ticker': b.get('ticker', ''),
+                    'type': cat,
+                    'status': st,
+                    'count': b.get('count', b.get('quantity', 0)),
+                    'game_phase': b.get('game_phase', ''),
+                    'created_at': b.get('created_at', ''),
+                }
+                # Show relevant prices based on bot type
+                if cat in ('anchor_dog', 'anchor_ladder'):
+                    info['dog_side'] = b.get('dog_side', '')
+                    info['dog_price'] = b.get('dog_price', 0)
+                    info['fav_price'] = b.get('fav_price', 0)
+                else:
+                    info['yes_price'] = b.get('yes_price', 0)
+                    info['no_price'] = b.get('no_price', 0)
+                # Compute P&L where possible
+                pnl = b.get('pnl')
+                if pnl is not None:
+                    info['pnl_cents'] = pnl
+                else:
+                    # Estimate from fills
+                    yes_fill = b.get('yes_fill_qty', 0) or 0
+                    no_fill = b.get('no_fill_qty', 0) or 0
+                    yp = b.get('yes_price', 0) or 0
+                    np = b.get('no_price', 0) or 0
+                    if yes_fill > 0 and no_fill > 0:
+                        info['pnl_cents'] = (100 - yp - np) * min(yes_fill, no_fill)
+                    elif yes_fill > 0 or no_fill > 0:
+                        info['one_side_filled'] = f"{'yes' if yes_fill > 0 else 'no'}={yes_fill or no_fill}"
+                        info['pnl_cents'] = 'pending (one side filled)'
+                    else:
+                        info['pnl_cents'] = 'no fills yet'
+                # Repeat info
+                if b.get('repeat_count', 0) > 0:
+                    info['repeats'] = f"{b.get('repeats_done', 0)}/{b.get('repeat_count', 0)}"
+                if st == 'stopped':
+                    stopped_count += 1
+                else:
+                    active_count += 1
+                summary[bid] = info
+            return {'bots': summary, 'active': active_count, 'stopped': stopped_count, 'total': len(summary)}
         # ── NEW TOOL HANDLERS ────────────────────────────────────
         elif tool_name == 'get_live_scores':
             query = tool_input.get('query', '').lower()

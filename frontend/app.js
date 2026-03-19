@@ -2947,14 +2947,14 @@ function setTradeMode(mode) {
     if (mode === 'straight') {
         if (straightSection) straightSection.style.display = 'block';
         if (straightBtn) { straightBtn.style.background = '#00ff8822'; straightBtn.style.color = '#00ff88'; straightBtn.style.borderBottom = '2px solid #00ff88'; }
-        iconEl.textContent = '💰';
-        titleEl.textContent = 'Straight Bet';
+        iconEl.textContent = '◎';
+        titleEl.textContent = 'Scout';
         subtitleEl.textContent = 'Limit Order';
     } else if (mode === 'middle') {
         if (middleSection) middleSection.style.display = 'block';
         if (middleBtn) { middleBtn.style.background = '#aa66ff22'; middleBtn.style.color = '#aa66ff'; middleBtn.style.borderBottom = '2px solid #aa66ff'; }
-        iconEl.textContent = '↔️';
-        titleEl.textContent = 'Middle Bot';
+        iconEl.textContent = '◈';
+        titleEl.textContent = 'Meridian Bot';
         subtitleEl.textContent = 'Dual-Spread Automation';
         updateMiddleBotCalc();
     } else if (mode === 'anchor') {
@@ -5497,7 +5497,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     el.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="color:#aa66ff;font-size:11px;font-weight:700;">↔️ MIDDLE</span>
+                <span style="color:#aa66ff;font-size:11px;font-weight:700;">◈ MERIDIAN</span>
                 <span style="color:#fff;font-weight:700;font-size:13px;">${bot.team_a_name||'A'} vs ${bot.team_b_name||'B'}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
@@ -5777,7 +5777,7 @@ async function loadBots() {
 
         // Update middle bots tab badge
         const midBtn = document.getElementById('bots-tab-middle');
-        if (midBtn) midBtn.textContent = `↔️ MIDDLE${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`;
+        if (midBtn) midBtn.textContent = `◈ MERIDIAN${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`;
 
         // Update dog bots tab badge
         const dogBtn = document.getElementById('bots-tab-dog');
@@ -5785,7 +5785,7 @@ async function loadBots() {
 
         // Update bets tab badge
         const betsBtn = document.getElementById('bots-tab-bets');
-        if (betsBtn) betsBtn.textContent = `💰 BETS${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`;
+        if (betsBtn) betsBtn.textContent = `◎ SCOUT${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`;
 
         // Update apex bots tab badge
         const arbBtn = document.getElementById('bots-tab-arb');
@@ -7344,8 +7344,44 @@ function setBuddyOutfit(tabMode) {
     // Update name tag
     const nameEl = buddy.querySelector('.bot-buddy-name');
     if (nameEl) {
-        const names = { apex: 'Meridian · Apex', phantom: 'Meridian · Phantom', middle: 'Meridian · Middle', bet: 'Meridian · Bets' };
+        const names = { apex: 'Apex', phantom: 'Phantom', middle: 'Meridian', bet: 'Scout' };
         nameEl.textContent = names[outfit] || 'Meridian';
+    }
+    // Intro message — each bot introduces itself when you switch tabs
+    const intros = {
+        apex: [
+            'Apex online. Scanning for multi-rung setups.',
+            'All angles covered. Show me the spreads.',
+            'Precision mode. Every rung is a chance.',
+            'Ladders locked. Watching for width.',
+        ],
+        phantom: [
+            'Phantom active. Watching the deep book.',
+            'Patience pays. I strike when they least expect it.',
+            'Anchors set. Waiting for volatility.',
+            'Silent. Still. Ready to pounce.',
+        ],
+        middle: [
+            'Meridian ready. Looking for the line between two worlds.',
+            'The gap exists. Let me find it.',
+            'Spread arbitrage is an art. Let\'s paint.',
+            'Two sides, one profit. That\'s the Meridian way.',
+        ],
+        bet: [
+            'Scout deployed. Eyes on the market.',
+            'One position, one edge. Keep it clean.',
+            'Scanning for entry points. Standing by.',
+            'First in, first out. That\'s my game.',
+        ],
+    };
+    const msgs = intros[outfit];
+    if (msgs) {
+        const msg = msgs[Math.floor(Math.random() * msgs.length)];
+        const msgEl = document.getElementById('bot-buddy-msg');
+        if (msgEl) {
+            const dotColor = { apex: '#00aaff', phantom: '#ffaa00', middle: '#aa66ff', bet: '#00ff88' }[outfit] || '#00ff88';
+            msgEl.innerHTML = `<span class="bot-buddy-status-dot" style="background:${dotColor}"></span><strong>${msg.split('.')[0]}.</strong> ${msg.split('.').slice(1).join('.').trim()}`;
+        }
     }
 }
 

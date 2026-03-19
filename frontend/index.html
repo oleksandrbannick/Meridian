@@ -253,6 +253,12 @@
             box-shadow:0 0 16px rgba(0,170,255,0.5) !important;
             clip-path: polygon(50% 0%, 100% 30%, 100% 100%, 0% 100%, 0% 30%);
         }
+        /* Apex visor — precision scope across eyes */
+        .buddy-apex .bot-buddy-body::before {
+            content:''; position:absolute; top:16px; left:50%; transform:translateX(-50%);
+            width:22px; height:3px; background:linear-gradient(90deg, transparent, #00ddff, transparent);
+            border-radius:2px; box-shadow:0 0 6px rgba(0,221,255,0.6); z-index:2; opacity:0.85;
+        }
         .buddy-apex .bot-buddy-face { margin-top:6px; }
         .buddy-apex .bot-buddy-eye { width:4px; height:7px; border-radius:2px; }
         .buddy-apex .bot-buddy-eyes { gap:7px; }
@@ -274,7 +280,15 @@
             animation: buddyFloat 2s ease-in-out infinite !important;
         }
         .buddy-phantom .bot-buddy-face { margin-top:4px; }
-        .buddy-phantom .bot-buddy-eye { width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px #ffdd00; background:#111; }
+        .buddy-phantom .bot-buddy-eye { width:6px; height:6px; border-radius:50%; box-shadow:0 0 10px #ffdd00; background:#111; }
+        /* Phantom ghost trail — fading afterimage below body */
+        .buddy-phantom .bot-buddy-body::after {
+            content:''; position:absolute; bottom:-8px; left:50%; transform:translateX(-50%);
+            width:30px; height:12px; border-radius:50%;
+            background:radial-gradient(ellipse, rgba(255,170,0,0.25), transparent 70%);
+            animation: ghostTrail 2s ease-in-out infinite;
+        }
+        @keyframes ghostTrail { 0%,100%{opacity:0.3;transform:translateX(-50%) scaleX(1)} 50%{opacity:0.6;transform:translateX(-50%) scaleX(1.2)} }
         .buddy-phantom .bot-buddy-eyes { gap:6px; }
         .buddy-phantom .bot-buddy-mouth { width:5px; height:5px; border-radius:50%; }
         .buddy-phantom .bot-buddy-arm { opacity:0; width:0; }
@@ -283,12 +297,20 @@
         .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
         @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
 
-        /* ⚖️ MIDDLE — Wide rounded pill, calm/stable, purple theme */
+        /* ◈ MERIDIAN — Wide rounded pill, regal/stable, purple theme with crown */
         .buddy-middle .bot-buddy-body {
             width:42px; height:32px; border-radius:16px;
             background:linear-gradient(135deg, #aa66ff, #7744cc) !important;
             box-shadow:0 0 14px rgba(170,102,255,0.4) !important;
             clip-path: none;
+        }
+        /* Meridian crown — 3 points above body */
+        .buddy-middle .bot-buddy-body::before {
+            content:''; position:absolute; top:-6px; left:50%; transform:translateX(-50%);
+            width:18px; height:7px;
+            background: linear-gradient(135deg, #cc88ff, #aa66ff);
+            clip-path: polygon(0% 100%, 15% 0%, 30% 60%, 50% 0%, 70% 60%, 85% 0%, 100% 100%);
+            box-shadow: 0 0 8px rgba(204,136,255,0.5);
         }
         .buddy-middle .bot-buddy-face { margin-top:0; }
         .buddy-middle .bot-buddy-eye { width:5px; height:5px; border-radius:50%; }
@@ -302,7 +324,7 @@
         .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
         .buddy-middle .bot-buddy-msg strong { color:#aa66ff !important; }
 
-        /* 🎯 BETS — Normal body shape, green theme, default buddy look */
+        /* ◎ SCOUT — Alert watchful look, green theme, radar pulse on antenna */
         .buddy-bet .bot-buddy-body {
             width:36px; height:36px; border-radius:10px;
             background:linear-gradient(135deg, #00ff88, #00cc6a) !important;
@@ -310,14 +332,25 @@
             clip-path: none;
         }
         .buddy-bet .bot-buddy-face { margin-top:0; }
-        .buddy-bet .bot-buddy-eye { width:5px; height:6px; border-radius:50%; }
-        .buddy-bet .bot-buddy-eyes { gap:5px; }
+        .buddy-bet .bot-buddy-eye { width:6px; height:7px; border-radius:50%; }
+        .buddy-bet .bot-buddy-eyes { gap:6px; }
         .buddy-bet .bot-buddy-mouth { width:8px; height:3px; border-radius:0 0 4px 4px; }
         .buddy-bet .bot-buddy-arm { background:#00cc6a !important; }
         .buddy-bet .bot-buddy-arm.left { bottom:12px; }
         .buddy-bet .bot-buddy-arm.right { bottom:12px; }
-        .buddy-bet .bot-buddy-antenna { background:#00ff88 !important; }
+        .buddy-bet .bot-buddy-antenna { background:#00ff88 !important; height:14px !important; }
         .buddy-bet .bot-buddy-antenna::after { background:#00ff88 !important; box-shadow:0 0 8px #00ff88 !important; }
+        /* Scout radar pulse — expanding ring from antenna */
+        .buddy-bet .bot-buddy-antenna::before {
+            content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+            width:16px; height:16px; border-radius:50%;
+            border:1.5px solid rgba(0,255,136,0.4);
+            animation: scoutRadar 2s ease-out infinite;
+        }
+        @keyframes scoutRadar {
+            0% { width:8px; height:8px; opacity:0.8; top:-2px; }
+            100% { width:28px; height:28px; opacity:0; top:-12px; }
+        }
         .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
 
@@ -565,7 +598,7 @@
                         <span id="auto-monitor-text">▶️ Monitor</span>
                     </button>
                     <button class="btn btn-secondary" onclick="openScanModal()" title="Apex Scanner — finds wide YES/NO spreads for Apex bots">△ Apex Scanner</button>
-                    <button class="btn btn-secondary" onclick="openMiddlesModal()" title="Middle Scanner — finds NO+NO opposing-spread opportunities">📐 Middles</button>
+                    <button class="btn btn-secondary" onclick="openMiddlesModal()" title="Meridian Scanner — finds NO+NO opposing-spread opportunities">◈ Meridian</button>
                     <button class="btn" onclick="toggleFeatureGuide()" title="Learn how each feature works"
                             style="background:none;border:1px solid #2a3550;color:#8892a6;padding:0.55rem 0.7rem;font-size:12px;border-radius:8px;">❓</button>
                 </div>
@@ -626,8 +659,8 @@
                 <div style="display:flex;gap:0;margin-bottom:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
                     <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">△ APEX</button>
                     <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">👻 PHANTOM</button>
-                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">↔️ MIDDLE</button>
-                    <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">💰 BETS</button>
+                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">◈ MERIDIAN</button>
+                    <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">◎ SCOUT</button>
                 </div>
                 <!-- Per-section daily mini-stats -->
                 <div id="bots-arb-daily" style="display:flex;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
@@ -635,9 +668,9 @@
                 <div id="bots-dog-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-bets-daily" style="display:none;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
                 <div id="bots-list"><p style="color: #8892a6;">No active bots</p></div>
-                <div id="middle-bots-list" style="display:none;"><p style="color:#8892a6;">No active middle bots</p></div>
-                <div id="dog-bots-list" style="display:none;"><p style="color:#8892a6;">No active dog bots</p></div>
-                <div id="bets-bots-list" style="display:none;"><p style="color:#8892a6;">No active straight bets</p></div>
+                <div id="middle-bots-list" style="display:none;"><p style="color:#8892a6;">No active Meridian bots</p></div>
+                <div id="dog-bots-list" style="display:none;"><p style="color:#8892a6;">No active Phantom bots</p></div>
+                <div id="bets-bots-list" style="display:none;"><p style="color:#8892a6;">No active Scout bets</p></div>
                 <!-- Latency Monitor -->
                 <div id="latency-panel" style="margin-top:12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:12px;display:none;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -657,7 +690,7 @@
                 <div style="display:grid;gap:12px;">
                     <div><strong style="color:#fff;">▶️ Auto-Monitor</strong> — <strong style="color:#ff6666;">Must be enabled for bots to work.</strong> Runs every 2 seconds: fills, reposts, flip stop-losses, and watch-bot management.</div>
                     <div><strong style="color:#fff;">△ Apex Scanner</strong> — Opens scanner with your settings. Set Min Width (minimum gap in cents) and Qty, then hit Scan. Places both YES+NO limit orders at bid+1 (front of queue). Profit = gap - 2¢ when both fill. Use All Widths to run bots at every profitable width simultaneously.</div>
-                    <div><strong style="color:#fff;">📐 Middles</strong> — Finds games with opposing-team spread lines. You bet NO on both sides — only one team can cover, so you always win at least one. Win both if the game lands in the middle.</div>
+                    <div><strong style="color:#fff;">◈ Meridian</strong> — Finds games with opposing-team spread lines. You bet NO on both sides — only one team can cover, so you always win at least one. Win both if the game lands in the middle.</div>
                     <div><strong style="color:#fff;">🛡 Flip (Stop-Loss)</strong> — If one leg fills and the market moves against you (bid falls below entry-15¢, floor 55¢), the bot market-sells the filled leg to exit and cancels the other. This limits loss to ~15-25¢ per contract.</div>
                     <div><strong style="color:#fff;">💼 Positions Tab</strong> — Your real Kalshi positions. Click Watch to attach a bot that monitors with stop-loss + take-profit targets.</div>
                     <div><strong style="color:#fff;">📜 History → ARB view</strong> — Your arb-only performance: fill rate, P&L, width breakdown, flip analysis. Toggle BETS to see watch-bot / straight bet history separately.</div>
@@ -700,9 +733,9 @@
                 </div>
                 <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
                     <button id="histmode-bets" onclick="setHistoryMode('bets')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">🎯 STRAIGHT</button>
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">◎ SCOUT</button>
                     <button id="histmode-middle" onclick="setHistoryMode('middle')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">↔️ MIDDLES</button>
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">◈ MERIDIAN</button>
                 </div>
             </div>
 
@@ -729,7 +762,7 @@
                 <div id="bets-pnl-calendar-panel" style="margin-bottom:20px;"></div>
                 <div id="bets-stats-panel" style="margin-bottom:20px;"></div>
                 <div id="bets-sport-panel" style="margin-bottom:20px;"></div>
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Straight Bets Log</h3>
+                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Scout Bets Log</h3>
                 <div id="bets-history-list">
                     <p style="color:#555;text-align:center;font-size:12px;">Loading...</p>
                 </div>
@@ -777,7 +810,7 @@
                 <div style="display:flex; align-items:center; gap:10px;">
                     <div id="modal-icon" style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);display:flex;align-items:center;justify-content:center;font-size:16px;">💰</div>
                     <div>
-                        <div id="modal-mode-title" style="color:#fff;font-weight:700;font-size:14px;letter-spacing:.02em;">Straight Bet</div>
+                        <div id="modal-mode-title" style="color:#fff;font-weight:700;font-size:14px;letter-spacing:.02em;">Scout</div>
                         <div id="modal-mode-subtitle" style="color:#8892a6;font-size:10px;letter-spacing:.04em;text-transform:uppercase;">Limit Order</div>
                     </div>
                 </div>
@@ -788,11 +821,11 @@
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
                     <button id="mode-straight" onclick="setTradeMode('straight')"
                         style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
-                        💰 Straight
+                        ◎ Scout
                     </button>
                     <button id="mode-middle" onclick="setTradeMode('middle')"
                         style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        ↔️ Middle
+                        ◈ Meridian
                     </button>
                     <button id="mode-arb" onclick="setTradeMode('arb')"
                         style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
@@ -1026,7 +1059,7 @@
                 <!-- ═══════ MIDDLE BOT SECTION ═══════ -->
                 <div id="middle-bot-section" style="display:none;">
                     <div style="background:#0a0e1a;border:1px solid #aa66ff44;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#aa66ff;">↔️ Middle Bot:</strong> Posts NO on both spread markets at target price. Game volatility fills both — guaranteed profit floor + middle bonus if both NOs win. Stop-loss exits filled leg if the other stalls.
+                        <strong style="color:#aa66ff;">◈ Meridian Bot:</strong> Posts NO on both spread markets at target price. Game volatility fills both — guaranteed profit floor + middle bonus if both NOs win. Stop-loss exits filled leg if the other stalls.
                     </div>
                     <!-- Two-column leg display -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
@@ -1113,7 +1146,7 @@
                     </div>
                     <!-- Launch button -->
                     <button onclick="launchMiddleBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#aa66ff 0%,#8844dd 100%);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
-                        ↔️ Launch Middle Bot
+                        ◈ Launch Meridian Bot
                     </button>
                 </div>
 
@@ -1277,7 +1310,7 @@
         <div class="modal-content" style="max-width:700px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid #ffaa00;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                 <div>
-                    <h2 class="modal-header" style="margin:0;">📐 Middle Scanner</h2>
+                    <h2 class="modal-header" style="margin:0;">◈ Meridian Scanner</h2>
                     <div style="color:#8892a6;font-size:11px;margin-top:2px;">NO+NO opposing-spread — one leg always wins, both win if score is in the middle</div>
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;">
@@ -1313,7 +1346,7 @@
                 </div>
             </div>
             <div id="middles-results" style="flex:1;overflow-y:auto;">
-                <p style="color:#555;text-align:center;padding:32px;font-size:13px;">Click Scan to find middle opportunities across all spread markets.</p>
+                <p style="color:#555;text-align:center;padding:32px;font-size:13px;">Click Scan to find Meridian opportunities across all spread markets.</p>
             </div>
         </div>
     </div>
@@ -1755,12 +1788,9 @@
         }
     </style>
 
-    <!-- FAB: Claude logo bubble -->
+    <!-- FAB: Pixel ghost bubble -->
     <button id="claude-chat-fab" onclick="toggleClaudeChat()" aria-label="Chat with Claude">
-        <svg class="claude-blob" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- Claude asterisk/blob logo -->
-            <path d="M50 10 C53 10, 56 28, 56 40 C56 28, 72 16, 75 18 C78 20, 68 36, 60 44 C72 40, 88 38, 89 42 C90 46, 72 48, 60 50 C72 52, 90 54, 89 58 C88 62, 72 60, 60 56 C68 64, 78 80, 75 82 C72 84, 56 72, 56 60 C56 72, 53 90, 50 90 C47 90, 44 72, 44 60 C44 72, 28 84, 25 82 C22 80, 32 64, 40 56 C28 60, 10 62, 11 58 C12 54, 28 52, 40 50 C28 48, 12 46, 11 42 C10 38, 28 40, 40 44 C32 36, 22 20, 25 18 C28 16, 44 28, 44 40 C44 28, 47 10, 50 10Z" fill="#0c1020"/>
-        </svg>
+        <canvas id="fab-ghost-canvas" width="24" height="24" style="image-rendering:pixelated;width:36px;height:36px;"></canvas>
     </button>
 
     <!-- Chat Panel -->
@@ -1872,7 +1902,7 @@
             [
                 { text: 'What\'s my balance and open positions?', q: 'Show me my current balance, open positions, and any active bots' },
                 { text: 'Show me recent fills from Kalshi', q: 'Get my recent trade fills from Kalshi' },
-                { text: 'Any middle opportunities on spreads?', q: 'Scan for middle opportunities across spread markets' },
+                { text: 'Any Meridian opportunities on spreads?', q: 'Scan for Meridian opportunities across spread markets' },
             ],
             [
                 { text: 'Check my resting orders on Kalshi', q: 'Show me all my resting orders on Kalshi - are any orphaned?' },
@@ -1983,6 +2013,39 @@
 
             // Sparkle accents
             px(5,14,CL); px(42,12,CL); px(4,30,CL); px(43,28,CL);
+        }
+
+        // Draw mini ghost on FAB button (24x24 grid)
+        const fabCanvas = document.getElementById('fab-ghost-canvas');
+        if (fabCanvas) {
+            const fc = fabCanvas.getContext('2d');
+            const fp = (x, y, c) => { fc.fillStyle = c; fc.fillRect(x, y, 1, 1); };
+            const A = '#d97706', L = '#f59e0b', D = '#92400e', B = '#0c1020', G = '#00ff88';
+            // Top dome
+            for (let x=8;x<=15;x++) fp(x,3,D);
+            for (let x=6;x<=17;x++) fp(x,4,D);
+            for (let x=5;x<=18;x++) fp(x,5,D);
+            // Body fill
+            for (let x=8;x<=15;x++) fp(x,4,A);
+            for (let x=6;x<=17;x++) fp(x,5,A);
+            for (let y=6;y<=17;y++) { for (let x=4;x<=19;x++) fp(x,y,A); }
+            // Highlight
+            for (let x=8;x<=11;x++) fp(x,5,L);
+            for (let x=6;x<=9;x++) fp(x,6,L);
+            // Side outlines
+            for (let y=6;y<=17;y++) { fp(3,y,D); fp(20,y,D); }
+            // Eyes
+            for (let x=7;x<=8;x++) for (let y=9;y<=11;y++) fp(x,y,B);
+            for (let x=14;x<=15;x++) for (let y=9;y<=11;y++) fp(x,y,B);
+            fp(7,9,G); fp(14,9,G);
+            // >_ prompt
+            fp(7,14,G); fp(8,15,G); fp(7,16,G);
+            for (let x=10;x<=13;x++) fp(x,16,G);
+            // Wavy bottom
+            for (let x=4;x<=7;x++) fp(x,18,A);
+            for (let x=9;x<=11;x++) { fp(x,18,A); fp(x,19,A); }
+            for (let x=13;x<=15;x++) fp(x,18,A);
+            for (let x=17;x<=19;x++) { fp(x,18,A); fp(x,19,A); }
         }
 
         const input = document.getElementById('claude-chat-input');
@@ -2264,7 +2327,7 @@
                                     create_ladder_arb: 'Deploying Apex bot', create_anchor_dog: 'Deploying Phantom bot',
                                     create_anchor_ladder: 'Deploying Phantom ladder', cancel_bot: 'Cancelling bot',
                                     cancel_bots_bulk: 'Cancelling bots', close_position: 'Closing position',
-                                    scan_arbs: 'Scanning arbs', scan_middles: 'Scanning middles',
+                                    scan_arbs: 'Scanning arbs', scan_middles: 'Scanning Meridian opps',
                                     get_orderbook: 'Checking orderbook', get_market: 'Looking up market', search_markets: 'Searching markets',
                                     get_live_scores: 'Checking scores', get_trade_history: 'Pulling trades',
                                     set_alert: 'Setting alert', change_view: 'Updating view',
@@ -2279,7 +2342,7 @@
                                     set_bot_phase: 'Switching phase', modify_bot: 'Modifying bot',
                                     sweep_orphans: 'Sweeping orphans', get_orphaned_positions: 'Checking orphans',
                                     reconcile_positions: 'Reconciling', get_ws_status: 'Checking WS',
-                                    get_latency: 'Checking latency', create_middle_bot: 'Deploying middle bot',
+                                    get_latency: 'Checking latency', create_middle_bot: 'Deploying Meridian bot',
                                     get_pnl_calendar: 'Loading P&L', get_bot_stats: 'Analyzing stats',
                                     get_risk_exposure: 'Checking exposure', read_activity_log: 'Reading log',
                                     get_system_status: 'Health check', get_boxscore: 'Loading boxscore',
@@ -2403,6 +2466,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260319g"></script>
+    <script src="app.js?v=20260319h"></script>
 </body>
 </html>

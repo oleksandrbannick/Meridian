@@ -14325,7 +14325,7 @@ CLAUDE_TOOLS = [
     },
     {
         "name": "scan_middles",
-        "description": "Scan for middle opportunities across spread markets.",
+        "description": "Scan for Meridian opportunities — find spread markets where opposing NO orders can lock in profit.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -14691,7 +14691,7 @@ CLAUDE_TOOLS = [
     },
     {
         "name": "create_middle_bot",
-        "description": "Create a middle bot — places NO limit orders on two opposing spread markets (e.g. LAL -4.5 and HOU +4.5). Profit if both fill since combined cost < 100¢. Requires two tickers from opposing sides of the same spread.",
+        "description": "Create a Meridian bot — places NO limit orders on two opposing spread markets (e.g. LAL -4.5 and HOU +4.5). Profit if both fill since combined cost < 100¢. Requires two tickers from opposing sides of the same spread.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -15584,7 +15584,7 @@ def claude_chat():
         'For create_smart_bot: ALWAYS suggest game_ending=true and bid_below=5 as default safety conditions. Creates a bot with repeat + auto-cancel.',
         'For diagnose_bots: checks orphaned positions, price violations (orders above bid), stuck bots. Report issues clearly and suggest fixes.',
         'For watch_game: adds game to watchlist for proactive notifications (score runs, game start/end). Notifications appear as chat badges.',
-        'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Middle posts both NO legs.',
+        'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Meridian posts both NO legs on opposing spreads. Scout places single limit orders.',
         'BOT STATE: Phantom and ladder bots only post ONE side (the dog/underdog). The other side shows as 0¢ or "pending" in bot state — this is NOT a real order. There is no such thing as a 0¢ limit order on Kalshi. A 0¢ price means that side has not been posted yet and is waiting for the dog to fill before hedging. Do NOT flag 0¢ prices as errors on phantom/anchor bots.',
         'SMART BOT MANAGEMENT: When the user asks you to manage a bot\'s lifecycle, use modify_bot and set_bot_phase. If a repeating bot is profitable over its cycles, keep it running (increase repeat_count). If it\'s losing money on cycles, stop it (set repeat_count to 0). If the game is close to ending (final 5 min), reduce repeats or stop the bot. Use read_activity_log to check a bot\'s recent cycle history. Use get_bot_stats to compare strategy performance. When the user says "keep it going" or "let it ride", increase repeat_count. When they say "shut it down" or "stop that bot", cancel it. You can also use amend_order to adjust resting order prices if a bot\'s orders aren\'t filling.',
     ]

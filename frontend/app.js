@@ -176,7 +176,29 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLiveScores();
     liveScoresInterval = setInterval(loadLiveScores, 30000);
     requestPushPermission();
+    // Check for orphaned positions after a short delay (let server finish startup)
+    setTimeout(checkOrphanedPositions, 5000);
 });
+
+async function checkOrphanedPositions() {
+    try {
+        const resp = await fetch(`${API_BASE}/orphaned-positions`);
+        const data = await resp.json();
+        if (data.orphaned && data.orphaned.length > 0) {
+            const listEl = document.getElementById('orphan-alert-list');
+            listEl.innerHTML = data.orphaned.map(p =>
+                `<div style="padding:8px 12px;background:#ff444411;border:1px solid #ff444433;border-radius:8px;margin-bottom:6px;">
+                    <div style="color:#fff;font-weight:600;font-size:13px;">${p.ticker}</div>
+                    <div style="color:#8892a6;font-size:11px;margin-top:2px;">
+                        ${p.side.toUpperCase()} — <strong style="color:#ff4444;">${p.orphaned_qty} orphaned</strong> of ${p.total_qty} contracts
+                        ${p.exposure > 0 ? ` — $${p.exposure.toFixed(2)} exposure` : ''}
+                    </div>
+                </div>`
+            ).join('');
+            document.getElementById('orphan-alert-modal').classList.add('show');
+        }
+    } catch (e) { /* server may not be ready yet */ }
+}
 
 // ─── TAB NAVIGATION ──────────────────────────────────────────────────────────
 
@@ -10327,8 +10349,10 @@ async function loadPositions() {
             const realizedPnl = (pos.realized_pnl / 100).toFixed(2);
             const pnlColor = pos.realized_pnl >= 0 ? '#00ff88' : '#ff4444';
             const isWatched = !!pos.watched_by;
+            const isOrphaned = pos.is_orphaned && pos.orphaned_qty > 0;
+            const cardBorder = isOrphaned ? 'border-color:#ff4444;box-shadow:0 0 10px rgba(255,68,68,0.3);' : (isWatched ? 'border-color:#9966ff66;' : '');
 
-            return `<div class="position-card" style="${isWatched ? 'border-color:#9966ff66;' : ''}">
+            return `<div class="position-card" style="${cardBorder}">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
                         <span class="side-badge ${pos.side}">${pos.side.toUpperCase()}</span>
@@ -10356,6 +10380,7 @@ async function loadPositions() {
                     <div>Realized: <strong style="color:${pnlColor};">$${realizedPnl}</strong></div>
                 </div>
                 ${pos.resting_orders ? `<div style="margin-top:6px;font-size:10px;color:#555;">${pos.resting_orders} resting order(s)</div>` : ''}
+                ${isOrphaned ? `<div style="margin-top:6px;padding:4px 8px;background:#ff444422;border:1px solid #ff444444;border-radius:6px;font-size:11px;color:#ff4444;font-weight:600;">⚠ ${pos.orphaned_qty} orphaned contract${pos.orphaned_qty > 1 ? 's' : ''} — no bot managing</div>` : ''}
             </div>`;
         }).join('');
     } catch (err) {

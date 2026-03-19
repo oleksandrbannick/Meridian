@@ -61,6 +61,9 @@ def _check_chat_alerts():
 _notification_queue = []  # [{id, type, message, data, created_at, read}]
 _notification_counter = 0
 
+# Orphaned positions detected on startup (ticker → {side, orphaned_qty, exposure})
+_orphaned_positions = {}  # ticker -> {side, orphaned_qty, exposure, detected_at}
+
 # Game watchlist — proactive updates
 _watched_games = []  # [{id, game_id, sport, teams, ticker_pattern, notify_on, last_score_home, last_score_away, last_status}]
 _watch_counter = 0
@@ -13550,6 +13553,7 @@ def get_active_positions():
                 fees_dollars = pos.get('fees_paid_dollars', pos.get('fees_paid', 0))
                 fees_cents = round(float(str(fees_dollars)) * 100) if isinstance(fees_dollars, str) else int(fees_dollars)
 
+                orphan_info = _orphaned_positions.get(ticker, {})
                 enriched.append({
                     'ticker':     ticker,
                     'title':      mkt.get('title', ticker),
@@ -13567,6 +13571,8 @@ def get_active_positions():
                     'watched_by': next((bid for bid, b in active_bots.items()
                                         if b.get('ticker') == ticker and b.get('type') == 'watch'
                                         and b['status'] == 'watching'), None),
+                    'is_orphaned': bool(orphan_info),
+                    'orphaned_qty': orphan_info.get('orphaned_qty', 0),
                 })
             except Exception:
                 enriched.append({
@@ -13583,6 +13589,15 @@ def get_active_positions():
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/orphaned-positions', methods=['GET'])
+def get_orphaned_positions():
+    """Return orphaned positions detected on startup."""
+    return jsonify({
+        'orphaned': [{**v, 'ticker': k} for k, v in _orphaned_positions.items()],
+        'count': len(_orphaned_positions),
+    })
 
 
 @app.route('/api/bot/watch', methods=['POST'])
@@ -13693,6 +13708,92 @@ def _run_startup():
                 print('⚠ config.json found but missing api_key_id or private key — skipping auto-login')
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
+
+    # ── Orphan cleanup: cancel stale orders, detect unmanaged positions ──
+    if kalshi_client:
+        try:
+            # Cancel orphaned limit orders
+            sweep_result = _sweep_orphaned_orders()
+            cancelled = sweep_result.get('cancelled', 0)
+            if cancelled > 0:
+                msg = f'🧹 Startup: cancelled {cancelled} orphaned order(s)'
+                print(msg)
+                _push_notification('orphan_sweep', msg, sweep_result)
+            else:
+                print('🧹 Startup orphan sweep: no orphaned orders')
+
+            # Detect orphaned positions — compare Kalshi qty vs bot-managed qty
+            api_rate_limiter.wait()
+            pos_resp = kalshi_client.get_positions()
+            kalshi_positions = pos_resp.get('market_positions', [])
+
+            # Sum managed qty per ticker+side from active bots
+            managed_qty = {}  # (ticker, side) -> qty
+            for b in active_bots.values():
+                if b.get('status') in ('completed', 'stopped', 'cancelled'):
+                    continue
+                t = b.get('ticker', '')
+                if not t:
+                    continue
+                # Figure out which sides this bot holds
+                cat = b.get('bot_category', '')
+                if cat in ('anchor_dog', 'anchor_ladder'):
+                    dog_side = b.get('dog_side', '')
+                    dog_qty = b.get('dog_fill_qty', 0) or b.get('quantity', 0)
+                    fav_side = b.get('fav_side', '')
+                    fav_qty = b.get('fav_fill_qty', 0)
+                    if dog_qty > 0 and dog_side:
+                        managed_qty[(t, dog_side)] = managed_qty.get((t, dog_side), 0) + dog_qty
+                    if fav_qty > 0 and fav_side:
+                        managed_qty[(t, fav_side)] = managed_qty.get((t, fav_side), 0) + fav_qty
+                elif cat == 'ladder_arb':
+                    yes_qty = b.get('filled_yes_qty', 0)
+                    no_qty = b.get('filled_no_qty', 0)
+                    if yes_qty > 0:
+                        managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
+                    if no_qty > 0:
+                        managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + no_qty
+
+            # Compare against Kalshi positions
+            for pos in kalshi_positions:
+                ticker = pos.get('ticker', '')
+                pos_fp = float(pos.get('position_fp', '0'))
+                exposure = float(pos.get('market_exposure_dollars', '0'))
+                if not ticker or (pos_fp == 0 and exposure == 0):
+                    continue
+                # position_fp is net: positive = YES held, negative = NO held
+                if pos_fp > 0:
+                    side = 'yes'
+                    kalshi_qty = int(pos_fp)
+                elif pos_fp < 0:
+                    side = 'no'
+                    kalshi_qty = int(abs(pos_fp))
+                else:
+                    continue
+                bot_qty = managed_qty.get((ticker, side), 0)
+                orphaned_qty = kalshi_qty - bot_qty
+                if orphaned_qty > 0:
+                    _orphaned_positions[ticker] = {
+                        'side': side,
+                        'orphaned_qty': orphaned_qty,
+                        'total_qty': kalshi_qty,
+                        'managed_qty': bot_qty,
+                        'exposure': exposure,
+                        'detected_at': time.time(),
+                    }
+                    print(f'⚠ ORPHANED POSITION: {ticker} {side.upper()} {orphaned_qty}/{kalshi_qty} contracts (${exposure:.2f} exposure)')
+
+            if _orphaned_positions:
+                tickers = ', '.join(_orphaned_positions.keys())
+                msg = f'⚠ {len(_orphaned_positions)} orphaned position(s) on startup: {tickers}'
+                _push_notification('orphan_position', msg, {
+                    'positions': [{**v, 'ticker': k} for k, v in _orphaned_positions.items()]
+                })
+                print(msg)
+            else:
+                print('✅ No orphaned positions')
+        except Exception as e:
+            print(f'⚠ Startup orphan check failed: {e}')
 
     # Start notification monitor thread
     _start_notification_thread()

@@ -1896,7 +1896,7 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
     """Total Kalshi maker fee for both legs of an arb trade, in cents."""
     return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
 
-def _arb_snap_check(anchor_price, bid_price, qty=1):
+def _apex_snap_check(anchor_price, bid_price, qty=1):
     """Return True if snapping to bid is profitable. Simple cents check — no fee math.
     Snap only if combined <= SNAP_CEILING_CENTS (95¢ = 5¢ minimum profit)."""
     combined = anchor_price + bid_price
@@ -2736,7 +2736,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['dog_filled_at'] = time.time()
                 bot['status'] = 'dog_filled'  # block monitor from re-entering dog_anchor_posted
                 threading.Thread(
-                    target=_execute_anchor_fav_hedge,
+                    target=_execute_phantom_hedge,
                     args=(bot_id,),
                     daemon=True
                 ).start()
@@ -2778,7 +2778,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             # All rungs filled? Hedge immediately
             if total_fill >= bot['total_dog_qty']:
                 bot['dog_filled_at'] = time.time()
-                threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+                threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
             elif not bot.get('_sweep_timer_started'):
                 # Partial fill — hedge immediately with whatever is filled, cancel remainder after
                 bot['_sweep_timer_started'] = True
@@ -2850,7 +2850,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     daemon=True
                 ).start()
 
-        _recompute_ladder_arb_fills(bot)
+        _recompute_apex_fills(bot)
 
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
@@ -2890,7 +2890,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     'first_fill_at': bot.get('first_fill_at'),
                     'time_to_complete_s': round(time.time() - bot.get('first_fill_at', time.time()), 1),
                 })
-                threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
+                threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
         elif total_yes > 0 and total_no == 0:
             bot['status'] = 'ladder_arb_yes_filled'
             if not bot.get('first_fill_at'):
@@ -2933,7 +2933,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         break
 
 
-def _precalc_anchor_hedge(dog_price, target_width, dog_side, qty):
+def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
     """Pre-calculate the hedge price so it's ready to fire instantly on dog fill.
     Returns the ceiling-capped hedge price or 0 if too low."""
     max_fav_price = 100 - dog_price - target_width
@@ -2946,7 +2946,7 @@ def _precalc_anchor_hedge(dog_price, target_width, dog_side, qty):
     return max(0, max_hedge)
 
 
-def _execute_anchor_fav_hedge(bot_id):
+def _execute_phantom_hedge(bot_id):
     """Post the favorite hedge immediately after the dog fills.
     Called from WS fill handler in a background thread for speed.
     Uses pre-calculated hedge price — zero compute on the hot path."""
@@ -2965,7 +2965,7 @@ def _execute_anchor_fav_hedge(bot_id):
         hedge_price = bot.get('_precalc_hedge_price') or 0
         if hedge_price < 1:
             # Fallback: recalculate (shouldn't happen)
-            hedge_price = _precalc_anchor_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
+            hedge_price = _precalc_phantom_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
         print(f'👻 PHANTOM HEDGE START: {bot_id} | dog={dog_side.upper()}@{dog_price}¢ | precalc hedge={hedge_price}¢ | fav={fav_side.upper()} qty={qty}')
 
         if hedge_price < 1:
@@ -3020,7 +3020,7 @@ def _execute_anchor_fav_hedge(bot_id):
             bot['status'] = 'dog_filled'  # fallback to monitor
 
 
-def _execute_ladder_fav_hedge(bot_id):
+def _execute_phantom_ladder_hedge(bot_id):
     """Post fav hedge based on weighted average of filled ladder rungs.
     Called from WS handler (all rungs fill) or monitor (bounce detected).
     Uses pre-calculated hedge price when all rungs fill for speed."""
@@ -3090,14 +3090,14 @@ def _execute_ladder_fav_hedge(bot_id):
             hedge_price = min(initial_fav_target, max_fav_price)
             if hedge_price < 1:
                 print(f'   ⚠ Hedge price {hedge_price}¢ too low — selling back')
-                _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
+                _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, 999, [])
                 return
 
             # Hard ceiling check
-            hedge_price = _precalc_anchor_hedge(avg_price, target_width, dog_side, total_fill_qty) or hedge_price
+            hedge_price = _precalc_phantom_hedge(avg_price, target_width, dog_side, total_fill_qty) or hedge_price
             if hedge_price < 1:
                 print(f'   🛑 CEILING: hedge={hedge_price}¢ too low — selling back')
-                _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, 999, [])
+                _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, 999, [])
                 return
             # Use calculated price — do NOT cap at bid (bid may have moved far away)
 
@@ -3214,10 +3214,10 @@ def _ladder_sweep_then_hedge(bot_id):
         return
     print(f'⚡ PHANTOM INSTANT HEDGE: {bot_id} — cancelling unfilled + hedging')
     bot['dog_filled_at'] = time.time()
-    _execute_ladder_fav_hedge(bot_id)
+    _execute_phantom_ladder_hedge(bot_id)
 
 
-def _ladder_sell_dogs_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
+def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
     """Sell all filled ladder rung contracts back."""
     now = time.time()
     ticker = bot['ticker']
@@ -5038,7 +5038,7 @@ def _calculate_arb_prices_server(yes_bid, no_bid, yes_ask, no_ask, width):
     return int(target_yes), int(target_no)
 
 
-def _recompute_ladder_arb_fills(bot):
+def _recompute_apex_fills(bot):
     """Recompute weighted averages and total fills across all rungs.
     When consolidated, distributes hedge fills across anchor-filled rungs in order."""
     qty_per = bot.get('quantity', 1)
@@ -5209,7 +5209,7 @@ def _record_rung_completion(bot_id, bot, rung):
         })
 
 
-def _check_and_record_rung_completions(bot_id, bot):
+def _check_apex_rung_completions(bot_id, bot):
     """Check for newly completed rungs, record their profit, handle hedge history.
     Returns True if ALL rungs are resolved (bot can fully complete)."""
     qty_per = bot.get('quantity', 1)
@@ -5268,7 +5268,7 @@ def _check_and_record_rung_completions(bot_id, bot):
                         _filled_count += _rq
 
     # NOTE: Hedge gen completion + state reset is handled by
-    # _execute_ladder_arb_full_completion which properly clears rung fill counts.
+    # _execute_apex_completion which properly clears rung fill counts.
     # Do NOT reset consolidation state here — doing so leaves orphaned anchor fills
     # that trigger duplicate hedges.
 
@@ -5409,7 +5409,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
 
         # Clear monitor's sweep flag so it doesn't double-cancel
         bot.pop('_sweep_at', None)
-        _recompute_ladder_arb_fills(bot)
+        _recompute_apex_fills(bot)
 
         total_filled_qty = sum(
             min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
@@ -5519,7 +5519,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         print(f'△ APEX SWEEP PHASE2: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {_unfilled_side} orders')
 
 
-def _execute_ladder_arb_full_completion(bot_id):
+def _execute_apex_completion(bot_id):
     """Handle full completion of a ladder-arb bot — all rungs resolved."""
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
@@ -5986,7 +5986,7 @@ def create_anchor_bot():
             'no_fill_qty':         0,
             'arb_width':           target_width,
             # Pre-calculated hedge price — ready to fire instantly on dog fill
-            '_precalc_hedge_price': _precalc_anchor_hedge(actual_dog_price, target_width, dog_side, quantity),
+            '_precalc_hedge_price': _precalc_phantom_hedge(actual_dog_price, target_width, dog_side, quantity),
             '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
             '_last_repost_at':     0,
             '_all_dog_order_ids':  [dog_order_id],
@@ -6156,7 +6156,7 @@ def create_ladder_bot():
             'fav_walk_ceiling': HARD_CEILING_CENTS,
             'fav_last_walk_at': None,
             # Pre-calculated hedge price assuming all rungs fill (weighted avg)
-            '_precalc_hedge_price': _precalc_anchor_hedge(
+            '_precalc_hedge_price': _precalc_phantom_hedge(
                 round(sum(r['price'] * r['qty'] for r in placed_rungs) / total_dog_qty),
                 target_width, dog_side, total_dog_qty
             ),
@@ -6919,7 +6919,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 HARD_CEILING_CENTS = 98
 SNAP_CEILING_CENTS = 95  # snap to bid only when combined <= 95¢ (5¢ minimum profit)
 
-def _handle_anchor_dog(bot_id, bot, actions):
+def _handle_phantom(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""
     now = time.time()
     ticker = bot['ticker']
@@ -6994,7 +6994,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             hedge_price = max_fav_price
             if hedge_price < 1:
                 print(f'⚠ PHANTOM {bot_id}: hedge price {hedge_price}¢ too low — selling dog back')
-                _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
+                _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
                 return
 
             # Hard ceiling check — no fees in bot logic, 98¢ combined = breakeven
@@ -7003,7 +7003,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 safe_hedge = HARD_CEILING_CENTS - actual_dog_price
                 if safe_hedge < 1:
                     print(f'🛑 PHANTOM CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
-                    _anchor_sell_dog_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
+                    _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
                     return
                 print(f'⚠ PHANTOM CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
                 hedge_price = safe_hedge
@@ -7209,7 +7209,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             max_hold_s = 600  # 10 minutes max
             if (now - dog_filled_at) > max_hold_s:
                 print(f'⚠ PHANTOM {bot_id}: dog held {(now - dog_filled_at)/60:.1f}m with no fav bid — selling back')
-                _anchor_sell_dog_back(bot_id, bot, bot['dog_price'], 0, 999, actions)
+                _phantom_sell_back(bot_id, bot, bot['dog_price'], 0, 999, actions)
                 return
             actions.append({'bot_id': bot_id, 'action': 'dog_filled_waiting_fav_bid'})
             return
@@ -7222,14 +7222,14 @@ def _handle_anchor_dog(bot_id, bot, actions):
         initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
         hedge_price = min(initial_fav_target, max_fav_price)
         if hedge_price < 1:
-            _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, 999, actions)
+            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, 999, actions)
             return
 
         total_cost = dog_price + hedge_price
         if total_cost > HARD_CEILING_CENTS:
             safe_hedge = HARD_CEILING_CENTS - dog_price
             if safe_hedge < 1:
-                _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
+                _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
                 return
             print(f'⚠ PHANTOM CEILING CAP: {bot_id} capped hedge {hedge_price}→{safe_hedge}¢')
             hedge_price = safe_hedge
@@ -7470,7 +7470,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 })
                 # Now sell back only the uncovered dogs
                 bot['quantity'] = sell_qty  # temporarily set qty for sell-back
-                _anchor_sell_dog_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+                _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
                 bot['quantity'] = qty  # restore original qty
             elif fav_filled >= qty:
                 # Fully filled during timeout check — complete normally
@@ -7480,7 +7480,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
             else:
                 # No fav fills — sell all dogs back
                 print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s, 0 fav fills — selling dog back')
-                _anchor_sell_dog_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+                _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
             return
 
         # Walk-up: every 20s, bump fav by 1c
@@ -7508,7 +7508,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
                         kalshi_client.cancel_order(fav_order_id)
                     except Exception:
                         pass
-                    _anchor_sell_dog_back(bot_id, bot, dog_price, 0, 999, actions)
+                    _phantom_sell_back(bot_id, bot, dog_price, 0, 999, actions)
                 return
 
             # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
@@ -7631,7 +7631,7 @@ def _handle_anchor_dog(bot_id, bot, actions):
         return
 
 
-def _handle_anchor_ladder(bot_id, bot, actions):
+def _handle_phantom_ladder(bot_id, bot, actions):
     """Handle all states for an anchor-ladder bot in the monitor loop."""
     now = time.time()
     ticker = bot['ticker']
@@ -7908,7 +7908,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         if total_fill >= bot['total_dog_qty']:
             print(f'👻 PHANTOM ALL FILLED: {bot_id} {total_fill}/{bot["total_dog_qty"]} — hedging')
             bot['dog_filled_at'] = now
-            threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+            threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
             return
 
         # Any fill at all? Hedge instantly (backup for WS miss)
@@ -7917,7 +7917,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
             print(f'👻 MONITOR PHANTOM FILL: {bot_id} detected {total_fill} fills WS missed — hedging instantly')
             bot['_sweep_timer_started'] = True
             bot['dog_filled_at'] = now
-            threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+            threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
             return
 
         save_state()
@@ -7934,9 +7934,9 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         if wait_s >= hedge_timeout_s:
             avg_dog = bot.get('avg_fill_price', 0)
             print(f'⏰ PHANTOM NO-FAV TIMEOUT: {bot_id} waited {wait_s:.0f}s for fav bid — selling back')
-            _ladder_sell_dogs_back(bot_id, bot, avg_dog, 0, 999, actions)
+            _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
             return
-        threading.Thread(target=_execute_ladder_fav_hedge, args=(bot_id,), daemon=True).start()
+        threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
         return
 
     # ── STATE: fav_hedge_posted — waiting for fav fill ──
@@ -8078,7 +8078,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
                 kalshi_client.cancel_order(fav_order_id)
             except Exception:
                 pass
-            _ladder_sell_dogs_back(bot_id, bot, avg_dog, bot.get('fav_price', 0), 999, actions)
+            _phantom_ladder_sell_back(bot_id, bot, avg_dog, bot.get('fav_price', 0), 999, actions)
             return
 
         # Walk-up every 20s
@@ -8148,7 +8148,7 @@ def _handle_anchor_ladder(bot_id, bot, actions):
         return
 
 
-def _handle_ladder_arb(bot_id, bot, actions):
+def _handle_apex(bot_id, bot, actions):
     """Handle all states for a ladder-arb bot in the monitor loop."""
     now = time.time()
     ticker = bot['ticker']
@@ -8376,14 +8376,14 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     except Exception:
                         pass
 
-        _recompute_ladder_arb_fills(bot)
+        _recompute_apex_fills(bot)
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
 
         # Record any newly completed rungs + check if bot fully done
-        all_resolved = _check_and_record_rung_completions(bot_id, bot)
+        all_resolved = _check_apex_rung_completions(bot_id, bot)
         if all_resolved and bot.get('completed_rungs_count', 0) > 0:
-            threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
+            threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
             return
 
         # One side has fills — transition state
@@ -8552,7 +8552,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 if r.get(f'{filled_side}_fill_qty', 0) > 0
             )
             if total_filled_qty > 0:
-                _recompute_ladder_arb_fills(bot)
+                _recompute_apex_fills(bot)
                 # Recompute total after recompute
                 total_filled_qty = sum(
                     min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
@@ -8725,7 +8725,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                 except Exception:
                     pass
 
-        _recompute_ladder_arb_fills(bot)
+        _recompute_apex_fills(bot)
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
 
@@ -8744,9 +8744,9 @@ def _handle_ladder_arb(bot_id, bot, actions):
                     _rung[f'{unfilled_side}_order_id'] = None
 
         # Record any newly completed rungs + check if bot fully done
-        all_resolved = _check_and_record_rung_completions(bot_id, bot)
+        all_resolved = _check_apex_rung_completions(bot_id, bot)
         if all_resolved and bot.get('completed_rungs_count', 0) > 0:
-            threading.Thread(target=_execute_ladder_arb_full_completion, args=(bot_id,), daemon=True).start()
+            threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
             return
 
         # ── Walk-up is the only way to complete the hedge from here ──
@@ -8770,7 +8770,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
         rq_for_snap = bot.get('hedge_qty', 1)
         snap_ready = (unfilled_bid and unfilled_bid > 0 and current_price_for_snap > 0
                       and anchor_for_snap > 0
-                      and _arb_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
+                      and _apex_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
         at_ceiling = (current_price_for_snap > 0 and anchor_for_snap > 0
                       and anchor_for_snap + current_price_for_snap >= HARD_CEILING_CENTS)
         # Target price: where we SHOULD be sitting right now
@@ -8947,7 +8947,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                             max_hedge = HARD_CEILING_CENTS - rung_anchor
                             past_ceiling = current_price >= max_hedge
                             rung_at_ceiling = rung_anchor + current_price >= HARD_CEILING_CENTS
-                            rung_snap_ready = _arb_snap_check(rung_anchor, unfilled_bid, rq) if unfilled_bid > 0 else False
+                            rung_snap_ready = _apex_snap_check(rung_anchor, unfilled_bid, rq) if unfilled_bid > 0 else False
 
                             # Same priority system as consolidated walk
                             if current_price > bid_target and bid_target > 0:
@@ -9001,7 +9001,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
                         walk_count = bot.get('walk_count', 0) + 1
                         bot['walk_count'] = walk_count
                         # Update compat fields with new average
-                        _recompute_ladder_arb_fills(bot)
+                        _recompute_apex_fills(bot)
                         print(f'📈 APEX WALK: {bot_id} {unfilled_side.upper()} stepped (walk #{walk_count}) avg_{filled_side}={avg_filled}¢')
 
                 bot['last_walk_at'] = now
@@ -9014,7 +9014,7 @@ def _handle_ladder_arb(bot_id, bot, actions):
         return
 
 
-def _anchor_sell_dog_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
+def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     """Sell the filled dog leg back to recover capital when arb is dead."""
     now = time.time()
     ticker = bot['ticker']
@@ -9184,7 +9184,7 @@ def _run_monitor():
             # ── ANCHOR-DOG BOT HANDLING ──────────────────────────────
             if bot.get('bot_category') == 'anchor_dog':
                 try:
-                    _handle_anchor_dog(bot_id, bot, actions)
+                    _handle_phantom(bot_id, bot, actions)
                 except Exception as ad_err:
                     print(f'❌ anchor_dog monitor {bot_id}: {ad_err}')
                 continue
@@ -9192,7 +9192,7 @@ def _run_monitor():
             # ── ANCHOR-LADDER BOT HANDLING ─────────────────────────────
             if bot.get('bot_category') == 'anchor_ladder':
                 try:
-                    _handle_anchor_ladder(bot_id, bot, actions)
+                    _handle_phantom_ladder(bot_id, bot, actions)
                 except Exception as al_err:
                     print(f'❌ anchor_ladder monitor {bot_id}: {al_err}')
                 continue
@@ -9200,7 +9200,7 @@ def _run_monitor():
             # ── LADDER-ARB BOT HANDLING ──────────────────────────────
             if bot.get('bot_category') == 'ladder_arb':
                 try:
-                    _handle_ladder_arb(bot_id, bot, actions)
+                    _handle_apex(bot_id, bot, actions)
                 except Exception as la_err:
                     import traceback
                     print(f'❌ ladder_arb monitor {bot_id}: {la_err}\n{traceback.format_exc()}')

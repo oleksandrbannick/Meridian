@@ -7517,19 +7517,20 @@ def _handle_anchor_dog(bot_id, bot, actions):
                 walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
             else:
                 walk_target = current_fav_bid
+
+            # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
+            max_fav = WALK_CEILING - dog_price
+            walk_target = min(walk_target, max_fav)
+
             new_fav_price = min(current_fav_price + 1, walk_target)
 
             # Check walk ceiling — fees excluded, 98¢ combined (dog + fav)
             combined = dog_price + new_fav_price
 
             if combined > WALK_CEILING:
-                # At ceiling — jump to walk_target (bid+1 in gaps) instead of holding
-                if walk_target > current_fav_price:
-                    new_fav_price = walk_target
-                    print(f'📈 PHANTOM WALK CEILING → BID: {bot_id} dog@{dog_price}¢ + fav@{new_fav_price}¢ = {dog_price + new_fav_price}¢ — jumping to target {walk_target}¢ (bid={current_fav_bid}¢ ask={current_fav_ask}¢)')
-                else:
-                    bot['fav_last_walk_at'] = now
-                    return
+                # Hard ceiling reached — cannot walk further
+                bot['fav_last_walk_at'] = now
+                return
 
             if new_fav_price <= current_fav_price:
                 # Already at or above bid — wait, don't walk past bid

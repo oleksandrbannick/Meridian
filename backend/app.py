@@ -5568,6 +5568,48 @@ def _execute_apex_completion(bot_id):
                 cancel_fail += 1
         print(f'🧹 FULL COMPLETION {bot_id}: cancelled {cancel_ok}/{len(all_cancel_ids)} orders ({cancel_fail} already gone)')
 
+        # ── Safety: check for unhedged anchors before completing ──
+        # A late anchor fill may have arrived during cancellation.
+        # Recompute fills and hedge any mismatch.
+        _recompute_apex_fills(bot)
+        filled_side = bot.get('first_fill_side', 'yes')
+        unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+        anchor_qty = bot.get(f'filled_{filled_side}_qty', 0)
+        hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
+        unhedged = anchor_qty - hedge_qty
+        if unhedged > 0:
+            # Late anchor fills came in — place a new hedge for the difference
+            ticker = bot.get('ticker', '')
+            avg_anchor = bot.get(f'avg_{filled_side}_price', 0)
+            target_hedge = round(100 - avg_anchor - bot.get('_avg_width', 5))
+            max_safe = HARD_CEILING_CENTS - avg_anchor
+            hedge_price = min(max(1, target_hedge), max(1, max_safe))
+            print(f'⚠ APEX UNHEDGED ANCHORS: {bot_id} anchor={anchor_qty} hedge={hedge_qty} → placing {unhedged} extra hedge @ {hedge_price}¢')
+            try:
+                resp, actual_price = create_order_maker(
+                    ticker=ticker, side=unfilled_side, action='buy',
+                    count=unhedged, price=hedge_price, priority=True,
+                    skip_rate_limit=True,
+                )
+                extra_oid = resp['order']['order_id']
+                print(f'   ✅ Extra hedge placed: {unfilled_side.upper()} {unhedged}x @{actual_price}¢ | {extra_oid[:12]}')
+                # Don't mark bot complete yet — let monitor handle the extra hedge fill
+                bot['hedge_order_id'] = extra_oid
+                bot['hedge_price'] = actual_price
+                bot['hedge_qty'] = unhedged
+                bot['_hedge_fill_count'] = 0
+                bot['_hedge_verified'] = False
+                bot['_ws_fill_handling'] = False
+                bot['_bot_completed'] = False
+                bot['status'] = f'ladder_arb_{filled_side}_filled'
+                all_ids = bot.get('_all_hedge_order_ids', [])
+                all_ids.append(extra_oid)
+                bot['_all_hedge_order_ids'] = all_ids
+                save_state()
+                return  # Don't complete — wait for extra hedge to fill
+            except Exception as e:
+                print(f'   ❌ Extra hedge failed: {e} — completing with {unhedged} unhedged')
+
         total_pnl = bot.get('cumulative_pnl', 0)
         completed_count = bot.get('completed_rungs_count', 0)
 

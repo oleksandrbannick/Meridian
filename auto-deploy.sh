@@ -9,11 +9,7 @@ if [ "$LOCAL" != "$REMOTE" ]; then
     git checkout origin/meridian -- backend/app.py frontend/ backend/requirements.txt backend/restart.sh 2>/dev/null
     # Update HEAD to match remote so we don't re-trigger
     git reset --soft origin/meridian 2>/dev/null
-    # Restart server
-    kill $(pgrep -f 'python3 app.py') 2>/dev/null
-    sleep 2
-    cd /root/meridian/backend
-    nohup venv/bin/python3 app.py > server.log 2>&1 &
-    disown
-    echo "[$(date)] Server restarted with PID $!"
+    # Restart server via systemd (no duplicate processes)
+    systemctl restart meridian
+    echo "[$(date)] Server restarted via systemd"
 fi

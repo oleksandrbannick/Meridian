@@ -1662,6 +1662,9 @@
             color: #8892a6; font-size: 11px; padding: 4px 8px;
             cursor: pointer; transition: all 0.15s; font-family: inherit;
             display: flex; align-items: center; gap: 4px;
+            -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+            user-select: none; -webkit-user-select: none;
+            min-height: 32px; min-width: 56px; justify-content: center;
         }
         .claude-toggle-btn:hover { border-color: #d97706; color: #f59e0b; }
         .claude-toggle-btn.active { border-color: #d97706; color: #f59e0b; background: #1a1500; }
@@ -1987,7 +1990,7 @@
         if (thinkingBtn && claudeThinking) thinkingBtn.classList.add('active');
 
         window.toggleClaudeThinking = function(e) {
-            if (e) e.stopPropagation();
+            if (e) { e.stopPropagation(); e.preventDefault(); }
             claudeThinking = !claudeThinking;
             localStorage.setItem('meridian_claude_thinking', String(claudeThinking));
             const btn = document.getElementById('claude-thinking-toggle');
@@ -1999,6 +2002,16 @@
                 }
             }
         };
+
+        // Mobile touch support for thinking toggle
+        const _thinkBtn = document.getElementById('claude-thinking-toggle');
+        if (_thinkBtn) {
+            _thinkBtn.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleClaudeThinking();
+            }, { passive: false });
+        }
 
         // ── Image upload handling ──
         window.handleClaudeImgUpload = function(input) {
@@ -2315,6 +2328,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260319d"></script>
+    <script src="app.js?v=20260319e"></script>
 </body>
 </html>

@@ -9485,6 +9485,10 @@ async function loadTradeHistoryList() {
                         <span style="color:#555;">Done: ${sTime} · ${sDate}</span>
                     </div>
                     ${rungRows ? `<div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;border-top:1px solid #1e2740;">${rungRows}</div>` : ''}
+                    <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #1e274033;">
+                        <span style="color:#3a4560;font-size:9px;font-family:monospace;">${botId.slice(-12)}</span>
+                        <button onclick="navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
+                    </div>
                 </div>`;
             }
 
@@ -9691,6 +9695,10 @@ async function loadTradeHistoryList() {
                         <div style="color:${pnlColor};font-size:10px;font-weight:600;">${resultLabel}</div>
                     </div>
                 </div>
+                ${t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:2px;padding:0 12px 6px;">
+                    <span style="color:#3a4560;font-size:9px;font-family:monospace;">${t.bot_id.slice(-12)}</span>
+                    <button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
+                </div>` : ''}
             `;
         }).join('');
         

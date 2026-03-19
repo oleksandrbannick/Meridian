@@ -5723,6 +5723,16 @@ def create_ladder_arb_bot():
             if late_blocked:
                 return jsonify({'error': f'⏰ Late-game block — {late_reason}'}), 400
 
+        # One Apex per ticker — prevent duplicate bots on same line
+        existing_apex = next(
+            (bid for bid, b in active_bots.items()
+             if b.get('ticker') == ticker and b.get('bot_category') == 'ladder_arb'
+             and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')),
+            None
+        )
+        if existing_apex:
+            return jsonify({'error': f'Already have an active Apex bot on this line: {existing_apex[:30]}'}), 400
+
         # Bot cap
         MAX_BOTS_PER_TICKER = 5
         active_on_ticker = sum(
@@ -5926,6 +5936,17 @@ def create_anchor_bot():
 
         if not ticker or dog_price < 1 or dog_price > 99:
             return jsonify({'error': 'Required: ticker, dog_price (1-99)'}), 400
+
+        # One Phantom per ticker
+        existing_phantom = next(
+            (bid for bid, b in active_bots.items()
+             if b.get('ticker') == ticker and b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
+             and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')),
+            None
+        )
+        if existing_phantom:
+            return jsonify({'error': f'Already have an active Phantom bot on this line: {existing_phantom[:30]}'}), 400
+
         if target_width < 1:
             return jsonify({'error': 'target_width must be >= 1'}), 400
 
@@ -6095,6 +6116,17 @@ def create_ladder_bot():
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
+
+        # One Phantom per ticker — prevent duplicate bots on same line
+        existing_phantom = next(
+            (bid for bid, b in active_bots.items()
+             if b.get('ticker') == ticker and b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
+             and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')),
+            None
+        )
+        if existing_phantom:
+            return jsonify({'error': f'Already have an active Phantom bot on this line: {existing_phantom[:30]}'}), 400
+
         if not rungs_input or len(rungs_input) < 1 or len(rungs_input) > 3:
             return jsonify({'error': 'Need 1-3 rungs'}), 400
         if target_width < 1:

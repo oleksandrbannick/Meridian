@@ -7483,61 +7483,88 @@ def _handle_phantom(bot_id, bot, actions):
                 _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
             return
 
-        # Walk-up: every 20s, bump fav by 1c
+        # ── Phantom Walk + Snap System ──
+        # Priority 1: Drop to bid if above it (instant)
+        # Priority 2: Profit snap to bid if combined <= 95¢ (instant, up or down)
+        # Priority 3: Normal walk +1¢ toward bid (every 20s)
+        # Hard ceiling: combined (dog + fav) never exceeds WALK_CEILING (98¢)
+        current_fav_price = bot.get('fav_price', 0)
+        if current_fav_price <= 0:
+            return
+
+        # Fetch current bid + ask
+        try:
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            current_fav_bid = _best_bid(ob, fav_side)
+            current_fav_ask = _best_ask(ob, fav_side)
+        except Exception:
+            current_fav_bid = 0
+            current_fav_ask = 0
+
+        if current_fav_bid <= 0:
+            # No bid — check if we should bail
+            if wait_s >= hedge_timeout_s * 0.75:
+                try:
+                    kalshi_client.cancel_order(fav_order_id)
+                except Exception:
+                    pass
+                _phantom_sell_back(bot_id, bot, dog_price, 0, 999, actions)
+            return
+
+        # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
+        fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
+        if fav_spread >= 2 and current_fav_ask > current_fav_bid:
+            walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
+        else:
+            walk_target = current_fav_bid
+
+        # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
+        max_fav = WALK_CEILING - dog_price
+        walk_target = min(walk_target, max_fav)
+
+        if walk_target <= 0:
+            return
+
+        # Determine action priority
+        needs_drop = current_fav_price > walk_target
+        snap_ready = (dog_price + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
+
+        # Interval: instant for drop/snap, 20s for normal walk
+        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
         fav_last_walk = bot.get('fav_last_walk_at') or bot.get('fav_posted_at') or now
         since_last_walk = now - fav_last_walk
-        if since_last_walk >= WALK_INTERVAL_S:
-            current_fav_price = bot.get('fav_price', 0)
-            if current_fav_price <= 0:
+
+        if since_last_walk >= walk_interval:
+            new_fav_price = None
+            walk_type = None
+
+            # PRIORITY 1: Drop to bid if price is above target
+            if needs_drop:
+                new_fav_price = walk_target
+                walk_type = 'drop_to_bid'
+
+            # PRIORITY 2: Profit snap to bid (up or down) if >= 5¢ profit
+            elif snap_ready and walk_target > current_fav_price:
+                new_fav_price = walk_target
+                walk_type = 'profit_snap'
+
+            # PRIORITY 3: Normal walk +1¢ toward bid (every 20s)
+            elif walk_target > current_fav_price:
+                new_fav_price = min(current_fav_price + 1, walk_target)
+                walk_type = 'normal_walk'
+
+            if new_fav_price is None or new_fav_price == current_fav_price:
+                bot['fav_last_walk_at'] = now
                 return
 
-            # Fetch current bid + ask to know upper bound and gap
-            try:
-                api_rate_limiter.wait()
-                ob = kalshi_client.get_market_orderbook(ticker)
-                current_fav_bid = _best_bid(ob, fav_side)
-                current_fav_ask = _best_ask(ob, fav_side)
-            except Exception:
-                current_fav_bid = 0
-                current_fav_ask = 0
-
-            if current_fav_bid <= 0:
-                # No bid — check if we should bail
-                if wait_s >= hedge_timeout_s * 0.75:
-                    try:
-                        kalshi_client.cancel_order(fav_order_id)
-                    except Exception:
-                        pass
-                    _phantom_sell_back(bot_id, bot, dog_price, 0, 999, actions)
-                return
-
-            # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
-            fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
-            if fav_spread >= 2 and current_fav_ask > current_fav_bid:
-                walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
-            else:
-                walk_target = current_fav_bid
-
-            # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
-            max_fav = WALK_CEILING - dog_price
-            walk_target = min(walk_target, max_fav)
-
-            new_fav_price = min(current_fav_price + 1, walk_target)
-
-            # Check walk ceiling — fees excluded, 98¢ combined (dog + fav)
+            # Check ceiling one more time
             combined = dog_price + new_fav_price
-
             if combined > WALK_CEILING:
-                # Hard ceiling reached — cannot walk further
                 bot['fav_last_walk_at'] = now
                 return
 
-            if new_fav_price <= current_fav_price:
-                # Already at or above bid — wait, don't walk past bid
-                bot['fav_last_walk_at'] = now
-                return
-
-            # Amend fav order up by 1c
+            # Amend fav order
             try:
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
@@ -7546,7 +7573,8 @@ def _handle_phantom(bot_id, bot, actions):
                     count=qty, **amend_kwargs
                 )
                 walk_count = bot.get('fav_walk_count', 0) + 1
-                print(f'📈 PHANTOM WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                direction = '↓' if new_fav_price < current_fav_price else '↑'
+                print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
                       f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -7556,12 +7584,12 @@ def _handle_phantom(bot_id, bot, actions):
                 else:
                     bot['no_price'] = new_fav_price
                 save_state()
-                actions.append({'bot_id': bot_id, 'action': 'anchor_fav_walkup',
+                actions.append({'bot_id': bot_id, 'action': f'anchor_fav_{walk_type}',
                                 'old_price': current_fav_price, 'new_price': new_fav_price,
                                 'walk_count': walk_count, 'combined': combined})
             except Exception as e:
-                print(f'❌ PHANTOM {bot_id}: fav walk-up amend failed: {e}')
-                bot['fav_last_walk_at'] = now  # don't retry immediately
+                print(f'❌ PHANTOM {bot_id}: fav {walk_type} amend failed: {e}')
+                bot['fav_last_walk_at'] = now
         return
 
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──
@@ -8081,49 +8109,73 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _phantom_ladder_sell_back(bot_id, bot, avg_dog, bot.get('fav_price', 0), 999, actions)
             return
 
-        # Walk-up every 20s
+        # ── Phantom Ladder Walk + Snap System ──
         WALK_INTERVAL_S = 20
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
+        current_fav_price = bot.get('fav_price', 0)
+        if current_fav_price <= 0:
+            return
+
+        try:
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            current_fav_bid = _best_bid(ob, fav_side)
+            current_fav_ask = _best_ask(ob, fav_side)
+        except Exception:
+            current_fav_bid = 0
+            current_fav_ask = 0
+
+        if current_fav_bid <= 0:
+            return
+
+        # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
+        fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
+        if fav_spread >= 2 and current_fav_ask > current_fav_bid:
+            walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
+        else:
+            walk_target = current_fav_bid
+
+        # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
+        max_fav = WALK_CEILING - avg_dog
+        walk_target = min(walk_target, max_fav)
+
+        if walk_target <= 0:
+            return
+
+        # Determine action priority
+        needs_drop = current_fav_price > walk_target
+        snap_ready = (avg_dog + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
+
+        # Interval: instant for drop/snap, 20s for normal walk
+        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
         fav_last_walk = bot.get('fav_last_walk_at') or fav_posted_at or now
         since_last_walk = now - fav_last_walk
-        if since_last_walk >= WALK_INTERVAL_S:
-            current_fav_price = bot.get('fav_price', 0)
-            if current_fav_price <= 0:
-                return
 
-            try:
-                api_rate_limiter.wait()
-                ob = kalshi_client.get_market_orderbook(ticker)
-                current_fav_bid = _best_bid(ob, fav_side)
-                current_fav_ask = _best_ask(ob, fav_side)
-            except Exception:
-                current_fav_bid = 0
-                current_fav_ask = 0
+        if since_last_walk >= walk_interval:
+            new_fav_price = None
+            walk_type = None
 
-            if current_fav_bid <= 0:
+            # PRIORITY 1: Drop to bid if price is above target
+            if needs_drop:
+                new_fav_price = walk_target
+                walk_type = 'drop_to_bid'
+
+            # PRIORITY 2: Profit snap to bid if >= 5¢ profit
+            elif snap_ready and walk_target > current_fav_price:
+                new_fav_price = walk_target
+                walk_type = 'profit_snap'
+
+            # PRIORITY 3: Normal walk +1¢ toward bid (every 20s)
+            elif walk_target > current_fav_price:
+                new_fav_price = min(current_fav_price + 1, walk_target)
+                walk_type = 'normal_walk'
+
+            if new_fav_price is None or new_fav_price == current_fav_price:
                 bot['fav_last_walk_at'] = now
                 return
 
-            # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
-            fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
-            if fav_spread >= 2 and current_fav_ask > current_fav_bid:
-                walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
-            else:
-                walk_target = current_fav_bid
-
-            # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
-            max_fav = WALK_CEILING - avg_dog
-            walk_target = min(walk_target, max_fav)
-
-            new_fav_price = min(current_fav_price + 1, walk_target)
-            combined = avg_dog + new_fav_price  # fees excluded from ceiling
-
+            combined = avg_dog + new_fav_price
             if combined > WALK_CEILING:
-                # Hard ceiling reached — cannot walk further
-                bot['fav_last_walk_at'] = now
-                return
-
-            if new_fav_price <= current_fav_price:
                 bot['fav_last_walk_at'] = now
                 return
 
@@ -8132,7 +8184,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 api_rate_limiter.wait()
                 kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
                 walk_count = bot.get('fav_walk_count', 0) + 1
-                print(f'📈 PHANTOM WALK-UP: {bot_id} fav {current_fav_price}¢→{new_fav_price}¢ '
+                direction = '↓' if new_fav_price < current_fav_price else '↑'
+                print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
                       f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -8143,7 +8196,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     bot['no_price'] = new_fav_price
                 save_state()
             except Exception as e:
-                print(f'❌ PHANTOM {bot_id}: fav walk-up failed: {e}')
+                print(f'❌ PHANTOM {bot_id}: fav {walk_type} failed: {e}')
                 bot['fav_last_walk_at'] = now
         return
 

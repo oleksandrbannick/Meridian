@@ -2197,35 +2197,39 @@
                                 continue;
                             }
                             else if (data.action) {
-                                // Claude is executing a tool
+                                // Claude is executing a tool — show as subtle transient status, not permanent text
                                 const actionNames = {
-                                    place_bet: 'Placing bet', create_arb_bot: 'Deploying Apex bot',
+                                    place_bet: 'Placing bet', create_arb_bot: 'Deploying arb bot',
                                     create_ladder_arb: 'Deploying Apex bot', create_anchor_dog: 'Deploying Phantom bot',
                                     create_anchor_ladder: 'Deploying Phantom ladder', cancel_bot: 'Cancelling bot',
                                     cancel_bots_bulk: 'Cancelling bots', close_position: 'Closing position',
-                                    scan_arbs: 'Scanning for arbs', scan_middles: 'Scanning middles',
+                                    scan_arbs: 'Scanning arbs', scan_middles: 'Scanning middles',
                                     get_orderbook: 'Checking orderbook', get_market: 'Looking up market', search_markets: 'Searching markets',
-                                    get_live_scores: 'Checking scores', get_trade_history: 'Pulling trade history',
+                                    get_live_scores: 'Checking scores', get_trade_history: 'Pulling trades',
                                     set_alert: 'Setting alert', change_view: 'Updating view',
                                     get_schedule: 'Checking schedule', analyze_market: 'Analyzing market',
                                     bulk_deploy: 'Deploying bots', get_leaderboard: 'Checking performance',
-                                    analyze_props: 'Analyzing player props', create_smart_bot: 'Creating smart bot',
-                                    diagnose_bots: 'Diagnosing bots', watch_game: 'Adding to watchlist',
+                                    analyze_props: 'Analyzing props', create_smart_bot: 'Creating smart bot',
+                                    diagnose_bots: 'Diagnosing bots', watch_game: 'Watching game',
                                     get_pnl: 'Checking P&L', get_balance: 'Checking balance',
                                     get_positions: 'Checking positions', get_active_bots: 'Checking bots',
-                                    get_orders: 'Checking resting orders', get_order_status: 'Checking order status',
-                                    amend_order: 'Amending order price', get_fills: 'Checking recent fills',
-                                    set_bot_phase: 'Switching bot phase', modify_bot: 'Modifying bot settings',
-                                    sweep_orphans: 'Sweeping orphaned orders', get_orphaned_positions: 'Checking orphaned positions',
-                                    reconcile_positions: 'Reconciling positions', get_ws_status: 'Checking WebSocket health',
+                                    get_orders: 'Checking orders', get_order_status: 'Checking order',
+                                    amend_order: 'Amending order', get_fills: 'Checking fills',
+                                    set_bot_phase: 'Switching phase', modify_bot: 'Modifying bot',
+                                    sweep_orphans: 'Sweeping orphans', get_orphaned_positions: 'Checking orphans',
+                                    reconcile_positions: 'Reconciling', get_ws_status: 'Checking WS',
                                     get_latency: 'Checking latency', create_middle_bot: 'Deploying middle bot',
-                                    get_pnl_calendar: 'Loading P&L calendar', get_bot_stats: 'Analyzing bot performance',
-                                    get_risk_exposure: 'Calculating risk exposure', read_activity_log: 'Reading activity log',
-                                    get_system_status: 'Running system health check', get_boxscore: 'Loading boxscore',
-                                    get_opening_lines: 'Checking opening lines', get_notifications: 'Checking notifications'
+                                    get_pnl_calendar: 'Loading P&L', get_bot_stats: 'Analyzing stats',
+                                    get_risk_exposure: 'Checking exposure', read_activity_log: 'Reading log',
+                                    get_system_status: 'Health check', get_boxscore: 'Loading boxscore',
+                                    get_opening_lines: 'Checking lines', get_notifications: 'Checking alerts',
+                                    get_live_kalshi_markets: 'Checking live markets'
                                 };
                                 const label = actionNames[data.action] || data.action;
-                                fullText += '\n\n`⚡ ' + label + '...`\n\n';
+                                // Show as transient status below any existing text — replaced on next action or text
+                                const existingHtml = fullText ? renderMd(fullText) : '';
+                                bubbleEl.innerHTML = existingHtml + '<div style="color:#555;font-size:11px;margin-top:6px;display:flex;align-items:center;gap:5px;"><div class="spinner" style="width:10px;height:10px;border:1.5px solid #1e2740;border-top-color:#555;border-radius:50%;animation:spin 0.8s linear infinite;"></div>' + label + '</div>';
+                                continue;
                             }
                             else if (data.ui_command) {
                                 // Claude is changing the user's view
@@ -2328,6 +2332,6 @@
     })();
     </script>
 
-    <script src="app.js?v=20260319e"></script>
+    <script src="app.js?v=20260319f"></script>
 </body>
 </html>

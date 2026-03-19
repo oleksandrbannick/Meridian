@@ -14128,6 +14128,61 @@ def get_system_status_endpoint():
     })
 
 
+@app.route('/api/markets/live', methods=['GET'])
+def get_live_kalshi_markets_endpoint():
+    """Return Kalshi markets where the game is currently in progress (live)."""
+    sport_filter = request.args.get('sport', '').lower()
+    try:
+        # Get cached markets
+        cached = _markets_cache.get('markets', [])
+        if not cached:
+            # Fetch fresh if no cache
+            r = requests.get('http://127.0.0.1:5001/api/markets', timeout=15)
+            cached = r.json().get('markets', []) if r.ok else []
+
+        # Refresh ESPN to know which games are live
+        _refresh_espn_cache()
+        espn = _espn_cache.get('data', {})
+        live_abbrs = {abbr for abbr, info in espn.items() if info.get('live')}
+
+        live_markets = []
+        for m in cached:
+            ticker = m.get('ticker', '')
+            sport = _detect_sport(ticker)
+            if sport_filter and sport != sport_filter:
+                continue
+            # Check if any team in this market is live via ESPN
+            title = (m.get('title', '') + ' ' + ticker).upper()
+            is_live = any(abbr in title for abbr in live_abbrs)
+            # Also check expiration — if expected_expiration is within the next few hours, likely live
+            if not is_live:
+                exp = m.get('expected_expiration_time', '')
+                if exp:
+                    try:
+                        exp_dt = datetime.fromisoformat(exp.replace('Z', '+00:00'))
+                        hours_until = (exp_dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                        if 0 < hours_until < 4:
+                            is_live = True
+                    except Exception:
+                        pass
+            if is_live:
+                live_markets.append({
+                    'ticker': ticker,
+                    'title': m.get('title', ''),
+                    'sport': sport,
+                    'yes_bid': m.get('yes_bid'), 'yes_ask': m.get('yes_ask'),
+                    'no_bid': m.get('no_bid'), 'no_ask': m.get('no_ask'),
+                    'volume': m.get('volume'),
+                    'market_type': m.get('market_type', ''),
+                    'status': m.get('status', 'open'),
+                })
+        # Sort by sport then volume
+        live_markets.sort(key=lambda x: (x['sport'], -(x.get('volume') or 0)))
+        return jsonify({'live_markets': live_markets, 'count': len(live_markets)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── Claude Chat: Tool definitions ────────────────────────────────────────
 CLAUDE_TOOLS = [
     {
@@ -14727,6 +14782,16 @@ CLAUDE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {},
+        }
+    },
+    {
+        "name": "get_live_kalshi_markets",
+        "description": "Get all currently LIVE markets on Kalshi — games that are in progress right now with open trading. This is the authoritative source for what is live and tradeable. Use this when the user asks what games are live or what they can trade right now.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "description": "Optional sport filter: nba, ncaab, nfl, nhl, mlb, mls, etc."}
+            },
         }
     },
 ]
@@ -15416,6 +15481,12 @@ def _execute_chat_tool(tool_name, tool_input):
             r = requests.get(f'{base}/chat/notifications', timeout=10)
             return r.json()
 
+        elif tool_name == 'get_live_kalshi_markets':
+            params = {}
+            if tool_input.get('sport'): params['sport'] = tool_input['sport']
+            r = requests.get(f'{base}/markets/live', params=params, timeout=15)
+            return r.json()
+
         else:
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
@@ -15461,7 +15532,7 @@ def claude_chat():
         'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',
         'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts).',
         'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately. Do NOT call change_view repeatedly — one call is enough.',
-        'EFFICIENCY: You have up to 12 tool calls per message. When searching for live games across sports, batch your work — call search_markets for each sport you need but summarize results concisely. The visible_markets in context shows what is on the user\'s screen already. Use get_schedule() for ESPN game times/scores, search_markets for Kalshi market tickers and prices.',
+        'EFFICIENCY: You have up to 12 tool calls per message. When the user asks what games are live or what to trade, use get_live_kalshi_markets — it returns all currently live Kalshi markets in one call. Use search_markets only for specific teams/tickers. Use get_schedule() for ESPN game times. The visible_markets in context shows what is on the user\'s screen.',
         'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',
         'For set_alert: alerts check live WebSocket prices. Tell the user what you set up.',
         'For analyze_props: explain pricing simply. YES bid = market price for "it happens." NO ask = your cost to bet "it misses." Fair value = 100 - YES midpoint. Suggest dump-catch limit orders 3-8¢ below NO ask.',

@@ -13728,6 +13728,15 @@ def _run_startup():
             kalshi_positions = pos_resp.get('market_positions', [])
 
             # Sum managed qty per ticker+side from active bots
+            def _safe_int(v):
+                """Safely convert bot qty fields to int (some may be lists or None)."""
+                if isinstance(v, (list, dict)):
+                    return 0
+                try:
+                    return int(v or 0)
+                except (TypeError, ValueError):
+                    return 0
+
             managed_qty = {}  # (ticker, side) -> qty
             for b in active_bots.values():
                 if b.get('status') in ('completed', 'stopped', 'cancelled'):
@@ -13735,20 +13744,19 @@ def _run_startup():
                 t = b.get('ticker', '')
                 if not t:
                     continue
-                # Figure out which sides this bot holds
                 cat = b.get('bot_category', '')
                 if cat in ('anchor_dog', 'anchor_ladder'):
                     dog_side = b.get('dog_side', '')
-                    dog_qty = b.get('dog_fill_qty', 0) or b.get('quantity', 0)
+                    dog_qty = _safe_int(b.get('dog_fill_qty')) or _safe_int(b.get('quantity'))
                     fav_side = b.get('fav_side', '')
-                    fav_qty = b.get('fav_fill_qty', 0)
+                    fav_qty = _safe_int(b.get('fav_fill_qty'))
                     if dog_qty > 0 and dog_side:
                         managed_qty[(t, dog_side)] = managed_qty.get((t, dog_side), 0) + dog_qty
                     if fav_qty > 0 and fav_side:
                         managed_qty[(t, fav_side)] = managed_qty.get((t, fav_side), 0) + fav_qty
                 elif cat == 'ladder_arb':
-                    yes_qty = b.get('filled_yes_qty', 0)
-                    no_qty = b.get('filled_no_qty', 0)
+                    yes_qty = _safe_int(b.get('filled_yes_qty'))
+                    no_qty = _safe_int(b.get('filled_no_qty'))
                     if yes_qty > 0:
                         managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
                     if no_qty > 0:

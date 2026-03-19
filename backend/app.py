@@ -8931,7 +8931,7 @@ def _handle_apex(bot_id, bot, actions):
                                 walk_type = 'ceiling_snap'
 
                             # ── PRIORITY 3: Profit snap to bid ──
-                            elif snap_ready and unfilled_bid > current_price:
+                            elif snap_ready and bid_target > current_price:
                                 if not was_snapped:
                                     bot['_pre_snap_price'] = current_price
                                 new_price = min(bid_target, max_hedge) if not past_ceiling else bid_target
@@ -8940,7 +8940,7 @@ def _handle_apex(bot_id, bot, actions):
                                       f'(anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
 
                             # ── PRIORITY 4: Normal walk +1¢ toward bid ──
-                            elif unfilled_bid > current_price:
+                            elif bid_target > current_price:
                                 walk_cap = min(bid_target, max_hedge) if not past_ceiling else bid_target
                                 new_price = min(current_price + 1, walk_cap)
                                 walk_type = 'normal_walk'
@@ -9055,13 +9055,13 @@ def _handle_apex(bot_id, bot, actions):
                                 else:
                                     new_price = bid_target
                                     rung_walk_type = 'drop_to_bid'
-                            elif rung_at_ceiling and unfilled_bid > current_price:
+                            elif rung_at_ceiling and bid_target > current_price:
                                 new_price = bid_target
                                 rung_walk_type = 'ceiling_snap'
-                            elif rung_snap_ready and unfilled_bid > current_price:
+                            elif rung_snap_ready and bid_target > current_price:
                                 new_price = min(bid_target, max_hedge) if not past_ceiling else bid_target
                                 rung_walk_type = 'profit_snap'
-                            elif unfilled_bid > current_price:
+                            elif bid_target > current_price:
                                 walk_cap = min(bid_target, max_hedge) if not past_ceiling else bid_target
                                 new_price = min(current_price + 1, walk_cap)
                                 rung_walk_type = 'normal_walk'

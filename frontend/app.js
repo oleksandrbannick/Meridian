@@ -5775,22 +5775,22 @@ async function loadBots() {
         const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle' && bots[id].type !== 'watch' && !['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const middleBotIds = activeBots.filter(id => bots[id].type === 'middle');
 
-        // Update tab badges — use innerHTML to preserve pixel icon canvases
-        const _tabIcon = (type) => `<canvas class="mini-bot-icon" data-bot="${type}" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas>`;
+        // Update tab badges with static pixel art img icons
+        const _botIcons = {
+            apex: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=',
+            phantom: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC',
+            meridian: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=',
+            scout: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAPUlEQVR4nGPgEVDAgYCIYVUoQgIizYDOwJBGl4YghPSqtP/oJJIcROo/VjlkBrqf0BEDih8Yigghh+JvrAgA8mpLBUVEbCUAAAAASUVORK5CYII=',
+        };
+        const _tabImg = (type) => `<img src="${_botIcons[type]}" style="image-rendering:pixelated;width:14px;height:14px;vertical-align:middle;">`;
         const midBtn = document.getElementById('bots-tab-middle');
-        if (midBtn) { midBtn.innerHTML = `${_tabIcon('meridian')} MERIDIAN${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`; }
+        if (midBtn) midBtn.innerHTML = `${_tabImg('meridian')} MERIDIAN${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`;
         const dogBtn = document.getElementById('bots-tab-dog');
-        if (dogBtn) { dogBtn.innerHTML = `${_tabIcon('phantom')} PHANTOM${dogBotIds.length > 0 ? ' (' + dogBotIds.length + ')' : ''}`; }
+        if (dogBtn) dogBtn.innerHTML = `${_tabImg('phantom')} PHANTOM${dogBotIds.length > 0 ? ' (' + dogBotIds.length + ')' : ''}`;
         const betsBtn = document.getElementById('bots-tab-bets');
-        if (betsBtn) { betsBtn.innerHTML = `${_tabIcon('scout')} SCOUT${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`; }
+        if (betsBtn) betsBtn.innerHTML = `${_tabImg('scout')} SCOUT${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`;
         const arbBtn = document.getElementById('bots-tab-arb');
-        if (arbBtn) { arbBtn.innerHTML = `${_tabIcon('apex')} APEX${arbBotIds.length > 0 ? ' (' + arbBotIds.length + ')' : ''}`; }
-        // Redraw the mini icons after innerHTML replaced them
-        if (typeof drawMiniBot === 'function') {
-            [midBtn, dogBtn, betsBtn, arbBtn].forEach(btn => {
-                if (btn) { const c = btn.querySelector('.mini-bot-icon'); if (c) drawMiniBot(c, c.dataset.bot); }
-            });
-        }
+        if (arbBtn) arbBtn.innerHTML = `${_tabImg('apex')} APEX${arbBotIds.length > 0 ? ' (' + arbBotIds.length + ')' : ''}`;
 
         // Render bets (watch bots) list — grouped by game
         const betsList = document.getElementById('bets-bots-list');

@@ -654,12 +654,47 @@
                             <button class="legend-tab" data-legend="meridian" onclick="showLegendBot('meridian')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">MERIDIAN</button>
                             <button class="legend-tab" data-legend="scout" onclick="showLegendBot('scout')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">SCOUT</button>
                         </div>
-                        <div id="legend-content" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:12px;padding:20px;display:flex;gap:20px;align-items:flex-start;">
-                            <canvas id="legend-bot-canvas" width="48" height="48" style="image-rendering:pixelated;width:96px;height:96px;flex-shrink:0;"></canvas>
-                            <div style="flex:1;min-width:0;">
-                                <div id="legend-bot-name" style="font-size:18px;font-weight:700;margin-bottom:4px;color:#00aaff;">Apex</div>
-                                <div id="legend-bot-tagline" style="font-size:12px;font-style:italic;color:#8892a6;margin-bottom:10px;">"Every angle. Every rung. No edge left behind."</div>
-                                <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.6;">Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated — Apex covers every price level so nothing slips through.</div>
+                        <div id="legend-card" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:12px;overflow:hidden;">
+                            <!-- Accent color strip -->
+                            <div id="legend-accent" style="height:3px;background:linear-gradient(90deg,#00aaff,#00ddff);"></div>
+                            <div style="padding:20px;">
+                                <div style="display:flex;gap:20px;align-items:flex-start;">
+                                    <!-- Pixel ghost with subtle grid bg -->
+                                    <div style="position:relative;flex-shrink:0;">
+                                        <div style="position:absolute;inset:0;opacity:0.05;background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:8px 8px;border-radius:8px;"></div>
+                                        <canvas id="legend-bot-canvas" width="48" height="48" style="image-rendering:pixelated;width:96px;height:96px;position:relative;"></canvas>
+                                    </div>
+                                    <div style="flex:1;min-width:0;">
+                                        <div id="legend-bot-name" style="font-size:18px;font-weight:700;margin-bottom:2px;color:#00aaff;">Apex</div>
+                                        <div id="legend-bot-tagline" style="font-size:12px;font-style:italic;color:#8892a6;margin-bottom:8px;">"Every angle. Every rung. No edge left behind."</div>
+                                        <!-- Personality traits -->
+                                        <div id="legend-traits" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;"></div>
+                                        <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.6;margin-bottom:12px;">Loading...</div>
+                                        <!-- Signature move -->
+                                        <div id="legend-signature" style="font-size:11px;color:#555;border-left:2px solid #00aaff;padding-left:8px;margin-bottom:12px;"></div>
+                                    </div>
+                                </div>
+                                <!-- Strategy diagram -->
+                                <div id="legend-strategy" style="background:#0c1020;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-top:12px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;color:#8892a6;letter-spacing:.02em;"></div>
+                                <!-- Live stats bar -->
+                                <div id="legend-stats" style="display:flex;gap:16px;margin-top:12px;padding:10px 14px;background:#0c1020;border:1px solid #1e2740;border-radius:8px;">
+                                    <div style="text-align:center;flex:1;">
+                                        <div style="font-size:9px;text-transform:uppercase;color:#555;letter-spacing:.06em;">Trades</div>
+                                        <div id="legend-stat-trades" style="font-size:15px;font-weight:700;color:#e2e8f0;">--</div>
+                                    </div>
+                                    <div style="text-align:center;flex:1;">
+                                        <div style="font-size:9px;text-transform:uppercase;color:#555;letter-spacing:.06em;">Win Rate</div>
+                                        <div id="legend-stat-winrate" style="font-size:15px;font-weight:700;color:#e2e8f0;">--</div>
+                                    </div>
+                                    <div style="text-align:center;flex:1;">
+                                        <div style="font-size:9px;text-transform:uppercase;color:#555;letter-spacing:.06em;">Avg Profit</div>
+                                        <div id="legend-stat-avg" style="font-size:15px;font-weight:700;color:#e2e8f0;">--</div>
+                                    </div>
+                                    <div style="text-align:center;flex:1;">
+                                        <div style="font-size:9px;text-transform:uppercase;color:#555;letter-spacing:.06em;">Total P&L</div>
+                                        <div id="legend-stat-total" style="font-size:15px;font-weight:700;color:#e2e8f0;">--</div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2676,29 +2711,50 @@
             p(5,14,CL);p(42,12,CL);
         }
 
-        // Bot legend data
+        // Bot legend data — full profiles
         const botLegendData = {
             apex: {
-                name: 'Apex', color: '#00aaff',
+                name: 'Apex', color: '#00aaff', gradient: 'linear-gradient(90deg,#00aaff,#00ddff)',
                 tagline: '"Every angle. Every rung. No edge left behind."',
-                desc: 'Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated \u2014 Apex covers every price level so nothing slips through.'
+                desc: 'Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated \u2014 Apex covers every price level so nothing slips through.',
+                traits: ['methodical', 'patient', 'calculated'],
+                signature: 'Best at: Capturing multi-width spreads on high-volume games',
+                strategy: '<span style="color:#00aaff">YES</span> @ 48\u00a2 \u2500\u2500 <span style="color:#00ddff">rung 1</span> \u2500\u2500 <span style="color:#ff6666">NO</span> @ 49\u00a2 &nbsp; <span style="color:#555">\u2502</span> &nbsp; <span style="color:#00aaff">YES</span> @ 47\u00a2 \u2500\u2500 <span style="color:#00ddff">rung 2</span> \u2500\u2500 <span style="color:#ff6666">NO</span> @ 50\u00a2',
             },
             phantom: {
-                name: 'Phantom', color: '#ffaa00',
+                name: 'Phantom', color: '#ffaa00', gradient: 'linear-gradient(90deg,#ffaa00,#ffdd00)',
                 tagline: '"Lurks deep. Strikes fast. Gone before they notice."',
-                desc: 'Phantom is your stealth hunter. He posts a single cheap order deep in the orderbook and waits. When volatility spikes and the order fills, he instantly hedges at the current bid. Silent, patient, lethal.'
+                desc: 'Phantom is your stealth hunter. He posts a single cheap order deep in the orderbook and waits. When volatility spikes and the order fills, he instantly hedges at the current bid. Silent, patient, lethal.',
+                traits: ['stealthy', 'opportunistic', 'lethal'],
+                signature: 'Best at: Catching volatility spikes in live games',
+                strategy: '<span style="color:#ffaa00">DOG</span> @ 12\u00a2 \u2500\u2500 <span style="color:#555">wait for fill</span> \u2500\u2500 <span style="color:#ffdd00">\u26a1 HEDGE</span> @ bid \u2500\u2500 <span style="color:#00ff88">profit locked</span>',
             },
             meridian: {
-                name: 'Meridian', color: '#aa66ff',
+                name: 'Meridian', color: '#aa66ff', gradient: 'linear-gradient(90deg,#aa66ff,#cc88ff)',
                 tagline: '"Finds the line between two worlds."',
-                desc: 'Meridian is the flagship. He finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.'
+                desc: 'Meridian is the flagship. He finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.',
+                traits: ['elegant', 'precise', 'flagship'],
+                signature: 'Best at: Spread markets where both sides have deep NO liquidity',
+                strategy: '<span style="color:#ff6666">NO</span> LAL -4.5 @ 48\u00a2 &nbsp; + &nbsp; <span style="color:#ff6666">NO</span> HOU +4.5 @ 49\u00a2 &nbsp; = &nbsp; <span style="color:#00ff88">3\u00a2 guaranteed</span>',
             },
             scout: {
-                name: 'Scout', color: '#00ff88',
+                name: 'Scout', color: '#00ff88', gradient: 'linear-gradient(90deg,#00ff88,#55ffaa)',
                 tagline: '"Eyes open. One clean shot."',
-                desc: 'Scout is your point man. Simple and direct \u2014 he places a single limit order where you see edge, with optional stop-loss and take-profit. No complexity, no hedging. Just a clean position and smart exits.'
+                desc: 'Scout is your point man. Simple and direct \u2014 he places a single limit order where you see edge, with optional stop-loss and take-profit. No complexity, no hedging. Just a clean position and smart exits.',
+                traits: ['watchful', 'direct', 'disciplined'],
+                signature: 'Best at: Quick directional plays with tight risk management',
+                strategy: '<span style="color:#00ff88">BUY</span> YES @ 45\u00a2 &nbsp; \u2192 &nbsp; <span style="color:#ff4444">SL</span> @ 38\u00a2 &nbsp; / &nbsp; <span style="color:#00ff88">TP</span> @ 60\u00a2 &nbsp; \u2192 &nbsp; <span style="color:#555">auto-exit</span>',
             },
         };
+
+        // Cached stats
+        let _legendStats = null;
+        async function _loadLegendStats() {
+            try {
+                const r = await fetch((window.API_BASE || '/api') + '/bot/stats-by-type');
+                _legendStats = await r.json();
+            } catch(e) { _legendStats = {}; }
+        }
 
         // Toggle legend panel
         window.toggleBotLegend = function() {
@@ -2708,18 +2764,39 @@
             const showing = panel.style.display !== 'none';
             panel.style.display = showing ? 'none' : 'block';
             if (chevron) chevron.style.transform = showing ? '' : 'rotate(180deg)';
-            if (!showing) showLegendBot('apex'); // default to apex on first open
+            if (!showing) {
+                _loadLegendStats().then(() => showLegendBot('apex'));
+            }
         };
 
         // Switch legend tab
         window.showLegendBot = function(type) {
             const data = botLegendData[type];
             if (!data) return;
+            // Accent strip
+            const accent = document.getElementById('legend-accent');
+            if (accent) accent.style.background = data.gradient;
+            // Name
             document.getElementById('legend-bot-name').textContent = data.name;
             document.getElementById('legend-bot-name').style.color = data.color;
+            // Tagline
             document.getElementById('legend-bot-tagline').textContent = data.tagline;
+            // Description
             document.getElementById('legend-bot-desc').textContent = data.desc;
-            // Update tab active states
+            // Traits
+            const traitsEl = document.getElementById('legend-traits');
+            if (traitsEl) {
+                traitsEl.innerHTML = data.traits.map(t =>
+                    `<span style="background:${data.color}15;color:${data.color};border:1px solid ${data.color}33;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;letter-spacing:.03em;">${t}</span>`
+                ).join('');
+            }
+            // Signature
+            const sigEl = document.getElementById('legend-signature');
+            if (sigEl) { sigEl.textContent = data.signature; sigEl.style.borderColor = data.color; }
+            // Strategy diagram
+            const stratEl = document.getElementById('legend-strategy');
+            if (stratEl) stratEl.innerHTML = data.strategy;
+            // Tab states
             document.querySelectorAll('.legend-tab').forEach(t => {
                 const isActive = t.dataset.legend === type;
                 t.style.background = isActive ? '#253555' : '#1a2540';
@@ -2727,6 +2804,16 @@
             });
             // Draw ghost
             drawLegendBot(document.getElementById('legend-bot-canvas'), type);
+            // Stats
+            const s = (_legendStats || {})[type] || {};
+            const tradesEl = document.getElementById('legend-stat-trades');
+            const wrEl = document.getElementById('legend-stat-winrate');
+            const avgEl = document.getElementById('legend-stat-avg');
+            const totalEl = document.getElementById('legend-stat-total');
+            if (tradesEl) tradesEl.textContent = s.trades ?? '--';
+            if (wrEl) { wrEl.textContent = s.trades ? s.win_rate + '%' : '--'; wrEl.style.color = (s.win_rate||0) >= 50 ? '#00ff88' : '#ff4444'; }
+            if (avgEl) { avgEl.textContent = s.trades ? '$' + s.avg_profit : '--'; avgEl.style.color = (s.avg_profit||0) >= 0 ? '#00ff88' : '#ff4444'; }
+            if (totalEl) { totalEl.textContent = s.trades ? '$' + s.total_profit : '--'; totalEl.style.color = (s.total_profit||0) >= 0 ? '#00ff88' : '#ff4444'; }
         };
 
         // Init: draw all mini bot icons

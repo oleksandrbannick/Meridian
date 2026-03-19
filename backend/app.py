@@ -15746,6 +15746,33 @@ def claude_chat():
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
+@app.route('/api/bot/stats-by-type', methods=['GET'])
+def bot_stats_by_type():
+    """Return win rate, avg profit, total trades per bot category for legend cards."""
+    categories = {
+        'apex': lambda t: t.get('bot_category') in ('arb', 'ladder_arb') or (t.get('type') not in ('watch', 'middle') and t.get('bot_category') not in ('anchor_dog', 'anchor_ladder')),
+        'phantom': lambda t: t.get('bot_category') in ('anchor_dog', 'anchor_ladder'),
+        'meridian': lambda t: t.get('type') == 'middle',
+        'scout': lambda t: t.get('type') == 'watch',
+    }
+    WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
+    stats = {}
+    for cat, filter_fn in categories.items():
+        trades = [t for t in trade_history if filter_fn(t)]
+        if not trades:
+            stats[cat] = {'trades': 0, 'win_rate': 0, 'avg_profit': 0, 'total_profit': 0}
+            continue
+        wins = sum(1 for t in trades if t.get('result') in WIN_RESULTS)
+        total_profit = sum((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) - (t.get('fee_cents', 0) or 0) for t in trades)
+        stats[cat] = {
+            'trades': len(trades),
+            'win_rate': round(wins / len(trades) * 100) if trades else 0,
+            'avg_profit': round(total_profit / len(trades) / 100, 2) if trades else 0,
+            'total_profit': round(total_profit / 100, 2),
+        }
+    return jsonify(stats)
+
+
 @app.route('/api/chat/models', methods=['GET'])
 def get_chat_models():
     """Return available models for the Claude chat."""

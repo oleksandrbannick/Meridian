@@ -247,17 +247,12 @@
         .bot-buddy-eyes { transition: gap 0.4s ease; }
 
         /* △ APEX — Sharp diamond/crystal shape, blue theme, precision energy */
-        /* △ APEX — Diamond crystal, blue, targeting scope glow */
+        /* △ APEX — Diamond crystal shape, blue theme */
         .buddy-apex .bot-buddy-body {
             width:34px; height:38px; border-radius:4px 4px 14px 14px;
             background:linear-gradient(135deg, #00aaff, #0077dd) !important;
             box-shadow:0 0 16px rgba(0,170,255,0.5) !important;
             clip-path: polygon(50% 0%, 100% 30%, 100% 100%, 0% 100%, 0% 30%);
-        }
-        /* Apex scope lens — small circle on right eye like a monocle */
-        .buddy-apex .bot-buddy-eye:nth-child(2) {
-            box-shadow: 0 0 4px #00ddff, 0 0 8px rgba(0,221,255,0.4);
-            border: 1px solid #00ddff44;
         }
         .buddy-apex .bot-buddy-face { margin-top:6px; }
         .buddy-apex .bot-buddy-eye { width:4px; height:7px; border-radius:2px; }
@@ -271,7 +266,7 @@
         .buddy-apex .bot-buddy-name { color:#00aaff !important; }
         .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
 
-        /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats, glowing trail */
+        /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats */
         .buddy-phantom .bot-buddy-body {
             width:38px; height:40px; border-radius:19px 19px 8px 8px;
             background:linear-gradient(180deg, #ffaa00, #cc7700) !important;
@@ -280,7 +275,7 @@
             animation: buddyFloat 2s ease-in-out infinite !important;
         }
         .buddy-phantom .bot-buddy-face { margin-top:4px; }
-        .buddy-phantom .bot-buddy-eye { width:6px; height:6px; border-radius:50%; box-shadow:0 0 10px #ffdd00; background:#111; }
+        .buddy-phantom .bot-buddy-eye { width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px #ffdd00; background:#111; }
         .buddy-phantom .bot-buddy-eyes { gap:6px; }
         .buddy-phantom .bot-buddy-mouth { width:5px; height:5px; border-radius:50%; }
         .buddy-phantom .bot-buddy-arm { opacity:0; width:0; }
@@ -289,19 +284,19 @@
         .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
         @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
 
-        /* ◈ MERIDIAN — Wide rounded pill, regal/stable, purple theme with crown */
+        /* ◈ MERIDIAN — Wide rounded pill, calm/stable, purple theme, crown */
         .buddy-middle .bot-buddy-body {
             width:42px; height:32px; border-radius:16px;
             background:linear-gradient(135deg, #aa66ff, #7744cc) !important;
             box-shadow:0 0 14px rgba(170,102,255,0.4) !important;
             clip-path: none;
         }
-        /* Meridian crown — sits on top of the antenna orb */
-        .buddy-middle .bot-buddy-antenna::before {
-            content:''; position:absolute; top:-10px; left:50%; transform:translateX(-50%);
-            width:14px; height:6px;
+        /* Crown on top of body */
+        .buddy-middle .bot-buddy-body::before {
+            content:''; position:absolute; top:-5px; left:50%; transform:translateX(-50%);
+            width:20px; height:6px;
             background: linear-gradient(135deg, #cc88ff, #aa66ff);
-            clip-path: polygon(0% 100%, 20% 0%, 35% 55%, 50% 0%, 65% 55%, 80% 0%, 100% 100%);
+            clip-path: polygon(0% 100%, 15% 0%, 30% 60%, 50% 0%, 70% 60%, 85% 0%, 100% 100%);
         }
         .buddy-middle .bot-buddy-face { margin-top:0; }
         .buddy-middle .bot-buddy-eye { width:5px; height:5px; border-radius:50%; }
@@ -315,28 +310,21 @@
         .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
         .buddy-middle .bot-buddy-msg strong { color:#aa66ff !important; }
 
-        /* ◎ SCOUT — Alert look, green, backpack bump on back */
+        /* ◎ SCOUT — Normal body, green theme, alert eyes */
         .buddy-bet .bot-buddy-body {
             width:36px; height:36px; border-radius:10px;
             background:linear-gradient(135deg, #00ff88, #00cc6a) !important;
             box-shadow:0 0 14px rgba(0,255,136,0.4) !important;
             clip-path: none;
         }
-        /* Scout backpack — small bump on the left side */
-        .buddy-bet .bot-buddy-body::after {
-            content:''; position:absolute; left:-5px; top:8px;
-            width:6px; height:14px; border-radius:3px 0 0 3px;
-            background:linear-gradient(135deg, #00cc6a, #00aa55);
-            border: 1px solid #00ff8844;
-        }
         .buddy-bet .bot-buddy-face { margin-top:0; }
-        .buddy-bet .bot-buddy-eye { width:6px; height:7px; border-radius:50%; }
-        .buddy-bet .bot-buddy-eyes { gap:6px; }
+        .buddy-bet .bot-buddy-eye { width:5px; height:6px; border-radius:50%; }
+        .buddy-bet .bot-buddy-eyes { gap:5px; }
         .buddy-bet .bot-buddy-mouth { width:8px; height:3px; border-radius:0 0 4px 4px; }
         .buddy-bet .bot-buddy-arm { background:#00cc6a !important; }
         .buddy-bet .bot-buddy-arm.left { bottom:12px; }
         .buddy-bet .bot-buddy-arm.right { bottom:12px; }
-        .buddy-bet .bot-buddy-antenna { background:#00ff88 !important; height:14px !important; }
+        .buddy-bet .bot-buddy-antenna { background:#00ff88 !important; }
         .buddy-bet .bot-buddy-antenna::after { background:#00ff88 !important; box-shadow:0 0 8px #00ff88 !important; }
         .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }

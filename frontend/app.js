@@ -5780,7 +5780,7 @@ async function loadBots() {
             apex: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=',
             phantom: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC',
             meridian: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=',
-            scout: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAPUlEQVR4nGPgEVDAgYCIYVUoQgIizYDOwJBGl4YghPSqtP/oJJIcROo/VjlkBrqf0BEDih8Yigghh+JvrAgA8mpLBUVEbCUAAAAASUVORK5CYII=',
+            scout: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAPElEQVR4nGNgQAf/O/6DMUFAUCFMATpGAatCwYKr/p+BK4CzMRSeyQIJQjAyG6tCbJg8hSBAtEJsiskBANz2aymn/yC2AAAAAElFTkSuQmCC',
         };
         const _tabImg = (type) => `<img src="${_botIcons[type]}" style="image-rendering:pixelated;width:14px;height:14px;vertical-align:middle;">`;
         const midBtn = document.getElementById('bots-tab-middle');

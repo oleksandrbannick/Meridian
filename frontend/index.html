@@ -164,7 +164,7 @@
         .bot-buddy { display:none; align-items:center; gap:10px; padding:10px 14px; background:#0a0e1a; border:1px solid #1e2740; border-radius:12px; margin-bottom:12px; cursor:pointer; transition: all 0.3s ease; position:relative; user-select:none; }
         .bot-buddy:hover { border-color:#2a3a5a; background:#0c1120; }
         .bot-buddy.active { display:flex; }
-        .bot-buddy-avatar { width:48px; height:48px; position:relative; flex-shrink:0; cursor:pointer; }
+        .bot-buddy-avatar { width:72px; height:52px; position:relative; flex-shrink:0; cursor:pointer; }
         .bot-buddy-body {
             width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#00ff88,#00cc6a);
             position:absolute; bottom:0; left:6px; display:flex; align-items:center; justify-content:center; flex-direction:column;
@@ -265,7 +265,13 @@
         .buddy-apex .bot-buddy-antenna::after { background:#00ddff !important; box-shadow:0 0 10px #00ddff !important; }
         .buddy-apex .bot-buddy-name { color:#00aaff !important; }
         .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
-        .buddy-apex .bot-buddy-tool { display:none; }
+        /* Apex tool: ladder on right side */
+        .buddy-apex .bot-buddy-tool {
+            position:absolute; right:2px; bottom:0;
+            width:16px; height:28px;
+            background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAOCAYAAAAWo42rAAAAIElEQVR4nGNgAIFV//8z4AIociQpvIsDk2/iqNWDy2oA7beO6UVVoCoAAAAASUVORK5CYII=') no-repeat center/contain;
+            image-rendering: pixelated;
+        }
 
         /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats */
         .buddy-phantom .bot-buddy-body {
@@ -283,7 +289,13 @@
         .buddy-phantom .bot-buddy-antenna { opacity:0; height:0; }
         .buddy-phantom .bot-buddy-name { color:#ffaa00 !important; }
         .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
-        .buddy-phantom .bot-buddy-tool { display:none; }
+        /* Phantom tool: side-view cat */
+        .buddy-phantom .bot-buddy-tool {
+            position:absolute; right:0; bottom:2px;
+            width:28px; height:24px;
+            background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAKCAYAAACALL/6AAAARUlEQVR4nGNgQAL/VzH8B2EGYsCZcohiEI1LDdwwkCJ0TFDD/7v4NcDFsJmO10aSFMNARyjDf3yYJA1YgwubJEENxIoDAJa6fS5G21ksAAAAAElFTkSuQmCC') no-repeat center/contain;
+            image-rendering: pixelated;
+        }
         @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
 
         /* ◈ MERIDIAN — Wide rounded pill, calm/stable, purple theme, crown */
@@ -332,7 +344,13 @@
         .buddy-bet .bot-buddy-antenna::after { background:#00ff88 !important; box-shadow:0 0 8px #00ff88 !important; }
         .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
-        .buddy-bet .bot-buddy-tool { display:none; }
+        /* Scout tool: binoculars */
+        .buddy-bet .bot-buddy-tool {
+            position:absolute; right:0; bottom:6px;
+            width:26px; height:20px;
+            background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAKCAYAAACALL/6AAAAPUlEQVR4nGNgAIH/Hf/hGB1gyAEZq/6f+Y9VE1Y5ZA4In8lCxejyGAJoNmCXI8kPIIDsBHSAVW4QaiABAADC+KSZd0UBRQAAAABJRU5ErkJggg==') no-repeat center/contain;
+            image-rendering: pixelated;
+        }
 
         /* Morph flash on shape change */
         .buddy-morphing .bot-buddy-body { animation: buddyMorph 0.4s ease-out !important; }

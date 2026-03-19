@@ -11100,6 +11100,11 @@ def _run_monitor():
                     pass
 
                 if settled_a and settled_b:
+                    # Guard: require actual result values before settling
+                    # Kalshi may return market as closed before result is populated
+                    if result_a not in ('yes', 'no') or result_b not in ('yes', 'no'):
+                        bot['_last_settle_check'] = now_s
+                        continue
                     qty_s = bot.get('qty', 1)
                     fill_a = bot.get('leg_a_fill_price', bot.get('target_price', 49))
                     fill_b = bot.get('leg_b_fill_price', bot.get('target_price', 49))

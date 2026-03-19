@@ -9531,8 +9531,8 @@ async function loadTradeHistoryList() {
                     </div>
                     ${rungRows ? `<div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;border-top:1px solid #1e2740;">${rungRows}</div>` : ''}
                     <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #1e274033;">
-                        <span style="color:#3a4560;font-size:9px;font-family:monospace;">${botId.slice(-12)}</span>
-                        <button onclick="navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
+                        <span style="color:#3a4560;font-size:9px;font-family:monospace;">${t.bot_id.slice(-12)}</span>
+                        <button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
                     </div>
                 </div>`;
             }
@@ -9739,11 +9739,11 @@ async function loadTradeHistoryList() {
                         <div style="color:${pnlColor};font-weight:800;font-size:16px;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
                         <div style="color:${pnlColor};font-size:10px;font-weight:600;">${resultLabel}</div>
                     </div>
-                </div>
-                ${t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:2px;padding:0 12px 6px;">
-                    <span style="color:#3a4560;font-size:9px;font-family:monospace;">${t.bot_id.slice(-12)}</span>
+                ${t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #1e274033;grid-column:1/-1;">
+                    <span style="color:#3a4560;font-size:9px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.bot_id.slice(-12)}</span>
                     <button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
                 </div>` : ''}
+                </div>
             `;
         }).join('');
         
@@ -10075,20 +10075,34 @@ async function loadMiddleHistory() {
             const l1Filled = l1Res === 'win' || l1Res === 'loss' || (priceA > 0 && l1Res !== null);
             const l2Filled = l2Res === 'win' || l2Res === 'loss' || (priceB > 0 && l2Res !== null);
             // Bot ID
-            const botIdHtml = t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+            const botIdHtml = t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
                 <span style="color:#3a4560;font-size:9px;font-family:monospace;">${(t.bot_id||'').slice(-12)}</span>
                 <button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
             </div>` : '';
-            return `<div style="background:#0f1419;border:1px solid ${borderCol};border-top:3px solid #aa66ff44;border-radius:10px;padding:14px;">
+            // Timing
+            const placedDt = t.placed_at ? new Date(t.placed_at * 1000) : null;
+            const placedTime = placedDt ? placedDt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
+            // Individual leg P&L
+            const l1Pnl = l1Filled && l1Res ? (l1Res === 'win' ? (100 - priceA) * (l1.qty||1) : -(priceA) * (l1.qty||1)) : null;
+            const l2Pnl = l2Filled && l2Res ? (l2Res === 'win' ? (100 - priceB) * (l2.qty||1) : -(priceB) * (l2.qty||1)) : null;
+            // Order IDs
+            const orderA = t.order_a_id || t.yes_order_id || '';
+            const orderB = t.order_b_id || t.no_order_id || '';
+            // Game ID for Kalshi link
+            const gameId = t.game_id || '';
+            return `<div style="background:#0f1419;border:1px solid ${borderCol};border-top:3px solid ${isHit ? '#aa66ff' : borderCol};border-radius:10px;padding:14px;">
                 <!-- Header -->
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                    <div style="display:flex;align-items:center;gap:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="font-size:15px;">${statusIcon}</span>
-                        <span style="color:#aa66ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${matchupLabel}</span>
+                        <span style="color:#aa66ff;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${matchupLabel}</span>
+                        ${isHit ? '<span style="background:#aa66ff22;color:#cc88ff;padding:2px 8px;border-radius:4px;font-weight:700;font-size:10px;">MIDDLE HIT</span>' : ''}
+                        ${t.spread_a && t.spread_b ? `<span style="color:#555;font-size:9px;">+${t.spread_a} / +${t.spread_b}</span>` : ''}
                     </div>
                     <div style="text-align:right;">
-                        <div style="color:${netCol};font-weight:800;font-size:16px;">${isPend ? '—' : (net>=0?'+':'') + net + '¢'}</div>
+                        <div style="color:${netCol};font-weight:800;font-size:18px;">${isPend ? '—' : (net>=0?'+':'') + net + '¢'}</div>
                         <div style="color:${netCol};font-size:10px;font-weight:700;">${statusLabel}</div>
+                        ${!isPend && totalCost > 0 ? `<div style="color:${netCol};font-size:9px;">$${(net/100).toFixed(2)}</div>` : ''}
                     </div>
                 </div>
                 <!-- Side by side legs -->
@@ -10099,11 +10113,13 @@ async function loadMiddleHistory() {
                             ${l1Filled ? `<span style="background:${l1Col}22;color:${l1Col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${l1Res === 'win' ? 'WON' : 'LOST'}</span>` : '<span style="color:#555;font-size:8px;">NOT FILLED</span>'}
                         </div>
                         <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l1.title || l1.ticker || '—'}</div>
-                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
+                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:4px;">
                             <span style="color:#ff4444;font-weight:700;">NO</span>
                             <span style="color:#fff;font-weight:700;">@ ${l1.price||'?'}¢</span>
                             <span style="color:#8892a6;">×${l1.qty||'?'}</span>
                         </div>
+                        ${l1Pnl !== null ? `<div style="color:${l1Pnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${l1Pnl >= 0 ? '+' : ''}${l1Pnl}¢</div>` : ''}
+                        ${l1.ticker ? `<div style="color:#3a4560;font-size:8px;margin-top:4px;word-break:break-all;font-family:monospace;">${l1.ticker}</div>` : ''}
                     </div>
                     <div style="background:#0a0e1a;border:2px solid ${l2Filled ? l2Col + '88' : '#1e274044'};border-radius:8px;padding:10px;${!l2Filled ? 'opacity:0.5;' : ''}">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -10111,20 +10127,31 @@ async function loadMiddleHistory() {
                             ${l2Filled ? `<span style="background:${l2Col}22;color:${l2Col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${l2Res === 'win' ? 'WON' : 'LOST'}</span>` : '<span style="color:#555;font-size:8px;">NOT FILLED</span>'}
                         </div>
                         <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l2.title || l2.ticker || '—'}</div>
-                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
+                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:4px;">
                             <span style="color:#ff4444;font-weight:700;">NO</span>
                             <span style="color:#fff;font-weight:700;">@ ${l2.price||'?'}¢</span>
                             <span style="color:#8892a6;">×${l2.qty||'?'}</span>
                         </div>
+                        ${l2Pnl !== null ? `<div style="color:${l2Pnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${l2Pnl >= 0 ? '+' : ''}${l2Pnl}¢</div>` : ''}
+                        ${l2.ticker ? `<div style="color:#3a4560;font-size:8px;margin-top:4px;word-break:break-all;font-family:monospace;">${l2.ticker}</div>` : ''}
                     </div>
                 </div>
                 <!-- Trade details -->
                 <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1e2740;align-items:center;">
                     ${arbLabel}
-                    ${totalCost > 0 ? `<span style="color:#8892a6;">Cost: ${totalCost}¢</span>` : ''}
-                    ${isHit ? `<span style="background:#aa66ff22;color:#cc88ff;padding:1px 8px;border-radius:4px;font-weight:700;font-size:10px;">MIDDLE HIT</span>` : ''}
-                    <span style="color:#555;font-size:10px;">${dateStr}</span>
+                    ${totalCost > 0 ? `<span style="color:#8892a6;">Cost: ${totalCost}¢ ($${(totalCost * (l1.qty||1) / 100).toFixed(2)})</span>` : ''}
+                    <span style="color:#8892a6;">×${l1.qty || t.qty || '?'}</span>
                 </div>
+                <div style="display:flex;gap:12px;font-size:10px;flex-wrap:wrap;margin-top:6px;color:#555;">
+                    ${placedTime ? `<span>Placed: ${placedTime}</span>` : ''}
+                    <span>Settled: ${dateStr}</span>
+                    ${gameId ? `<span style="font-family:monospace;font-size:8px;">${gameId.split('-').slice(-1)[0]}</span>` : ''}
+                </div>
+                ${orderA || orderB ? `<div style="font-size:8px;margin-top:4px;color:#3a4560;word-break:break-all;">
+                    ${orderA ? `<span>A: ${orderA}</span>` : ''}
+                    ${orderA && orderB ? ' · ' : ''}
+                    ${orderB ? `<span>B: ${orderB}</span>` : ''}
+                </div>` : ''}
                 ${botIdHtml}
             </div>`;
         }).join('')}</div>`;

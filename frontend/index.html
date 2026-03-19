@@ -1562,8 +1562,6 @@
             0%,100% { box-shadow: 0 4px 24px rgba(217,119,6,0.45), 0 0 0 0 rgba(251,191,36,0); }
             50% { box-shadow: 0 4px 24px rgba(217,119,6,0.45), 0 0 0 10px rgba(251,191,36,0.08); }
         }
-        .claude-blob { width: 36px; height: 36px; }
-
         /* ── Chat Panel ─────────────────────────────────────────── */
         #claude-chat-panel {
             position: fixed; bottom: 24px; right: 24px; z-index: 10001;
@@ -1840,7 +1838,6 @@
                 bottom: 8px; right: 8px; border-radius: 16px;
             }
             #claude-chat-fab { bottom: 16px; right: 16px; width: 52px; height: 52px; }
-            .claude-blob { width: 30px; height: 30px; }
         }
     </style>
 
@@ -1853,7 +1850,7 @@
     <div id="claude-chat-panel">
         <div class="claude-chat-header">
             <div class="claude-chat-header-avatar">
-                <canvas id="header-ghost-canvas" width="24" height="24" style="image-rendering:pixelated;width:20px;height:20px;"></canvas>
+                <canvas id="header-ghost-canvas" width="24" height="24" style="image-rendering:pixelated;width:28px;height:28px;"></canvas>
             </div>
             <div class="claude-chat-header-info">
                 <div class="claude-chat-header-title">Claude</div>
@@ -2783,6 +2780,6 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260319m"></script>
+    <script src="app.js?v=20260319n"></script>
 </body>
 </html>

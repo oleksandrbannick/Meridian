@@ -5342,6 +5342,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
             ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
             ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
+            ${(() => { const lat = bot.hedge_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
         </div>` : ''}
         ${walkInfo}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">

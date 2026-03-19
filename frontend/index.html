@@ -247,17 +247,17 @@
         .bot-buddy-eyes { transition: gap 0.4s ease; }
 
         /* △ APEX — Sharp diamond/crystal shape, blue theme, precision energy */
+        /* △ APEX — Diamond crystal, blue, targeting scope glow */
         .buddy-apex .bot-buddy-body {
             width:34px; height:38px; border-radius:4px 4px 14px 14px;
             background:linear-gradient(135deg, #00aaff, #0077dd) !important;
             box-shadow:0 0 16px rgba(0,170,255,0.5) !important;
             clip-path: polygon(50% 0%, 100% 30%, 100% 100%, 0% 100%, 0% 30%);
         }
-        /* Apex visor — precision scope across eyes */
-        .buddy-apex .bot-buddy-body::before {
-            content:''; position:absolute; top:16px; left:50%; transform:translateX(-50%);
-            width:22px; height:3px; background:linear-gradient(90deg, transparent, #00ddff, transparent);
-            border-radius:2px; box-shadow:0 0 6px rgba(0,221,255,0.6); z-index:2; opacity:0.85;
+        /* Apex scope lens — small circle on right eye like a monocle */
+        .buddy-apex .bot-buddy-eye:nth-child(2) {
+            box-shadow: 0 0 4px #00ddff, 0 0 8px rgba(0,221,255,0.4);
+            border: 1px solid #00ddff44;
         }
         .buddy-apex .bot-buddy-face { margin-top:6px; }
         .buddy-apex .bot-buddy-eye { width:4px; height:7px; border-radius:2px; }
@@ -271,7 +271,7 @@
         .buddy-apex .bot-buddy-name { color:#00aaff !important; }
         .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
 
-        /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats */
+        /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats, glowing trail */
         .buddy-phantom .bot-buddy-body {
             width:38px; height:40px; border-radius:19px 19px 8px 8px;
             background:linear-gradient(180deg, #ffaa00, #cc7700) !important;
@@ -281,14 +281,6 @@
         }
         .buddy-phantom .bot-buddy-face { margin-top:4px; }
         .buddy-phantom .bot-buddy-eye { width:6px; height:6px; border-radius:50%; box-shadow:0 0 10px #ffdd00; background:#111; }
-        /* Phantom ghost trail — fading afterimage below body */
-        .buddy-phantom .bot-buddy-body::after {
-            content:''; position:absolute; bottom:-8px; left:50%; transform:translateX(-50%);
-            width:30px; height:12px; border-radius:50%;
-            background:radial-gradient(ellipse, rgba(255,170,0,0.25), transparent 70%);
-            animation: ghostTrail 2s ease-in-out infinite;
-        }
-        @keyframes ghostTrail { 0%,100%{opacity:0.3;transform:translateX(-50%) scaleX(1)} 50%{opacity:0.6;transform:translateX(-50%) scaleX(1.2)} }
         .buddy-phantom .bot-buddy-eyes { gap:6px; }
         .buddy-phantom .bot-buddy-mouth { width:5px; height:5px; border-radius:50%; }
         .buddy-phantom .bot-buddy-arm { opacity:0; width:0; }
@@ -304,13 +296,12 @@
             box-shadow:0 0 14px rgba(170,102,255,0.4) !important;
             clip-path: none;
         }
-        /* Meridian crown — 3 points above body */
-        .buddy-middle .bot-buddy-body::before {
-            content:''; position:absolute; top:-6px; left:50%; transform:translateX(-50%);
-            width:18px; height:7px;
+        /* Meridian crown — sits on top of the antenna orb */
+        .buddy-middle .bot-buddy-antenna::before {
+            content:''; position:absolute; top:-10px; left:50%; transform:translateX(-50%);
+            width:14px; height:6px;
             background: linear-gradient(135deg, #cc88ff, #aa66ff);
-            clip-path: polygon(0% 100%, 15% 0%, 30% 60%, 50% 0%, 70% 60%, 85% 0%, 100% 100%);
-            box-shadow: 0 0 8px rgba(204,136,255,0.5);
+            clip-path: polygon(0% 100%, 20% 0%, 35% 55%, 50% 0%, 65% 55%, 80% 0%, 100% 100%);
         }
         .buddy-middle .bot-buddy-face { margin-top:0; }
         .buddy-middle .bot-buddy-eye { width:5px; height:5px; border-radius:50%; }
@@ -324,12 +315,19 @@
         .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
         .buddy-middle .bot-buddy-msg strong { color:#aa66ff !important; }
 
-        /* ◎ SCOUT — Alert watchful look, green theme, radar pulse on antenna */
+        /* ◎ SCOUT — Alert look, green, backpack bump on back */
         .buddy-bet .bot-buddy-body {
             width:36px; height:36px; border-radius:10px;
             background:linear-gradient(135deg, #00ff88, #00cc6a) !important;
             box-shadow:0 0 14px rgba(0,255,136,0.4) !important;
             clip-path: none;
+        }
+        /* Scout backpack — small bump on the left side */
+        .buddy-bet .bot-buddy-body::after {
+            content:''; position:absolute; left:-5px; top:8px;
+            width:6px; height:14px; border-radius:3px 0 0 3px;
+            background:linear-gradient(135deg, #00cc6a, #00aa55);
+            border: 1px solid #00ff8844;
         }
         .buddy-bet .bot-buddy-face { margin-top:0; }
         .buddy-bet .bot-buddy-eye { width:6px; height:7px; border-radius:50%; }
@@ -340,17 +338,6 @@
         .buddy-bet .bot-buddy-arm.right { bottom:12px; }
         .buddy-bet .bot-buddy-antenna { background:#00ff88 !important; height:14px !important; }
         .buddy-bet .bot-buddy-antenna::after { background:#00ff88 !important; box-shadow:0 0 8px #00ff88 !important; }
-        /* Scout radar pulse — expanding ring from antenna */
-        .buddy-bet .bot-buddy-antenna::before {
-            content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
-            width:16px; height:16px; border-radius:50%;
-            border:1.5px solid rgba(0,255,136,0.4);
-            animation: scoutRadar 2s ease-out infinite;
-        }
-        @keyframes scoutRadar {
-            0% { width:8px; height:8px; opacity:0.8; top:-2px; }
-            100% { width:28px; height:28px; opacity:0; top:-12px; }
-        }
         .buddy-bet .bot-buddy-name { color:#00ff88 !important; }
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
 
@@ -657,10 +644,30 @@
                 <div id="pnl-display" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0a0e1a;border-radius:8px;margin-bottom:12px;font-size:13px;min-height:32px;"></div>
                 <!-- ARB / MIDDLE / DOG toggle -->
                 <div style="display:flex;gap:0;margin-bottom:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;width:fit-content;">
-                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">△ APEX</button>
-                    <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">👻 PHANTOM</button>
-                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">◈ MERIDIAN</button>
-                    <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;">◎ SCOUT</button>
+                    <button id="bots-tab-arb" onclick="setBotsTab('arb')" style="background:#253555;border:none;color:#00ff88;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="apex" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> APEX</button>
+                    <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="phantom" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> PHANTOM</button>
+                    <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="meridian" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> MERIDIAN</button>
+                    <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="scout" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> SCOUT</button>
+                </div>
+                <!-- Bot Legend Panel -->
+                <button id="bot-legend-toggle" onclick="toggleBotLegend()" style="background:none;border:1px solid #1e2740;border-radius:8px;color:#555;font-size:10px;padding:4px 10px;cursor:pointer;margin:8px 0 4px 0;display:flex;align-items:center;gap:4px;transition:all .15s;letter-spacing:.04em;">
+                    Meet the Bots <span id="bot-legend-chevron" style="transition:transform .2s;">▼</span>
+                </button>
+                <div id="bot-legend-panel" style="display:none;margin-bottom:8px;">
+                    <div style="display:flex;gap:0;margin-bottom:8px;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
+                        <button class="legend-tab active" data-legend="apex" onclick="showLegendBot('apex')" style="flex:1;background:#253555;border:none;color:#00aaff;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">APEX</button>
+                        <button class="legend-tab" data-legend="phantom" onclick="showLegendBot('phantom')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">PHANTOM</button>
+                        <button class="legend-tab" data-legend="meridian" onclick="showLegendBot('meridian')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">MERIDIAN</button>
+                        <button class="legend-tab" data-legend="scout" onclick="showLegendBot('scout')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:6px 8px;font-size:10px;font-weight:700;cursor:pointer;">SCOUT</button>
+                    </div>
+                    <div id="legend-content" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:10px;padding:16px;display:flex;gap:16px;align-items:flex-start;">
+                        <canvas id="legend-bot-canvas" width="48" height="48" style="image-rendering:pixelated;width:96px;height:96px;flex-shrink:0;"></canvas>
+                        <div style="flex:1;min-width:0;">
+                            <div id="legend-bot-name" style="font-size:16px;font-weight:700;margin-bottom:2px;color:#00aaff;">Apex</div>
+                            <div id="legend-bot-tagline" style="font-size:11px;font-style:italic;color:#8892a6;margin-bottom:8px;">"Every angle. Every rung. No edge left behind."</div>
+                            <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.5;">Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated — Apex covers every price level so nothing slips through.</div>
+                        </div>
+                    </div>
                 </div>
                 <!-- Per-section daily mini-stats -->
                 <div id="bots-arb-daily" style="display:flex;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
@@ -727,15 +734,15 @@
             <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:20px;">
                 <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
                     <button id="histmode-arb" onclick="setHistoryMode('arb')"
-                        style="flex:1;background:#253555;border:none;color:#00ff88;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">△ APEX</button>
+                        style="flex:1;background:#253555;border:none;color:#00ff88;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:5px;"><canvas class="mini-bot-icon" data-bot="apex" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> APEX</button>
                     <button id="histmode-dog" onclick="setHistoryMode('dog')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">👻 PHANTOM</button>
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:5px;"><canvas class="mini-bot-icon" data-bot="phantom" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> PHANTOM</button>
                 </div>
                 <div style="display:flex;gap:0;border:1px solid #2a3550;border-radius:8px;overflow:hidden;">
                     <button id="histmode-bets" onclick="setHistoryMode('bets')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">◎ SCOUT</button>
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:5px;"><canvas class="mini-bot-icon" data-bot="scout" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> SCOUT</button>
                     <button id="histmode-middle" onclick="setHistoryMode('middle')"
-                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;">◈ MERIDIAN</button>
+                        style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:5px;"><canvas class="mini-bot-icon" data-bot="meridian" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> MERIDIAN</button>
                 </div>
             </div>
 
@@ -820,20 +827,20 @@
                 <!-- ── Mode Toggle ── -->
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:16px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
                     <button id="mode-straight" onclick="setTradeMode('straight')"
-                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;">
-                        ◎ Scout
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:#00ff8822;color:#00ff88;border-bottom:2px solid #00ff88;display:flex;align-items:center;justify-content:center;gap:4px;">
+                        <canvas class="mini-bot-icon" data-bot="scout" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> Scout
                     </button>
                     <button id="mode-middle" onclick="setTradeMode('middle')"
-                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        ◈ Meridian
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;display:flex;align-items:center;justify-content:center;gap:4px;">
+                        <canvas class="mini-bot-icon" data-bot="meridian" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> Meridian
                     </button>
                     <button id="mode-arb" onclick="setTradeMode('arb')"
-                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        △ Apex Bot
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;display:flex;align-items:center;justify-content:center;gap:4px;">
+                        <canvas class="mini-bot-icon" data-bot="apex" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> Apex
                     </button>
                     <button id="mode-anchor" onclick="setTradeMode('anchor')"
-                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;">
-                        👻 Phantom
+                        style="padding:10px 4px;border:none;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s;background:transparent;color:#8892a6;border-bottom:2px solid transparent;display:flex;align-items:center;justify-content:center;gap:4px;">
+                        <canvas class="mini-bot-icon" data-bot="phantom" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> Phantom
                     </button>
                 </div>
                 <!-- Market card (shared) -->
@@ -2466,6 +2473,212 @@
     })();
     </script>
 
-    <script src="app.js?v=20260319h"></script>
+    <script>
+    // ── Bot Pixel Art & Legend ──────────────────────────────────────────────
+    (function() {
+        // Mini 10x10 bot icons for tab buttons
+        function drawMiniBot(canvas, type) {
+            if (!canvas) return;
+            const c = canvas.getContext('2d');
+            const p = (x,y,col) => { c.fillStyle = col; c.fillRect(x,y,1,1); };
+            c.clearRect(0,0,10,10);
+            if (type === 'apex') {
+                // Blue diamond crystal
+                const B = '#00aaff', D = '#0077dd';
+                p(4,1,B);p(5,1,B);
+                p(3,2,B);p(4,2,D);p(5,2,D);p(6,2,B);
+                p(2,3,B);p(3,3,D);p(4,3,D);p(5,3,D);p(6,3,D);p(7,3,B);
+                p(1,4,B);p(2,4,D);p(3,4,D);p(4,4,D);p(5,4,D);p(6,4,D);p(7,4,D);p(8,4,B);
+                for(let x=2;x<=7;x++) p(x,5,D);
+                for(let x=2;x<=7;x++) p(x,6,D);
+                for(let x=3;x<=6;x++) p(x,7,D);
+                for(let x=3;x<=6;x++) p(x,8,D);
+                // Eyes
+                p(3,5,'#000');p(6,5,'#000');
+                p(3,4,'#00ddff');p(6,4,'#00ddff'); // eye shine
+            } else if (type === 'phantom') {
+                // Orange ghost
+                const O = '#ffaa00', D = '#cc7700';
+                for(let x=3;x<=6;x++) p(x,1,O);
+                for(let x=2;x<=7;x++) p(x,2,O);
+                for(let x=1;x<=8;x++) p(x,3,O);
+                for(let x=1;x<=8;x++) p(x,4,O);
+                for(let x=1;x<=8;x++) p(x,5,D);
+                for(let x=1;x<=8;x++) p(x,6,D);
+                for(let x=1;x<=8;x++) p(x,7,D);
+                // Wavy bottom
+                p(1,8,D);p(2,8,D);p(4,8,D);p(5,8,D);p(7,8,D);p(8,8,D);
+                // Eyes - glowing
+                p(3,4,'#111');p(6,4,'#111');
+                p(3,3,'#ffdd00');p(6,3,'#ffdd00');
+            } else if (type === 'meridian') {
+                // Purple pill with crown
+                const P = '#aa66ff', D = '#7744cc', C = '#cc88ff';
+                // Crown
+                p(3,0,C);p(5,0,C);p(7,0,C);
+                p(3,1,C);p(4,1,C);p(5,1,C);p(6,1,C);p(7,1,C);
+                // Body (wide pill)
+                for(let x=1;x<=8;x++) p(x,2,P);
+                for(let x=0;x<=9;x++) p(x,3,P);
+                for(let x=0;x<=9;x++) p(x,4,P);
+                for(let x=0;x<=9;x++) p(x,5,D);
+                for(let x=0;x<=9;x++) p(x,6,D);
+                for(let x=1;x<=8;x++) p(x,7,D);
+                for(let x=2;x<=7;x++) p(x,8,D);
+                // Eyes
+                p(3,4,'#000');p(6,4,'#000');
+            } else if (type === 'scout') {
+                // Green body with backpack
+                const G = '#00ff88', D = '#00cc6a', K = '#00aa55';
+                // Antenna
+                p(4,0,G);p(5,0,G);
+                // Body
+                for(let x=2;x<=7;x++) p(x,2,G);
+                for(let x=2;x<=7;x++) p(x,3,G);
+                for(let x=2;x<=7;x++) p(x,4,D);
+                for(let x=2;x<=7;x++) p(x,5,D);
+                for(let x=2;x<=7;x++) p(x,6,D);
+                for(let x=2;x<=7;x++) p(x,7,D);
+                // Backpack bump
+                p(1,3,K);p(1,4,K);p(1,5,K);p(1,6,K);
+                // Eyes (wide alert)
+                p(3,4,'#000');p(4,4,'#000');p(6,4,'#000');p(7,4,'#000');
+                // Eye shine
+                p(3,3,'#aaffcc');p(6,3,'#aaffcc');
+            }
+        }
+
+        // Draw large ghost for legend (48x48, same style as welcome ghost)
+        function drawLegendBot(canvas, type) {
+            if (!canvas) return;
+            const c = canvas.getContext('2d');
+            const p = (x,y,col) => { c.fillStyle = col; c.fillRect(x,y,1,1); };
+            c.clearRect(0,0,48,48);
+
+            let CC, CL, CD, GN;
+            if (type === 'apex') { CC='#00aaff'; CL='#00ddff'; CD='#004488'; GN='#00ddff'; }
+            else if (type === 'phantom') { CC='#ffaa00'; CL='#ffdd00'; CD='#885500'; GN='#ffdd00'; }
+            else if (type === 'meridian') { CC='#aa66ff'; CL='#cc88ff'; CD='#553399'; GN='#cc88ff'; }
+            else { CC='#00ff88'; CL='#55ffaa'; CD='#006644'; GN='#00ff88'; }
+
+            // Ghost body — same template as welcome ghost
+            for(let x=16;x<=31;x++) p(x,8,CD);
+            for(let x=14;x<=33;x++) p(x,9,CD);
+            for(let x=12;x<=35;x++) p(x,10,CD);
+            for(let x=11;x<=36;x++) p(x,11,CD);
+            for(let x=10;x<=37;x++) p(x,12,CD);
+            for(let y=13;y<=36;y++) { const l=y<14?10:9, r=y<14?37:38; for(let x=l;x<=r;x++) p(x,y,CC); }
+            for(let x=16;x<=31;x++) p(x,9,CC);
+            for(let x=14;x<=33;x++) p(x,10,CC);
+            for(let x=12;x<=35;x++) p(x,11,CC);
+            for(let x=11;x<=36;x++) p(x,12,CC);
+            for(let x=17;x<=22;x++) p(x,10,CL);
+            for(let x=13;x<=18;x++) p(x,11,CL);
+            for(let x=12;x<=15;x++) p(x,12,CL);
+            // Wavy bottom
+            for(let x=9;x<=14;x++){p(x,37,CC);p(x,38,CC);}
+            for(let x=17;x<=22;x++){p(x,37,CC);p(x,38,CC);p(x,39,CC);}
+            for(let x=25;x<=30;x++){p(x,37,CC);p(x,38,CC);}
+            for(let x=33;x<=38;x++){p(x,37,CC);p(x,38,CC);p(x,39,CC);}
+            // Side outlines
+            for(let y=13;y<=36;y++){p(8,y,CD);p(39,y,CD);}
+            // Eyes
+            const BG = '#0c1020';
+            for(let x=14;x<=17;x++) for(let y=18;y<=22;y++) p(x,y,BG);
+            for(let x=26;x<=29;x++) for(let y=18;y<=22;y++) p(x,y,BG);
+            p(15,18,GN);p(27,18,GN);
+
+            // Per-type unique features
+            if (type === 'apex') {
+                // Scope glow on right eye
+                p(26,17,GN);p(29,17,GN);p(26,23,GN);p(29,23,GN);
+            } else if (type === 'phantom') {
+                // Half-closed eyes (sleepy/shifty)
+                for(let x=14;x<=17;x++) p(x,18,CC); // eyelid top
+                for(let x=26;x<=29;x++) p(x,18,CC);
+            } else if (type === 'meridian') {
+                // Crown above head
+                for(let x=16;x<=31;x++) p(x,7,CL);
+                p(18,5,CL);p(22,5,CL);p(26,5,CL);
+                p(18,6,CL);p(19,6,CL);p(20,6,CL);p(21,6,CL);p(22,6,CL);
+                p(23,6,CL);p(24,6,CL);p(25,6,CL);p(26,6,CL);
+                p(18,7,CL);p(22,7,CL);p(26,7,CL);
+            } else if (type === 'scout') {
+                // Backpack on left side
+                for(let y=18;y<=30;y++) p(7,y,CD);
+                for(let y=19;y<=29;y++) p(6,y,CD);
+                for(let y=20;y<=28;y++) p(5,y,CC);
+                // Taller antenna
+                for(let y=2;y<=8;y++) p(24,y,GN);
+                p(24,1,CL);
+            }
+            // >_ prompt on body
+            p(14,27,GN);p(15,28,GN);p(16,29,GN);p(17,30,GN);
+            p(16,31,GN);p(15,32,GN);p(14,33,GN);
+            for(let x=20;x<=25;x++) p(x,33,GN);
+            // Sparkles
+            p(5,14,CL);p(42,12,CL);
+        }
+
+        // Bot legend data
+        const botLegendData = {
+            apex: {
+                name: 'Apex', color: '#00aaff',
+                tagline: '"Every angle. Every rung. No edge left behind."',
+                desc: 'Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated \u2014 Apex covers every price level so nothing slips through.'
+            },
+            phantom: {
+                name: 'Phantom', color: '#ffaa00',
+                tagline: '"Lurks deep. Strikes fast. Gone before they notice."',
+                desc: 'Phantom is your stealth hunter. He posts a single cheap order deep in the orderbook and waits. When volatility spikes and the order fills, he instantly hedges at the current bid. Silent, patient, lethal.'
+            },
+            meridian: {
+                name: 'Meridian', color: '#aa66ff',
+                tagline: '"Finds the line between two worlds."',
+                desc: 'Meridian is the flagship. He finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.'
+            },
+            scout: {
+                name: 'Scout', color: '#00ff88',
+                tagline: '"Eyes open. One clean shot."',
+                desc: 'Scout is your point man. Simple and direct \u2014 he places a single limit order where you see edge, with optional stop-loss and take-profit. No complexity, no hedging. Just a clean position and smart exits.'
+            },
+        };
+
+        // Toggle legend panel
+        window.toggleBotLegend = function() {
+            const panel = document.getElementById('bot-legend-panel');
+            const chevron = document.getElementById('bot-legend-chevron');
+            if (!panel) return;
+            const showing = panel.style.display !== 'none';
+            panel.style.display = showing ? 'none' : 'block';
+            if (chevron) chevron.style.transform = showing ? '' : 'rotate(180deg)';
+            if (!showing) showLegendBot('apex'); // default to apex on first open
+        };
+
+        // Switch legend tab
+        window.showLegendBot = function(type) {
+            const data = botLegendData[type];
+            if (!data) return;
+            document.getElementById('legend-bot-name').textContent = data.name;
+            document.getElementById('legend-bot-name').style.color = data.color;
+            document.getElementById('legend-bot-tagline').textContent = data.tagline;
+            document.getElementById('legend-bot-desc').textContent = data.desc;
+            // Update tab active states
+            document.querySelectorAll('.legend-tab').forEach(t => {
+                const isActive = t.dataset.legend === type;
+                t.style.background = isActive ? '#253555' : '#1a2540';
+                t.style.color = isActive ? data.color : '#8892a6';
+            });
+            // Draw ghost
+            drawLegendBot(document.getElementById('legend-bot-canvas'), type);
+        };
+
+        // Init: draw all mini bot icons
+        document.querySelectorAll('.mini-bot-icon').forEach(c => {
+            drawMiniBot(c, c.dataset.bot);
+        });
+    })();
+    </script>
+    <script src="app.js?v=20260319i"></script>
 </body>
 </html>

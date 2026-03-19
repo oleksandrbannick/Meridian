@@ -3212,12 +3212,18 @@ def _ladder_sweep_then_hedge(bot_id):
     """Fire immediately on first rung fill — cancel unfilled rungs + hedge.
     The ~100ms of API calls to cancel orders IS the sweep window:
     any fills that arrive via WS during that time get included automatically."""
-    bot = active_bots.get(bot_id)
-    if not bot or bot.get('status') != 'ladder_posted':
-        return
-    print(f'⚡ PHANTOM INSTANT HEDGE: {bot_id} — cancelling unfilled + hedging')
-    bot['dog_filled_at'] = time.time()
-    _execute_phantom_ladder_hedge(bot_id)
+    try:
+        bot = active_bots.get(bot_id)
+        if not bot or bot.get('status') != 'ladder_posted':
+            return
+        print(f'⚡ PHANTOM INSTANT HEDGE: {bot_id} — cancelling unfilled + hedging')
+        bot['dog_filled_at'] = time.time()
+        _execute_phantom_ladder_hedge(bot_id)
+    finally:
+        # Clear sweep flag so monitor can retry if thread crashed
+        bot = active_bots.get(bot_id)
+        if bot and bot.get('status') == 'ladder_posted':
+            bot['_sweep_timer_started'] = False
 
 
 def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
@@ -3242,6 +3248,19 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         # After 3 failed attempts, position likely doesn't exist — ghost data from repeat cycle
         if attempts >= 3:
             print(f'🔧 PHANTOM SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, no position exists. Completing bot.')
+            # Record estimated loss so trade doesn't disappear from history
+            est_loss = avg_price * total_fill_qty  # worst case: dog price × qty
+            session_pnl['gross_loss_cents'] += est_loss
+            session_pnl['stopped_bots'] += 1
+            _record_trade({
+                'bot_id': bot_id, 'ticker': bot.get('ticker', ''),
+                'yes_price': avg_price if bot.get('dog_side') == 'yes' else 0,
+                'no_price': avg_price if bot.get('dog_side') == 'no' else 0,
+                'quantity': total_fill_qty, 'profit_cents': 0, 'loss_cents': est_loss,
+                'fee_cents': 0, 'result': 'ladder_sellback_ghost',
+                'exit_via': 'ghost_complete', 'timestamp': now,
+                'bot_category': 'anchor_ladder',
+            }, bot)
             bot['status'] = 'completed'
             bot['completed_at'] = now
             bot['_trade_recorded'] = True
@@ -5436,6 +5455,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         target_hedge = round(100 - avg_filled_price - weighted_avg_width)
         hedge_price = max(1, target_hedge)  # Use calculated price, not bid
         bot['_target_hedge_price'] = target_hedge
+        bot['_avg_width'] = weighted_avg_width
 
         max_safe = HARD_CEILING_CENTS - avg_filled_price
         if hedge_price > max_safe:
@@ -7110,7 +7130,8 @@ def _handle_phantom(bot_id, bot, actions):
         ws_dog_bid = bot.get(f'live_{dog_side}_bid', 0)
         gap_thresh, cooldown_s = _phantom_gap_threshold(bot, ws_dog_bid) if ws_dog_bid > 0 else (3, 15)
         bid_at_post = bot.get('_bid_at_post', 0)
-        gap = abs(ws_dog_bid - bid_at_post) if ws_dog_bid > 0 and bid_at_post > 0 else 0
+        # Only repost when bid moves AWAY from dog (increases). Bid moving toward dog = good, stay put.
+        gap = max(0, ws_dog_bid - bid_at_post) if ws_dog_bid > 0 and bid_at_post > 0 else 0
         since_last_repost = now - bot.get('_last_repost_at', 0)
 
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
@@ -7909,7 +7930,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # Gap detection from WS bid (free, no API call)
         gap_thresh, cooldown_s = _phantom_gap_threshold(bot, current_dog_bid) if current_dog_bid > 0 else (3, 15)
         bid_at_post = bot.get('_bid_at_post', 0)
-        gap = abs(current_dog_bid - bid_at_post) if current_dog_bid > 0 and bid_at_post > 0 else 0
+        # Only repost when bid moves AWAY from dog (increases). Bid moving toward dog = good, stay put.
+        gap = max(0, current_dog_bid - bid_at_post) if current_dog_bid > 0 and bid_at_post > 0 else 0
         since_last_repost = now - bot.get('_last_repost_at', 0)
 
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and total_fill == 0
@@ -8693,6 +8715,7 @@ def _handle_apex(bot_id, bot, actions):
                 unfilled_ask = (100 - fresh_no_bid) if unfilled_side == 'yes' and fresh_no_bid > 0 else ((100 - fresh_yes_bid) if unfilled_side == 'no' and fresh_yes_bid > 0 else 0)
                 hedge_price = max(1, target_hedge)  # Use calculated price, not bid
                 bot['_target_hedge_price'] = target_hedge
+                bot['_avg_width'] = weighted_avg_width
 
                 # Safety: cap at 98¢ combined
                 max_safe = HARD_CEILING_CENTS - avg_filled_price
@@ -8717,6 +8740,13 @@ def _handle_apex(bot_id, bot, actions):
                         all_ids = bot.get('_all_hedge_order_ids', [])
                         all_ids.append(hedge_oid)
                         bot['_all_hedge_order_ids'] = all_ids
+                        # Collect unfilled-side order IDs BEFORE clearing them
+                        _pre_cancel_oids = []
+                        for r in bot['rungs']:
+                            _oid = r.get(f'{unfilled_side}_order_id')
+                            if _oid and _oid != hedge_oid:
+                                _pre_cancel_oids.append((_oid, r))
+                        # Now safe to update rung references
                         bot['rungs'][0][f'{unfilled_side}_order_id'] = hedge_oid
                         for r in bot['rungs'][1:]:
                             r[f'{unfilled_side}_order_id'] = None
@@ -8733,21 +8763,23 @@ def _handle_apex(bot_id, bot, actions):
                     except Exception as e:
                         print(f'❌ APEX CONSOLIDATE {bot_id}: hedge placement failed: {e}')
 
-                # ── THEN cancel remaining UNFILLED-SIDE orders only ──
+                # ── THEN cancel remaining UNFILLED-SIDE orders (collected before clearing) ──
                 # NEVER cancel anchor (filled_side) orders — they stay alive for late fills
-                cancel_oids = []
-                for _rung in bot.get('rungs', []):
-                    _oid = _rung.get(f'{unfilled_side}_order_id')
-                    if _oid and _oid != bot.get('hedge_order_id'):
-                        cancel_oids.append((_oid, _rung, unfilled_side))
+                cancel_oids = _pre_cancel_oids if '_pre_cancel_oids' in dir() else []
+                if not cancel_oids:
+                    # Fallback: collect from rungs (for non-consolidation path)
+                    for _rung in bot.get('rungs', []):
+                        _oid = _rung.get(f'{unfilled_side}_order_id')
+                        if _oid and _oid != bot.get('hedge_order_id'):
+                            cancel_oids.append((_oid, _rung))
                 if cancel_oids:
                     cancel_ok = 0
-                    for _oid, _rung, _side in cancel_oids:
+                    for _oid, _rung in cancel_oids:
                         if _cancel_with_retry(_oid):
                             cancel_ok += 1
                         else:
                             print(f'⚠ APEX MON CANCEL FAILED: {_oid}')
-                        _rung[f'{_side}_order_id'] = None
+                        _rung[f'{unfilled_side}_order_id'] = None
                     print(f'🔄 APEX MON: cancelled {cancel_ok}/{len(cancel_oids)} {unfilled_side} orders (anchors preserved)')
 
                 save_state()

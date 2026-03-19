@@ -8717,19 +8717,19 @@ def _handle_ladder_arb(bot_id, bot, actions):
         total_yes = bot['filled_yes_qty']
         total_no = bot['filled_no_qty']
 
-        # Safety: cancel stale orders on consolidated bots (e.g. cancel API failed during sweep)
+        # Safety: cancel stale UNFILLED-SIDE orders on consolidated bots (e.g. cancel API failed during sweep)
+        # NEVER cancel anchor (filled_side) orders — they stay alive for late fills
         if bot.get('_consolidated'):
             hedge_oid = bot.get('hedge_order_id')
             for _rung in bot.get('rungs', []):
-                for _s in ('yes', 'no'):
-                    _oid = _rung.get(f'{_s}_order_id')
-                    if _oid and _oid != hedge_oid:
-                        try:
-                            kalshi_client.cancel_order(_oid)
-                            print(f'🧹 STALE ORDER CLEANUP: {bot_id} cancelled {_s} {_oid[:8]}...')
-                        except Exception:
-                            pass
-                        _rung[f'{_s}_order_id'] = None
+                _oid = _rung.get(f'{unfilled_side}_order_id')
+                if _oid and _oid != hedge_oid:
+                    try:
+                        kalshi_client.cancel_order(_oid)
+                        print(f'🧹 STALE ORDER CLEANUP: {bot_id} cancelled {unfilled_side} {_oid[:8]}...')
+                    except Exception:
+                        pass
+                    _rung[f'{unfilled_side}_order_id'] = None
 
         # Record any newly completed rungs + check if bot fully done
         all_resolved = _check_and_record_rung_completions(bot_id, bot)

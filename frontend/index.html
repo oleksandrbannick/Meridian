@@ -164,7 +164,7 @@
         .bot-buddy { display:none; align-items:center; gap:10px; padding:10px 14px; background:#0a0e1a; border:1px solid #1e2740; border-radius:12px; margin-bottom:12px; cursor:pointer; transition: all 0.3s ease; position:relative; user-select:none; }
         .bot-buddy:hover { border-color:#2a3a5a; background:#0c1120; }
         .bot-buddy.active { display:flex; }
-        .bot-buddy-avatar { width:48px; height:48px; position:relative; flex-shrink:0; cursor:pointer; }
+        .bot-buddy-avatar { width:58px; height:48px; position:relative; flex-shrink:0; cursor:pointer; }
         .bot-buddy-body {
             width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#00ff88,#00cc6a);
             position:absolute; bottom:0; left:6px; display:flex; align-items:center; justify-content:center; flex-direction:column;
@@ -265,16 +265,19 @@
         .buddy-apex .bot-buddy-antenna::after { background:#00ddff !important; box-shadow:0 0 10px #00ddff !important; }
         .buddy-apex .bot-buddy-name { color:#00aaff !important; }
         .buddy-apex .bot-buddy-msg strong { color:#00aaff !important; }
-        /* Apex tool: small scope/telescope on right side */
+        /* Apex tool: small ladder/rungs on right side */
         .buddy-apex .bot-buddy-tool {
-            position:absolute; right:-2px; top:14px;
-            width:10px; height:4px; background:#00aaff; border-radius:2px;
-            box-shadow: 0 0 4px rgba(0,170,255,0.5);
+            position:absolute; right:-8px; top:12px;
+            width:8px; height:18px;
+        }
+        .buddy-apex .bot-buddy-tool::before {
+            content:''; position:absolute; left:0; top:0;
+            width:2px; height:18px; background:#00aaff; border-radius:1px;
         }
         .buddy-apex .bot-buddy-tool::after {
-            content:''; position:absolute; right:-3px; top:-1px;
-            width:6px; height:6px; border-radius:50%; border:1.5px solid #00ddff;
-            background: transparent;
+            content:''; position:absolute; right:0; top:0;
+            width:2px; height:18px; background:#00aaff; border-radius:1px;
+            box-shadow: -3px 3px 0 0 #00ddff, -3px 8px 0 0 #00ddff, -3px 13px 0 0 #00ddff;
         }
 
         /* 👻 PHANTOM — Ghost shape, rounded top, wavy bottom, floats */
@@ -293,7 +296,24 @@
         .buddy-phantom .bot-buddy-antenna { opacity:0; height:0; }
         .buddy-phantom .bot-buddy-name { color:#ffaa00 !important; }
         .buddy-phantom .bot-buddy-msg strong { color:#ffaa00 !important; }
-        .buddy-phantom .bot-buddy-tool { display:none; }
+        /* Phantom tool: tiny cat companion sitting beside him */
+        .buddy-phantom .bot-buddy-tool {
+            position:absolute; right:-6px; bottom:2px;
+            width:10px; height:10px; background:#cc7700; border-radius:5px 5px 3px 3px;
+        }
+        .buddy-phantom .bot-buddy-tool::before {
+            /* Cat ears */
+            content:''; position:absolute; top:-3px; left:1px;
+            width:0; height:0;
+            border-left:3px solid transparent; border-right:3px solid transparent;
+            border-bottom:4px solid #cc7700;
+        }
+        .buddy-phantom .bot-buddy-tool::after {
+            /* Cat eyes */
+            content:''; position:absolute; top:3px; left:2px;
+            width:2px; height:2px; background:#ffdd00; border-radius:50%;
+            box-shadow: 4px 0 0 #ffdd00;
+        }
         @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
 
         /* ◈ MERIDIAN — Wide rounded pill, calm/stable, purple theme, crown */
@@ -321,18 +341,22 @@
         .buddy-middle .bot-buddy-antenna::after { background:#cc88ff !important; box-shadow:0 0 8px #cc88ff !important; }
         .buddy-middle .bot-buddy-name { color:#aa66ff !important; }
         .buddy-middle .bot-buddy-msg strong { color:#aa66ff !important; }
-        /* Meridian tool: small balance/scale on right side */
+        /* Meridian tool: balance scale on right side */
         .buddy-middle .bot-buddy-tool {
-            position:absolute; right:-4px; top:20px;
-            width:12px; height:1.5px; background:#aa66ff; border-radius:1px;
+            position:absolute; right:-10px; top:10px;
+            width:16px; height:20px;
         }
         .buddy-middle .bot-buddy-tool::before {
-            content:''; position:absolute; left:0; top:-4px;
-            width:3px; height:4px; background:#cc88ff; border-radius:1px 1px 0 0;
+            /* Vertical pole + beam */
+            content:''; position:absolute; left:7px; top:0;
+            width:2px; height:14px; background:#aa66ff; border-radius:1px;
+            box-shadow: -5px 3px 0 0 #cc88ff, 5px 3px 0 0 #cc88ff;
         }
         .buddy-middle .bot-buddy-tool::after {
-            content:''; position:absolute; right:0; top:-3px;
-            width:3px; height:3px; background:#cc88ff; border-radius:1px 1px 0 0;
+            /* Two hanging pans */
+            content:''; position:absolute; top:6px; left:1px;
+            width:4px; height:3px; background:#cc88ff; border-radius:0 0 2px 2px;
+            box-shadow: 10px 0 0 #cc88ff;
         }
 
         /* ◎ SCOUT — Normal body, green theme, alert eyes */
@@ -355,16 +379,18 @@
         .buddy-bet .bot-buddy-msg strong { color:#00ff88 !important; }
         /* Scout tool: binoculars on right side */
         .buddy-bet .bot-buddy-tool {
-            position:absolute; right:-3px; top:16px;
-            display:flex; gap:1px;
+            position:absolute; right:-8px; top:14px;
+            width:14px; height:10px;
         }
         .buddy-bet .bot-buddy-tool::before {
-            content:''; width:5px; height:5px; border-radius:50%;
-            border:1.5px solid #00ff88; background:transparent;
+            content:''; position:absolute; left:0; top:0;
+            width:6px; height:8px; border-radius:3px;
+            border:1.5px solid #00ff88; background:rgba(0,255,136,0.1);
         }
         .buddy-bet .bot-buddy-tool::after {
-            content:''; width:5px; height:5px; border-radius:50%;
-            border:1.5px solid #00ff88; background:transparent;
+            content:''; position:absolute; right:0; top:0;
+            width:6px; height:8px; border-radius:3px;
+            border:1.5px solid #00ff88; background:rgba(0,255,136,0.1);
         }
 
         /* Morph flash on shape change */
@@ -620,6 +646,23 @@
                     <button class="btn btn-secondary" onclick="toggleBotLegend()" title="Meet the bots — learn about each bot's personality and strategy" style="padding:0.5rem 1rem;font-size:12px;width:100%;">
                         🤖 Meet the Bots <span id="bot-legend-chevron" style="transition:transform .2s;display:inline-block;">▼</span>
                     </button>
+                    <!-- Bot Legend Panel — drops down from button, separate from active bots -->
+                    <div id="bot-legend-panel" style="display:none;margin-top:8px;">
+                        <div style="display:flex;gap:0;margin-bottom:8px;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
+                            <button class="legend-tab active" data-legend="apex" onclick="showLegendBot('apex')" style="flex:1;background:#253555;border:none;color:#00aaff;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">APEX</button>
+                            <button class="legend-tab" data-legend="phantom" onclick="showLegendBot('phantom')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">PHANTOM</button>
+                            <button class="legend-tab" data-legend="meridian" onclick="showLegendBot('meridian')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">MERIDIAN</button>
+                            <button class="legend-tab" data-legend="scout" onclick="showLegendBot('scout')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">SCOUT</button>
+                        </div>
+                        <div id="legend-content" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:12px;padding:20px;display:flex;gap:20px;align-items:flex-start;">
+                            <canvas id="legend-bot-canvas" width="48" height="48" style="image-rendering:pixelated;width:96px;height:96px;flex-shrink:0;"></canvas>
+                            <div style="flex:1;min-width:0;">
+                                <div id="legend-bot-name" style="font-size:18px;font-weight:700;margin-bottom:4px;color:#00aaff;">Apex</div>
+                                <div id="legend-bot-tagline" style="font-size:12px;font-style:italic;color:#8892a6;margin-bottom:10px;">"Every angle. Every rung. No edge left behind."</div>
+                                <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.6;">Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated — Apex covers every price level so nothing slips through.</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -681,23 +724,6 @@
                     <button id="bots-tab-dog" onclick="setBotsTab('dog')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="phantom" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> PHANTOM</button>
                     <button id="bots-tab-middle" onclick="setBotsTab('middle')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="meridian" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> MERIDIAN</button>
                     <button id="bots-tab-bets" onclick="setBotsTab('bets')" style="background:#1a2540;border:none;color:#8892a6;padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><canvas class="mini-bot-icon" data-bot="scout" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas> SCOUT</button>
-                </div>
-                <!-- Bot Legend Panel (toggled from "Meet the Bots" button in toolbar) -->
-                <div id="bot-legend-panel" style="display:none;margin:12px 0;">
-                    <div style="display:flex;gap:0;margin-bottom:8px;border:1px solid #1e2740;border-radius:8px;overflow:hidden;">
-                        <button class="legend-tab active" data-legend="apex" onclick="showLegendBot('apex')" style="flex:1;background:#253555;border:none;color:#00aaff;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">APEX</button>
-                        <button class="legend-tab" data-legend="phantom" onclick="showLegendBot('phantom')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">PHANTOM</button>
-                        <button class="legend-tab" data-legend="meridian" onclick="showLegendBot('meridian')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">MERIDIAN</button>
-                        <button class="legend-tab" data-legend="scout" onclick="showLegendBot('scout')" style="flex:1;background:#1a2540;border:none;color:#8892a6;padding:8px 8px;font-size:11px;font-weight:700;cursor:pointer;">SCOUT</button>
-                    </div>
-                    <div id="legend-content" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:12px;padding:20px;display:flex;gap:20px;align-items:flex-start;">
-                        <canvas id="legend-bot-canvas" width="48" height="48" style="image-rendering:pixelated;width:96px;height:96px;flex-shrink:0;"></canvas>
-                        <div style="flex:1;min-width:0;">
-                            <div id="legend-bot-name" style="font-size:18px;font-weight:700;margin-bottom:4px;color:#00aaff;">Apex</div>
-                            <div id="legend-bot-tagline" style="font-size:12px;font-style:italic;color:#8892a6;margin-bottom:10px;">"Every angle. Every rung. No edge left behind."</div>
-                            <div id="legend-bot-desc" style="font-size:12px;color:#8892a6;line-height:1.6;">Apex is your ladder strategist. He deploys multi-rung arb bots that post both YES and NO at different widths simultaneously. Methodical, patient, and always calculated — Apex covers every price level so nothing slips through.</div>
-                        </div>
-                    </div>
                 </div>
                 <!-- Per-section daily mini-stats -->
                 <div id="bots-arb-daily" style="display:flex;gap:12px;align-items:center;padding:6px 10px;font-size:11px;color:#555;margin-bottom:10px;margin-top:6px;"></div>
@@ -2507,7 +2533,7 @@
     // ── Bot Pixel Art & Legend ──────────────────────────────────────────────
     (function() {
         // Mini 10x10 bot icons for tab buttons
-        function drawMiniBot(canvas, type) {
+        window.drawMiniBot = function(canvas, type) {
             if (!canvas) return;
             const c = canvas.getContext('2d');
             const p = (x,y,col) => { c.fillStyle = col; c.fillRect(x,y,1,1); };

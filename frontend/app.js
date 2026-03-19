@@ -5775,21 +5775,22 @@ async function loadBots() {
         const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle' && bots[id].type !== 'watch' && !['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const middleBotIds = activeBots.filter(id => bots[id].type === 'middle');
 
-        // Update middle bots tab badge
+        // Update tab badges — use innerHTML to preserve pixel icon canvases
+        const _tabIcon = (type) => `<canvas class="mini-bot-icon" data-bot="${type}" width="10" height="10" style="image-rendering:pixelated;width:14px;height:14px;"></canvas>`;
         const midBtn = document.getElementById('bots-tab-middle');
-        if (midBtn) midBtn.textContent = `◈ MERIDIAN${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`;
-
-        // Update dog bots tab badge
+        if (midBtn) { midBtn.innerHTML = `${_tabIcon('meridian')} MERIDIAN${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`; }
         const dogBtn = document.getElementById('bots-tab-dog');
-        if (dogBtn) dogBtn.textContent = `👻 PHANTOM${dogBotIds.length > 0 ? ' (' + dogBotIds.length + ')' : ''}`;
-
-        // Update bets tab badge
+        if (dogBtn) { dogBtn.innerHTML = `${_tabIcon('phantom')} PHANTOM${dogBotIds.length > 0 ? ' (' + dogBotIds.length + ')' : ''}`; }
         const betsBtn = document.getElementById('bots-tab-bets');
-        if (betsBtn) betsBtn.textContent = `◎ SCOUT${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`;
-
-        // Update apex bots tab badge
+        if (betsBtn) { betsBtn.innerHTML = `${_tabIcon('scout')} SCOUT${betsBotIds.length > 0 ? ' (' + betsBotIds.length + ')' : ''}`; }
         const arbBtn = document.getElementById('bots-tab-arb');
-        if (arbBtn) arbBtn.textContent = `△ APEX${arbBotIds.length > 0 ? ' (' + arbBotIds.length + ')' : ''}`;
+        if (arbBtn) { arbBtn.innerHTML = `${_tabIcon('apex')} APEX${arbBotIds.length > 0 ? ' (' + arbBotIds.length + ')' : ''}`; }
+        // Redraw the mini icons after innerHTML replaced them
+        if (typeof drawMiniBot === 'function') {
+            [midBtn, dogBtn, betsBtn, arbBtn].forEach(btn => {
+                if (btn) { const c = btn.querySelector('.mini-bot-icon'); if (c) drawMiniBot(c, c.dataset.bot); }
+            });
+        }
 
         // Render bets (watch bots) list — grouped by game
         const betsList = document.getElementById('bets-bots-list');

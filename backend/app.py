@@ -15755,14 +15755,14 @@ def bot_stats_by_type():
         'meridian': lambda t: t.get('type') == 'middle',
         'scout': lambda t: t.get('type') == 'watch',
     }
-    WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
     stats = {}
     for cat, filter_fn in categories.items():
         trades = [t for t in trade_history if filter_fn(t)]
         if not trades:
             stats[cat] = {'trades': 0, 'win_rate': 0, 'avg_profit': 0, 'total_profit': 0}
             continue
-        wins = sum(1 for t in trades if t.get('result') in WIN_RESULTS)
+        # Win = net profit on the trade is positive (profit - loss - fees > 0)
+        wins = sum(1 for t in trades if ((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) - (t.get('fee_cents', 0) or 0)) > 0)
         total_profit = sum((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) - (t.get('fee_cents', 0) or 0) for t in trades)
         stats[cat] = {
             'trades': len(trades),

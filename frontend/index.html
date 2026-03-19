@@ -1259,17 +1259,13 @@
                             <button onclick="document.getElementById('anchor-target-width').value=10;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">10¢</button>
                         </div>
                     </div>
-                    <!-- Anchor Depth -->
+                    <!-- Anchor Depth — Auto only -->
                     <div style="margin-bottom:12px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                            <label style="color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;">ANCHOR DEPTH (below market)</label>
-                            <span id="anchor-depth-display" style="color:#ffaa00;font-weight:800;font-size:13px;">auto</span>
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;">
+                            <label style="color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;">ANCHOR DEPTH</label>
+                            <span id="anchor-depth-display" style="color:#ffaa00;font-weight:800;font-size:13px;">Auto</span>
                         </div>
-                        <input type="range" id="anchor-depth" min="0" max="20" value="0" step="1" oninput="initAnchorDogPrices()"
-                            style="width:100%;accent-color:#ffaa00;">
-                        <div style="display:flex;justify-content:space-between;color:#555;font-size:9px;margin-top:1px;">
-                            <span>0 = auto (80/20 split)</span><span>20¢ deep</span>
-                        </div>
+                        <input type="hidden" id="anchor-depth" value="0">
                         <div id="anchor-shave-info" style="color:#555;font-size:9px;margin-top:3px;"></div>
                     </div>
                     <!-- Hedge timeout -->
@@ -2779,6 +2775,6 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260319k"></script>
+    <script src="app.js?v=20260319m"></script>
 </body>
 </html>

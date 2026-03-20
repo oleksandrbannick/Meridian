@@ -2211,13 +2211,19 @@ function createMarketRow(market, label) {
 
     // ── Bot recommendation icons (dimmed) ──
     const recoTypes = [];
-    if (liq.arbEdge >= 1 && liq.arbEdge <= 10 && liq.avgSpread <= 8 && !botTypes.apex) {
+    // Apex: both sides need bids, at least 2¢ edge (98¢ ceiling), reasonable spread
+    if (liq.yesBid > 0 && liq.noBid > 0 && liq.arbEdge >= 2 && liq.avgSpread <= 8 && !botTypes.apex) {
         recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
     }
-    if ((liq.yesBid >= 60 || liq.noBid >= 60) && liq.avgSpread < 20 && !botTypes.phantom) {
+    // Phantom: clear fav/dog split, dog is cheap (<35¢), arb math works (fav hedge leaves ≥2¢ profit)
+    if (!botTypes.phantom) {
         const dogPrice = Math.min(liq.yesBid, liq.noBid);
-        const dogSide = liq.yesBid < liq.noBid ? 'YES' : 'NO';
-        recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢` });
+        const favBid = Math.max(liq.yesBid, liq.noBid);
+        const hedgeRoom = 98 - dogPrice - (100 - favBid); // profit if hedge fills at fav ask
+        if (dogPrice > 0 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2) {
+            const dogSide = liq.yesBid < liq.noBid ? 'YES' : 'NO';
+            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room` });
+        }
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
     if (middleReco && !botTypes.meridian) {

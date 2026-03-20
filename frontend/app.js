@@ -5584,10 +5584,16 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             </div>
         </div>
         <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;flex-wrap:wrap;">
-            ${targetA && targetB ? `<span>One leg wins: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
-            <span>Middle hits: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
-            <span style="color:#8892a6;">Cost/ct: <strong style="color:#fff;">${targetA + targetB}¢</strong></span>
-            <span style="color:#8892a6;">Total: <strong style="color:#fff;">${cost}¢</strong></span>` : '<span style="color:#555;font-style:italic;">price data unavailable</span>'}
+            ${targetA && targetB ? (() => {
+                const arbWidth = 100 - targetA - targetB;
+                const arbLabel = arbWidth <= 0 ? 'Straight Middle' : arbWidth + '¢ arb';
+                const arbColor = arbWidth <= 0 ? '#ffaa00' : '#00ff88';
+                return `<span style="color:${arbColor};font-weight:700;">${arbLabel}</span>
+                <span>Floor: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
+                <span>Middle: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
+                <span style="color:#8892a6;">Cost/ct: <strong style="color:#fff;">${targetA + targetB}¢</strong></span>
+                <span style="color:#8892a6;">Total: <strong style="color:#fff;">${cost}¢</strong></span>`;
+            })() : '<span style="color:#555;font-style:italic;">price data unavailable</span>'}
             <span>×${qty}</span>
             ${floorPrice > 0 ? `<span style="color:#ff6666;">Stop-loss: ${floorPrice}¢ drop</span>` : ''}
         </div>
@@ -10152,34 +10158,34 @@ async function loadMiddleHistory() {
                 </div>
                 <!-- Side by side legs -->
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-                    <div style="background:#0a0e1a;border:2px solid ${l1Filled ? l1Col + '88' : '#1e274044'};border-radius:8px;padding:10px;${!l1Filled ? 'opacity:0.5;' : ''}">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                            <span style="color:#aa66ff;font-size:9px;font-weight:800;text-transform:uppercase;">LEG A</span>
-                            ${l1Filled ? `<span style="background:${l1Col}22;color:${l1Col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${l1Res === 'win' ? 'WON' : 'LOST'}</span>` : '<span style="color:#555;font-size:8px;">NOT FILLED</span>'}
-                        </div>
-                        <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l1.title || l1.ticker || '—'}</div>
-                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:4px;">
-                            <span style="color:#ff4444;font-weight:700;">NO</span>
-                            <span style="color:#fff;font-weight:700;">@ ${l1.price||'?'}¢</span>
-                            <span style="color:#8892a6;">×${l1.qty||'?'}</span>
-                        </div>
-                        ${l1Pnl !== null ? `<div style="color:${l1Pnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${l1Pnl >= 0 ? '+' : ''}${l1Pnl}¢</div>` : ''}
-                        ${l1.ticker ? `<div style="color:#3a4560;font-size:8px;margin-top:4px;word-break:break-all;font-family:monospace;">${l1.ticker}</div>` : ''}
-                    </div>
-                    <div style="background:#0a0e1a;border:2px solid ${l2Filled ? l2Col + '88' : '#1e274044'};border-radius:8px;padding:10px;${!l2Filled ? 'opacity:0.5;' : ''}">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                            <span style="color:#aa66ff;font-size:9px;font-weight:800;text-transform:uppercase;">LEG B</span>
-                            ${l2Filled ? `<span style="background:${l2Col}22;color:${l2Col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${l2Res === 'win' ? 'WON' : 'LOST'}</span>` : '<span style="color:#555;font-size:8px;">NOT FILLED</span>'}
-                        </div>
-                        <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;">${l2.title || l2.ticker || '—'}</div>
-                        <div style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:4px;">
-                            <span style="color:#ff4444;font-weight:700;">NO</span>
-                            <span style="color:#fff;font-weight:700;">@ ${l2.price||'?'}¢</span>
-                            <span style="color:#8892a6;">×${l2.qty||'?'}</span>
-                        </div>
-                        ${l2Pnl !== null ? `<div style="color:${l2Pnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${l2Pnl >= 0 ? '+' : ''}${l2Pnl}¢</div>` : ''}
-                        ${l2.ticker ? `<div style="color:#3a4560;font-size:8px;margin-top:4px;word-break:break-all;font-family:monospace;">${l2.ticker}</div>` : ''}
-                    </div>
+                    ${[{l: l1, res: l1Res, col: l1Col, filled: l1Filled, pnl: l1Pnl, teamOwn: t.team_b_name, teamOpp: t.team_a_name, spread: t.spread_a, origLabel: `NO ${t.team_a_name||''} +${t.spread_a||'?'}`},
+                       {l: l2, res: l2Res, col: l2Col, filled: l2Filled, pnl: l2Pnl, teamOwn: t.team_a_name, teamOpp: t.team_b_name, spread: t.spread_b, origLabel: `NO ${t.team_b_name||''} +${t.spread_b||'?'}`}
+                    ].map((leg, idx) => {
+                        const fillPct = leg.filled ? 100 : 0;
+                        const fillCol = leg.filled ? (leg.res === 'win' ? '#00ff88' : '#ff4444') : '#333';
+                        const borderC = leg.filled ? leg.col + '88' : '#1e274044';
+                        // Reverse display: show "TeamOwn +spread" as main, original underneath
+                        const mainLabel = leg.teamOwn ? `${leg.teamOwn} +${leg.spread||'?'}` : (leg.l.title || '—');
+                        return `<div style="background:#0a0e1a;border:2px solid ${borderC};border-radius:8px;padding:10px;${!leg.filled ? 'opacity:0.5;' : ''}">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                <span style="color:#aa66ff;font-size:9px;font-weight:800;">NO</span>
+                                ${leg.filled ? `<span style="background:${leg.col}22;color:${leg.col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${leg.res === 'win' ? '✓ WON' : '✗ LOST'}</span>` : '<span style="color:#555;font-size:8px;">—</span>'}
+                            </div>
+                            <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:2px;">${mainLabel}</div>
+                            <div style="color:#555;font-size:8px;margin-bottom:6px;">${leg.origLabel}</div>
+                            <div style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:4px;">
+                                <span style="color:#fff;font-weight:700;">@ ${leg.l.price||'?'}¢</span>
+                                <span style="color:#8892a6;">×${leg.l.qty||'?'}</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                                <div style="flex:1;height:5px;background:#1a2540;border-radius:3px;overflow:hidden;">
+                                    <div style="width:${fillPct}%;height:100%;background:${fillCol};border-radius:3px;"></div>
+                                </div>
+                                <span style="color:${fillCol};font-weight:700;font-size:9px;">${leg.filled ? (leg.l.qty||1)+'/'+(leg.l.qty||1)+' ✓' : '0/'+(leg.l.qty||'?')}</span>
+                            </div>
+                            ${leg.pnl !== null ? `<div style="color:${leg.pnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${leg.pnl >= 0 ? '+' : ''}${leg.pnl}¢</div>` : ''}
+                        </div>`;
+                    }).join('')}
                 </div>
                 <!-- Trade details -->
                 <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1e2740;align-items:center;">

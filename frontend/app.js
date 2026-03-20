@@ -4819,37 +4819,35 @@ async function placeSelectedWidthsBots() {
 
     console.log(`[DEPLOY] validWidths=${validWidths.length}, routing to ladder-arb (Apex)`);
 
-    try {
-        const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                ticker: currentArbMarket.ticker,
-                widths: validWidths.map(v => v.w),
-                quantity: qty,
-                width_scaling: useScaling,
-                repeat_count: repeatCount,
-                game_phase: gamePhase,
-            }),
-        });
-        // Close modal immediately so user isn't waiting
-        closeModal();
-        const data = await resp.json();
+    // Close modal IMMEDIATELY — don't wait for Kalshi API round trips
+    closeModal();
+    if (deployBtn) { deployBtn.disabled = false; _updateDeployButton(); }
+    if (!autoMonitorInterval) toggleAutoMonitor();
+    showNotification(`△ Deploying Apex: ${validWidths.length} widths on ${currentArbMarket.ticker}...`);
+
+    // Fire API call in background — notification updates when done
+    fetch(`${API_BASE}/bot/ladder-arb`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            ticker: currentArbMarket.ticker,
+            widths: validWidths.map(v => v.w),
+            quantity: qty,
+            width_scaling: useScaling,
+            repeat_count: repeatCount,
+            game_phase: gamePhase,
+        }),
+    }).then(r => r.json()).then(data => {
         if (data.bot_id) {
             const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
-            notifMsg = `△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`;
+            showNotification(`△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`);
         } else {
-            notifMsg = `❌ Apex failed: ${data.error || 'Unknown error'}`;
+            showNotification(`❌ Apex failed: ${data.error || 'Unknown error'}`);
         }
-    } catch (err) {
-        notifMsg = `❌ Apex failed: Network error`;
-    }
-
-    if (deployBtn) { deployBtn.disabled = false; _updateDeployButton(); }
-
-    loadBots();  // fire-and-forget, don't await
-    if (!autoMonitorInterval) toggleAutoMonitor();
-    showNotification(notifMsg);
+        loadBots();
+    }).catch(() => {
+        showNotification(`❌ Apex failed: Network error`);
+    });
 }
 
 let botsTabMode = 'arb';  // 'arb' | 'middle'

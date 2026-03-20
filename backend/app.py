@@ -16790,9 +16790,9 @@ def claude_chat():
 
     # Model selection — default to Sonnet
     AVAILABLE_MODELS = {
-        'sonnet': 'claude-sonnet-4-6-20250627',
+        'sonnet': 'claude-sonnet-4-5-20241022',
         'haiku': 'claude-haiku-4-5-20251001',
-        'opus': 'claude-opus-4-6-20250627',
+        'opus': 'claude-opus-4-20250514',
     }
     selected_model_key = body.get('model', 'sonnet')
     selected_model = AVAILABLE_MODELS.get(selected_model_key, AVAILABLE_MODELS['sonnet'])

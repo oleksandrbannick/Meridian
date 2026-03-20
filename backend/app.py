@@ -6877,9 +6877,23 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
                                       'verified_cleared': True, 'remaining': 0,
                                       'actual_fill_price': last_sell_price}
                     else:
-                        # Never sold anything but position not found — API might be wrong
-                        # Return False so the bot retries rather than recording a phantom loss
-                        print(f'⚠ execute_sell({reason}): no {side} position found on Kalshi but we never sold — returning False to retry (possible API race)')
+                        # Check if position netted against opposite side (arb already cleared)
+                        # On Kalshi, YES + NO on same ticker net automatically.
+                        # If we bought YES but net shows NO, our YES was consumed by netting.
+                        _net_pos = 0
+                        for p in positions or all_positions:
+                            if p.get('ticker') == ticker:
+                                _net_pos = _parse_position_qty(p)
+                                break
+                        opposite_held = (side == 'yes' and _net_pos < 0) or (side == 'no' and _net_pos > 0)
+                        if opposite_held:
+                            print(f'✅ execute_sell({reason}): no {side} position — netted against opposite side (net={_net_pos}). Position already cleared by arb.')
+                            return True, {'order_id': 'arb_netted', 'filled': count,
+                                          'sell_price': 0, 'already_cleared': True,
+                                          'verified_cleared': True, 'remaining': 0,
+                                          'actual_fill_price': 0}
+                        # No position at all — might be API race
+                        print(f'⚠ execute_sell({reason}): no {side} position found on Kalshi (net={_net_pos}) — returning False to retry')
                         return False, {'error': 'position_not_found_no_prior_sell', 'position_check_empty': True}
                 if actual_held < remaining_to_sell:
                     print(f'   execute_sell({reason}) attempt {attempt}: Kalshi shows {actual_held} {side} (bot thinks {remaining_to_sell}) — capping to Kalshi position')
@@ -14369,11 +14383,17 @@ def get_active_positions():
 
             if cat in ('anchor_dog', 'anchor_ladder'):
                 dog_side = b.get('dog_side', '')
-                dog_qty = _si(b.get('total_dog_fill_qty')) or _si(b.get('dog_fill_qty')) or _si(b.get('quantity'))
+                # Only count ACTUAL fills (what we own on Kalshi), not expected qty
+                dog_fills = _si(b.get('total_dog_fill_qty')) or _si(b.get('dog_fill_qty'))
+                # For ladder, sum rung fills
+                if dog_fills == 0 and b.get('rungs'):
+                    dog_fills = sum(_si(r.get('fill_qty', 0)) for r in b.get('rungs', []))
                 fav_side = b.get('fav_side', '')
                 fav_qty = _si(b.get('fav_fill_qty'))
-                _add(t, dog_side, 'phantom', dog_qty)
-                _add(t, fav_side, 'phantom', fav_qty)
+                if dog_fills > 0:
+                    _add(t, dog_side, 'phantom', dog_fills)
+                if fav_qty > 0:
+                    _add(t, fav_side, 'phantom', fav_qty)
             elif cat == 'ladder_arb':
                 _add(t, 'yes', 'apex', _si(b.get('filled_yes_qty')))
                 _add(t, 'no', 'apex', _si(b.get('filled_no_qty')))
@@ -14421,7 +14441,10 @@ def get_active_positions():
                 fees_dollars = pos.get('fees_paid_dollars', pos.get('fees_paid', 0))
                 fees_cents = round(float(str(fees_dollars)) * 100) if isinstance(fees_dollars, str) else int(fees_dollars)
 
-                orphan_info = _orphaned_positions.get(ticker, {})
+                # Live orphan detection: compare position qty vs bot-managed qty
+                _managed = sum(mb['qty'] for mb in _breakdown_list(ticker, side))
+                _orphan_qty = max(0, abs_qty - _managed)
+                orphan_info = {'orphaned_qty': _orphan_qty} if _orphan_qty > 0 else {}
                 # Parse team matchup from ticker for cleaner display
                 _parts = ticker.split('-')
                 _display_title = mkt.get('title', ticker)

@@ -14319,19 +14319,27 @@ def scan_middles():
                             guaranteed_profit = 100 - cost   # one NO always wins
                             middle_profit = 200 - cost       # both NOs win
 
-                            # Suggested prices: shave evenly off each side to hit target.
-                            # Default target = 100¢ (straight middle, no arb).
-                            # Frontend width presets adjust for 2¢/4¢/6¢ arb.
+                            # Suggested prices: depends on whether instant arb exists.
+                            # Default target = 100¢ (straight middle).
                             target_total = 100
-                            shave = max(0, (cost - target_total + 1) // 2)  # split evenly, round up
-                            sug_a = max(1, no_a - shave)
-                            sug_b = max(1, no_b - shave)
-                            # If still over target, shave extra off the higher side
-                            while sug_a + sug_b > target_total and sug_a > 1 and sug_b > 1:
-                                if sug_a >= sug_b:
-                                    sug_a -= 1
-                                else:
-                                    sug_b -= 1
+                            if cost <= 100 and (no_a + 1) + (no_b + 1) <= 100:
+                                # Instant arb — bid+1 on both to get first in line
+                                sug_a = no_a + 1
+                                sug_b = no_b + 1
+                            elif cost <= 100:
+                                # Instant arb but bid+1 pushes over — stay at bid
+                                sug_a = no_a
+                                sug_b = no_b
+                            else:
+                                # Over 100¢ — shave evenly to hit target
+                                shave = max(0, (cost - target_total + 1) // 2)
+                                sug_a = max(1, no_a - shave)
+                                sug_b = max(1, no_b - shave)
+                                while sug_a + sug_b > target_total and sug_a > 1 and sug_b > 1:
+                                    if sug_a >= sug_b:
+                                        sug_a -= 1
+                                    else:
+                                        sug_b -= 1
                             suggested_profit = 100 - sug_a - sug_b
 
                             # ── Spread & liquidity for each NO leg ────────
@@ -14392,6 +14400,8 @@ def scan_middles():
                                 'middle_width': middle_width,
                                 'no_a_bid': no_a,
                                 'no_b_bid': no_b,
+                                'no_a_ask': mkt_a['no_ask'] or 0,
+                                'no_b_ask': mkt_b['no_ask'] or 0,
                                 'no_spread_a': no_spread_a if no_spread_a < 99 else 0,
                                 'no_spread_b': no_spread_b if no_spread_b < 99 else 0,
                                 'cost': cost,

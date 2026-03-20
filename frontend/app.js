@@ -8502,17 +8502,19 @@ function showMiddlesResults(data) {
                 </div>
                 <!-- Pricing table -->
                 <div style="background:#060a14;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;">
-                    <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;padding-bottom:4px;border-bottom:1px solid #1a2030;margin-bottom:4px;">
+                    <div style="display:grid;grid-template-columns:1fr 55px 55px 80px;gap:4px;padding-bottom:4px;border-bottom:1px solid #1a2030;margin-bottom:4px;">
                         <div style="color:#556;font-size:10px;font-weight:600;">LEG</div>
-                        <div style="color:#556;font-size:10px;font-weight:600;text-align:center;">MARKET BID</div>
+                        <div style="color:#556;font-size:10px;font-weight:600;text-align:center;">BID</div>
+                        <div style="color:#556;font-size:10px;font-weight:600;text-align:center;">ASK</div>
                         <div style="color:#ffaa00;font-size:10px;font-weight:600;text-align:center;">YOUR LIMIT</div>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;${legRowStyle(legAInRange)}">
+                    <div style="display:grid;grid-template-columns:1fr 55px 55px 80px;gap:4px;align-items:center;padding:4px 0;${legRowStyle(legAInRange)}">
                         <div>
                             <span style="color:#fff;font-weight:700;font-size:11px;">${m.team_b||'Opp'} +${m.spread_a||'?'}</span>${rangeTag(legAInRange)}
                             <div style="color:#555;font-size:9px;">NO: ${m.title_a.replace(' Points?','').replace(' points?','')}</div>
                         </div>
                         <div style="text-align:center;color:#8892a6;font-weight:600;">${m.no_a_bid}¢</div>
+                        <div style="text-align:center;color:#556;font-weight:600;">${m.no_a_ask || '?'}¢${(m.no_spread_a || 0) > 2 ? '<div style="color:#ffaa00;font-size:8px;">GAP</div>' : ''}</div>
                         <div style="text-align:center;">
                             <input id="mid-pa-${idx}" type="number" min="1" max="99" value="${m.suggested_a}"
                                 oninput="updateMiddleProfit(${idx},${m.no_a_bid},${m.no_b_bid})"
@@ -8520,12 +8522,13 @@ function showMiddlesResults(data) {
                             ${shaveA > 0 ? `<span style="color:#ff9944;font-size:9px;">-${shaveA}¢</span>` : ''}
                         </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:4px;align-items:center;padding:4px 0;${legRowStyle(legBInRange)}">
+                    <div style="display:grid;grid-template-columns:1fr 55px 55px 80px;gap:4px;align-items:center;padding:4px 0;${legRowStyle(legBInRange)}">
                         <div>
                             <span style="color:#fff;font-weight:700;font-size:11px;">${m.team_a||'Opp'} +${m.spread_b||'?'}</span>${rangeTag(legBInRange)}
                             <div style="color:#555;font-size:9px;">NO: ${m.title_b.replace(' Points?','').replace(' points?','')}</div>
                         </div>
                         <div style="text-align:center;color:#8892a6;font-weight:600;">${m.no_b_bid}¢</div>
+                        <div style="text-align:center;color:#556;font-weight:600;">${m.no_b_ask || '?'}¢${(m.no_spread_b || 0) > 2 ? '<div style="color:#ffaa00;font-size:8px;">GAP</div>' : ''}</div>
                         <div style="text-align:center;">
                             <input id="mid-pb-${idx}" type="number" min="1" max="99" value="${m.suggested_b}"
                                 oninput="updateMiddleProfit(${idx},${m.no_a_bid},${m.no_b_bid})"
@@ -8665,10 +8668,22 @@ function showMiddlesResults(data) {
 
 function setMiddleScanWidth(idx, width, bidA, bidB) {
     const targetSum = 100 - width;
-    const totalShave = (bidA + bidB) - targetSum;
-    const shaveEach = totalShave / 2;
-    const pA = Math.max(1, Math.min(bidA, Math.round(bidA - shaveEach)));
-    const pB = Math.max(1, Math.min(bidB, Math.round(bidB - shaveEach)));
+    const cost = bidA + bidB;
+    let pA, pB;
+    if (cost <= targetSum && (bidA + 1) + (bidB + 1) <= targetSum) {
+        // Instant arb — bid+1 to get first in line
+        pA = bidA + 1;
+        pB = bidB + 1;
+    } else if (cost <= targetSum) {
+        // Instant arb but bid+1 pushes over — stay at bid
+        pA = bidA;
+        pB = bidB;
+    } else {
+        // Over target — shave evenly
+        const shaveEach = (cost - targetSum) / 2;
+        pA = Math.max(1, Math.round(bidA - shaveEach));
+        pB = Math.max(1, Math.round(bidB - shaveEach));
+    }
     const elA = document.getElementById(`mid-pa-${idx}`);
     const elB = document.getElementById(`mid-pb-${idx}`);
     if (elA) elA.value = pA;

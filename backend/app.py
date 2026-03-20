@@ -15718,6 +15718,71 @@ CLAUDE_TOOLS = [
             },
         }
     },
+    # ── TOOLS v2 ─────────────────────────────────────────────────────
+    {
+        "name": "sell_position",
+        "description": "Place a limit SELL order at a specific price (not emergency market dump). Use when you want to exit a position at a target price rather than selling at whatever the current bid is. For immediate exit use close_position instead.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker"},
+                "side": {"type": "string", "enum": ["yes", "no"], "description": "Side of the position to sell"},
+                "count": {"type": "integer", "description": "Number of contracts to sell"},
+                "price": {"type": "integer", "description": "Limit sell price in cents (1-99). Order rests until someone buys at this price."}
+            },
+            "required": ["ticker", "side", "count", "price"]
+        }
+    },
+    {
+        "name": "get_bot_detail",
+        "description": "Get full detail for a specific bot — rung-level fills, hedge history, fill timeline, walk progress, precalc values, order IDs, and all internal state. Much more detail than get_active_bots. Use when debugging a specific bot or when the user asks 'what happened to that bot'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bot_id": {"type": "string", "description": "Bot ID to inspect"}
+            },
+            "required": ["bot_id"]
+        }
+    },
+    {
+        "name": "create_watch_bot",
+        "description": "Attach a watch-bot (Scout) to an existing Kalshi position for stop-loss / take-profit monitoring. Use when the user already has a position (placed outside Meridian or manually) and wants SL/TP protection.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Market ticker of the existing position"},
+                "side": {"type": "string", "enum": ["yes", "no"], "description": "Side of the existing position"},
+                "entry_price": {"type": "integer", "description": "Price the position was entered at (cents)"},
+                "quantity": {"type": "integer", "description": "Number of contracts held"},
+                "stop_loss_cents": {"type": "integer", "description": "Stop-loss trigger: sell when bid drops this many cents below entry (default 5)"},
+                "take_profit_cents": {"type": "integer", "description": "Take-profit trigger: sell when bid rises this many cents above entry (0 = disabled)"}
+            },
+            "required": ["ticker", "side", "entry_price", "quantity"]
+        }
+    },
+    {
+        "name": "cancel_order",
+        "description": "Cancel a specific resting order on Kalshi by order ID. Use for surgical cancellation of individual orders — orphaned orders, stale limit orders, etc. For canceling an entire bot use cancel_bot instead.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "The Kalshi order ID to cancel"}
+            },
+            "required": ["order_id"]
+        }
+    },
+    {
+        "name": "get_game_context",
+        "description": "Get combined game context in one call — live score, game clock, Kalshi markets for the game, and any active bots on those markets. Use instead of calling get_live_scores + search_markets + get_active_bots separately.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Team name or game (e.g. 'Suns', 'Duke vs UNC')"},
+                "sport": {"type": "string", "description": "Sport filter: nba, ncaab, nfl, nhl, mlb, etc."}
+            },
+            "required": ["query"]
+        }
+    },
 ]
 
 def _execute_chat_tool(tool_name, tool_input):
@@ -16458,6 +16523,130 @@ def _execute_chat_tool(tool_name, tool_input):
             r = requests.get(f'{base}/markets/live', params=params, timeout=15)
             return r.json()
 
+        # ── TOOLS v2 handlers ──────────────────────────────────────
+        elif tool_name == 'sell_position':
+            ticker = tool_input['ticker']
+            side = tool_input['side']
+            count = tool_input['count']
+            price = tool_input['price']
+            try:
+                order_kwargs = {
+                    'ticker': ticker,
+                    'side': side,
+                    'action': 'sell',
+                    'count': count,
+                }
+                if side == 'yes':
+                    order_kwargs['yes_price'] = price
+                else:
+                    order_kwargs['no_price'] = price
+                api_rate_limiter.wait()
+                resp = kalshi_client.create_order(**order_kwargs)
+                oid = _extract_order_id(resp, f'limit_sell_{ticker}_{side}')
+                return {'success': True, 'order_id': oid, 'ticker': ticker, 'side': side, 'price': price, 'count': count,
+                        'message': f'Limit sell posted: {side.upper()} {count}x at {price}¢ on {ticker}'}
+            except Exception as e:
+                return {'error': f'Sell order failed: {e}'}
+
+        elif tool_name == 'get_bot_detail':
+            bot_id = tool_input['bot_id']
+            bot = active_bots.get(bot_id)
+            if not bot:
+                # Check completed bots in trade history
+                for t in trade_history:
+                    if t.get('bot_id') == bot_id:
+                        return {'found_in': 'trade_history', 'trade': t}
+                return {'error': f'Bot {bot_id} not found in active bots or trade history'}
+            # Return full bot state with sanitized keys
+            detail = dict(bot)
+            detail['bot_id'] = bot_id
+            # Add live price from WS cache
+            ticker = bot.get('ticker', '')
+            if ws_manager and ticker:
+                ws_p = ws_manager.get_price(ticker)
+                if ws_p:
+                    detail['_live_prices'] = ws_p
+            return detail
+
+        elif tool_name == 'create_watch_bot':
+            r = requests.post(f'{base}/bot/watch', json={
+                'ticker': tool_input['ticker'],
+                'side': tool_input['side'],
+                'entry_price': tool_input['entry_price'],
+                'quantity': tool_input['quantity'],
+                'stop_loss_cents': tool_input.get('stop_loss_cents', 5),
+                'take_profit_cents': tool_input.get('take_profit_cents', 0),
+            }, timeout=15)
+            return r.json()
+
+        elif tool_name == 'cancel_order':
+            order_id = tool_input['order_id']
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(order_id)
+                return {'success': True, 'order_id': order_id, 'message': f'Order {order_id[:16]}... cancelled'}
+            except Exception as e:
+                return {'error': f'Cancel failed: {e}'}
+
+        elif tool_name == 'get_game_context':
+            query = tool_input['query']
+            sport = tool_input.get('sport', '')
+            result = {'query': query}
+
+            # 1. Search Kalshi markets for this game
+            try:
+                params = {'query': query}
+                if sport: params['sport'] = sport
+                r = requests.get(f'{base}/markets/search', params=params, timeout=10)
+                markets = r.json().get('markets', [])[:20]
+                result['markets'] = markets
+                result['market_count'] = len(markets)
+            except Exception:
+                result['markets'] = []
+
+            # 2. Get live scores
+            try:
+                r = requests.get(f'{base}/scoreboard/{sport or "nba"}', params={'query': query}, timeout=10)
+                scores_data = r.json()
+                # Filter to matching games
+                games = []
+                query_lower = query.lower()
+                for evt in scores_data.get('events', scores_data.get('games', [])):
+                    name = (evt.get('name', '') + ' ' + evt.get('shortName', '')).lower()
+                    if any(q in name for q in query_lower.split()):
+                        competitions = evt.get('competitions', [{}])
+                        comp = competitions[0] if competitions else {}
+                        competitors = comp.get('competitors', [])
+                        game_info = {
+                            'name': evt.get('shortName', evt.get('name', '')),
+                            'status': comp.get('status', {}).get('type', {}).get('description', ''),
+                            'clock': comp.get('status', {}).get('displayClock', ''),
+                            'period': comp.get('status', {}).get('period', 0),
+                        }
+                        for c in competitors:
+                            side = 'home' if c.get('homeAway') == 'home' else 'away'
+                            game_info[f'{side}_team'] = c.get('team', {}).get('abbreviation', '')
+                            game_info[f'{side}_score'] = c.get('score', '0')
+                        games.append(game_info)
+                result['live_scores'] = games
+            except Exception:
+                result['live_scores'] = []
+
+            # 3. Find active bots on matching tickers
+            market_tickers = set(m.get('ticker', '') for m in result.get('markets', []))
+            matching_bots = []
+            for bid, b in active_bots.items():
+                if b.get('ticker', '') in market_tickers and b.get('status') not in ('completed', 'stopped', 'cancelled'):
+                    matching_bots.append({
+                        'bot_id': bid, 'ticker': b.get('ticker'),
+                        'bot_category': b.get('bot_category', b.get('type', '?')),
+                        'status': b.get('status'), 'pnl': b.get('cumulative_pnl', 0),
+                    })
+            result['active_bots'] = matching_bots
+            result['active_bot_count'] = len(matching_bots)
+
+            return result
+
         else:
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
@@ -16501,7 +16690,7 @@ def claude_chat():
         'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
         'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
         'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',
-        'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts).',
+        'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts), sell_position (limit sell at target price), get_bot_detail (full detail for one bot), create_watch_bot (attach SL/TP to existing position), cancel_order (cancel single order by ID), get_game_context (combined scores+markets+bots for a game).',
         'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately. Do NOT call change_view repeatedly — one call is enough.',
         'EFFICIENCY: You have up to 12 tool calls per message. When the user asks what games are live or what to trade, use get_live_kalshi_markets — it returns all currently live Kalshi markets in one call. Use search_markets only for specific teams/tickers. Use get_schedule() for ESPN game times. The visible_markets in context shows what is on the user\'s screen.',
         'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',

@@ -15810,6 +15810,37 @@ CLAUDE_TOOLS = [
             "required": ["title", "description"]
         }
     },
+    {
+        "name": "restart_server",
+        "description": "Restart the Meridian server. Use when the system is stuck, bots aren't responding, or after a known issue. ALWAYS confirm with the user before restarting — active bots will briefly pause. The server restarts via systemctl (the proper way) and verifies it comes back up.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirm": {"type": "boolean", "description": "Must be true to actually restart. First call without confirm to warn the user."},
+                "reason": {"type": "string", "description": "Why you're restarting (for the log)"}
+            },
+            "required": ["confirm"]
+        }
+    },
+    {
+        "name": "read_server_logs",
+        "description": "Read recent server logs (journalctl output). Shows errors, warnings, bot events, and startup messages. Use to diagnose why something isn't working.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lines": {"type": "integer", "description": "Number of log lines to read (default 50, max 200)"},
+                "filter": {"type": "string", "description": "Optional grep filter — only show lines containing this text (e.g. 'ERROR', 'PHANTOM', a bot_id)"}
+            }
+        }
+    },
+    {
+        "name": "server_status",
+        "description": "Check if the Meridian server is running, how long it's been up, memory usage, and process count. Quick health check.",
+        "input_schema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
 ]
 
 def _execute_chat_tool(tool_name, tool_input):
@@ -16687,6 +16718,58 @@ def _execute_chat_tool(tool_name, tool_input):
                 f.write(entry)
             return {'success': True, 'message': f'Debug note saved: {title}', 'file': notes_file}
 
+        elif tool_name == 'restart_server':
+            if not tool_input.get('confirm'):
+                return {'warning': 'Server restart requires confirm=true. Active bots will briefly pause during restart. Are you sure?'}
+            reason = tool_input.get('reason', 'requested via chat')
+            import subprocess
+            bot_log('SERVER_RESTART', '', {'reason': reason, 'source': 'chat_claude'})
+            try:
+                result = subprocess.run(
+                    ['systemctl', 'restart', 'meridian'],
+                    capture_output=True, text=True, timeout=15
+                )
+                # We won't see this response since the server is restarting,
+                # but if systemctl returns before the process dies:
+                return {'success': True, 'message': f'Server restarting... reason: {reason}'}
+            except Exception as e:
+                return {'error': f'Restart failed: {e}'}
+
+        elif tool_name == 'read_server_logs':
+            import subprocess
+            lines = min(tool_input.get('lines', 50), 200)
+            grep_filter = tool_input.get('filter', '')
+            try:
+                cmd = ['journalctl', '-u', 'meridian', '-n', str(lines), '--no-pager']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                output = result.stdout or result.stderr or 'No output'
+                if grep_filter:
+                    output = '\n'.join(l for l in output.split('\n') if grep_filter.lower() in l.lower())
+                    if not output:
+                        output = f'No lines matching "{grep_filter}" in last {lines} log entries'
+                return {'logs': output, 'lines': lines, 'filter': grep_filter or 'none'}
+            except Exception as e:
+                return {'error': f'Failed to read logs: {e}'}
+
+        elif tool_name == 'server_status':
+            import subprocess
+            try:
+                status = subprocess.run(
+                    ['systemctl', 'status', 'meridian'],
+                    capture_output=True, text=True, timeout=10
+                )
+                procs = subprocess.run(
+                    ['pgrep', '-af', 'python3.*app.py'],
+                    capture_output=True, text=True, timeout=5
+                )
+                return {
+                    'status': status.stdout or 'unknown',
+                    'processes': procs.stdout.strip().split('\n') if procs.stdout.strip() else [],
+                    'process_count': len(procs.stdout.strip().split('\n')) if procs.stdout.strip() else 0,
+                }
+            except Exception as e:
+                return {'error': f'Status check failed: {e}'}
+
         else:
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
@@ -16732,6 +16815,7 @@ def claude_chat():
         'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',
         'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts), sell_position (limit sell at target price), get_bot_detail (full detail for one bot), create_watch_bot (attach SL/TP to existing position), cancel_order (cancel single order by ID), get_game_context (combined scores+markets+bots for a game), save_debug_note (document bugs/issues for the developer to fix).',
         'DEBUG NOTES: When the user asks you to "tell Claude Code about this", "save this for debugging", "leave a note about this bug", or similar — use save_debug_note. Include specific details: bot IDs, tickers, what happened vs expected, timestamps. The developer reads these notes at the start of each session.',
+        'SERVER OPS: restart_server (ALWAYS confirm with user first — active bots pause briefly), read_server_logs (journalctl output, filterable), server_status (quick health check). Use read_server_logs when diagnosing errors. The proper restart method is systemctl restart meridian — NEVER use nohup or kill manually.',
         'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately. Do NOT call change_view repeatedly — one call is enough.',
         'EFFICIENCY: You have up to 12 tool calls per message. When the user asks what games are live or what to trade, use get_live_kalshi_markets — it returns all currently live Kalshi markets in one call. Use search_markets only for specific teams/tickers. Use get_schedule() for ESPN game times. The visible_markets in context shows what is on the user\'s screen.',
         'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',

@@ -14358,6 +14358,29 @@ def get_pnl_calendar():
     return jsonify({'days': calendar_data})
 
 
+@app.route('/api/emergency-sell', methods=['POST'])
+def emergency_sell():
+    """Sell orphaned contracts — called from positions page."""
+    try:
+        data = request.get_json(force=True) or {}
+        ticker = data.get('ticker', '').strip()
+        side = data.get('side', '').strip()
+        count = int(data.get('count', 0))
+        if not ticker or not side or count <= 0:
+            return jsonify({'success': False, 'error': 'Missing ticker, side, or count'}), 400
+        success, info = execute_sell(ticker, side, count, reason='emergency_orphan_sell')
+        sell_price = (info or {}).get('actual_fill_price') or (info or {}).get('sell_price', 0)
+        if success:
+            bot_log('EMERGENCY_SELL', f'orphan_{ticker}', {
+                'ticker': ticker, 'side': side, 'count': count,
+                'sell_price': sell_price, 'reason': 'orphan_sell_button'})
+            return jsonify({'success': True, 'sell_price': sell_price})
+        else:
+            return jsonify({'success': False, 'error': (info or {}).get('error', 'Sell failed')})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/latency', methods=['GET'])
 def get_latency():
     """Get latency stats for API calls and fill-to-hedge pipeline."""
@@ -14826,20 +14849,32 @@ def get_active_positions():
 
             if cat in ('anchor_dog', 'anchor_ladder'):
                 dog_side = b.get('dog_side', '')
-                # Only count ACTUAL fills (what we own on Kalshi), not expected qty
                 dog_fills = _si(b.get('total_dog_fill_qty')) or _si(b.get('dog_fill_qty'))
-                # For ladder, sum rung fills
                 if dog_fills == 0 and b.get('rungs'):
                     dog_fills = sum(_si(r.get('fill_qty', 0)) for r in b.get('rungs', []))
                 fav_side = b.get('fav_side', '')
                 fav_qty = _si(b.get('fav_fill_qty'))
-                if dog_fills > 0:
-                    _add(t, dog_side, 'phantom', dog_fills)
-                if fav_qty > 0:
-                    _add(t, fav_side, 'phantom', fav_qty)
+                # Kalshi settles matching fills instantly - use NET only
+                if dog_side and fav_side and dog_side != fav_side:
+                    net_dog = max(0, dog_fills - fav_qty)
+                    net_fav = max(0, fav_qty - dog_fills)
+                    if net_dog > 0:
+                        _add(t, dog_side, 'phantom', net_dog)
+                    if net_fav > 0:
+                        _add(t, fav_side, 'phantom', net_fav)
+                else:
+                    if dog_fills > 0:
+                        _add(t, dog_side, 'phantom', dog_fills)
+                    if fav_qty > 0:
+                        _add(t, fav_side, 'phantom', fav_qty)
             elif cat == 'ladder_arb':
-                _add(t, 'yes', 'apex', _si(b.get('filled_yes_qty')))
-                _add(t, 'no', 'apex', _si(b.get('filled_no_qty')))
+                # Kalshi instantly settles matching YES+NO - only NET imbalance is real
+                _apex_yes = _si(b.get('filled_yes_qty'))
+                _apex_no = _si(b.get('filled_no_qty'))
+                if _apex_yes > _apex_no:
+                    _add(t, 'yes', 'apex', _apex_yes - _apex_no)
+                elif _apex_no > _apex_yes:
+                    _add(t, 'no', 'apex', _apex_no - _apex_yes)
             elif btype == 'middle':
                 for leg in ('a', 'b'):
                     mt = b.get(f'ticker_{leg}', '')

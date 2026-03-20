@@ -5848,8 +5848,35 @@ def _execute_apex_completion(bot_id):
             # Guard: don't re-place if we already have a live hedge for this exact scenario
             existing_hedge = bot.get('hedge_order_id')
             if existing_hedge and bot.get('_extra_hedge_placed'):
-                # Already placed an extra hedge — wait for it to fill, don't spam new ones
-                return
+                # Verify the extra hedge order still exists on Kalshi
+                try:
+                    api_rate_limiter.wait()
+                    _eh_resp = kalshi_client.get_order(existing_hedge)
+                    _eh_data = _eh_resp.get('order', _eh_resp) if isinstance(_eh_resp, dict) else {}
+                    _eh_status = _eh_data.get('status', '')
+                    _eh_fills = _parse_fill_count(_eh_data)
+                    if _eh_fills > 0:
+                        # Extra hedge got fills — update and let completion proceed
+                        hedge_qty += _eh_fills
+                        unhedged = anchor_qty - hedge_qty
+                        print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} has {_eh_fills} fills, unhedged now {unhedged}')
+                    elif _eh_status in ('resting', 'pending'):
+                        # Still alive and waiting — don't spam new ones
+                        return
+                    else:
+                        # Order is cancelled/expired/gone — clear flag, proceed to complete
+                        print(f'⚠ APEX EXTRA HEDGE GONE: {bot_id} hedge {existing_hedge[:12]} status={_eh_status} — accepting {unhedged} unhedged, completing')
+                        bot['_extra_hedge_placed'] = False
+                        unhedged = 0  # Accept the loss, proceed to completion
+                except Exception as _eh_err:
+                    if '404' in str(_eh_err):
+                        # Order gone from Kalshi — clear flag and complete
+                        print(f'⚠ APEX EXTRA HEDGE 404: {bot_id} hedge {existing_hedge[:12]} — accepting {unhedged} unhedged, completing')
+                        bot['_extra_hedge_placed'] = False
+                        unhedged = 0  # Accept the loss, proceed to completion
+                    else:
+                        # Can't verify — wait and retry next cycle
+                        return
             # Late anchor fills came in — place a new hedge for the difference
             ticker = bot.get('ticker', '')
             avg_anchor = bot.get(f'avg_{filled_side}_price', 0)
@@ -14616,8 +14643,22 @@ def get_active_positions():
 
         _bot_breakdown = {}  # (ticker, side) → {type_label: qty}
         for _bid, b in active_bots.items():
-            if b.get('status') in ('completed', 'stopped', 'cancelled'):
-                continue
+            _bstatus = b.get('status', '')
+            # Include completed/stopped bots with fills — their positions are
+            # awaiting settlement on Kalshi and shouldn't be flagged as orphans
+            if _bstatus in ('completed', 'stopped', 'cancelled'):
+                _bcat = b.get('bot_category', '')
+                _has_net_fills = False
+                if _bcat in ('anchor_dog', 'anchor_ladder'):
+                    _yes_f = _si(b.get('yes_fill_qty', 0))
+                    _no_f = _si(b.get('no_fill_qty', 0))
+                    _has_net_fills = _yes_f != _no_f  # one-sided = position exists on Kalshi
+                elif _bcat == 'ladder_arb':
+                    _yes_f = _si(b.get('filled_yes_qty', 0))
+                    _no_f = _si(b.get('filled_no_qty', 0))
+                    _has_net_fills = _yes_f != _no_f
+                if not _has_net_fills:
+                    continue  # balanced fills → net position is 0, skip
             t = b.get('ticker', '')
             cat = b.get('bot_category', '')
             btype = b.get('type', '')
@@ -14898,15 +14939,33 @@ def _run_startup():
 
             managed_qty = {}  # (ticker, side) -> qty
             for b in active_bots.values():
-                if b.get('status') in ('completed', 'stopped', 'cancelled'):
-                    continue
+                _bst = b.get('status', '')
+                # Include completed bots with one-sided fills (positions await settlement)
+                if _bst in ('completed', 'stopped', 'cancelled'):
+                    _cat = b.get('bot_category', '')
+                    if _cat in ('anchor_dog', 'anchor_ladder'):
+                        _yf = _safe_int(b.get('yes_fill_qty', 0))
+                        _nf = _safe_int(b.get('no_fill_qty', 0))
+                        if _yf == _nf:
+                            continue  # balanced → no position
+                    elif _cat == 'ladder_arb':
+                        _yf = _safe_int(b.get('filled_yes_qty', 0))
+                        _nf = _safe_int(b.get('filled_no_qty', 0))
+                        if _yf == _nf:
+                            continue
+                    else:
+                        continue
                 t = b.get('ticker', '')
                 if not t:
                     continue
                 cat = b.get('bot_category', '')
                 if cat in ('anchor_dog', 'anchor_ladder'):
                     dog_side = b.get('dog_side', '')
-                    dog_qty = _safe_int(b.get('dog_fill_qty')) or _safe_int(b.get('quantity'))
+                    # Use total_dog_fill_qty (survives repeats) > dog_fill_qty (reset) > quantity (fallback)
+                    dog_qty = _safe_int(b.get('total_dog_fill_qty')) or _safe_int(b.get('dog_fill_qty')) or _safe_int(b.get('quantity'))
+                    # For ladder: sum rung fills as backup (most accurate for current cycle)
+                    if dog_qty == 0 and b.get('rungs'):
+                        dog_qty = sum(_safe_int(r.get('fill_qty', 0)) for r in b.get('rungs', []))
                     fav_side = b.get('fav_side', '')
                     fav_qty = _safe_int(b.get('fav_fill_qty'))
                     if dog_qty > 0 and dog_side:

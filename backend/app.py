@@ -14928,21 +14928,29 @@ def get_active_positions():
                 orphan_info = {'orphaned_qty': _orphan_qty} if _orphan_qty > 0 else {}
                 # Parse team matchup from ticker for cleaner display
                 _parts = ticker.split('-')
-                _display_title = mkt.get('title', ticker)
-                if len(_parts) >= 3:
-                    # e.g. KXNBAGAME-26MAR19LALMIA-LAL → teams=LALMIA, market_team=LAL
-                    _teams_raw = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', _parts[1])  # strip date
+                _kalshi_title = mkt.get('title', '').strip()
+                if _kalshi_title and _kalshi_title != ticker:
+                    # Use Kalshi's market title (includes spread info like "+13")
+                    _display_title = f'{_kalshi_title} — {side.upper()}'
+                elif len(_parts) >= 3:
+                    # Fallback: parse from ticker
+                    _teams_raw = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', _parts[1])
                     _market_team = re.match(r'^([A-Z]+)', _parts[-1])
                     if _market_team:
                         _mt = _market_team.group(1)
-                        # Build "LAL vs MIA — LAL NO" format
                         _t1, _t2 = _parse_ticker_teams(ticker)
                         if _t1 and _t2:
                             _display_title = f'{_t1} vs {_t2} — {_mt} {side.upper()}'
+                        else:
+                            _display_title = f'{ticker} — {side.upper()}'
+                    else:
+                        _display_title = f'{ticker} — {side.upper()}'
                 elif len(_parts) >= 2:
                     _t1, _t2 = _parse_ticker_teams(ticker)
                     if _t1 and _t2:
                         _display_title = f'{_t1} vs {_t2} — {side.upper()}'
+                    else:
+                        _display_title = f'{ticker} — {side.upper()}'
 
                 enriched.append({
                     'ticker':     ticker,

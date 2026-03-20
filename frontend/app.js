@@ -1332,7 +1332,7 @@ function displayMarkets(markets) {
     }
     window._botTypeMap = botMap;
 
-    // Fetch middle scanner results for recommendation icons (non-blocking)
+    // Fetch Meridian scanner results for recommendation icons (non-blocking)
     if (!window._middleRecoMap) window._middleRecoMap = {};
     fetch(`${API_BASE}/scan/middles`).then(r => r.json()).then(data => {
         const rMap = {};
@@ -8361,7 +8361,7 @@ async function toggleBotPhase(botId, newPhase) {
     }
 }
 
-// ─── Middle Spread Scanner ────────────────────────────────────────────────────
+// ─── Meridian Scanner ─────────────────────────────────────────────────────────
 function openMiddlesModal() {
     document.getElementById('middles-modal')?.classList.add('show');
 }

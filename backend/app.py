@@ -163,12 +163,18 @@ def _start_notification_thread():
                                 if oid:
                                     try: kalshi_client.cancel_order(oid)
                                     except Exception: pass
-                            for rung in bot.get('rungs', []):
-                                for side in ('yes', 'no'):
-                                    oid = rung.get(f'{side}_order_id')
-                                    if oid:
-                                        try: kalshi_client.cancel_order(oid)
-                                        except Exception: pass
+                            # Cancel rung orders via group or individually
+                            _ac_group = bot.get('_order_group_id')
+                            if _ac_group:
+                                try: kalshi_client.cancel_order_group(_ac_group)
+                                except Exception: _ac_group = None
+                            if not _ac_group:
+                                for rung in bot.get('rungs', []):
+                                    for side in ('yes', 'no'):
+                                        oid = rung.get(f'{side}_order_id')
+                                        if oid:
+                                            try: kalshi_client.cancel_order(oid)
+                                            except Exception: pass
                         except Exception: pass
                         _push_notification('auto_cancel', f"🛑 Auto-cancelled {bot_id}: game ending", {'bot_id': bot_id})
                         cancelled = True
@@ -4628,6 +4634,67 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     return {}
 
 
+def _get_team_margin_for_spread_ticker(ticker: str, spread_value=0):
+    """Get a specific team's score margin for a spread ticker.
+    Extracts the team code from the last ticker segment (e.g. OKC from ...OKC24),
+    looks it up in ESPN cache, and returns directional margin vs the spread.
+
+    Returns dict with keys: margin, team_code, covering, period, secs_remaining, status
+    or {} if ESPN data unavailable.
+    """
+    try:
+        parts = ticker.split('-')
+        if len(parts) < 3:
+            return {}
+        # Extract team code from last segment: "OKC24" → "OKC"
+        last_seg = parts[-1]
+        code_match = re.match(r'^([A-Z]+)', last_seg)
+        if not code_match:
+            return {}
+        team_code = code_match.group(1)
+
+        # Look up in ESPN cache
+        _refresh_espn_cache()
+        info = _espn_cache.get('data', {})
+        if not info:
+            return {}
+
+        # Try direct lookup, then Kalshi-to-ESPN mapping
+        espn_code = _KALSHI_TO_ESPN.get(team_code, team_code)
+        entry = info.get(team_code) or info.get(espn_code)
+        if not entry or entry.get('status') not in ('in', 'post'):
+            return {}
+
+        # Cross-sport guard (same as _get_game_score_for_ticker)
+        ticker_sport = _detect_sport(ticker)
+        _SPORT_TO_ESPN = {
+            'nba': {'nba'}, 'ncaab': {'ncaab'}, 'ncaaw': {'ncaaw'}, 'nfl': {'nfl'},
+            'nhl': {'nhl'}, 'mlb': {'mlb'},
+        }
+        allowed = _SPORT_TO_ESPN.get(ticker_sport)
+        entry_sport = entry.get('espn_sport', '')
+        if allowed and entry_sport and entry_sport not in allowed:
+            return {}
+
+        team_score = entry.get('team_score', 0)
+        opp_score = entry.get('opp_score', 0)
+        margin = team_score - opp_score  # positive = team winning
+        clock = entry.get('clock', '')
+        secs = _parse_clock_seconds(clock)
+
+        return {
+            'margin': margin,
+            'team_code': team_code,
+            'covering': margin >= spread_value,  # team is covering the spread
+            'period': entry.get('period', 0),
+            'clock': clock,
+            'secs_remaining': secs,
+            'status': entry.get('status', ''),
+        }
+    except Exception:
+        return {}
+
+
 def _get_game_time(ticker: str) -> str:
     """Get game start time from ESPN cache for a given ticker. Returns e.g. '7:30 PM' or ''."""
     _refresh_espn_cache()
@@ -5590,12 +5657,37 @@ def _execute_apex_completion(bot_id):
 
         # ── Safety: check for unhedged anchors before completing ──
         # A late anchor fill may have arrived during cancellation.
-        # Recompute fills and hedge any mismatch.
+        # Step 1: recompute from local state
         _recompute_apex_fills(bot)
         filled_side = bot.get('first_fill_side', 'yes')
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
         anchor_qty = bot.get(f'filled_{filled_side}_qty', 0)
         hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
+
+        # Step 2: verify against Kalshi actual positions (catches WS-missed fills)
+        ticker = bot.get('ticker', '')
+        if ticker:
+            try:
+                api_rate_limiter.wait()
+                pos_resp = kalshi_client.get_positions(ticker=ticker)
+                positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+                for p in positions:
+                    if p.get('ticker') == ticker:
+                        actual_qty = _parse_position_qty(p)
+                        # positive qty = YES position, negative = NO position
+                        if filled_side == 'yes' and actual_qty > 0:
+                            if actual_qty > anchor_qty:
+                                print(f'⚠ APEX POSITION CHECK: {bot_id} Kalshi says {actual_qty} YES but local={anchor_qty} — updating')
+                                anchor_qty = actual_qty
+                        elif filled_side == 'no' and actual_qty < 0:
+                            actual_no = abs(actual_qty)
+                            if actual_no > anchor_qty:
+                                print(f'⚠ APEX POSITION CHECK: {bot_id} Kalshi says {actual_no} NO but local={anchor_qty} — updating')
+                                anchor_qty = actual_no
+                        break
+            except Exception as pos_err:
+                print(f'⚠ APEX POSITION CHECK failed: {bot_id}: {pos_err} — using local state')
+
         unhedged = anchor_qty - hedge_qty
         if unhedged > 0:
             # Late anchor fills came in — place a new hedge for the difference
@@ -5787,16 +5879,21 @@ def create_ladder_arb_bot():
         total_scaled_qty = 0
         all_placed_oids = []  # Master list of ALL order IDs for cleanup
 
-        print(f'△ APEX PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling})')
+        import uuid as _uuid
+        _order_group_id = str(_uuid.uuid4())
+        print(f'△ APEX PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling}) group={_order_group_id[:8]}')
 
         # Batch YES orders and NO orders
         yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in rung_specs]
         no_specs  = [{'ticker': ticker, 'side': 'no',  'count': s['rung_qty'], 'price': s['no_price']}  for s in rung_specs]
-        yes_results = create_orders_batch(yes_specs)
-        no_results  = create_orders_batch(no_specs)
+        yes_results = create_orders_batch(yes_specs, order_group_id=_order_group_id)
+        no_results  = create_orders_batch(no_specs, order_group_id=_order_group_id)
 
         for spec_idx, spec in enumerate(rung_specs):
             try:
+                if yes_results[spec_idx] is None or no_results[spec_idx] is None:
+                    print(f'  ⚠ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ SKIPPED (batch partial failure)')
+                    continue
                 yr, yes_actual = yes_results[spec_idx]
                 nr, no_actual  = no_results[spec_idx]
                 yes_oid = yr['order']['order_id']
@@ -5859,6 +5956,7 @@ def create_ladder_arb_bot():
             '_all_hedge_order_ids': [],
             # Master list of ALL order IDs ever placed (for cleanup)
             '_all_placed_order_ids': all_placed_oids,
+            '_order_group_id': _order_group_id,
             # Walk state
             'walk_count': 0,
             'last_walk_at': None,
@@ -6187,14 +6285,19 @@ def create_ladder_bot():
                 print(f'   rung[{idx}] → {r["price"]}¢ (depth={anchor_depth + idx * 2}¢)')
 
         # Place all rung orders via batch
+        import uuid as _uuid
+        phantom_group_id = str(_uuid.uuid4())
         rung_specs = [{'ticker': ticker, 'side': dog_side, 'count': int(r.get('qty', 1)), 'price': int(r['price'])} for r in rungs_input]
         try:
-            batch_results = create_orders_batch(rung_specs)
+            batch_results = create_orders_batch(rung_specs, order_group_id=phantom_group_id)
         except Exception as batch_err:
             return jsonify({'error': f'Failed to place rungs: {batch_err}'}), 500
 
         placed_rungs = []
-        for i, (resp, actual_price) in enumerate(batch_results):
+        for i, result in enumerate(batch_results):
+            if result is None:
+                continue  # Partial batch failure — skip this rung
+            resp, actual_price = result
             placed_rungs.append({
                 'price': actual_price,
                 'qty': rung_specs[i]['count'],
@@ -6259,6 +6362,7 @@ def create_ladder_bot():
             ),
             '_bid_at_post': current_dog_bid if current_dog_bid > 0 else 0,
             '_last_repost_at': 0,
+            '_order_group_id': phantom_group_id,
         }
         save_state()
 
@@ -6402,10 +6506,11 @@ def simulate_ladder():
 
 
 # ─── BATCH ORDER PLACEMENT ─────────────────────────────────────────
-def create_orders_batch(order_specs):
+def create_orders_batch(order_specs, order_group_id=None):
     """Place multiple orders in a single API call.
     order_specs: list of dicts with keys: ticker, side, action, count, price
-    Returns: list of (response_dict, actual_price) tuples.
+    order_group_id: optional UUID string — all orders share one group for atomic cancel.
+    Returns: list of (response_dict, actual_price) tuples.  None entries = failed orders.
     On batch failure, falls back to individual create_order_maker calls.
     """
     if not order_specs:
@@ -6424,6 +6529,8 @@ def create_orders_batch(order_specs):
             'post_only': True,
             price_key: spec['price'],
         }
+        if order_group_id:
+            order['order_group_id'] = order_group_id
         batch_orders.append(order)
 
     try:
@@ -6442,23 +6549,33 @@ def create_orders_batch(order_specs):
                 out.append((results[i], actual_price))
             else:
                 # This order failed in the batch — fall back to individual
-                r, p = create_order_maker(
-                    ticker=spec['ticker'], side=spec['side'],
-                    action=spec.get('action', 'buy'),
-                    count=spec['count'], price=spec['price'],
-                )
-                out.append((r, p))
+                try:
+                    r, p = create_order_maker(
+                        ticker=spec['ticker'], side=spec['side'],
+                        action=spec.get('action', 'buy'),
+                        count=spec['count'], price=spec['price'],
+                        order_group_id=order_group_id,
+                    )
+                    out.append((r, p))
+                except Exception as ind_err:
+                    print(f'  ⚠ Individual fallback failed [{spec["side"]}@{spec["price"]}¢]: {ind_err}')
+                    out.append(None)
         return out
     except Exception as e:
         print(f'⚠ Batch order failed ({len(batch_orders)} orders): {e} — falling back to individual')
         out = []
         for spec in order_specs:
-            r, p = create_order_maker(
-                ticker=spec['ticker'], side=spec['side'],
-                action=spec.get('action', 'buy'),
-                count=spec['count'], price=spec['price'],
-            )
-            out.append((r, p))
+            try:
+                r, p = create_order_maker(
+                    ticker=spec['ticker'], side=spec['side'],
+                    action=spec.get('action', 'buy'),
+                    count=spec['count'], price=spec['price'],
+                    order_group_id=order_group_id,
+                )
+                out.append((r, p))
+            except Exception as ind_err:
+                print(f'  ⚠ Individual fallback failed [{spec["side"]}@{spec["price"]}¢]: {ind_err}')
+                out.append(None)
         return out
 
 
@@ -7854,22 +7971,30 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
 
-            new_rungs = []
+            # Batch-place all rungs for new cycle
+            import uuid as _uuid
+            repeat_ph_group = str(_uuid.uuid4())
+            repeat_specs = []
+            repeat_qtys = []
             for rung in bot.get('rungs', []):
-                rung_price = max(1, anchor_base - anchor_depth - (len(new_rungs) * 2))
+                rung_price = max(1, anchor_base - anchor_depth - (len(repeat_specs) * 2))
                 rung_qty = rung.get('qty', qty)
-                try:
-                    resp, actual = create_order_maker(
-                        ticker=ticker, side=dog_side, action='buy',
-                        count=rung_qty, price=rung_price
-                    )
+                repeat_specs.append({'ticker': ticker, 'side': dog_side, 'count': rung_qty, 'price': rung_price})
+                repeat_qtys.append(rung_qty)
+
+            new_rungs = []
+            if repeat_specs:
+                repeat_results = create_orders_batch(repeat_specs, order_group_id=repeat_ph_group)
+                for j, result in enumerate(repeat_results):
+                    if result is None:
+                        print(f'⚠ PHANTOM REPEAT rung {j} failed (batch partial)')
+                        continue
+                    resp, actual = result
                     new_rungs.append({
-                        'price': actual, 'qty': rung_qty,
+                        'price': actual, 'qty': repeat_qtys[j],
                         'order_id': resp['order']['order_id'],
                         'fill_qty': 0, 'filled_at': None,
                     })
-                except Exception as e:
-                    print(f'⚠ PHANTOM REPEAT rung place fail: {bot_id} — {e}')
 
             if new_rungs:
                 bot['rungs'] = new_rungs
@@ -7892,6 +8017,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['hedge_qty'] = None
                 bot['status'] = 'ladder_posted'
                 bot['posted_at'] = now
+                bot['_order_group_id'] = repeat_ph_group
                 ws_rp = (ws_manager.get_price(ticker) if ws_manager else None) or {}
                 bot['_bid_at_post'] = ws_rp.get(f'{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
@@ -7984,9 +8110,20 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             if rp_dog_bid > 0:
                 # Drift guard: no longer underdog
                 if rp_dog_bid > 50:
-                    for rung in bot.get('rungs', []):
-                        if rung.get('order_id'):
-                            _safe_cancel(rung['order_id'], f'phantom drift {bot_id}')
+                    _ph_group = bot.get('_order_group_id')
+                    if _ph_group:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order_group(_ph_group)
+                        except Exception:
+                            # Fallback to individual
+                            for rung in bot.get('rungs', []):
+                                if rung.get('order_id'):
+                                    _safe_cancel(rung['order_id'], f'phantom drift {bot_id}')
+                    else:
+                        for rung in bot.get('rungs', []):
+                            if rung.get('order_id'):
+                                _safe_cancel(rung['order_id'], f'phantom drift {bot_id}')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     actions.append({'bot_id': bot_id, 'action': 'phantom_ladder_drift_cancel', 'dog_bid': rp_dog_bid})
@@ -8000,25 +8137,45 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
                 old_first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
                 if abs(smart_first - old_first_price) > 1:
-                    # Cancel + repost all unfilled rungs at new prices
+                    # Cancel old orders via group (1 call) or individual fallback
+                    _ph_old_group = bot.get('_order_group_id')
+                    if _ph_old_group:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order_group(_ph_old_group)
+                        except Exception:
+                            for rung in bot.get('rungs', []):
+                                if rung.get('order_id') and rung.get('fill_qty', 0) < rung['qty']:
+                                    _safe_cancel(rung['order_id'], f'phantom rung repost {bot_id}')
+                    else:
+                        for rung in bot.get('rungs', []):
+                            if rung.get('order_id') and rung.get('fill_qty', 0) < rung['qty']:
+                                _safe_cancel(rung['order_id'], f'phantom rung repost {bot_id}')
+
+                    # Batch-place new orders for unfilled rungs
+                    import uuid as _uuid
+                    new_ph_group = str(_uuid.uuid4())
+                    repost_specs = []
+                    repost_indices = []
                     for idx, rung in enumerate(bot.get('rungs', [])):
                         if rung.get('fill_qty', 0) >= rung['qty']:
                             continue  # filled, don't touch
                         new_price = max(1, smart_first - (idx * 2))
-                        old_oid = rung.get('order_id')
-                        if old_oid:
-                            _safe_cancel(old_oid, f'phantom rung repost {bot_id}')
-                        try:
-                            new_resp, actual_price = create_order_maker(
-                                ticker=ticker, side=dog_side, action='buy',
-                                count=rung['qty'], price=new_price
-                            )
-                            new_oid = _extract_order_id(new_resp, f'phantom rung repost {bot_id}')
-                            rung['order_id'] = new_oid
-                            rung['price'] = actual_price
-                        except Exception as e:
-                            print(f'⚠ PHANTOM RUNG REPOST {idx}: {e}')
+                        repost_specs.append({'ticker': ticker, 'side': dog_side, 'count': rung['qty'], 'price': new_price})
+                        repost_indices.append(idx)
 
+                    if repost_specs:
+                        repost_results = create_orders_batch(repost_specs, order_group_id=new_ph_group)
+                        for j, ri in enumerate(repost_indices):
+                            rung = bot['rungs'][ri]
+                            if repost_results[j] is None:
+                                rung['order_id'] = None
+                                continue
+                            resp, actual_price = repost_results[j]
+                            rung['order_id'] = resp['order']['order_id']
+                            rung['price'] = actual_price
+
+                    bot['_order_group_id'] = new_ph_group
                     bot['posted_at'] = now
                     bot['_bid_at_post'] = rp_dog_bid
                     bot['_last_repost_at'] = now
@@ -8435,14 +8592,18 @@ def _handle_apex(bot_id, bot, actions):
                     continue
                 rung_qty = _scale_qty_for_width(qty_per, w) if use_scaling else qty_per
                 valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn, 'rung_qty': rung_qty})
+            import uuid as _uuid
+            repeat_group_id = str(_uuid.uuid4())
             if valid_specs:
                 yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in valid_specs]
                 no_specs  = [{'ticker': ticker, 'side': 'no',  'count': s['rung_qty'], 'price': s['no_price']}  for s in valid_specs]
-                yes_results = create_orders_batch(yes_specs)
-                no_results  = create_orders_batch(no_specs)
+                yes_results = create_orders_batch(yes_specs, order_group_id=repeat_group_id)
+                no_results  = create_orders_batch(no_specs, order_group_id=repeat_group_id)
                 new_rungs = []
                 for idx, spec in enumerate(valid_specs):
                     try:
+                        if yes_results[idx] is None or no_results[idx] is None:
+                            continue
                         yr, ya = yes_results[idx]
                         nr, na = no_results[idx]
                         new_rungs.append({
@@ -8478,8 +8639,9 @@ def _handle_apex(bot_id, bot, actions):
                 bot['live_no_bid'] = fresh_no_bid
                 bot['yes_price'] = new_rungs[0]['yes_price']
                 bot['no_price'] = new_rungs[0]['no_price']
+                bot['_order_group_id'] = repeat_group_id
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_repeat_repost'})
-                print(f'🔄 APEX REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs reposted')
+                print(f'🔄 APEX REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs reposted (group={repeat_group_id[:8]})')
             else:
                 return  # No profitable rungs — wait
         except Exception as e:
@@ -8590,19 +8752,40 @@ def _handle_apex(bot_id, bot, actions):
         REPOST_AFTER_MIN = 1
         age_min = (now - bot.get('posted_at', now)) / 60.0
         if phase == 'live' and age_min >= REPOST_AFTER_MIN and bot.get('filled_yes_qty', 0) == 0 and bot.get('filled_no_qty', 0) == 0:
-            # Cancel all, recompute, re-place
-            for rung in bot.get('rungs', []):
-                for side in ('yes', 'no'):
-                    oid = rung.get(f'{side}_order_id')
-                    if oid:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
+            # Cancel all via order group (1 API call) or fall back to individual
+            old_group_id = bot.get('_order_group_id')
+            if old_group_id:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order_group(old_group_id)
+                except Exception as cg_err:
+                    # Group cancel failed — fall back to individual cancels
+                    print(f'  ⚠ Group cancel failed ({old_group_id[:8]}): {cg_err} — individual fallback')
+                    for rung in bot.get('rungs', []):
+                        for side in ('yes', 'no'):
+                            oid = rung.get(f'{side}_order_id')
+                            if oid:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(oid)
+                                except Exception:
+                                    pass
+            else:
+                # Legacy bot without order group — cancel individually
+                for rung in bot.get('rungs', []):
+                    for side in ('yes', 'no'):
+                        oid = rung.get(f'{side}_order_id')
+                        if oid:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(oid)
+                            except Exception:
+                                pass
 
             # Fetch fresh orderbook
             try:
+                import uuid as _uuid
+                new_group_id = str(_uuid.uuid4())
                 api_rate_limiter.wait()
                 ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                 ob = ob_data.get('orderbook', ob_data)
@@ -8633,10 +8816,12 @@ def _handle_apex(bot_id, bot, actions):
                 if valid_specs:
                     yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]
                     no_specs  = [{'ticker': ticker, 'side': 'no',  'count': qty_per, 'price': s['no_price']}  for s in valid_specs]
-                    yes_results = create_orders_batch(yes_specs)
-                    no_results  = create_orders_batch(no_specs)
+                    yes_results = create_orders_batch(yes_specs, order_group_id=new_group_id)
+                    no_results  = create_orders_batch(no_specs, order_group_id=new_group_id)
                     for idx, spec in enumerate(valid_specs):
                         try:
+                            if yes_results[idx] is None or no_results[idx] is None:
+                                continue
                             yr, ya = yes_results[idx]
                             nr, na = no_results[idx]
                             new_rungs.append({
@@ -8659,8 +8844,9 @@ def _handle_apex(bot_id, bot, actions):
                     bot['live_no_bid'] = fresh_no_bid
                     bot['yes_price'] = new_rungs[0]['yes_price']
                     bot['no_price'] = new_rungs[0]['no_price']
+                    bot['_order_group_id'] = new_group_id
                     actions.append({'bot_id': bot_id, 'action': 'ladder_arb_reposted', 'repost_count': bot['repost_count']})
-                    print(f'🔄 APEX REPOST: {bot_id} #{bot["repost_count"]} — {len(new_rungs)} rungs refreshed')
+                    print(f'🔄 APEX REPOST: {bot_id} #{bot["repost_count"]} — {len(new_rungs)} rungs refreshed (group={new_group_id[:8]})')
                 else:
                     bot['status'] = 'drift_cancelled'
                     bot['completed_at'] = now
@@ -10754,6 +10940,254 @@ def _run_monitor():
                 print(f"Error monitoring bot {bot_id}: {e}")
                 continue
 
+        # ── Middle Bot Rebalancer (last-resort, late-game only) ──────
+        def _middle_rebalancer_check(bot, bot_id, now_m, actions, session_pnl):
+            """Smart rebalancer for middle bots. Only fires in the final minutes
+            of the last period when BOTH market price AND ESPN score confirm a leg
+            is dead.  Returns True if an action was taken.
+
+            Supports one_filled (scrape/ride) and both_filled (profit enhancement).
+            Default mode is dry_run (log only, no sells).
+            """
+            if not bot.get('rebalancer_enabled', True):
+                return False
+            mode = bot.get('rebalancer_mode', 'dry_run')  # 'dry_run' or 'live'
+
+            PROTECT_FLOOR   = bot.get('rebalancer_protect_floor', 80)
+            LATE_GAME_SECS  = bot.get('rebalancer_late_game_secs', 180)
+            SCRAPE_CEIL     = bot.get('rebalancer_scrape_ceil', 10)
+            MARGIN_BUFFER   = bot.get('rebalancer_margin_buffer', 5)
+            status = bot['status']
+
+            # ── Determine which legs to check ──
+            if status == 'one_filled':
+                filled_leg = bot.get('filled_leg', 'a')
+                legs_to_check = [filled_leg]
+            elif status == 'both_filled':
+                legs_to_check = ['a', 'b']
+            else:
+                return False
+
+            for check_leg in legs_to_check:
+                other_leg = 'b' if check_leg == 'a' else 'a'
+                check_ticker = bot.get(f'ticker_{check_leg}', '')
+                other_ticker = bot.get(f'ticker_{other_leg}', '')
+                fill_price = bot.get(f'leg_{check_leg}_fill_price') or bot.get('target_price', 49)
+                check_spread = bot.get(f'spread_{check_leg}', 0)
+                other_spread = bot.get(f'spread_{other_leg}', 0)
+                qty = bot.get('qty', 1)
+
+                if not check_ticker:
+                    continue
+
+                # Get live NO bid for this leg
+                live_bid = 0
+                ws_p = ws_manager.get_price(check_ticker) if ws_manager else None
+                if ws_p:
+                    live_bid = ws_p.get('no_bid', 0) or 0
+
+                # GUARD: Protect winners — never touch a healthy leg
+                if live_bid >= PROTECT_FLOOR:
+                    continue
+
+                # GUARD: Late game only — get ESPN score for this leg's team
+                score_data = _get_team_margin_for_spread_ticker(check_ticker, check_spread)
+                if not score_data:
+                    continue  # No ESPN data — don't act on price alone
+
+                period = score_data.get('period', 0)
+                secs = score_data.get('secs_remaining')
+                margin = score_data.get('margin', 0)
+                team_code = score_data.get('team_code', '?')
+                covering = score_data.get('covering', False)
+                game_status = score_data.get('status', '')
+
+                # Find the late-game rule for this sport
+                series = check_ticker.split('-')[0].upper() if check_ticker else ''
+                rule = None
+                for prefix, r in _LATE_GAME_RULES.items():
+                    if series.startswith(prefix):
+                        if rule is None or len(prefix) > len(rule[0]):
+                            rule = (prefix, r)
+
+                if not rule:
+                    continue  # Unknown sport
+
+                final_period = rule[1]['block_period']
+                is_late = (game_status == 'post') or \
+                          (period >= final_period and secs is not None and secs <= LATE_GAME_SECS)
+
+                if not is_late:
+                    continue  # Not late game — too early to act
+
+                # ── CHECK: Dead Leg Scrape ──
+                # Price says dead (bid < SCRAPE_CEIL) AND team covering spread by MARGIN_BUFFER+
+                buffer_met = (margin >= check_spread + MARGIN_BUFFER)
+                if live_bid > 0 and live_bid < SCRAPE_CEIL and covering and buffer_met:
+                    log_data = {
+                        'leg': check_leg, 'team': team_code, 'margin': margin,
+                        'spread': check_spread, 'buffer': MARGIN_BUFFER,
+                        'covering': True, 'buffer_met': True,
+                        'bid': live_bid, 'fill_price': fill_price,
+                        'period': period, 'secs': secs, 'mode': mode,
+                    }
+
+                    if mode == 'dry_run':
+                        action_str = f'WOULD_SCRAPE at {live_bid}c' if status == 'one_filled' else f'WOULD_ENHANCE sell at {live_bid}c'
+                        bot_log('REBALANCER_DRY_RUN', bot_id, {**log_data, 'action': action_str})
+                        print(f'🔬 REBALANCER_DRY_RUN: {bot_id} | leg={check_leg.upper()} team={team_code} '
+                              f'margin={margin} spread={check_spread} bid={live_bid}c | {action_str}')
+                        continue  # Dry run — don't actually do anything
+
+                    # LIVE MODE — execute the scrape
+                    event_type = 'REBALANCER_SCRAPE' if status == 'one_filled' else 'REBALANCER_ENHANCE'
+                    bot_log(event_type, bot_id, log_data)
+
+                    # For one_filled: cancel unfilled order first
+                    if status == 'one_filled':
+                        unfilled_order_key = f'order_{other_leg}_id'
+                        if bot.get(unfilled_order_key):
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(bot[unfilled_order_key])
+                            except Exception as ce:
+                                # Check if it filled during cancel (race condition)
+                                try:
+                                    resp_race = kalshi_client.get_order(bot[unfilled_order_key])
+                                    ord_race = resp_race.get('order', resp_race) if isinstance(resp_race, dict) else {}
+                                    if _parse_fill_count(ord_race) >= qty:
+                                        bot[f'leg_{other_leg}_filled'] = True
+                                        bot[f'leg_{other_leg}_fill_price'] = get_actual_fill_price(bot[unfilled_order_key], 'no')
+                                        bot['status'] = 'both_filled'
+                                        bot['both_filled_at'] = now_m
+                                        bot_log('MIDDLE_BOTH_FILLED', bot_id, {'source': 'rebalancer_race'})
+                                        save_state()
+                                        return True
+                                except Exception:
+                                    pass
+
+                    # Market-sell the dead leg
+                    sold, sell_info = execute_sell(check_ticker, 'no', qty,
+                                                   reason=f'rebalancer_{event_type.lower()}_{bot_id}')
+                    if not sold:
+                        bot_log('REBALANCER_SELL_FAILED', bot_id, {
+                            'leg': check_leg, 'bid': live_bid, 'error': str(sell_info),
+                        })
+                        print(f'⚠ REBALANCER SELL FAILED: {bot_id} leg={check_leg.upper()} — retrying next cycle')
+                        return False  # Don't change status, retry next cycle
+
+                    sell_price = (sell_info or {}).get('actual_fill_price') or \
+                                 (sell_info or {}).get('sell_price', 0)
+
+                    if status == 'one_filled':
+                        loss_cents = (fill_price - (sell_price or fill_price)) * qty
+                        bot['status'] = 'stopped'
+                        bot['stopped_at'] = now_m
+                        bot['sl_sell_price'] = sell_price
+                        bot['rebalancer_exit_reason'] = 'scrape'
+                        session_pnl['gross_loss_cents'] += max(0, loss_cents)
+                        session_pnl['stopped_bots'] += 1
+                        _record_trade({
+                            'bot_id': bot_id, 'type': 'middle',
+                            'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
+                            'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                            'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
+                            'target_price': bot.get('target_price'), 'qty': qty,
+                            'filled_leg': check_leg, 'fill_price': fill_price,
+                            'sl_sell_price': sell_price, 'loss_cents': loss_cents,
+                            'result': 'rebalancer_scrape', 'timestamp': now_m,
+                            'note': f'rebalancer scrape: {team_code} margin={margin} spread={check_spread} bid={live_bid}c secs={secs}',
+                        }, bot)
+                        _push_notification('rebalancer',
+                            f'Rebalancer scrape: {bot_id} — leg {check_leg.upper()} ({team_code}) '
+                            f'sold at {sell_price}c (margin={margin} vs spread={check_spread})',
+                            {'bot_id': bot_id, 'reason': 'scrape'})
+                    else:
+                        # both_filled enhancement — sell dead leg for extra profit
+                        recovery_cents = (sell_price or 0) * qty
+                        bot['rebalancer_exit_reason'] = 'enhance'
+                        bot[f'leg_{check_leg}_sold_early'] = True
+                        bot[f'leg_{check_leg}_sell_price'] = sell_price
+                        _record_trade({
+                            'bot_id': bot_id, 'type': 'middle',
+                            'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
+                            'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
+                            'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
+                            'qty': qty, 'filled_leg': check_leg,
+                            'fill_price': fill_price, 'sl_sell_price': sell_price,
+                            'recovery_cents': recovery_cents,
+                            'result': 'rebalancer_enhance', 'timestamp': now_m,
+                            'note': f'rebalancer enhance: sold dead leg {check_leg.upper()} ({team_code}) '
+                                    f'at {sell_price}c (margin={margin} spread={check_spread})',
+                        }, bot)
+                        _push_notification('rebalancer',
+                            f'Rebalancer enhance: {bot_id} — sold dead leg {check_leg.upper()} '
+                            f'at {sell_price}c (+{recovery_cents}c recovery)',
+                            {'bot_id': bot_id, 'reason': 'enhance'})
+
+                    actions.append({'bot_id': bot_id, 'action': event_type.lower()})
+                    save_state()
+                    return True
+
+                # ── CHECK: Ride Winner (one_filled only) ──
+                # Unfilled leg's team is covering → filled leg is safe → cancel unfilled, ride to settle
+                if status == 'one_filled' and live_bid >= 70:
+                    other_score = _get_team_margin_for_spread_ticker(other_ticker, other_spread)
+                    if other_score and other_score.get('covering') and \
+                       other_score.get('margin', 0) >= other_spread + MARGIN_BUFFER:
+                        other_team = other_score.get('team_code', '?')
+                        log_data = {
+                            'filled_leg': check_leg, 'filled_bid': live_bid,
+                            'unfilled_leg': other_leg, 'unfilled_team': other_team,
+                            'unfilled_margin': other_score['margin'], 'unfilled_spread': other_spread,
+                            'period': period, 'secs': secs, 'mode': mode,
+                        }
+
+                        if mode == 'dry_run':
+                            bot_log('REBALANCER_DRY_RUN', bot_id, {**log_data, 'action': 'WOULD_RIDE (cancel unfilled, ride to settle)'})
+                            print(f'🔬 REBALANCER_DRY_RUN: {bot_id} | filled={check_leg.upper()} bid={live_bid}c | '
+                                  f'unfilled={other_leg.upper()} {other_team} covering (margin={other_score["margin"]} spread={other_spread}) | WOULD_RIDE')
+                            continue
+
+                        # LIVE MODE — cancel unfilled, ride filled to settlement
+                        bot_log('REBALANCER_RIDE', bot_id, log_data)
+                        unfilled_order_key = f'order_{other_leg}_id'
+                        if bot.get(unfilled_order_key):
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(bot[unfilled_order_key])
+                            except Exception:
+                                pass
+                        bot['status'] = 'one_leg_timeout'
+                        bot['timeout_at'] = now_m
+                        bot['rebalancer_exit_reason'] = 'ride'
+                        _push_notification('rebalancer',
+                            f'Rebalancer ride: {bot_id} — {other_team} covering, '
+                            f'riding leg {check_leg.upper()} (bid={live_bid}c) to settlement',
+                            {'bot_id': bot_id, 'reason': 'ride'})
+                        actions.append({'bot_id': bot_id, 'action': 'rebalancer_ride'})
+                        save_state()
+                        return True
+
+                # Log dry-run no-action for visibility
+                if mode == 'dry_run' and (live_bid < SCRAPE_CEIL or covering):
+                    action_str = 'NONE'
+                    reasons = []
+                    if live_bid >= SCRAPE_CEIL:
+                        reasons.append(f'bid {live_bid}c >= ceil {SCRAPE_CEIL}c')
+                    if not covering:
+                        reasons.append(f'not covering (margin={margin} < spread={check_spread})')
+                    elif not buffer_met:
+                        reasons.append(f'buffer not met (margin={margin} < spread+buf={check_spread + MARGIN_BUFFER})')
+                    bot_log('REBALANCER_DRY_RUN', bot_id, {
+                        'leg': check_leg, 'team': team_code, 'margin': margin,
+                        'spread': check_spread, 'bid': live_bid,
+                        'covering': covering, 'buffer_met': buffer_met,
+                        'action': f'NONE ({"; ".join(reasons)})',
+                    })
+
+            return False
+
         # ── Middle Bots ──────────────────────────────────────────────
         for bot_id, bot in list(active_bots.items()):
             if bot.get('type') != 'middle':
@@ -10895,6 +11329,11 @@ def _run_monitor():
                                         continue  # within tolerance, don't touch
                                     # Gap ≥ 3¢ — cancel and replace at current bid
                                     new_price = max(1, min(90, cur_bid_lr))
+                                    # ── Arb guard: don't repost if combined cost kills the arb ──
+                                    other_price_key = 'target_price_b' if leg == 'a' else 'target_price_a'
+                                    other_leg_price = bot.get(other_price_key) or bot.get('target_price', 49)
+                                    if new_price + other_leg_price >= 98:
+                                        continue  # Combined cost too high — arb is gone, don't chase
                                     try:
                                         api_rate_limiter.wait()
                                         kalshi_client.cancel_order(old_order_id)
@@ -10963,6 +11402,10 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'middle_both_filled'})
                         save_state()
                     else:
+                        # ── Smart Rebalancer (last-resort, late-game only) ──
+                        if _middle_rebalancer_check(bot, bot_id, now_m, actions, session_pnl):
+                            continue  # Rebalancer acted — skip legacy checks
+
                         # Check stop-loss: get live bid of the filled leg
                         filled_ticker = bot.get(filled_ticker_key, '')
                         try:
@@ -11073,6 +11516,11 @@ def _run_monitor():
                 continue
             try:
                 now_s = time.time()
+
+                # ── Rebalancer: sell dead leg to enhance arb profit ──
+                if _middle_rebalancer_check(bot, bot_id, now_s, actions, session_pnl):
+                    continue  # Rebalancer sold a leg — settlement will handle the rest
+
                 ticker_a = bot.get('ticker_a', '')
                 ticker_b = bot.get('ticker_b', '')
                 # Check if both markets are settled
@@ -11249,6 +11697,13 @@ def create_middle_bot():
         no_a_bid        = data.get('no_a_bid', 0)
         no_b_bid        = data.get('no_b_bid', 0)
         game_id         = data.get('game_id', '')
+        # Rebalancer config
+        rebalancer_enabled    = data.get('rebalancer_enabled', True)
+        rebalancer_mode       = data.get('rebalancer_mode', 'dry_run')  # 'dry_run' or 'live'
+        rebalancer_protect    = int(data.get('rebalancer_protect_floor', 80))
+        rebalancer_late_secs  = int(data.get('rebalancer_late_game_secs', 180))
+        rebalancer_scrape     = int(data.get('rebalancer_scrape_ceil', 10))
+        rebalancer_buffer     = int(data.get('rebalancer_margin_buffer', 5))
 
         if not ticker_a or not ticker_b:
             return jsonify({'error': 'Missing required fields: ticker_a, ticker_b'}), 400
@@ -11311,6 +11766,13 @@ def create_middle_bot():
             'filled_leg':       None,
             'created_at':       time.time(),
             'placed_at':        time.time(),
+            # Rebalancer (last-resort, late-game smart exit)
+            'rebalancer_enabled':        rebalancer_enabled,
+            'rebalancer_mode':           rebalancer_mode,
+            'rebalancer_protect_floor':  rebalancer_protect,
+            'rebalancer_late_game_secs': rebalancer_late_secs,
+            'rebalancer_scrape_ceil':    rebalancer_scrape,
+            'rebalancer_margin_buffer':  rebalancer_buffer,
         }
         save_state()
 
@@ -12201,19 +12663,29 @@ def cancel_bot(bot_id):
 
             # ── Handle ladder-arb bots ──
             elif bot.get('bot_category') == 'ladder_arb':
-                # Cancel all unfilled orders on both sides
-                for rung in bot.get('rungs', []):
-                    for side in ('yes', 'no'):
-                        oid = rung.get(f'{side}_order_id')
-                        fq = rung.get(f'{side}_fill_qty', 0)
-                        rq = rung.get('quantity', bot.get('quantity', 1))
-                        if oid and fq < rq:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(oid)
-                                cancelled.append(f'{side.upper()}@{rung.get(f"{side}_price", "?")}c')
-                            except Exception as e:
-                                print(f'⚠ cancel_bot({bot_id}): cancel {side} rung failed: {e}')
+                # Cancel rung orders via order group (1 API call) or fall back to individual
+                _larb_group_id = bot.get('_order_group_id')
+                if _larb_group_id:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order_group(_larb_group_id)
+                        cancelled.append(f'GROUP_{_larb_group_id[:8]}')
+                    except Exception as e:
+                        print(f'⚠ cancel_bot({bot_id}): group cancel failed: {e} — falling back to individual')
+                        _larb_group_id = None  # trigger individual fallback below
+                if not _larb_group_id:
+                    for rung in bot.get('rungs', []):
+                        for side in ('yes', 'no'):
+                            oid = rung.get(f'{side}_order_id')
+                            fq = rung.get(f'{side}_fill_qty', 0)
+                            rq = rung.get('quantity', bot.get('quantity', 1))
+                            if oid and fq < rq:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(oid)
+                                    cancelled.append(f'{side.upper()}@{rung.get(f"{side}_price", "?")}c')
+                                except Exception as e:
+                                    print(f'⚠ cancel_bot({bot_id}): cancel {side} rung failed: {e}')
                 # Cancel all historically tracked hedge/placed orders
                 rung_oids = set()
                 for rung in bot.get('rungs', []):

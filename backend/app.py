@@ -5745,13 +5745,20 @@ def _execute_apex_completion(bot_id):
 
         # ── INSTANT KILL: cancel order group first (1 API call kills all anchors) ──
         _og = bot.get('_order_group_id')
+        _group_cancelled = False
         if _og:
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order_group(_og)
+                _group_cancelled = True
                 print(f'⚡ APEX COMPLETION: {bot_id} order group cancelled instantly')
             except Exception as _cge:
-                print(f'⚠ APEX COMPLETION group cancel failed: {_cge} — falling back to individual')
+                # 404 = group already cancelled (by sweep phase 2) — that's OK, orders are gone
+                if '404' in str(_cge):
+                    _group_cancelled = True
+                    print(f'⚡ APEX COMPLETION: {bot_id} order group already cancelled (404)')
+                else:
+                    print(f'⚠ APEX COMPLETION group cancel failed: {_cge} — falling back to individual')
 
         # Build master set of ALL order IDs to cancel (catches hedges + anything group missed)
         all_cancel_ids = set()
@@ -5779,6 +5786,20 @@ def _execute_apex_completion(bot_id):
 
         cancel_ok = 0
         cancel_fail = 0
+        # If group cancel succeeded, rung orders are already gone — only cancel hedge orders
+        if _group_cancelled:
+            # Only cancel hedge-related orders (not rungs, they were in the group)
+            hedge_only_ids = set()
+            if bot.get('hedge_order_id'):
+                hedge_only_ids.add(bot['hedge_order_id'])
+            for oid in bot.get('_all_hedge_order_ids', []):
+                hedge_only_ids.add(oid)
+            for hg in bot.get('hedge_history', []):
+                if hg.get('order_id'):
+                    hedge_only_ids.add(hg['order_id'])
+                for oid in hg.get('order_ids', []):
+                    hedge_only_ids.add(oid)
+            all_cancel_ids = hedge_only_ids
         for oid in all_cancel_ids:
             if _cancel_with_retry(oid):
                 cancel_ok += 1

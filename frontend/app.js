@@ -5290,7 +5290,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         let hedgeBlock = '';
         const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
         const historyFills = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
-        const activeHedgeFill = Math.max(0, hedgeFill - historyFills);
+        const rawActiveHedgeFill = Math.max(0, hedgeFill - historyFills);
+        const activeHedgeFill = Math.min(rawActiveHedgeFill, hedgeQty); // cap at hedge qty for display
+        const overflowFills = Math.max(0, rawActiveHedgeFill - hedgeQty); // extra fills needing new hedge
 
         // Completed hedge history
         const historyHTML = hedgeHistory.map(h => {
@@ -5327,10 +5329,17 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>`;
         }
 
+        // Overflow: extra anchor fills that arrived after hedge was placed (cancel race)
+        const overflowBlock = overflowFills > 0 ? `<div style="margin-top:4px;padding:4px 8px;background:#ffaa0011;border:1px dashed #ffaa0044;border-radius:4px;font-size:10px;">
+            <span style="color:#ffaa00;font-weight:700;">⚡ +${overflowFills} late fill${overflowFills > 1 ? 's' : ''}</span>
+            <span style="color:#8892a6;"> — extra anchor${overflowFills > 1 ? 's' : ''} filled during cancel, awaiting new hedge</span>
+        </div>` : '';
+
         rungsHTML = anchorSummary
             + `<div style="padding:4px 8px;">${rungRows}</div>`
             + (historyHTML ? `<div style="padding:2px 8px;border-top:1px solid #1e274033;">${historyHTML}</div>` : '')
-            + hedgeBlock;
+            + hedgeBlock
+            + overflowBlock;
     } else if (isFilled) {
         // Filled but not yet consolidated — show per-rung with fills (hide cancelled rungs)
         const filledLabel = filledSideKey === 'yes' ? 'YES' : 'NO';

@@ -3239,6 +3239,33 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     dog_side = bot['dog_side']
     total_fill_qty = bot.get('hedge_qty') or sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
 
+    # Verify actual fills by checking each rung's ORDER on Kalshi (not positions —
+    # positions are aggregate across all bots on the same ticker)
+    try:
+        verified_fill = 0
+        for rung in bot.get('rungs', []):
+            oid = rung.get('order_id')
+            if not oid:
+                verified_fill += rung.get('fill_qty', 0)
+                continue
+            try:
+                api_rate_limiter.wait()
+                resp = kalshi_client.get_order(oid)
+                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                actual = _parse_fill_count(ord_data)
+                if actual > rung.get('fill_qty', 0):
+                    print(f'⚠ PHANTOM SELLBACK: {bot_id} rung @{rung.get("price")}¢ local={rung.get("fill_qty",0)} Kalshi={actual} — updating')
+                    rung['fill_qty'] = actual
+                verified_fill += actual
+            except Exception:
+                verified_fill += rung.get('fill_qty', 0)
+        if verified_fill > total_fill_qty:
+            print(f'⚠ PHANTOM SELLBACK ORDER CHECK: {bot_id} local={total_fill_qty} verified={verified_fill} — using verified')
+            total_fill_qty = verified_fill
+            bot['hedge_qty'] = verified_fill
+    except Exception as vf_err:
+        print(f'⚠ PHANTOM SELLBACK order check failed: {bot_id}: {vf_err} — using local qty')
+
     if total_fill_qty <= 0:
         bot['status'] = 'completed'
         bot['completed_at'] = now
@@ -5664,29 +5691,32 @@ def _execute_apex_completion(bot_id):
         anchor_qty = bot.get(f'filled_{filled_side}_qty', 0)
         hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
 
-        # Step 2: verify against Kalshi actual positions (catches WS-missed fills)
-        ticker = bot.get('ticker', '')
-        if ticker:
-            try:
-                api_rate_limiter.wait()
-                pos_resp = kalshi_client.get_positions(ticker=ticker)
-                positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
-                for p in positions:
-                    if p.get('ticker') == ticker:
-                        actual_qty = _parse_position_qty(p)
-                        # positive qty = YES position, negative = NO position
-                        if filled_side == 'yes' and actual_qty > 0:
-                            if actual_qty > anchor_qty:
-                                print(f'⚠ APEX POSITION CHECK: {bot_id} Kalshi says {actual_qty} YES but local={anchor_qty} — updating')
-                                anchor_qty = actual_qty
-                        elif filled_side == 'no' and actual_qty < 0:
-                            actual_no = abs(actual_qty)
-                            if actual_no > anchor_qty:
-                                print(f'⚠ APEX POSITION CHECK: {bot_id} Kalshi says {actual_no} NO but local={anchor_qty} — updating')
-                                anchor_qty = actual_no
-                        break
-            except Exception as pos_err:
-                print(f'⚠ APEX POSITION CHECK failed: {bot_id}: {pos_err} — using local state')
+        # Step 2: verify anchor fills by checking each rung's ORDER on Kalshi
+        # (Don't use positions API — it's aggregate across all bots on the same ticker)
+        try:
+            verified_anchor = 0
+            for rung in bot.get('rungs', []):
+                oid = rung.get(f'{filled_side}_order_id')
+                local_fill = rung.get(f'{filled_side}_fill_qty', 0)
+                if not oid:
+                    verified_anchor += local_fill
+                    continue
+                try:
+                    api_rate_limiter.wait()
+                    resp = kalshi_client.get_order(oid)
+                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                    actual = _parse_fill_count(ord_data)
+                    if actual > local_fill:
+                        print(f'⚠ APEX ORDER CHECK: {bot_id} rung {filled_side}@{rung.get(f"{filled_side}_price")}¢ local={local_fill} Kalshi={actual}')
+                        rung[f'{filled_side}_fill_qty'] = actual
+                    verified_anchor += max(actual, local_fill)
+                except Exception:
+                    verified_anchor += local_fill
+            if verified_anchor > anchor_qty:
+                print(f'⚠ APEX ORDER CHECK: {bot_id} total anchor local={anchor_qty} verified={verified_anchor} — updating')
+                anchor_qty = verified_anchor
+        except Exception as vf_err:
+            print(f'⚠ APEX ORDER CHECK failed: {bot_id}: {vf_err} — using local state')
 
         unhedged = anchor_qty - hedge_qty
         if unhedged > 0:
@@ -8240,6 +8270,49 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         else:
             bot['no_fill_qty'] = fav_filled
 
+        # ── Verify actual rung fills before completion (catches WS-missed fills) ──
+        if now - bot.get('_last_rung_verify', 0) >= 30:
+            bot['_last_rung_verify'] = now
+            try:
+                verified_total = 0
+                for rung in bot.get('rungs', []):
+                    oid = rung.get('order_id')
+                    if not oid:
+                        verified_total += rung.get('fill_qty', 0)
+                        continue
+                    try:
+                        resp_v = kalshi_client.get_order(oid)
+                        ord_v = resp_v.get('order', resp_v) if isinstance(resp_v, dict) else {}
+                        actual_v = _parse_fill_count(ord_v)
+                        if actual_v > rung.get('fill_qty', 0):
+                            print(f'⚠ PHANTOM RUNG VERIFY: {bot_id} rung @{rung.get("price")}¢ local={rung.get("fill_qty",0)} Kalshi={actual_v} — updating')
+                            rung['fill_qty'] = actual_v
+                        verified_total += max(actual_v, rung.get('fill_qty', 0))
+                    except Exception:
+                        verified_total += rung.get('fill_qty', 0)
+                if verified_total > hedge_qty:
+                    # More fills than hedged — amend hedge qty
+                    new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot['rungs'] if r.get('fill_qty', 0) > 0) / verified_total) if verified_total > 0 else bot.get('avg_fill_price', 0)
+                    bot['avg_fill_price'] = new_avg
+                    bot['hedge_qty'] = verified_total
+                    hedge_qty = verified_total
+                    target_w = bot.get('target_width', 5)
+                    amend_p = max(1, 100 - new_avg - target_w)
+                    # Preserve walk offset
+                    old_tgt = max(1, 100 - (bot.get('avg_fill_price', new_avg)) - target_w)
+                    w_off = max(0, bot.get('fav_price', amend_p) - old_tgt)
+                    amend_p = max(1, amend_p + w_off)
+                    try:
+                        amend_kw = {f'{fav_side}_price': amend_p}
+                        api_rate_limiter.wait()
+                        kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=verified_total, **amend_kw)
+                        bot['fav_price'] = amend_p
+                        print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} qty {hedge_qty-verified_total+verified_total}→{verified_total} avg={new_avg}¢ hedge@{amend_p}¢')
+                    except Exception as ae:
+                        print(f'⚠ PHANTOM LATE FILL AMEND FAIL: {bot_id}: {ae}')
+            except Exception as rv_err:
+                print(f'⚠ PHANTOM RUNG VERIFY FAIL: {bot_id}: {rv_err}')
+
         if fav_filled >= hedge_qty:
             print(f'👻 PHANTOM COMPLETE: {bot_id} fav filled {fav_filled}/{hedge_qty}')
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
@@ -9368,6 +9441,21 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     qty = bot.get('quantity', 1)
+
+    # Verify actual fill by checking the dog order on Kalshi (not positions —
+    # positions are aggregate across all bots on the same ticker)
+    dog_oid = bot.get('dog_order_id')
+    if dog_oid:
+        try:
+            api_rate_limiter.wait()
+            resp = kalshi_client.get_order(dog_oid)
+            ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+            actual = _parse_fill_count(ord_data)
+            if actual != qty and actual > 0:
+                print(f'⚠ PHANTOM SELLBACK ORDER CHECK: {bot_id} local={qty} Kalshi={actual} — using Kalshi')
+                qty = actual
+        except Exception as vf_err:
+            print(f'⚠ PHANTOM SELLBACK order check failed: {bot_id}: {vf_err} — using local qty')
 
     sold_back, sell_info = execute_sell(ticker, dog_side, qty, reason=f'anchor_sellback_{bot_id}')
 
@@ -13178,13 +13266,82 @@ def _sweep_orphaned_orders():
     total = len(orphans)
     if total > 0:
         print(f'🧹 Orphan sweep complete: {len(cancelled)}/{total} cancelled, {len(failed)} failed')
+
+    # ── Also check POSITIONS (filled contracts) not tracked by any bot ──
+    orphaned_positions = []
+    try:
+        def _safe_int_sweep(v):
+            if isinstance(v, (list, dict)):
+                return 0
+            try:
+                return int(v or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        # Build managed qty per (ticker, side) from active bots
+        managed_qty = {}
+        for b in active_bots.values():
+            if b.get('status') in ('completed', 'stopped', 'cancelled'):
+                continue
+            t = b.get('ticker', '')
+            cat = b.get('bot_category', '')
+            btype = b.get('type', '')
+            if cat in ('anchor_dog', 'anchor_ladder'):
+                dog_side = b.get('dog_side', '')
+                dog_qty = _safe_int_sweep(b.get('total_dog_fill_qty')) or _safe_int_sweep(b.get('dog_fill_qty')) or _safe_int_sweep(b.get('quantity'))
+                fav_side = b.get('fav_side', '')
+                fav_qty = _safe_int_sweep(b.get('fav_fill_qty'))
+                if dog_qty > 0 and dog_side:
+                    managed_qty[(t, dog_side)] = managed_qty.get((t, dog_side), 0) + dog_qty
+                if fav_qty > 0 and fav_side:
+                    managed_qty[(t, fav_side)] = managed_qty.get((t, fav_side), 0) + fav_qty
+            elif cat == 'ladder_arb':
+                yes_qty = _safe_int_sweep(b.get('filled_yes_qty'))
+                no_qty = _safe_int_sweep(b.get('filled_no_qty'))
+                if yes_qty > 0:
+                    managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
+                if no_qty > 0:
+                    managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + no_qty
+            elif btype == 'middle':
+                # Middle bots hold NO positions on two tickers
+                for leg in ('a', 'b'):
+                    mt = b.get(f'ticker_{leg}', '')
+                    if mt and b.get(f'leg_{leg}_filled'):
+                        mq = _safe_int_sweep(b.get('qty', 1))
+                        managed_qty[(mt, 'no')] = managed_qty.get((mt, 'no'), 0) + mq
+
+        pos_resp = kalshi_client.get_positions()
+        positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+        for pos in positions:
+            pticker = pos.get('ticker', '')
+            try:
+                pos_fp = float(pos.get('position_fp') or 0)
+            except (TypeError, ValueError):
+                pos_fp = 0
+            if not pticker or pos_fp == 0:
+                continue
+            side = 'yes' if pos_fp > 0 else 'no'
+            kalshi_qty = int(abs(pos_fp))
+            bot_qty = managed_qty.get((pticker, side), 0)
+            orphaned = kalshi_qty - bot_qty
+            if orphaned > 0:
+                orphaned_positions.append({
+                    'ticker': pticker, 'side': side,
+                    'orphaned_qty': orphaned, 'kalshi_qty': kalshi_qty,
+                    'managed_qty': bot_qty,
+                })
+                print(f'⚠ ORPHAN POSITION: {pticker} {side.upper()} {orphaned}/{kalshi_qty} (bots track {bot_qty})')
+    except Exception as pos_err:
+        print(f'⚠ Orphan position check failed: {pos_err}')
+
     return {'cancelled_count': len(cancelled), 'failed_count': len(failed),
-            'cancelled': cancelled, 'failed': failed}
+            'cancelled': cancelled, 'failed': failed,
+            'orphaned_positions': orphaned_positions}
 
 
 @app.route('/api/bot/sweep-orphans', methods=['POST'])
 def sweep_orphans_endpoint():
-    """Manual endpoint to sweep orphaned orders not owned by any active bot."""
+    """Manual endpoint to sweep orphaned orders and detect orphaned positions."""
     result = _sweep_orphaned_orders()
     return jsonify({'success': True, **result})
 
@@ -14348,8 +14505,14 @@ def _run_startup():
             # Compare against Kalshi positions
             for pos in kalshi_positions:
                 ticker = pos.get('ticker', '')
-                pos_fp = float(pos.get('position_fp', '0'))
-                exposure = float(pos.get('market_exposure_dollars', '0'))
+                try:
+                    pos_fp = float(pos.get('position_fp') or 0)
+                except (TypeError, ValueError):
+                    pos_fp = 0
+                try:
+                    exposure = float(pos.get('market_exposure_dollars') or 0)
+                except (TypeError, ValueError):
+                    exposure = 0
                 if not ticker or (pos_fp == 0 and exposure == 0):
                     continue
                 # position_fp is net: positive = YES held, negative = NO held
@@ -14384,7 +14547,9 @@ def _run_startup():
             else:
                 print('✅ No orphaned positions')
         except Exception as e:
+            import traceback
             print(f'⚠ Startup orphan check failed: {e}')
+            traceback.print_exc()
 
     # Start notification monitor thread
     _start_notification_thread()

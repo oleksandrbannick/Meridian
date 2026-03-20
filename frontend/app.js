@@ -4,20 +4,77 @@ function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 
-// Global pixel art bot icons (10×10 base64 PNGs)
-const BOT_ICONS = {
-    apex: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=',
-    phantom: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC',
-    meridian: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=',
-    scout: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAPElEQVR4nGNgQAf/O/6DMUFAUCFMATpGAatCwYKr/p+BK4CzMRSeyQIJQjAyG6tCbJg8hSBAtEJsiskBANz2aymn/yC2AAAAAElFTkSuQmCC',
-};
+// Bot type colors and inline SVG icons (match bot buddy characters)
 const BOT_COLORS = { phantom: '#ff9900', apex: '#00d4ff', meridian: '#cc66ff', scout: '#9966ff' };
+function botIconSvg(type, size) {
+    const s = size || 14;
+    const c = BOT_COLORS[type] || '#888';
+    const cf = c + '33'; // fill with transparency
+    if (type === 'apex') {
+        // Shield/hex body + antenna + rectangular eyes
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+            `<line x1="8" y1="0" x2="8" y2="3" stroke="${c}" stroke-width="1.2"/>` +
+            `<circle cx="8" cy="0.8" r="1" fill="${c}"/>` +
+            `<path d="M4 3L8 1.5L12 3L13 6L13 13L3 13L3 6Z" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
+            `<rect x="5" y="6" width="2" height="3" rx="0.5" fill="${c}"/>` +
+            `<rect x="9" y="6" width="2" height="3" rx="0.5" fill="${c}"/>` +
+            `<line x1="6" y1="11" x2="10" y2="11" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            `</svg>`;
+    }
+    if (type === 'phantom') {
+        // Ghost body (round top, wavy bottom) + big eyes + cat
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+            `<path d="M3 7C3 3.7 5.2 2 7 2C8.8 2 11 3.7 11 7L11 12L10 11L9 12.5L7 11L5 12.5L4 11L3 12Z" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
+            `<circle cx="5.5" cy="6" r="1.3" fill="#111" stroke="${c}" stroke-width="0.5"/>` +
+            `<circle cx="8.5" cy="6" r="1.3" fill="#111" stroke="${c}" stroke-width="0.5"/>` +
+            `<circle cx="5.2" cy="5.7" r="0.4" fill="${c}"/>` +
+            `<circle cx="8.2" cy="5.7" r="0.4" fill="${c}"/>` +
+            `<ellipse cx="7" cy="9" rx="0.8" ry="0.6" fill="#111"/>` +
+            // Cat companion
+            `<path d="M12.5 9L12 7.5L13 7.5Z" fill="${c}"/>` +
+            `<path d="M14.5 9L14 7.5L15 7.5Z" fill="${c}"/>` +
+            `<ellipse cx="13.5" cy="10.5" rx="2" ry="1.8" fill="${cf}" stroke="${c}" stroke-width="0.7"/>` +
+            `<circle cx="12.8" cy="10" r="0.4" fill="${c}"/>` +
+            `<circle cx="14.2" cy="10" r="0.4" fill="${c}"/>` +
+            `<path d="M13 13L15 12.5" stroke="${c}" stroke-width="0.7" stroke-linecap="round"/>` +
+            `</svg>`;
+    }
+    if (type === 'meridian') {
+        // Wide pill body + crown + dot eyes
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+            // Crown
+            `<path d="M4 4L5.5 2L8 3.5L10.5 2L12 4Z" fill="${c}" stroke="${c}" stroke-width="0.5"/>` +
+            // Pill body
+            `<rect x="3" y="4.5" width="10" height="9" rx="4.5" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
+            `<circle cx="6" cy="8.5" r="1" fill="${c}"/>` +
+            `<circle cx="10" cy="8.5" r="1" fill="${c}"/>` +
+            `<line x1="6.5" y1="11" x2="9.5" y2="11" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            // Tiny arms
+            `<line x1="3" y1="9" x2="1.5" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            `<line x1="13" y1="9" x2="14.5" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            `</svg>`;
+    }
+    if (type === 'scout') {
+        // Rounded square body + antenna + alert eyes + smile
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+            `<line x1="8" y1="1" x2="8" y2="4" stroke="${c}" stroke-width="1"/>` +
+            `<circle cx="8" cy="1" r="1.2" fill="${c}"/>` +
+            `<rect x="3.5" y="4" width="9" height="9.5" rx="3" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
+            `<circle cx="6" cy="8" r="1.2" fill="${c}"/>` +
+            `<circle cx="10" cy="8" r="1.2" fill="${c}"/>` +
+            `<path d="M6.5 11 Q8 12.5 9.5 11" stroke="${c}" stroke-width="0.8" fill="none" stroke-linecap="round"/>` +
+            // Arms
+            `<line x1="3.5" y1="9" x2="2" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            `<line x1="12.5" y1="9" x2="14" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            `</svg>`;
+    }
+    return '';
+}
 function botIconImg(type, size, opacity) {
-    const src = BOT_ICONS[type];
-    if (!src) return '';
-    const s = size || 12;
-    const o = opacity != null ? opacity : 1;
-    return `<img src="${src}" style="image-rendering:pixelated;width:${s}px;height:${s}px;vertical-align:middle;opacity:${o};">`;
+    const svg = botIconSvg(type, size);
+    if (!svg) return '';
+    const o = opacity != null && opacity !== 1 ? `opacity:${opacity};` : '';
+    return `<span style="display:inline-flex;align-items:center;vertical-align:middle;${o}">${svg}</span>`;
 }
 
 // Scroll to a market card in the marketplace and highlight it
@@ -196,6 +253,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLiveScores();
     liveScoresInterval = setInterval(loadLiveScores, 30000);
     requestPushPermission();
+    // Populate tab icons with SVGs
+    document.querySelectorAll('.tab-icon[data-bot]').forEach(el => {
+        el.innerHTML = botIconSvg(el.dataset.bot, 14);
+    });
     // Check for orphaned positions after a short delay (let server finish startup)
     setTimeout(checkOrphanedPositions, 5000);
 });

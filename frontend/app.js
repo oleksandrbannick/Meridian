@@ -10019,7 +10019,8 @@ async function loadTradeHistoryList() {
                     const rPnl = (r.profit_cents || 0) - (r.loss_cents || 0);
                     const rCol = rPnl > 0 ? '#00ff88' : rPnl < 0 ? '#ff4444' : '#555';
                     const w = r.rung_width || r.arb_width || '?';
-                    return `<span style="color:${rCol};font-size:9px;">${w}¢: ${rPnl >= 0 ? '+' : ''}${rPnl}¢</span>`;
+                    const rq = r.quantity || '?';
+                    return `<span style="color:${rCol};font-size:9px;">${w}¢×${rq}: ${rPnl >= 0 ? '+' : ''}${rPnl}¢</span>`;
                 }).join(' · ');
                 return `
                 <div style="background:#0f1419;border:1px solid ${pnl >= 0 ? '#00ff8822' : '#ff444422'};border-left:3px solid ${pnlCol};border-radius:8px;padding:12px;">
@@ -10042,7 +10043,7 @@ async function loadTradeHistoryList() {
                         <span style="color:#00ff88;">Avg YES: <strong>${t.yes_price}¢</strong></span>
                         <span style="color:#ff4444;">Avg NO: <strong>${t.no_price}¢</strong></span>
                         <span style="color:#8892a6;">Combined: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'};">${totalCost}¢</strong></span>
-                        <span style="color:#8892a6;">×${t.quantity}</span>
+                        <span style="color:#8892a6;">×${t.quantity} contracts</span>
                     </div>
                     <div style="display:flex;gap:12px;font-size:10px;margin-bottom:4px;flex-wrap:wrap;">
                         <span style="color:#555;">Fees: ${t.fee_cents}¢</span>

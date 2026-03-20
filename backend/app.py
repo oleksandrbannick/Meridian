@@ -7794,15 +7794,15 @@ def _handle_phantom(bot_id, bot, actions):
             new_fav_price = None
             walk_type = None
 
-            # PRIORITY 1: Drop to bid if price is above target
-            if needs_drop:
-                new_fav_price = walk_target
-                walk_type = 'drop_to_bid'
-
-            # PRIORITY 2: Profit snap to bid (up or down) if >= 2¢ profit
-            elif snap_ready and walk_target > current_fav_price:
+            # PRIORITY 1: Profit snap to bid — fastest hedge fill
+            if snap_ready and walk_target > current_fav_price:
                 new_fav_price = walk_target
                 walk_type = 'profit_snap'
+
+            # PRIORITY 2: Drop to bid if price is above target
+            elif needs_drop:
+                new_fav_price = walk_target
+                walk_type = 'drop_to_bid'
 
             # PRIORITY 3: Normal walk +1¢ toward bid (every 20s)
             elif walk_target > current_fav_price:
@@ -8492,15 +8492,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             new_fav_price = None
             walk_type = None
 
-            # PRIORITY 1: Drop to bid if price is above target
-            if needs_drop:
-                new_fav_price = walk_target
-                walk_type = 'drop_to_bid'
-
-            # PRIORITY 2: Profit snap to bid if >= 2¢ profit
-            elif snap_ready and walk_target > current_fav_price:
+            # PRIORITY 1: Profit snap to bid — fastest hedge fill
+            if snap_ready and walk_target > current_fav_price:
                 new_fav_price = walk_target
                 walk_type = 'profit_snap'
+
+            # PRIORITY 2: Drop to bid if price is above target
+            elif needs_drop:
+                new_fav_price = walk_target
+                walk_type = 'drop_to_bid'
 
             # PRIORITY 3: Normal walk +1¢ toward bid (every 20s)
             elif walk_target > current_fav_price:
@@ -9254,12 +9254,7 @@ def _handle_apex(bot_id, bot, actions):
                                     new_price = bid_target
                                     walk_type = 'drop_to_bid'
 
-                            # ── PRIORITY 2: Ceiling snap UP to bid to exit ──
-                            elif at_ceiling and unfilled_bid > current_price:
-                                new_price = bid_target if not past_ceiling else bid_target
-                                walk_type = 'ceiling_snap'
-
-                            # ── PRIORITY 3: Profit snap to bid ──
+                            # ── PRIORITY 2: Profit snap to bid ──
                             elif snap_ready and bid_target > current_price:
                                 if not was_snapped:
                                     bot['_pre_snap_price'] = current_price
@@ -9267,6 +9262,11 @@ def _handle_apex(bot_id, bot, actions):
                                 walk_type = 'profit_snap'
                                 print(f'⚡ APEX SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
                                       f'(anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
+
+                            # ── PRIORITY 3: Ceiling snap UP to bid to exit ──
+                            elif at_ceiling and unfilled_bid > current_price:
+                                new_price = bid_target if not past_ceiling else bid_target
+                                walk_type = 'ceiling_snap'
 
                             # ── PRIORITY 4: Normal walk +1¢ toward bid ──
                             elif bid_target > current_price:

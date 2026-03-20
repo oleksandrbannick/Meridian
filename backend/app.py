@@ -7472,7 +7472,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 # ANCHOR-DOG MONITOR LOGIC
 # ═══════════════════════════════════════════════════════════════════
 HARD_CEILING_CENTS = 98
-SNAP_CEILING_CENTS = 98  # snap to bid only when combined <= 98¢ (2¢ minimum profit)
+SNAP_CEILING_CENTS = 96  # snap to bid only when combined <= 96¢ (2¢ minimum profit after fees)
 
 def _handle_phantom(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""

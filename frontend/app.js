@@ -5470,7 +5470,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="${legStyle(legAInRange, bot.leg_a_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG A${hasLiveScore ? (legAInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">NO${hasLiveScore ? (legAInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Opp'} +${bot.spread_a||'?'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${bot.team_a_name||'?'} wins by ${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:4px;">
@@ -5485,7 +5485,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 </div>
             </div>
             <div style="${legStyle(legBInRange, bot.leg_b_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">LEG B${hasLiveScore ? (legBInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
+                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">NO${hasLiveScore ? (legBInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
                 <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Opp'} +${bot.spread_b||'?'}</div>
                 <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${bot.team_b_name||'?'} wins by ${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:4px;">
@@ -5503,7 +5503,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;flex-wrap:wrap;">
             ${targetA && targetB ? `<span>One leg wins: <strong style="color:${floor>=0?'#00ff88':'#ff4444'};">${floor>=0?'+':''}${floor}¢</strong></span>
             <span>Middle hits: <strong style="color:#aa66ff;">+${midP}¢</strong></span>
-            <span style="color:#8892a6;">Cost: <strong style="color:#fff;">${cost}¢</strong></span>` : '<span style="color:#555;font-style:italic;">price data unavailable</span>'}
+            <span style="color:#8892a6;">Cost/ct: <strong style="color:#fff;">${targetA + targetB}¢</strong></span>
+            <span style="color:#8892a6;">Total: <strong style="color:#fff;">${cost}¢</strong></span>` : '<span style="color:#555;font-style:italic;">price data unavailable</span>'}
             <span>×${qty}</span>
             ${floorPrice > 0 ? `<span style="color:#ff6666;">Stop-loss: ${floorPrice}¢ drop</span>` : ''}
         </div>
@@ -5664,8 +5665,7 @@ function _renderPnlDisplay(mode) {
         const net   = (pnl.mid_net_cents || 0) / 100;
         const unrealized = (pnl.mid_unrealized_cents || 0) / 100;
         const unrealizedCount = pnl.mid_unrealized_count || 0;
-        const totalNet = net + unrealized;
-        const color = totalNet >= 0 ? '#aa66ff' : '#ff4444';
+        const color = net >= 0 ? '#aa66ff' : '#ff4444';
         const wins  = pnl.mid_wins   || 0;
         const losses = pnl.mid_losses || 0;
         const gross = ((pnl.mid_profit_cents || 0) / 100).toFixed(2);
@@ -5677,7 +5677,7 @@ function _renderPnlDisplay(mode) {
         const atRiskBadge = atRiskCount > 0 ? `<span style="color:#ffaa00;font-size:10px;font-weight:600;">$${atRisk.toFixed(2)} at risk (${atRiskCount} open)</span>` : '';
         el.innerHTML = `
             <span style="color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;">Meridian Today <span style="color:#444;font-size:9px;">${dayLabel}</span></span>
-            <span style="color:${color};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${color}44;">${totalNet >= 0 ? '+' : ''}$${totalNet.toFixed(2)}</span>
+            <span style="color:${color};font-weight:800;font-size:1.2rem;text-shadow:0 0 12px ${color}44;">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span>
             <span style="font-size:11px;">
                 <span style="color:#aa66ff;">↑ $${gross}</span>
                 <span style="color:#555;margin:0 3px;">·</span>

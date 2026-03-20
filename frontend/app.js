@@ -8929,25 +8929,37 @@ async function loadLatency() {
             const mainVal = c.live != null ? Math.round(c.live) : Math.round(s.avg);
             const mainLabel = c.live != null ? 'now' : 'avg';
             const valCol = mainVal < 200 ? '#00ff88' : mainVal < 500 ? '#ffaa00' : '#ff4444';
-            // Raw hedge speed line for Phantom/Apex hedge tiles
-            let rawLine = '';
+            // Hedge tiles: side-by-side raw + round trip at equal size
             if (c.rawKey) {
                 const rs = data[c.rawKey] || {};
-                if (rs.count) {
-                    const rawVal = Math.round(rs.avg);
-                    const rawCol = rawVal < 5 ? '#00ffcc' : rawVal < 15 ? '#00ff88' : rawVal < 50 ? '#ffaa00' : '#ff4444';
-                    rawLine = `<div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;margin-top:6px;text-align:center;">
-                        <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Speed</div>
-                        <div style="color:${rawCol};font-size:18px;font-weight:800;">${rawVal}ms</div>
-                        <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:2px;">
-                            <span>min ${Math.round(rs.min)}</span>
-                            <span>p95 ${Math.round(rs.p95)}</span>
-                            <span>max ${Math.round(rs.max)}</span>
+                const rawVal = rs.count ? Math.round(rs.avg) : null;
+                const rawCol = rawVal != null ? (rawVal < 5 ? '#00ffcc' : rawVal < 15 ? '#00ff88' : rawVal < 50 ? '#ffaa00' : '#ff4444') : '#555';
+                return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
+                    <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:8px;">${c.icon} ${c.label}</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:8px;text-align:center;">
+                            <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Speed</div>
+                            <div style="color:${rawCol};font-size:22px;font-weight:800;">${rawVal != null ? rawVal + 'ms' : '—'}</div>
+                            ${rs.count ? `<div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
+                                <span>min ${Math.round(rs.min)}</span>
+                                <span>p95 ${Math.round(rs.p95)}</span>
+                            </div>
+                            <div style="color:#555;font-size:8px;text-align:center;margin-top:1px;">${rs.count} samples</div>` : ''}
                         </div>
-                    </div>`;
-                }
+                        <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:8px;text-align:center;">
+                            <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Round Trip</div>
+                            <div style="color:${valCol};font-size:22px;font-weight:800;">${mainVal}ms</div>
+                            <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
+                                <span>min ${Math.round(s.min)}</span>
+                                <span>p95 ${Math.round(s.p95)}</span>
+                            </div>
+                            <div style="color:#555;font-size:8px;text-align:center;margin-top:1px;">${s.count} samples</div>
+                        </div>
+                    </div>
+                </div>`;
             }
-            // Raw network ping sub-line for API Ping tile
+            // API Ping tile with raw ping
+            let rawLine = '';
             if (c.key === 'api_ping' && rawPing != null) {
                 const rpCol = rawPing < 2 ? '#00ffcc' : rawPing < 10 ? '#00ff88' : '#ffaa00';
                 rawLine = `<div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;margin-top:6px;text-align:center;">
@@ -8958,7 +8970,7 @@ async function loadLatency() {
             return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
                 <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:6px;">${c.icon} ${c.label}</div>
                 <div style="color:${valCol};font-size:22px;font-weight:800;text-align:center;">${mainVal}ms</div>
-                <div style="color:#666;font-size:9px;text-align:center;margin-top:-2px;">${mainLabel} (round trip)</div>
+                <div style="color:#666;font-size:9px;text-align:center;margin-top:-2px;">${mainLabel}</div>
                 <div style="display:flex;justify-content:space-between;font-size:9px;color:#8892a6;margin-top:4px;">
                     <span>min ${Math.round(s.min)}</span>
                     <span>p95 ${Math.round(s.p95)}</span>

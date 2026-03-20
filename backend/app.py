@@ -5563,36 +5563,32 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         ticker = bot['ticker']
         qty_per = bot.get('quantity', 1)
 
-        # Collect opposite-side order IDs (will cancel AFTER hedge is placed)
+        # Clear monitor's sweep flag so it doesn't double-cancel
+        bot.pop('_sweep_at', None)
+
+        # Single-pass rung scan: collect unfilled OIDs + filled qty + weighted width
+        total_filled_qty = 0
+        total_width_x_qty = 0
         for rung in bot.get('rungs', []):
             oid = rung.get(f'{unfilled_side}_order_id')
             if oid:
                 unfilled_oids.append(oid)
                 rung[f'{unfilled_side}_order_id'] = None
-
-        # Clear monitor's sweep flag so it doesn't double-cancel
-        bot.pop('_sweep_at', None)
-        _recompute_apex_fills(bot)
-
-        total_filled_qty = sum(
-            min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
-            for r in bot.get('rungs', [])
-            if r.get(f'{filled_side}_fill_qty', 0) > 0
-        )
+            rq = rung.get('quantity', qty_per)
+            fq = min(rung.get(f'{filled_side}_fill_qty', 0), rq)
+            if fq > 0:
+                total_filled_qty += fq
+                total_width_x_qty += rung.get('width', 0) * fq
 
         if total_filled_qty <= 0:
             bot.pop('_sweep_thread_running', None)
             save_state()
             return
 
+        # Use avg price already computed by WS handler's _recompute_apex_fills
         avg_filled_price = bot.get(f'avg_{filled_side}_price', 0) or 0
 
-        total_width_x_qty = sum(
-            r.get('width', 0) * min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
-            for r in bot.get('rungs', [])
-            if r.get(f'{filled_side}_fill_qty', 0) > 0
-        )
-        weighted_avg_width = total_width_x_qty / total_filled_qty if total_filled_qty > 0 else 0
+        weighted_avg_width = total_width_x_qty / total_filled_qty
         target_hedge = round(100 - avg_filled_price - weighted_avg_width)
         hedge_price = max(1, target_hedge)  # Use calculated price, not bid
         bot['_target_hedge_price'] = target_hedge
@@ -5609,7 +5605,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             'avg_filled_price': avg_filled_price, 'target_hedge': target_hedge,
             'weighted_avg_width': weighted_avg_width,
         }
-        save_state()
+        # No save_state() here — Phase 1c saves after hedge is placed
 
     if not computed or computed['hedge_price'] <= 0:
         with ws_fill_lock:

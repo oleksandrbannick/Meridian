@@ -5042,7 +5042,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
             <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
-            ${(() => { const lat = bot.hedge_latency_ms != null ? bot.hedge_latency_ms : bot.hedge_fill_latency_ms; const raw = bot.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
+            ${(() => { const hedged = bot._hedge_fired || (bot.dog_fill_qty || 0) > 0; const lat = hedged ? (bot.hedge_latency_ms != null ? bot.hedge_latency_ms : bot.hedge_fill_latency_ms) : null; const raw = hedged ? bot.raw_hedge_ms : null; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostCt = bot.dog_repost_count || 0;
@@ -5489,7 +5489,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
             ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
             ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
-            ${(() => { const lat = bot.hedge_latency_ms; const raw = bot.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
+            ${(() => { const hedged = bot._hedge_fired || (bot.dog_fill_qty || 0) > 0; const lat = hedged ? bot.hedge_latency_ms : null; const raw = hedged ? bot.raw_hedge_ms : null; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
         </div>` : ''}
         ${walkInfo}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
@@ -9329,7 +9329,7 @@ async function loadHistoryStats() {
     const widthPanel = document.getElementById('width-breakdown-panel');
     if (!panel) return;
     try {
-        const dateParam = selectedHistoryDay ? `?date=${selectedHistoryDay}` : '';
+        const dateParam = selectedHistoryDays.length ? `?dates=${selectedHistoryDays.join(',')}` : '';
         const [statsResp, pnlResp] = await Promise.all([
             fetch(`${API_BASE}/bot/history/stats${dateParam}`),
             fetch(`${API_BASE}/pnl`),
@@ -9378,7 +9378,7 @@ async function loadHistoryStats() {
                     <div style="color:#555;font-size:10px;margin-top:2px;">${s.arb_wins}W / ${s.arb_losses}L of ${s.arb_total}</div>
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${selectedHistoryDay ? `📅 ${selectedHistoryDay}` : 'Lifetime P&L'}</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${selectedHistoryDays.length ? `📅 ${selectedHistoryDays.length === 1 ? selectedHistoryDays[0] : selectedHistoryDays.length + ' days'}` : 'Lifetime P&L'}</div>
                     <div style="color:${netColor};font-size:24px;font-weight:800;">${s.arb_net_cents >= 0 ? '+' : ''}$${netDollars}</div>
                     <div style="color:#555;font-size:10px;margin-top:2px;">Win: +${s.arb_avg_profit}¢ / Loss: -${s.arb_avg_loss}¢</div>
                 </div>
@@ -9630,7 +9630,7 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 
 // ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
 let calendarViewDate = new Date(); // tracks which month is displayed
-let selectedHistoryDay = null;     // YYYY-MM-DD string, null = full history
+let selectedHistoryDays = [];      // Array of YYYY-MM-DD strings, empty = full history
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
@@ -9755,18 +9755,18 @@ function renderPnLCalendar(panel, days) {
             content = `<span style="color:#222;font-size:10px;">${d}</span>`;
         }
 
-        const isSelected = key === selectedHistoryDay;
+        const isSelected = selectedHistoryDays.includes(key);
         const todayRing = isSelected
             ? 'box-shadow:0 0 0 2px #ffaa00;'
             : isToday ? 'box-shadow:0 0 0 2px #00aaff;' : '';
         const clickable = (dayData || isToday) && !isFuture;
         const cursor = clickable ? 'cursor:pointer;' : '';
-        cellsHtml += `<div onclick="${clickable ? `selectHistoryDay('${key}')` : ''}" style="background:${bg};border:1px solid ${border};border-radius:6px;padding:4px 2px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:48px;${todayRing}${cursor}" title="${key}">${content}</div>`;
+        cellsHtml += `<div onclick="${clickable ? `selectHistoryDay('${key}', event)` : ''}" style="background:${bg};border:1px solid ${border};border-radius:6px;padding:4px 2px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:48px;${todayRing}${cursor}" title="${key}${isSelected ? ' (selected)' : ''}">${content}</div>`;
     }
 
-    const filterBanner = selectedHistoryDay
+    const filterBanner = selectedHistoryDays.length > 0
         ? `<div style="display:flex;align-items:center;justify-content:space-between;background:#ffaa0022;border:1px solid #ffaa0066;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:11px;">
-               <span style="color:#ffaa00;font-weight:700;">📅 Filtered: ${selectedHistoryDay}</span>
+               <span style="color:#ffaa00;font-weight:700;">📅 Filtered: ${selectedHistoryDays.length === 1 ? selectedHistoryDays[0] : selectedHistoryDays.length + ' days'}</span>
                <button onclick="selectHistoryDay(null)" style="background:none;border:none;color:#ffaa00;cursor:pointer;font-size:12px;font-weight:700;padding:0 4px;">✕ Clear</button>
            </div>`
         : '';
@@ -9777,7 +9777,7 @@ function renderPnLCalendar(panel, days) {
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                 <button onclick="calendarPrevMonth()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">‹</button>
                 <div style="text-align:center;">
-                    <div style="color:#fff;font-weight:700;font-size:14px;">📅 ${monthName}</div>
+                    <div onclick="selectHistoryMonth()" style="color:#fff;font-weight:700;font-size:14px;cursor:pointer;" title="Click to select/deselect all days in ${monthName}">📅 ${monthName}</div>
                     <div style="display:flex;gap:16px;justify-content:center;margin-top:4px;">
                         <span style="color:${monthColor};font-size:12px;font-weight:700;">${monthNet >= 0 ? '+' : ''}$${(monthNet / 100).toFixed(2)}</span>
                         <span style="color:#555;font-size:11px;">${monthTrades} trades</span>
@@ -9793,10 +9793,47 @@ function renderPnLCalendar(panel, days) {
     `;
 }
 
-function selectHistoryDay(dateStr) {
-    // Toggle: clicking same day deselects, clicking null clears
-    selectedHistoryDay = (dateStr && dateStr !== selectedHistoryDay) ? dateStr : null;
-    // Reload current history mode
+function selectHistoryDay(dateStr, event) {
+    if (!dateStr) {
+        // Clear all
+        selectedHistoryDays = [];
+    } else if (event && event.shiftKey && selectedHistoryDays.length > 0) {
+        // Shift-click: select range from last selected to this day
+        const last = selectedHistoryDays[selectedHistoryDays.length - 1];
+        const start = new Date(last), end = new Date(dateStr);
+        const lo = start < end ? start : end, hi = start < end ? end : start;
+        for (let d = new Date(lo); d <= hi; d.setDate(d.getDate() + 1)) {
+            const key = d.toISOString().slice(0, 10);
+            if (!selectedHistoryDays.includes(key)) selectedHistoryDays.push(key);
+        }
+    } else {
+        // Toggle single day
+        const idx = selectedHistoryDays.indexOf(dateStr);
+        if (idx >= 0) selectedHistoryDays.splice(idx, 1);
+        else selectedHistoryDays.push(dateStr);
+    }
+    selectedHistoryDays.sort();
+    setHistoryMode(historyViewMode);
+}
+
+function selectHistoryMonth() {
+    // Select all days in the currently viewed month that have data
+    const year = calendarViewDate.getFullYear(), month = calendarViewDate.getMonth();
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    const monthDays = [];
+    for (let d = 1; d <= totalDays; d++) {
+        monthDays.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+    }
+    // If all days in this month are already selected, deselect them (toggle)
+    const allSelected = monthDays.every(d => selectedHistoryDays.includes(d));
+    if (allSelected) {
+        selectedHistoryDays = selectedHistoryDays.filter(d => !monthDays.includes(d));
+    } else {
+        for (const d of monthDays) {
+            if (!selectedHistoryDays.includes(d)) selectedHistoryDays.push(d);
+        }
+    }
+    selectedHistoryDays.sort();
     setHistoryMode(historyViewMode);
 }
 
@@ -9814,7 +9851,7 @@ async function loadTradeHistoryList() {
     const el = document.getElementById('trade-history-list');
     if (!el) return;
     try {
-        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
         const data = await resp.json();
         let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback','ladder_arb_sellback'].includes(t.result));
@@ -10169,7 +10206,7 @@ async function loadBetsHistory() {
     const listEl  = document.getElementById('bets-history-list');
     if (!listEl) return;
     try {
-        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=500${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'watch');
@@ -10338,7 +10375,7 @@ async function loadMiddleHistory() {
     const listEl  = document.getElementById('middle-history-list');
     if (!listEl) return;
     try {
-        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=500${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'middle');
@@ -10568,7 +10605,7 @@ async function loadDogHistory() {
     const listEl     = document.getElementById('dog-history-list');
     if (!listEl) return;
     try {
-        const dateParam = selectedHistoryDay ? `&date=${selectedHistoryDay}` : '';
+        const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=500&category=anchor_dog,anchor_ladder,anchor_sellback${dateParam}`);
         const data = await resp.json();
         const trades = data.trades || [];

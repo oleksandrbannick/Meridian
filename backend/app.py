@@ -12225,8 +12225,12 @@ def bot_history():
     """Get completed/stopped trade history"""
     limit = int(request.args.get('limit', 50))
     date_filter = request.args.get('date', '').strip()
+    dates_filter = request.args.get('dates', '').strip()  # comma-separated multi-day
     category_filter = request.args.get('category', '').strip()
-    if date_filter:
+    if dates_filter:
+        date_set = set(d.strip() for d in dates_filter.split(',') if d.strip())
+        filtered = [t for t in trade_history if _trade_day_key(t) in date_set]
+    elif date_filter:
         filtered = [t for t in trade_history if _trade_day_key(t) == date_filter]
     else:
         filtered = trade_history
@@ -12380,7 +12384,19 @@ def _compute_amended_stats(arb_trades):
 def history_stats():
     """Compute analytics from trade history for the optimization dashboard."""
     date_filter = request.args.get('date', '').strip()
-    if date_filter:
+    dates_filter = request.args.get('dates', '').strip()  # comma-separated multi-day
+    if dates_filter:
+        date_set = set(d.strip() for d in dates_filter.split(',') if d.strip())
+        source = []
+        for t in trade_history:
+            day = _trade_day_key(t)
+            if day not in date_set:
+                continue
+            day_reset = _pnl_reset_for_day(day)
+            if day_reset > 0 and (t.get('timestamp') or 0) < day_reset:
+                continue
+            source.append(t)
+    elif date_filter:
         source = [t for t in trade_history if _trade_day_key(t) == date_filter]
         # Apply per-day reset for the filtered day
         day_reset = _pnl_reset_for_day(date_filter)
@@ -12398,6 +12414,8 @@ def history_stats():
     arb_trades = [t for t in source if t.get('type') not in ('watch', 'middle')
                   and t.get('bot_category') not in ('anchor_dog', 'anchor_ladder')
                   and t.get('result') not in ('anchor_sellback', 'ladder_sellback')]
+    # Width stats use only current Apex system (ladder_arb), not old arb system
+    apex_trades = [t for t in arb_trades if t.get('bot_category') == 'ladder_arb']
     watch_trades = [t for t in source if t.get('type') == 'watch']
 
     WIN_RESULTS = ('completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed')
@@ -12508,7 +12526,7 @@ def history_stats():
     )
     flip_system_results = current_system_results  # alias kept for below code
     width_stats = {}
-    for t in arb_trades:
+    for t in apex_trades:
         if t.get('result', '') not in flip_system_results:
             continue
         w = t.get('arb_width', 0)

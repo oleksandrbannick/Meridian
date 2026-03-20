@@ -1337,12 +1337,19 @@ function displayMarkets(markets) {
     fetch(`${API_BASE}/scan/middles`).then(r => r.json()).then(data => {
         const rMap = {};
         for (const opp of (data.middles || [])) {
-            if ((opp.catch_score || 0) >= 6) {
+            const cost = opp.cost || 999;
+            const sc = opp.catch_score || 0;
+            const isLive = opp.is_live || opp.live || false;
+            // Only recommend live games — pregame spreads don't have the volatility.
+            // Under 100¢ = arb exists now. Otherwise need catch score + close to 100.
+            if (isLive && (cost <= 100 || (cost <= 115 && sc >= 6))) {
                 const ta = opp.ticker_a || '', tb = opp.ticker_b || '';
-                const sc = Math.round(opp.catch_score || 0);
                 const mw = opp.middle_width || 0;
-                if (ta) rMap[ta] = { partner: tb, score: sc, width: mw };
-                if (tb) rMap[tb] = { partner: ta, score: sc, width: mw };
+                const tip = cost <= 100
+                    ? `${100 - cost}¢ arb, ${mw}pt middle`
+                    : `${mw}pt middle, ${cost}¢ cost (catch on vol)`;
+                if (ta) rMap[ta] = { partner: tb, score: Math.round(sc), width: mw, cost, tip };
+                if (tb) rMap[tb] = { partner: ta, score: Math.round(sc), width: mw, cost, tip };
             }
         }
         window._middleRecoMap = rMap;
@@ -2231,7 +2238,7 @@ function createMarketRow(market, label) {
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
     if (middleReco && !botTypes.meridian) {
-        recoTypes.push({ type: 'meridian', tip: `Meridian: ${middleReco.width}pt middle, catch score ${middleReco.score}` });
+        recoTypes.push({ type: 'meridian', tip: `Meridian: ${middleReco.tip}` });
     }
     if (recoTypes.length > 0) {
         const rWrap = document.createElement('span');

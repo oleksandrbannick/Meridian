@@ -529,7 +529,7 @@
             <!-- Signal Legend (collapsible) -->
             <div id="signal-legend" style="margin-bottom:12px;">
                 <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px;user-select:none;">
-                    <span style="font-size:11px;color:#8892a6;font-weight:600;">📘 What do the colors mean?</span>
+                    <span style="font-size:11px;color:#8892a6;font-weight:600;">👻 What do the ghosts mean?</span>
                     <span class="arrow" style="font-size:10px;color:#556;">▸</span>
                 </div>
                 <div id="legend-body" class="hidden" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
@@ -548,17 +548,21 @@
                             </div>
                         </div>
                         <div>
-                            <div style="border-left:3px solid #00ff88;padding-left:10px;margin-bottom:10px;">
-                                <span style="background:#00ff8822;color:#00ff88;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">Apex</span>
-                                <span style="color:#8892a6;"> — YES+NO spread arb (both sides at once)</span>
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#00ff8808;border:1px solid #00ff8833;border-radius:6px;">
+                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=" style="image-rendering:pixelated;width:28px;height:28px;">
+                                <div><strong style="color:#00ff88;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
                             </div>
-                            <div style="border-left:3px solid #ffaa00;padding-left:10px;margin-bottom:10px;">
-                                <span style="background:#ffaa0022;color:#ffaa00;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">Phantom</span>
-                                <span style="color:#8892a6;"> — Underdog anchor (wait for volatility spike)</span>
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#ffaa0008;border:1px solid #ffaa0033;border-radius:6px;">
+                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC" style="image-rendering:pixelated;width:28px;height:28px;">
+                                <div><strong style="color:#ffaa00;">Phantom</strong><br><span style="color:#8892a6;font-size:10px;">Underdog anchor — fills on volatility spikes</span></div>
                             </div>
-                            <div style="border-left:3px solid #aa66ff;padding-left:10px;margin-bottom:10px;">
-                                <span style="background:#aa66ff22;color:#aa66ff;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">Meridian</span>
-                                <span style="color:#8892a6;"> — Middle bot (NO on both sides of a spread pair)</span>
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#aa66ff08;border:1px solid #aa66ff33;border-radius:6px;">
+                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=" style="image-rendering:pixelated;width:28px;height:28px;">
+                                <div><strong style="color:#aa66ff;">Meridian</strong><br><span style="color:#8892a6;font-size:10px;">Middle bot — NO on both sides of a spread pair</span></div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:10px;padding:8px;background:#9966ff08;border:1px solid #9966ff33;border-radius:6px;">
+                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAPElEQVR4nGNgQAf/O/6DMUFAUCFMATpGAatCwYKr/p+BK4CzMRSeyQIJQjAyG6tCbJg8hSBAtEJsiskBANz2aymn/yC2AAAAAElFTkSuQmCC" style="image-rendering:pixelated;width:28px;height:28px;">
+                                <div><strong style="color:#9966ff;">Scout</strong><br><span style="color:#8892a6;font-size:10px;">Stop-loss / take-profit guard on existing bets</span></div>
                             </div>
                         </div>
                     </div>
@@ -2794,6 +2798,6 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260320b"></script>
+    <script src="app.js?v=20260320c"></script>
 </body>
 </html>

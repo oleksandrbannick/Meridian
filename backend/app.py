@@ -5882,11 +5882,8 @@ def create_ladder_arb_bot():
         else:
             game_phase = 'live' if _is_game_live(ticker) else 'pregame'
 
-        # Late-game block
-        if game_phase == 'live':
-            late_blocked, late_reason = _is_late_game(ticker)
-            if late_blocked:
-                return jsonify({'error': f'⏰ Late-game block — {late_reason}'}), 400
+        # Apex has NO late-game block — Meridian rebalancer handles late-game exits
+        # (late game block is only on phantom/anchor bots)
 
         # One Apex per ticker — prevent duplicate bots on same line
         existing_apex = next(

@@ -5520,7 +5520,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             : '';
         legStatusHtml = `<div style="background:${bothInRange && hasLiveScore ? '#00ff8818' : '#00ff8811'};border:1px solid ${bothInRange && hasLiveScore ? '#00ff8855' : '#00ff8833'};border-radius:5px;padding:6px 10px;font-size:11px;">
             <span style="color:#00ff88;font-weight:700;">🔒 Both legs in — holding to settlement</span>
-            <span style="color:#8892a6;margin-left:10px;">A: ${legAFill||'?'} · B: ${legBFill||'?'}</span>
+            <span style="color:#8892a6;margin-left:10px;">NO: ${legAFill||'?'} + NO: ${legBFill||'?'} = ${(parseInt(legAFill)||0)+(parseInt(legBFill)||0)}¢/ct</span>
             ${rangeHtml}
         </div>`;
     }

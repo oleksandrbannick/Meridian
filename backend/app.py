@@ -5696,7 +5696,17 @@ def _execute_apex_completion(bot_id):
         now = time.time()
         qty_per = bot.get('quantity', 1)
 
-        # Build master set of ALL order IDs to cancel
+        # ── INSTANT KILL: cancel order group first (1 API call kills all anchors) ──
+        _og = bot.get('_order_group_id')
+        if _og:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order_group(_og)
+                print(f'⚡ APEX COMPLETION: {bot_id} order group cancelled instantly')
+            except Exception as _cge:
+                print(f'⚠ APEX COMPLETION group cancel failed: {_cge} — falling back to individual')
+
+        # Build master set of ALL order IDs to cancel (catches hedges + anything group missed)
         all_cancel_ids = set()
         # From rungs
         for rung in bot.get('rungs', []):

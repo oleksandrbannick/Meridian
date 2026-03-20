@@ -4956,7 +4956,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
             <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
-            ${(() => { const lat = bot.hedge_latency_ms != null ? bot.hedge_latency_ms : bot.hedge_fill_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
+            ${(() => { const lat = bot.hedge_latency_ms != null ? bot.hedge_latency_ms : bot.hedge_fill_latency_ms; const raw = bot.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostCt = bot.dog_repost_count || 0;
@@ -5402,7 +5402,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
             ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
             ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
-            ${(() => { const lat = bot.hedge_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
+            ${(() => { const lat = bot.hedge_latency_ms; const raw = bot.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
         </div>` : ''}
         ${walkInfo}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
@@ -8911,36 +8911,61 @@ async function loadLatency() {
         const data = await resp.json();
         const livePing = data.live_ping_ms;
         const rawPing = data.raw_ping_ms;
+        const rawPhantom = data.raw_hedge_phantom || {};
+        const rawApex = data.raw_hedge_apex || {};
         const cats = [
             { key: 'order_place',   label: 'Order Place',   color: '#ffaa00', icon: '📤' },
             { key: 'orderbook',     label: 'Orderbook',     color: '#00aaff', icon: '📊' },
-            { key: 'fill_to_hedge_phantom', label: 'Phantom Hedge', color: '#00ff88', icon: '👻' },
-            { key: 'fill_to_hedge_apex',    label: 'Apex Hedge',    color: '#66ffcc', icon: '🏹' },
+            { key: 'fill_to_hedge_phantom', label: 'Phantom Hedge', color: '#00ff88', icon: '👻', rawKey: 'raw_hedge_phantom' },
+            { key: 'fill_to_hedge_apex',    label: 'Apex Hedge',    color: '#66ffcc', icon: '🏹', rawKey: 'raw_hedge_apex' },
             { key: 'api_ping',      label: 'API Ping',      color: '#ff66cc', icon: '🏓', live: livePing },
         ];
         stats.innerHTML = cats.map(c => {
             const s = data[c.key] || {};
-            if (!s.count) return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
-                <div style="color:${c.color};font-size:10px;font-weight:700;">${c.icon} ${c.label}</div>
-                <div style="color:#555;font-size:10px;margin-top:4px;">No data yet</div>
+            if (!s.count) return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:${c.color};font-size:11px;font-weight:700;">${c.icon} ${c.label}</div>
+                <div style="color:#555;font-size:11px;margin-top:4px;">No data yet</div>
             </div>`;
             const mainVal = c.live != null ? Math.round(c.live) : Math.round(s.avg);
             const mainLabel = c.live != null ? 'now' : 'avg';
             const valCol = mainVal < 200 ? '#00ff88' : mainVal < 500 ? '#ffaa00' : '#ff4444';
+            // Raw hedge speed line for Phantom/Apex hedge tiles
+            let rawLine = '';
+            if (c.rawKey) {
+                const rs = data[c.rawKey] || {};
+                if (rs.count) {
+                    const rawVal = Math.round(rs.avg);
+                    const rawCol = rawVal < 5 ? '#00ffcc' : rawVal < 15 ? '#00ff88' : rawVal < 50 ? '#ffaa00' : '#ff4444';
+                    rawLine = `<div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;margin-top:6px;text-align:center;">
+                        <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Speed</div>
+                        <div style="color:${rawCol};font-size:18px;font-weight:800;">${rawVal}ms</div>
+                        <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:2px;">
+                            <span>min ${Math.round(rs.min)}</span>
+                            <span>p95 ${Math.round(rs.p95)}</span>
+                            <span>max ${Math.round(rs.max)}</span>
+                        </div>
+                    </div>`;
+                }
+            }
             // Raw network ping sub-line for API Ping tile
-            const rawLine = (c.key === 'api_ping' && rawPing != null)
-                ? `<div style="color:#8892a6;font-size:9px;text-align:center;margin-top:3px;">🌐 raw: <span style="color:#00ccff;font-weight:700;">${rawPing}ms</span></div>`
-                : '';
-            return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;">
-                <div style="color:${c.color};font-size:10px;font-weight:700;margin-bottom:6px;">${c.icon} ${c.label}</div>
-                <div style="color:${valCol};font-size:20px;font-weight:800;text-align:center;">${mainVal}ms</div>
-                <div style="color:#666;font-size:8px;text-align:center;margin-top:-2px;">${mainLabel}</div>${rawLine}
+            if (c.key === 'api_ping' && rawPing != null) {
+                const rpCol = rawPing < 2 ? '#00ffcc' : rawPing < 10 ? '#00ff88' : '#ffaa00';
+                rawLine = `<div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;margin-top:6px;text-align:center;">
+                    <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Ping</div>
+                    <div style="color:${rpCol};font-size:18px;font-weight:800;">${rawPing}ms</div>
+                </div>`;
+            }
+            return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
+                <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:6px;">${c.icon} ${c.label}</div>
+                <div style="color:${valCol};font-size:22px;font-weight:800;text-align:center;">${mainVal}ms</div>
+                <div style="color:#666;font-size:9px;text-align:center;margin-top:-2px;">${mainLabel} (round trip)</div>
                 <div style="display:flex;justify-content:space-between;font-size:9px;color:#8892a6;margin-top:4px;">
                     <span>min ${Math.round(s.min)}</span>
-                    <span>avg ${Math.round(s.avg)}</span>
+                    <span>p95 ${Math.round(s.p95)}</span>
                     <span>max ${Math.round(s.max)}</span>
                 </div>
                 <div style="color:#555;font-size:9px;text-align:center;margin-top:2px;">${s.count} samples</div>
+                ${rawLine}
             </div>`;
         }).join('');
     } catch (e) {
@@ -10365,7 +10390,7 @@ async function loadDogHistory() {
                     <span style="color:#555;">${dateStr}</span>
                     ${t.fee_cents ? `<span style="color:#8892a6;">Fee: ${t.fee_cents}¢</span>` : ''}
                     ${t.fill_duration_s != null ? `<span style="color:#8892a6;">Fill: ${t.fill_duration_s}s</span>` : ''}
-                    ${(() => { const lat = t.hedge_latency_ms != null ? t.hedge_latency_ms : t.hedge_fill_latency_ms; return lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : ''; })()}
+                    ${(() => { const lat = t.hedge_latency_ms != null ? t.hedge_latency_ms : t.hedge_fill_latency_ms; const raw = t.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> raw ${raw.toFixed(1)}ms</span>` : ''); })()}
                     ${isSellback && t.hard_ceiling_total ? `<span style="color:#ff6644;">Ceiling: ${t.hard_ceiling_total}¢</span>` : ''}
                     ${t.rungs_filled ? `<span style="color:#8892a6;">Rungs: ${t.rungs_filled}/${t.rungs_total||'?'}</span>` : ''}
                 </div>

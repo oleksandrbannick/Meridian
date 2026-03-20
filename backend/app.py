@@ -3012,6 +3012,13 @@ def _execute_phantom_hedge(bot_id):
             return
 
         # Post fav hedge at pre-calculated price — no computation, straight to API
+        # Record raw hedge speed (fill → just before HTTP send)
+        _raw_fill_at = bot.get('dog_filled_at')
+        if _raw_fill_at:
+            _raw_ms = (time.time() - _raw_fill_at) * 1000
+            bot['raw_hedge_ms'] = round(_raw_ms, 1)
+            _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom'})
+            print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
         # Use priority rate limit token so hedge never queues behind monitor calls
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
@@ -3148,7 +3155,13 @@ def _execute_phantom_ladder_hedge(bot_id):
             save_state()
             return
 
-        # ── HEDGE FIRST — gets priority burst token ──
+        # ── HEDGE FIRST — record raw speed then fire ──
+        _raw_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
+        if _raw_fill_at:
+            _raw_ms = (time.time() - _raw_fill_at) * 1000
+            bot['raw_hedge_ms'] = round(_raw_ms, 1)
+            _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom_ladder'})
+            print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price, priority=True,
@@ -3694,8 +3707,10 @@ from collections import deque
 _latency_log = {
     'order_place':    deque(maxlen=200),   # ms per create_order call
     'orderbook':      deque(maxlen=200),   # ms per get_market_orderbook call
-    'fill_to_hedge_phantom': deque(maxlen=50), # ms from phantom fill to hedge posted
-    'fill_to_hedge_apex':    deque(maxlen=50), # ms from apex fill to hedge posted
+    'fill_to_hedge_phantom': deque(maxlen=50), # ms from phantom fill to hedge posted (full round trip)
+    'fill_to_hedge_apex':    deque(maxlen=50), # ms from apex fill to hedge posted (full round trip)
+    'raw_hedge_phantom':     deque(maxlen=50), # ms from phantom fill to HTTP send (before API round trip)
+    'raw_hedge_apex':        deque(maxlen=50), # ms from apex fill to HTTP send (before API round trip)
     'api_generic':    deque(maxlen=200),   # ms for other API calls
     'api_ping':       deque(maxlen=200),   # ms per live ping (get_balance)
 }
@@ -5341,6 +5356,7 @@ def _record_rung_completion(bot_id, bot, rung):
         'rungs_completed': bot.get('completed_rungs_count', 1),
         'rungs_total': len(bot.get('rungs', [])),
         'hedge_latency_ms': bot.get('hedge_latency_ms'),
+        'raw_hedge_ms': bot.get('raw_hedge_ms'),
         'timestamp': now,
         'placed_at': bot.get('created_at', now),
         'arb_width': width,
@@ -5631,6 +5647,21 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
     _avg_filled = computed['avg_filled_price']
 
     print(f'📊 WS SWEEP HEDGE: {bot_id} avg_anchor={_avg_filled}¢ width={computed["weighted_avg_width"]:.1f}¢ target={computed["target_hedge"]}¢ placing@{_hedge_price}¢ × {_total_qty}')
+
+    # Record raw hedge speed before API call
+    _raw_fill_at = None
+    with ws_fill_lock:
+        _b = active_bots.get(bot_id)
+        if _b:
+            _raw_fill_at = _b.get('first_fill_at')
+    if _raw_fill_at:
+        _raw_ms = (time.time() - _raw_fill_at) * 1000
+        with ws_fill_lock:
+            _b = active_bots.get(bot_id)
+            if _b:
+                _b['raw_hedge_ms'] = round(_raw_ms, 1)
+        _record_latency('raw_hedge_apex', _raw_ms, {'bot_id': bot_id, 'type': 'apex_sweep'})
+        print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
 
     hedge_oid = None
     actual_hedge = None
@@ -7669,6 +7700,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'dog_price': dog_price,
                 'fav_price': actual_fav_price,
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'fill_duration_s': round(now - bot['dog_filled_at']) if bot.get('dog_filled_at') else None,
                 'timestamp': now,
                 'placed_at': bot.get('created_at', now),
@@ -8486,6 +8518,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'fav_price': actual_fav_price,
                 'avg_dog_price': avg_dog,
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'rungs_filled': filled_rung_count,
                 'rungs_total': len(bot['rungs']),
                 'rungs_detail': filled_rungs_detail,
@@ -14025,6 +14058,8 @@ def get_latency():
         'orderbook':     _latency_stats('orderbook'),
         'fill_to_hedge_phantom': _latency_stats('fill_to_hedge_phantom'),
         'fill_to_hedge_apex':    _latency_stats('fill_to_hedge_apex'),
+        'raw_hedge_phantom':     _latency_stats('raw_hedge_phantom'),
+        'raw_hedge_apex':        _latency_stats('raw_hedge_apex'),
         'api_ping':      _latency_stats('api_ping'),
         'live_ping_ms':  ping_ms,
         'raw_ping_ms':   raw_ping_ms,

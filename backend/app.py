@@ -5442,6 +5442,9 @@ def _record_rung_completion(bot_id, bot, rung):
         'game_context': _get_game_context(ticker),
         'fill_source': 'ladder_arb',
         'bot_category': 'ladder_arb',
+        'type': 'arb',
+        'repeat_cycle': bot.get('repeats_done', 0) + 1,
+        'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
     }, bot)
 
     # Calculate hedge latency from rung fill timestamps

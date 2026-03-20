@@ -1922,6 +1922,7 @@
         <div class="claude-chat-input-area">
             <div class="claude-chat-input-wrap">
                 <textarea id="claude-chat-input" rows="1" placeholder="Message Claude..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendClaudeMsg()}"></textarea>
+                <button id="claude-chat-stop" onclick="stopClaudeChat()" style="display:none;background:#ff4444;border:none;border-radius:50%;width:36px;height:36px;cursor:pointer;color:#fff;font-size:16px;font-weight:700;" title="Stop generating">&#9632;</button>
                 <button id="claude-chat-send" onclick="sendClaudeMsg()" disabled>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/>
@@ -1938,6 +1939,20 @@
         const CHAT_STORAGE_KEY = 'meridian_claude_chat';
         let chatMessages = [];
         let chatStreaming = false;
+        let _chatAbortController = null;
+        window.stopClaudeChat = function() {
+            if (_chatAbortController) {
+                _chatAbortController.abort();
+                _chatAbortController = null;
+            }
+            chatStreaming = false;
+            const sendBtn = document.getElementById('claude-chat-send');
+            if (sendBtn) sendBtn.disabled = false;
+            // Show stop button as send button again
+            const stopBtn = document.getElementById('claude-chat-stop');
+            if (stopBtn) stopBtn.style.display = 'none';
+            if (sendBtn) sendBtn.style.display = '';
+        };
 
         function saveChatToStorage() {
             try {
@@ -2380,6 +2395,11 @@
             const needsMarkets = /\b(this|these|screen|see|look|show|market|game|what.?s (on|live)|deploy|scan|which)\b/i.test(text);
             const context = await gatherMeridianContext(needsMarkets);
 
+            // Show stop button, hide send button during streaming
+            const stopBtn = document.getElementById('claude-chat-stop');
+            if (stopBtn) stopBtn.style.display = '';
+            sendBtn.style.display = 'none';
+            _chatAbortController = new AbortController();
             try {
                 const resp = await fetch(`${API_BASE}/chat`, {
                     method: 'POST',
@@ -2390,6 +2410,7 @@
                         model: claudeModel,
                         thinking: claudeThinking,
                     }),
+                    signal: _chatAbortController.signal,
                 });
                 if (!resp.ok) {
                     const err = await resp.json();
@@ -2507,6 +2528,9 @@
                 bubbleEl.innerHTML = '<span style="color:#ff4444">Connection error: ' + e.message + '</span>';
             }
             chatStreaming = false;
+            _chatAbortController = null;
+            if (stopBtn) stopBtn.style.display = 'none';
+            sendBtn.style.display = '';
             sendBtn.disabled = !input.value.trim() && pendingImages.length === 0;
         };
 

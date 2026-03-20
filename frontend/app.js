@@ -560,8 +560,12 @@ function filterBySport(sport) {
         return;
     }
 
-    // Live toggle is always client-side — just re-filter existing data
-    applyFilters();
+    // Re-load markets then apply filters — ensures fresh data when sport + live change together
+    if (allMarkets.length > 0) {
+        applyFilters();
+    } else {
+        loadMarkets();
+    }
 }
 
 function applyFilters() {
@@ -9910,19 +9914,42 @@ async function loadTradeHistoryList() {
         const data = await resp.json();
         let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback','ladder_arb_sellback'].includes(t.result));
 
-        // Group ladder_arb trades by bot_id into single summary entries
+        // Group ladder_arb trades by bot_id + run cycle into summary entries
         const grouped = [];
         const larbGroups = {};
         for (const t of trades) {
             if ((t.bot_category === 'ladder_arb' || t.fill_source === 'ladder_arb') && t.bot_id) {
-                if (!larbGroups[t.bot_id]) larbGroups[t.bot_id] = [];
-                larbGroups[t.bot_id].push(t);
+                // Group by bot_id + repeat_cycle (or detect run boundaries)
+                const cycle = t.repeat_cycle || 1;
+                const groupKey = `${t.bot_id}__run${cycle}`;
+                if (!larbGroups[groupKey]) larbGroups[groupKey] = [];
+                larbGroups[groupKey].push(t);
             } else {
                 grouped.push(t);
             }
         }
-        // Create one summary entry per ladder_arb bot
-        for (const [botId, rungTrades] of Object.entries(larbGroups)) {
+        // For trades without repeat_cycle, split by rungs_completed resets
+        const splitGroups = {};
+        for (const [key, rungTrades] of Object.entries(larbGroups)) {
+            if (rungTrades[0].repeat_cycle) {
+                splitGroups[key] = rungTrades;
+            } else {
+                // Detect run boundaries: sort by time, split when rungs_completed resets
+                const sorted = rungTrades.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+                let runIdx = 1;
+                let lastRc = 0;
+                for (const t of sorted) {
+                    const rc = t.rungs_completed || 0;
+                    if (rc <= lastRc && lastRc > 0) runIdx++;
+                    lastRc = rc;
+                    const sk = `${key}__split${runIdx}`;
+                    if (!splitGroups[sk]) splitGroups[sk] = [];
+                    splitGroups[sk].push(t);
+                }
+            }
+        }
+        // Create one summary entry per run
+        for (const [groupKey, rungTrades] of Object.entries(splitGroups)) {
             const totalProfit = rungTrades.reduce((s, t) => s + (t.profit_cents || 0), 0);
             const totalLoss = rungTrades.reduce((s, t) => s + (t.loss_cents || 0), 0);
             const totalFees = rungTrades.reduce((s, t) => s + (t.fee_cents || 0), 0);
@@ -9956,6 +9983,8 @@ async function loadTradeHistoryList() {
                 _width_range: widthRange,
                 _rung_trades: rungTrades,
                 _net_pnl: netPnl,
+                _run_number: rungTrades[0].repeat_cycle || null,
+                _repeat_total: rungTrades[0].repeat_total || null,
             });
         }
         // Sort by timestamp descending
@@ -10001,6 +10030,7 @@ async function loadTradeHistoryList() {
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
                             <span style="background:#00aaff22;color:#00aaff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">△ APEX</span>
                             <span style="background:#ffaa0022;color:#ffaa00;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t._rungs_completed}/${t._rungs_total} rungs</span>
+                            ${t._run_number ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">Run ${t._run_number}${t._repeat_total ? '/' + t._repeat_total : ''}</span>` : ''}
                             ${t._width_range ? `<span style="color:#555;font-size:9px;">Widths: ${t._width_range}</span>` : ''}
                         </div>
                         <div style="text-align:right;">

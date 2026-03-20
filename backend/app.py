@@ -14319,16 +14319,19 @@ def scan_middles():
                             guaranteed_profit = 100 - cost   # one NO always wins
                             middle_profit = 200 - cost       # both NOs win
 
-                            # Suggested prices: always target total < 100¢ for
-                            # guaranteed arb.  Place at 48¢ each (96¢ total = 4¢
-                            # guaranteed), capped at the current NO bid so we
-                            # don't overpay.  During live play, volatility can
-                            # push prices down to fill these.
-                            target_total = 96  # 4¢ guaranteed profit
-                            sug_a = min(target_total // 2, no_a)
-                            sug_b = min(target_total - sug_a, no_b)
-                            sug_a = max(1, sug_a)
-                            sug_b = max(1, sug_b)
+                            # Suggested prices: shave evenly off each side to hit target.
+                            # Default target = 100¢ (straight middle, no arb).
+                            # Frontend width presets adjust for 2¢/4¢/6¢ arb.
+                            target_total = 100
+                            shave = max(0, (cost - target_total + 1) // 2)  # split evenly, round up
+                            sug_a = max(1, no_a - shave)
+                            sug_b = max(1, no_b - shave)
+                            # If still over target, shave extra off the higher side
+                            while sug_a + sug_b > target_total and sug_a > 1 and sug_b > 1:
+                                if sug_a >= sug_b:
+                                    sug_a -= 1
+                                else:
+                                    sug_b -= 1
                             suggested_profit = 100 - sug_a - sug_b
 
                             # ── Spread & liquidity for each NO leg ────────

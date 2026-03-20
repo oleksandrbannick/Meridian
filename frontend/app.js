@@ -4832,6 +4832,8 @@ async function placeSelectedWidthsBots() {
                 game_phase: gamePhase,
             }),
         });
+        // Close modal immediately so user isn't waiting
+        closeModal();
         const data = await resp.json();
         if (data.bot_id) {
             const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
@@ -4845,9 +4847,7 @@ async function placeSelectedWidthsBots() {
 
     if (deployBtn) { deployBtn.disabled = false; _updateDeployButton(); }
 
-    // ── Close modal + reload first, then show notification ────────────────────
-    closeModal();
-    await loadBots();
+    loadBots();  // fire-and-forget, don't await
     if (!autoMonitorInterval) toggleAutoMonitor();
     showNotification(notifMsg);
 }

@@ -16939,36 +16939,41 @@ def claude_chat():
         'SCREENSHOT: You can take a screenshot of the user\'s screen with take_screenshot. Use it when they say "look at my screen", "check this", "what do you see", "look at this", or anything about what\'s on their screen. You\'ll get a real screenshot of the Meridian UI. If you spot UI bugs or issues, use save_debug_note to log them for Claude Code to fix.',
         'PERSISTENT MEMORY: You have a memory system that persists across conversations. Use save_memory to record lessons learned — especially trading mistakes, successful patterns, user preferences, and system quirks. Use read_memories to recall past learnings. WHEN TO SAVE: after a trade goes wrong (what happened and why), after discovering a market pattern, when the user corrects you, when you discover a Meridian quirk. WHEN TO READ: at the start of conversations when you need context on past trades or strategies. Your memories make you smarter over time — use them.',
     ]
-    # Auto-inject saved memories into system prompt
+
+    # ── BLOCK 1: Static instructions (cached — never changes between requests) ──
+    static_prompt = '\n'.join(system_parts)
+
+    # ── BLOCK 2: Memories (cached separately — only changes when Claude saves a new memory) ──
+    memory_parts = []
     memory_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chat_claude_memory')
     if os.path.isdir(memory_dir):
         mem_files = sorted(f for f in os.listdir(memory_dir) if f.endswith('.md') and not f.endswith('.superseded.md'))
         if mem_files:
-            system_parts.append('\n--- YOUR SAVED MEMORIES ---')
+            memory_parts.append('--- YOUR SAVED MEMORIES ---')
             for fn in mem_files[:30]:  # cap at 30 to avoid token bloat
                 with open(os.path.join(memory_dir, fn), 'r') as f:
-                    system_parts.append(f.read().strip())
-            system_parts.append('--- END MEMORIES ---')
-    # Inject current time so Claude has a clock
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    az_time = _dt.now(_tz(_td(hours=-7)))
-    system_parts.append(f'\nCurrent time: {az_time.strftime("%A, %B %d %Y, %-I:%M %p")} Arizona (MST). The user is in Arizona time. Use this for sanity checks — no games are live at 8am, most NBA/NCAAB games are afternoon/evening.')
+                    memory_parts.append(f.read().strip())
+            memory_parts.append('--- END MEMORIES ---')
+    memory_prompt = '\n'.join(memory_parts) if memory_parts else ''
+
+    # ── BLOCK 3: Live state (uncached — changes every request) ──
+    live_parts = []
+    az_time = datetime.now(AZ_TZ)
+    live_parts.append(f'Current time: {az_time.strftime("%A, %B %d %Y, %-I:%M %p")} Arizona (MST). The user is in Arizona time. Use this for sanity checks — no games are live at 8am, most NBA/NCAAB games are afternoon/evening.')
     if context:
-        system_parts.append('\n--- LIVE MERIDIAN STATE ---')
+        live_parts.append('\n--- LIVE MERIDIAN STATE ---')
         if 'balance' in context:
             bal = context['balance']
             if isinstance(bal, dict):
-                # /api/ws/balance already returns dollars (not cents)
-                system_parts.append(f"Balance: ${bal.get('balance', 0):.2f}")
+                live_parts.append(f"Balance: ${bal.get('balance', 0):.2f}")
             else:
-                system_parts.append(f"Balance: {bal}")
+                live_parts.append(f"Balance: {bal}")
         if 'active_bots' in context:
             bots = context['active_bots']
-            system_parts.append(f"Active bots: {len(bots)}")
+            live_parts.append(f"Active bots: {len(bots)}")
             for b in bots[:15]:
                 cat = b.get('bot_category', b.get('type', '?'))
                 status = b.get('status', '?')
-                # Format prices based on bot type — phantom/ladder bots only post one side
                 if cat in ('anchor_dog', 'anchor_ladder'):
                     dog_side = b.get('dog_side', 'no')
                     dog_price = b.get('dog_price', b.get('yes_price' if dog_side == 'yes' else 'no_price', '?'))
@@ -16981,18 +16986,18 @@ def claude_chat():
                     yes_p = b.get('yes_price', '?')
                     no_p = b.get('no_price', '?')
                     price_str = f"yes={yes_p}¢ no={no_p}¢"
-                system_parts.append(f"  - {b.get('ticker','?')} | {cat} | status={status} | {price_str} x{b.get('count','?')} | pnl={b.get('pnl','?')}")
+                live_parts.append(f"  - {b.get('ticker','?')} | {cat} | status={status} | {price_str} x{b.get('count','?')} | pnl={b.get('pnl','?')}")
         if 'positions' in context and context['positions']:
             pos = context['positions']
             if isinstance(pos, dict):
                 pos = pos.get('positions', [])
-            system_parts.append(f"Open positions: {json.dumps(pos[:10], default=str)}")
+            live_parts.append(f"Open positions: {json.dumps(pos[:10], default=str)}")
         if 'screen' in context:
             screen = context['screen']
-            system_parts.append(f"User's current view: sport_filter={screen.get('sport_filter','all')}, live_only={screen.get('live_filter',False)}, search='{screen.get('search_query','')}'")
+            live_parts.append(f"User's current view: sport_filter={screen.get('sport_filter','all')}, live_only={screen.get('live_filter',False)}, search='{screen.get('search_query','')}'")
         if 'visible_markets' in context:
             mkts = context['visible_markets']
-            system_parts.append(f"Markets on screen ({len(mkts)}):")
+            live_parts.append(f"Markets on screen ({len(mkts)}):")
             for m in mkts[:30]:
                 parts_m = f"  - {m.get('ticker','?')}: {m.get('title','')} bid={m.get('yes_bid','?')}¢ ask={m.get('yes_ask','?')}¢"
                 if m.get('no_bid') is not None:
@@ -17000,29 +17005,31 @@ def claude_chat():
                 if m.get('market_type'):
                     parts_m += f" type={m['market_type']}"
                 parts_m += f" vol={m.get('volume','?')}"
-                system_parts.append(parts_m)
-        system_parts.append('--- END STATE ---')
+                live_parts.append(parts_m)
+        live_parts.append('--- END STATE ---')
 
     # Check and inject triggered alerts
     _check_chat_alerts()
     triggered = [a for a in _chat_alerts if a['status'] == 'triggered']
     watching = [a for a in _chat_alerts if a['status'] == 'watching']
     if triggered:
-        system_parts.append('\n⚠️ TRIGGERED ALERTS:')
+        live_parts.append('\n⚠️ TRIGGERED ALERTS:')
         for a in triggered:
-            system_parts.append(f"  - {a['description'] or a['ticker']}: {a['side']} hit {a.get('triggered_price', '?')}¢ ({a['condition']} {a['price']}¢)")
+            live_parts.append(f"  - {a['description'] or a['ticker']}: {a['side']} hit {a.get('triggered_price', '?')}¢ ({a['condition']} {a['price']}¢)")
     if watching:
-        system_parts.append(f"\nActive alerts: {len(watching)} watching")
-    # Build system prompt with prompt caching — static instructions cached, live state uncached
-    static_prompt = '\n'.join(system_parts[:system_parts.index('--- END STATE ---') if '--- END STATE ---' in system_parts else len(system_parts)])
-    live_state = '\n'.join(system_parts[system_parts.index('--- END STATE ---'):] if '--- END STATE ---' in system_parts else [])
+        live_parts.append(f"\nActive alerts: {len(watching)} watching")
+    live_prompt = '\n'.join(live_parts)
 
-    # Use cache_control on static system prompt block for prompt caching
+    # ── Build system blocks with prompt caching ──
+    # Block 1: Static instructions — cached, identical across all requests (~4K tokens saved)
+    # Block 2: Memories — cached separately, only busts when Claude saves a new memory
+    # Block 3: Live state — uncached, changes every request (time, balance, bots, markets)
     system_blocks = [
         {"type": "text", "text": static_prompt, "cache_control": {"type": "ephemeral"}},
     ]
-    if live_state:
-        system_blocks.append({"type": "text", "text": live_state})
+    if memory_prompt:
+        system_blocks.append({"type": "text", "text": memory_prompt, "cache_control": {"type": "ephemeral"}})
+    system_blocks.append({"type": "text", "text": live_prompt})
 
     def generate():
         try:

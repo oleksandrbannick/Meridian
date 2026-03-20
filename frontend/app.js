@@ -2221,9 +2221,19 @@ function createMarketRow(market, label) {
 
     // ── Bot recommendation icons (dimmed) ──
     const recoTypes = [];
-    // Apex: both sides need bids, at least 2¢ edge (98¢ ceiling). Wider spreads = more room = better.
-    if (liq.yesBid > 0 && liq.noBid > 0 && liq.arbEdge >= 2 && !botTypes.apex) {
-        recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
+    // Apex: both sides need bids. Recommend when instant arb exists (arbEdge >= 2)
+    // OR when a live game is close (coin-flip) — volatility will swing prices through resting orders.
+    if (liq.yesBid > 0 && liq.noBid > 0 && !botTypes.apex) {
+        const hasInstantEdge = liq.arbEdge >= 2;
+        // Coin-flip detection: bids sum to 96-103 (near 50/50) on a live game
+        const bidSum = liq.yesBid + liq.noBid;
+        const isCoinFlip = bidSum >= 96 && bidSum <= 103 && Math.abs(liq.yesBid - liq.noBid) <= 15;
+        const isLiveGame = isLive;  // from the enclosing card builder scope
+        if (hasInstantEdge) {
+            recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
+        } else if (isCoinFlip && isLiveGame) {
+            recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — volatility play` });
+        }
     }
     // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
     // arb math works, and lowest rung won't hit 1¢ floor

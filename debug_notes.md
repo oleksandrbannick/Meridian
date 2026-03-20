@@ -3,7 +3,7 @@
 Notes from the Meridian chat Claude about bugs, issues, and observations.
 Claude Code reads this file at the start of each session.
 
-**RULES FOR CHAT CLAUDE:** Only log ACTUAL bugs (broken UI, crashes, wrong data display, API errors). Do NOT log strategy suggestions, feature requests, or opinions about how bot recommendation logic should work. The user designs the trading strategy — you do not get to decide what Apex/Phantom/Meridian should recommend.
+**RULES FOR CHAT CLAUDE:** Only log ACTUAL bugs and issues the user confirms. Do NOT log strategy suggestions or feature requests as bugs without user confirmation.
 
 ---
 
@@ -28,9 +28,9 @@ Root cause: `_gameIdDateMatchesESPN()` had a -1 day tolerance for UTC midnight c
 
 ---
 
-## [REJECTED] Apex recommendation on 50/50 markets — NOT A BUG
-**2026-03-20 16:56** | apex | **Rejected by user — strategy decision, not a bug**
+## [BUG] Apex not recommended on near-50/50 spread markets
+**2026-03-20 16:56** | apex
 
-Chat Claude logged two notes suggesting Apex should recommend on near-50/50 spread markets. This is NOT a bug — the recommendation logic works as designed by the user. Chat Claude does not decide trading strategy.
+User confirms: Apex bots derive edge from game volatility, not just instant arb (YES+NO under 100¢). On TTU -8.5 / AKR +8.5 the prices are 51¢/50¢ — a near coin toss. Apex should be recommended here because price swings will naturally push one side temporarily under 100¢ total. The recommendation logic should factor in volatility / coin-toss scenarios, not just wait for a pre-existing gap. Currently no Apex suggestion is surfacing on these markets despite this being a prime opportunity.
 
 ---

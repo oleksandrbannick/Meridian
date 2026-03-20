@@ -15841,6 +15841,31 @@ CLAUDE_TOOLS = [
             "properties": {}
         }
     },
+    {
+        "name": "save_memory",
+        "description": "Save a persistent memory so you can learn and improve across conversations. Use this to remember: trading mistakes and what went wrong, successful strategies and patterns, user preferences, Meridian system quirks you discover, market behavior insights. Memories persist across sessions — you read them at the start of every conversation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "enum": ["trading_lesson", "strategy", "user_preference", "system_quirk", "market_insight"], "description": "Category of the memory"},
+                "title": {"type": "string", "description": "Short title (e.g. 'NBA spreads fill faster in 4th quarter')"},
+                "content": {"type": "string", "description": "What you learned and why it matters. Be specific — include tickers, prices, outcomes, timestamps where relevant."},
+                "supersedes": {"type": "string", "description": "Optional: title of an old memory this replaces (e.g. if you learned something that corrects a previous lesson)"}
+            },
+            "required": ["category", "title", "content"]
+        }
+    },
+    {
+        "name": "read_memories",
+        "description": "Read your persistent memories. Call this at the start of conversations or when you need to recall past learnings. Returns all saved memories organized by category.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "enum": ["trading_lesson", "strategy", "user_preference", "system_quirk", "market_insight", "all"], "description": "Filter by category, or 'all' for everything"}
+            },
+            "required": ["category"]
+        }
+    },
 ]
 
 def _execute_chat_tool(tool_name, tool_input):
@@ -16770,6 +16795,53 @@ def _execute_chat_tool(tool_name, tool_input):
             except Exception as e:
                 return {'error': f'Status check failed: {e}'}
 
+        elif tool_name == 'save_memory':
+            import datetime as _dt
+            memory_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chat_claude_memory')
+            os.makedirs(memory_dir, exist_ok=True)
+            category = tool_input.get('category', 'general')
+            title = tool_input['title']
+            content = tool_input['content']
+            supersedes = tool_input.get('supersedes')
+            ts = _dt.datetime.now().strftime('%Y-%m-%d %H:%M')
+            # If superseding an old memory, mark it
+            if supersedes:
+                for fn in os.listdir(memory_dir):
+                    if fn.endswith('.md'):
+                        fpath = os.path.join(memory_dir, fn)
+                        with open(fpath, 'r') as f:
+                            old_content = f.read()
+                        if supersedes.lower() in old_content.lower():
+                            os.rename(fpath, fpath.replace('.md', '.superseded.md'))
+                            break
+            # Write new memory
+            safe_title = ''.join(c if c.isalnum() or c in ' -_' else '' for c in title).strip().replace(' ', '_')[:60]
+            filename = f"{category}_{safe_title}.md"
+            filepath = os.path.join(memory_dir, filename)
+            with open(filepath, 'w') as f:
+                f.write(f"# {title}\n")
+                f.write(f"**Category:** {category} | **Saved:** {ts}\n\n")
+                f.write(content + '\n')
+                if supersedes:
+                    f.write(f"\n*Supersedes: {supersedes}*\n")
+            return {'success': True, 'message': f'Memory saved: {title}', 'file': filename}
+
+        elif tool_name == 'read_memories':
+            memory_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chat_claude_memory')
+            if not os.path.isdir(memory_dir):
+                return {'memories': [], 'message': 'No memories saved yet. Use save_memory to start building your knowledge base.'}
+            category = tool_input.get('category', 'all')
+            memories = []
+            for fn in sorted(os.listdir(memory_dir)):
+                if not fn.endswith('.md') or fn.endswith('.superseded.md'):
+                    continue
+                if category != 'all' and not fn.startswith(category):
+                    continue
+                fpath = os.path.join(memory_dir, fn)
+                with open(fpath, 'r') as f:
+                    memories.append({'file': fn, 'content': f.read()})
+            return {'memories': memories, 'count': len(memories)}
+
         else:
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
@@ -16827,7 +16899,18 @@ def claude_chat():
         'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Meridian posts both NO legs on opposing spreads. Scout places single limit orders.',
         'BOT STATE: Phantom and ladder bots only post ONE side (the dog/underdog). The other side shows as 0¢ or "pending" in bot state — this is NOT a real order. There is no such thing as a 0¢ limit order on Kalshi. A 0¢ price means that side has not been posted yet and is waiting for the dog to fill before hedging. Do NOT flag 0¢ prices as errors on phantom/anchor bots.',
         'SMART BOT MANAGEMENT: When the user asks you to manage a bot\'s lifecycle, use modify_bot and set_bot_phase. If a repeating bot is profitable over its cycles, keep it running (increase repeat_count). If it\'s losing money on cycles, stop it (set repeat_count to 0). If the game is close to ending (final 5 min), reduce repeats or stop the bot. Use read_activity_log to check a bot\'s recent cycle history. Use get_bot_stats to compare strategy performance. When the user says "keep it going" or "let it ride", increase repeat_count. When they say "shut it down" or "stop that bot", cancel it. You can also use amend_order to adjust resting order prices if a bot\'s orders aren\'t filling.',
+        'PERSISTENT MEMORY: You have a memory system that persists across conversations. Use save_memory to record lessons learned — especially trading mistakes, successful patterns, user preferences, and system quirks. Use read_memories to recall past learnings. WHEN TO SAVE: after a trade goes wrong (what happened and why), after discovering a market pattern, when the user corrects you, when you discover a Meridian quirk. WHEN TO READ: at the start of conversations when you need context on past trades or strategies. Your memories make you smarter over time — use them.',
     ]
+    # Auto-inject saved memories into system prompt
+    memory_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chat_claude_memory')
+    if os.path.isdir(memory_dir):
+        mem_files = sorted(f for f in os.listdir(memory_dir) if f.endswith('.md') and not f.endswith('.superseded.md'))
+        if mem_files:
+            system_parts.append('\n--- YOUR SAVED MEMORIES ---')
+            for fn in mem_files[:30]:  # cap at 30 to avoid token bloat
+                with open(os.path.join(memory_dir, fn), 'r') as f:
+                    system_parts.append(f.read().strip())
+            system_parts.append('--- END MEMORIES ---')
     if context:
         system_parts.append('\n--- LIVE MERIDIAN STATE ---')
         if 'balance' in context:

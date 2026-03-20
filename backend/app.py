@@ -7660,6 +7660,19 @@ def _handle_phantom(bot_id, bot, actions):
                     # No bid — market might be dead, just wait
                     return
 
+                # Dead market guard: bid at 1c = market is settled/dead, stop bot
+                if current_dog_bid <= 1:
+                    print(f'🛑 PHANTOM DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ — cancelling')
+                    _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    bot['repeat_count'] = 0
+                    bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+                    _audit('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+                    actions.append({'bot_id': bot_id, 'action': 'anchor_dead_market_cancel'})
+                    save_state()
+                    return
+
                 # Drift guard: if dog side bid is very high (>50c), the market
                 # has moved too far — this isn't a dog anymore, cancel
                 if current_dog_bid > 50:
@@ -8362,6 +8375,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 return  # no market data, wait
+            # Don't repost if market is dead (bid at 1c = pointless)
+            if current_dog_bid <= 1:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0
+                print(f'🛑 PHANTOM REPEAT SKIP: {bot_id} dog bid={current_dog_bid}¢ — market dead, stopping')
+                bot_log('PHANTOM_REPEAT_SKIP', bot_id, {'dog_bid': current_dog_bid, 'reason': 'market_dead'})
+                _audit('PHANTOM_REPEAT_SKIP', bot_id, {'dog_bid': current_dog_bid})
+                save_state()
+                return
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
 

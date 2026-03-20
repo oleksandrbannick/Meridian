@@ -5279,20 +5279,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const rQty = r.quantity || qtyPer;
             const isFilled_r = fill > 0;
 
-            // Only shade completed rungs when their hedge generation is done:
-            // - Rungs covered by completed hedge history → always shade
-            // - Rungs covered by active hedge → shade only when active hedge fully filled
+            // Only shade rungs covered by COMPLETED hedge generations (in hedge_history).
+            // Active hedge = all filled anchors stay lit (work in progress).
             let isCompleted = false;
-            if (r.completed) {
-                if (_historyBudget >= rQty) {
-                    _historyBudget -= rQty;
-                    isCompleted = true;
-                } else {
-                    _historyBudget = 0;
-                    isCompleted = (_activeHedgeFillForShade >= hedgeQty);
-                }
-            } else if (isFilled_r) {
-                _historyBudget = Math.max(0, _historyBudget - rQty);
+            if (r.completed && hedgeHistory.length > 0 && _historyBudget >= rQty) {
+                _historyBudget -= rQty;
+                isCompleted = true;
             }
             const dimStyle = isCompleted ? 'opacity:0.35;' : !isFilled_r ? 'opacity:0.4;' : '';
             const anchorPrice = r[`${filledSideKey}_price`] || 0;

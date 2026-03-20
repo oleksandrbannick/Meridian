@@ -5966,6 +5966,11 @@ def _execute_apex_completion(bot_id):
         total_pnl = bot.get('cumulative_pnl', 0)
         completed_count = bot.get('completed_rungs_count', 0)
 
+        # Calculate hedge fill latency (first anchor fill → completion)
+        _first_fill = bot.get('first_fill_at')
+        if _first_fill:
+            bot['hedge_fill_latency_ms'] = round((now - _first_fill) * 1000, 1)
+
         # Repeat logic
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now

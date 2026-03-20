@@ -103,6 +103,7 @@ function kalshiFeeCents(yesPrice, noPrice, count) {
 }
 let allMarkets = [];
 let autoMonitorInterval = null;
+let _tabRefreshInterval = null; // Auto-refresh for history/positions tabs
 let liveScoresInterval = null;
 let selectedMarket = null;
 let selectedSide = null;
@@ -295,9 +296,16 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-page').forEach(p => {
         p.classList.toggle('active', p.id === 'tab-' + tab);
     });
-    // Load tab-specific data
-    if (tab === 'positions') loadPositions();
-    if (tab === 'history') loadTradeHistory();
+    // Load tab-specific data + auto-refresh for active tab
+    if (_tabRefreshInterval) { clearInterval(_tabRefreshInterval); _tabRefreshInterval = null; }
+    if (tab === 'positions') {
+        loadPositions();
+        _tabRefreshInterval = setInterval(loadPositions, 5000);
+    }
+    if (tab === 'history') {
+        loadTradeHistory();
+        _tabRefreshInterval = setInterval(loadTradeHistory, 5000);
+    }
     if (tab === 'bots') {
         loadBots(); loadPnL(); loadLatency();
         // Always show buddy on bots tab

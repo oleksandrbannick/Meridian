@@ -8958,26 +8958,40 @@ async function loadLatency() {
                     </div>
                 </div>`;
             }
-            // API Ping tile with raw ping
-            let rawLine = '';
+            // API Ping tile: side-by-side raw ping + API ping
             if (c.key === 'api_ping' && rawPing != null) {
                 const rpCol = rawPing < 2 ? '#00ffcc' : rawPing < 10 ? '#00ff88' : '#ffaa00';
-                rawLine = `<div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;margin-top:6px;text-align:center;">
-                    <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Ping</div>
-                    <div style="color:${rpCol};font-size:18px;font-weight:800;">${rawPing}ms</div>
+                return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
+                    <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:8px;">${c.icon} ${c.label}</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:8px;text-align:center;">
+                            <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Ping</div>
+                            <div style="color:${rpCol};font-size:22px;font-weight:800;">${rawPing}ms</div>
+                        </div>
+                        <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:8px;text-align:center;">
+                            <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">API Call</div>
+                            <div style="color:${valCol};font-size:22px;font-weight:800;">${mainVal}ms</div>
+                            <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
+                                <span>min ${Math.round(s.min)}</span>
+                                <span>p95 ${Math.round(s.p95)}</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>`;
             }
+            // Order Place + Orderbook tiles: same consistent style
             return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
-                <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:6px;">${c.icon} ${c.label}</div>
-                <div style="color:${valCol};font-size:22px;font-weight:800;text-align:center;">${mainVal}ms</div>
-                <div style="color:#666;font-size:9px;text-align:center;margin-top:-2px;">${mainLabel}</div>
-                <div style="display:flex;justify-content:space-between;font-size:9px;color:#8892a6;margin-top:4px;">
-                    <span>min ${Math.round(s.min)}</span>
-                    <span>p95 ${Math.round(s.p95)}</span>
-                    <span>max ${Math.round(s.max)}</span>
+                <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:8px;">${c.icon} ${c.label}</div>
+                <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:8px;text-align:center;">
+                    <div style="color:${valCol};font-size:22px;font-weight:800;">${mainVal}ms</div>
+                    <div style="color:#666;font-size:9px;margin-top:-2px;">${mainLabel}</div>
+                    <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
+                        <span>min ${Math.round(s.min)}</span>
+                        <span>p95 ${Math.round(s.p95)}</span>
+                        <span>max ${Math.round(s.max)}</span>
+                    </div>
+                    <div style="color:#555;font-size:8px;margin-top:1px;">${s.count} samples</div>
                 </div>
-                <div style="color:#555;font-size:9px;text-align:center;margin-top:2px;">${s.count} samples</div>
-                ${rawLine}
             </div>`;
         }).join('');
     } catch (e) {

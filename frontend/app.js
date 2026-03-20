@@ -1892,14 +1892,7 @@ function displayEventRow(eventData, container) {
             if (timeBadge.textContent || timeBadge.innerHTML) badgeWrap.appendChild(timeBadge);
         }
     }
-    // Signal badge — shows anchor/swing/early/pregame context
-    if (signal.label) {
-        const sigBadge = document.createElement('span');
-        sigBadge.style.cssText = `background:${signal.color}22;color:${signal.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;`;
-        sigBadge.textContent = signal.label;
-        if (signal.description) sigBadge.title = signal.description;
-        badgeWrap.appendChild(sigBadge);
-    }
+    // Signal badge removed — ghost recommendation icons replace signal labels
     header.appendChild(badgeWrap);
     card.appendChild(header);
 
@@ -2127,15 +2120,7 @@ function createMarketRow(market, label) {
         }
     }
 
-    // Inline spread/edge indicator for quick scanning
     const liq = getMarketLiquidity(market);
-    if (liq.arbEdge >= 1 && liq.arbEdge <= 20 && liq.avgSpread < 99) {
-        const edgeDot = document.createElement('span');
-        const dotColor = liq.arbEdge <= 8 ? '#00ff88' : (liq.arbEdge <= 12 ? '#60a5fa' : '#ffaa33');
-        edgeDot.style.cssText = `display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};margin-left:6px;vertical-align:middle;`;
-        edgeDot.title = `Edge: ${liq.arbEdge}¢ · Spread: ${liq.avgSpread}¢ · ${liq.tierLabel}`;
-        labelDiv.appendChild(edgeDot);
-    }
 
     // ── Active bot type icons ──
     const botTypes = (window._botTypeMap || {})[market.ticker] || {};
@@ -2148,7 +2133,7 @@ function createMarketRow(market, label) {
             const n = botTypes[bt];
             const pill = document.createElement('span');
             pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-            pill.innerHTML = `${botIconImg(bt, 10)}${n > 1 ? n : ''}`;
+            pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
             pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
             wrap.appendChild(pill);
         }
@@ -2175,8 +2160,8 @@ function createMarketRow(market, label) {
         for (const r of recoTypes) {
             const c = BOT_COLORS[r.type] || '#888';
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;padding:1px 3px;border:1px dashed ${c}55;border-radius:4px;opacity:0.4;`;
-            pill.innerHTML = botIconImg(r.type, 10, 0.5);
+            pill.style.cssText = `display:inline-flex;align-items:center;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
+            pill.innerHTML = botIconImg(r.type, 14, 0.75);
             pill.title = r.tip;
             rWrap.appendChild(pill);
         }
@@ -8846,6 +8831,8 @@ async function launchMiddleBot() {
             no_a_bid:        md.no_a_bid || 0,
             no_b_bid:        md.no_b_bid || 0,
             game_id:         md.game_id || '',
+            rebalancer_mode: document.getElementById('middle-rebalancer-toggle')?.checked ? 'live' : 'off',
+            rebalancer_enabled: document.getElementById('middle-rebalancer-toggle')?.checked !== false,
         };
         const resp = await fetch(`${API_BASE}/middle/bot/create`, {
             method: 'POST',

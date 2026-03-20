@@ -16911,6 +16911,10 @@ def claude_chat():
                 with open(os.path.join(memory_dir, fn), 'r') as f:
                     system_parts.append(f.read().strip())
             system_parts.append('--- END MEMORIES ---')
+    # Inject current time so Claude has a clock
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    az_time = _dt.now(_tz(_td(hours=-7)))
+    system_parts.append(f'\nCurrent time: {az_time.strftime("%A, %B %d %Y, %-I:%M %p")} Arizona (MST). The user is in Arizona time. Use this for sanity checks — no games are live at 8am, most NBA/NCAAB games are afternoon/evening.')
     if context:
         system_parts.append('\n--- LIVE MERIDIAN STATE ---')
         if 'balance' in context:

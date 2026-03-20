@@ -4,15 +4,18 @@ function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 
-// Bot type colors and inline SVG icons (match bot buddy characters)
+// Bot type colors, labels, and icons
 const BOT_COLORS = { phantom: '#ff9900', apex: '#00d4ff', meridian: '#cc66ff', scout: '#9966ff' };
+const BOT_LABELS = { phantom: '👻', apex: '△', meridian: '♛', scout: '◎' };
+const BOT_NAMES = { phantom: 'Phantom', apex: 'Apex', meridian: 'Meridian', scout: 'Scout' };
+
+// Detailed SVG icons — used in bot cards, tab buttons, Meet the Bots (larger sizes 18px+)
 function botIconSvg(type, size) {
     const s = size || 14;
     const c = BOT_COLORS[type] || '#888';
-    const cf = c + '33'; // fill with transparency
+    const cf = c + '33';
     if (type === 'apex') {
-        // Shield/hex body + antenna + rectangular eyes
-        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none">` +
             `<line x1="8" y1="0" x2="8" y2="3" stroke="${c}" stroke-width="1.2"/>` +
             `<circle cx="8" cy="0.8" r="1" fill="${c}"/>` +
             `<path d="M4 3L8 1.5L12 3L13 6L13 13L3 13L3 6Z" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
@@ -22,15 +25,13 @@ function botIconSvg(type, size) {
             `</svg>`;
     }
     if (type === 'phantom') {
-        // Ghost body (round top, wavy bottom) + big eyes + cat
-        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none">` +
             `<path d="M3 7C3 3.7 5.2 2 7 2C8.8 2 11 3.7 11 7L11 12L10 11L9 12.5L7 11L5 12.5L4 11L3 12Z" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
             `<circle cx="5.5" cy="6" r="1.3" fill="#111" stroke="${c}" stroke-width="0.5"/>` +
             `<circle cx="8.5" cy="6" r="1.3" fill="#111" stroke="${c}" stroke-width="0.5"/>` +
             `<circle cx="5.2" cy="5.7" r="0.4" fill="${c}"/>` +
             `<circle cx="8.2" cy="5.7" r="0.4" fill="${c}"/>` +
             `<ellipse cx="7" cy="9" rx="0.8" ry="0.6" fill="#111"/>` +
-            // Cat companion
             `<path d="M12.5 9L12 7.5L13 7.5Z" fill="${c}"/>` +
             `<path d="M14.5 9L14 7.5L15 7.5Z" fill="${c}"/>` +
             `<ellipse cx="13.5" cy="10.5" rx="2" ry="1.8" fill="${cf}" stroke="${c}" stroke-width="0.7"/>` +
@@ -40,37 +41,28 @@ function botIconSvg(type, size) {
             `</svg>`;
     }
     if (type === 'meridian') {
-        // Wide pill body + tiara crown + eyes with lashes
-        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
-            // Tiara crown
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none">` +
             `<path d="M4 4L5.5 2L8 3.5L10.5 2L12 4Z" fill="${c}" stroke="${c}" stroke-width="0.5"/>` +
-            // Pill body
             `<rect x="3" y="4.5" width="10" height="9" rx="4.5" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
-            // Eyes
             `<circle cx="6" cy="8.5" r="1" fill="${c}"/>` +
             `<circle cx="10" cy="8.5" r="1" fill="${c}"/>` +
-            // Eyelashes
             `<line x1="4.8" y1="7.8" x2="5.3" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
             `<line x1="7" y1="7.8" x2="6.5" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
             `<line x1="8.8" y1="7.8" x2="9.3" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
             `<line x1="11" y1="7.8" x2="10.5" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
-            // Curved smile
             `<path d="M6.5 11 Q8 12 9.5 11" stroke="${c}" stroke-width="0.6" fill="none" stroke-linecap="round"/>` +
-            // Tiny arms
             `<line x1="3" y1="9" x2="1.5" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
             `<line x1="13" y1="9" x2="14.5" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
             `</svg>`;
     }
     if (type === 'scout') {
-        // Rounded square body + antenna + alert eyes + smile
-        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+        return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none">` +
             `<line x1="8" y1="1" x2="8" y2="4" stroke="${c}" stroke-width="1"/>` +
             `<circle cx="8" cy="1" r="1.2" fill="${c}"/>` +
             `<rect x="3.5" y="4" width="9" height="9.5" rx="3" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
             `<circle cx="6" cy="8" r="1.2" fill="${c}"/>` +
             `<circle cx="10" cy="8" r="1.2" fill="${c}"/>` +
             `<path d="M6.5 11 Q8 12.5 9.5 11" stroke="${c}" stroke-width="0.8" fill="none" stroke-linecap="round"/>` +
-            // Arms
             `<line x1="3.5" y1="9" x2="2" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
             `<line x1="12.5" y1="9" x2="14" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
             `</svg>`;
@@ -2194,25 +2186,27 @@ function createMarketRow(market, label) {
 
     const liq = getMarketLiquidity(market);
 
-    // ── Active bot type icons ──
+    // ── Active bot indicators (solid pills with label) ──
     const botTypes = (window._botTypeMap || {})[market.ticker] || {};
     const activeBotTypes = Object.keys(botTypes);
     if (activeBotTypes.length > 0) {
         const wrap = document.createElement('span');
-        wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
+        wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;';
         for (const bt of activeBotTypes) {
             const c = BOT_COLORS[bt] || '#818cf8';
             const n = botTypes[bt];
+            const emoji = BOT_LABELS[bt] || '?';
+            const name = BOT_NAMES[bt] || bt;
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-            pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
-            pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
+            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+            pill.innerHTML = `${emoji}${n > 1 ? ' ×'+n : ''}`;
+            pill.title = `${n} active ${name} bot${n > 1 ? 's' : ''}`;
             wrap.appendChild(pill);
         }
         labelDiv.appendChild(wrap);
     }
 
-    // ── Bot recommendation icons (dimmed) ──
+    // ── Bot recommendation indicators (dashed pills with label) ──
     const recoTypes = [];
     if (liq.arbEdge >= 1 && liq.arbEdge <= 10 && liq.avgSpread <= 8 && !botTypes.apex) {
         recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
@@ -2224,16 +2218,17 @@ function createMarketRow(market, label) {
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
     if (middleReco && !botTypes.meridian) {
-        recoTypes.push({ type: 'meridian', tip: `Middle: pair with ${middleReco.partner}, ${middleReco.guaranteed > 0 ? middleReco.guaranteed + '¢ guaranteed' : 'score ' + middleReco.score}` });
+        recoTypes.push({ type: 'meridian', tip: `Meridian: pair with ${middleReco.partner}, ${middleReco.guaranteed > 0 ? middleReco.guaranteed + '¢ guaranteed' : 'score ' + middleReco.score}` });
     }
     if (recoTypes.length > 0) {
         const rWrap = document.createElement('span');
-        rWrap.style.cssText = 'margin-left:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
+        rWrap.style.cssText = 'margin-left:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;';
         for (const r of recoTypes) {
             const c = BOT_COLORS[r.type] || '#888';
+            const emoji = BOT_LABELS[r.type] || '?';
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
-            pill.innerHTML = botIconImg(r.type, 14, 0.75);
+            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 5px;border:1px dashed ${c}66;border-radius:4px;font-size:9px;color:${c};opacity:0.6;`;
+            pill.innerHTML = emoji;
             pill.title = r.tip;
             rWrap.appendChild(pill);
         }

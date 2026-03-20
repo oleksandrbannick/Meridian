@@ -2292,7 +2292,7 @@
         }
 
         // Gather live Meridian state to give Claude context
-        async function gatherMeridianContext() {
+        async function gatherMeridianContext(includeMarkets = true) {
             const ctx = {};
             try {
                 const [balRes, botsRes, posRes] = await Promise.allSettled([
@@ -2324,15 +2324,18 @@
                 search_query: (document.getElementById('search-input') || {}).value || '',
             };
 
-            // Send FILTERED markets (what user sees), not raw allMarkets
-            const filtered = window._lastFilteredMarkets || (typeof allMarkets !== 'undefined' ? allMarkets : []);
-            if (filtered.length > 0) {
-                ctx.visible_markets = filtered.slice(0, 30).map(m => ({
-                    ticker: m.ticker, title: m.title || m.event_ticker,
-                    yes_bid: m.yes_bid, yes_ask: m.yes_ask,
-                    no_bid: m.no_bid, no_ask: m.no_ask,
-                    volume: m.volume, market_type: m.market_type,
-                }));
+            // Only send visible markets when the user's message references the screen
+            // This saves ~2K tokens per message when asking about P&L, balance, etc.
+            if (includeMarkets) {
+                const filtered = window._lastFilteredMarkets || (typeof allMarkets !== 'undefined' ? allMarkets : []);
+                if (filtered.length > 0) {
+                    ctx.visible_markets = filtered.slice(0, 30).map(m => ({
+                        ticker: m.ticker, title: m.title || m.event_ticker,
+                        yes_bid: m.yes_bid, yes_ask: m.yes_ask,
+                        no_bid: m.no_bid, no_ask: m.no_ask,
+                        volume: m.volume, market_type: m.market_type,
+                    }));
+                }
             }
             return ctx;
         }
@@ -2373,8 +2376,9 @@
             const assistantEl = appendMsg('assistant', '', true);
             const bubbleEl = assistantEl.querySelector('.claude-msg-bubble');
 
-            // Gather live context in parallel with UI update
-            const context = await gatherMeridianContext();
+            // Gather live context — only include visible markets if the message references the screen
+            const needsMarkets = /\b(this|these|screen|see|look|show|market|game|what.?s (on|live)|deploy|scan|which)\b/i.test(text);
+            const context = await gatherMeridianContext(needsMarkets);
 
             try {
                 const resp = await fetch(`${API_BASE}/chat`, {
@@ -2493,6 +2497,10 @@
                 }
                 chatMessages.push({ role: 'assistant', content: fullText });
                 saveChatToStorage();
+                // Auto-summarize if conversation is getting long (saves tokens)
+                if (chatMessages.length > 20) {
+                    summarizeOldMessages();
+                }
             } catch (e) {
                 bubbleEl.innerHTML = '<span style="color:#ff4444">Connection error: ' + e.message + '</span>';
             }
@@ -2523,6 +2531,27 @@
         function scrollChat() {
             const msgsEl = document.getElementById('claude-chat-messages');
             msgsEl.scrollTop = msgsEl.scrollHeight;
+        }
+
+        // ── Auto-summarization of long conversations ──
+        async function summarizeOldMessages() {
+            if (chatMessages.length <= 20) return;
+            try {
+                const resp = await fetch(`${API_BASE}/chat/summarize`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ messages: chatMessages }),
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (data.compressed) {
+                    chatMessages = data.compressed;
+                    saveChatToStorage();
+                    console.log(`Chat compressed: ${data.original_count} → ${data.compressed_count} messages`);
+                }
+            } catch (e) {
+                console.log('Auto-summarize skipped:', e);
+            }
         }
 
         // ── Screenshot capture for Claude's take_screenshot tool ──
@@ -2866,6 +2895,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260320ac"></script>
+    <script src="app.js?v=20260320ad"></script>
 </body>
 </html>

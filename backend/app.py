@@ -16872,6 +16872,65 @@ def _execute_chat_tool(tool_name, tool_input):
     except Exception as e:
         return {'error': str(e)}
 
+# ── Conversation summarization (compress old messages to save tokens) ────
+@app.route('/api/chat/summarize', methods=['POST'])
+def chat_summarize():
+    """Summarize older conversation messages using Haiku to reduce token count."""
+    body = request.json or {}
+    messages = body.get('messages', [])
+    if len(messages) < 10:
+        return jsonify({'error': 'Not enough messages to summarize'}), 400
+
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'ANTHROPIC_API_KEY not set'}), 500
+
+    # Take all but the last 6 messages (keep recent context fresh)
+    to_summarize = messages[:-6]
+    keep_recent = messages[-6:]
+
+    # Build a compact transcript for Haiku to summarize
+    transcript_parts = []
+    for m in to_summarize:
+        role = m.get('role', '?')
+        content = m.get('content', '')
+        if isinstance(content, list):
+            # Multi-part content (images + text) — just extract text parts
+            text_parts = [c.get('text', '') for c in content if isinstance(c, dict) and c.get('type') == 'text']
+            content = ' '.join(text_parts) or '(image)'
+        # Truncate very long messages
+        if len(content) > 500:
+            content = content[:500] + '...'
+        transcript_parts.append(f"{'User' if role == 'user' else 'Claude'}: {content}")
+    transcript = '\n'.join(transcript_parts)
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=800,
+            system='You summarize trading chat conversations. Output a concise summary (max 200 words) of what was discussed, what actions were taken (bets placed, bots created, markets analyzed), and any important context. Use bullet points. Do NOT include greetings or filler.',
+            messages=[{'role': 'user', 'content': f'Summarize this trading chat:\n\n{transcript}'}],
+        )
+        summary = resp.content[0].text if resp.content else 'No summary generated.'
+
+        # Build the compressed message history:
+        # 1. A system-style summary of older messages
+        # 2. The recent messages kept intact
+        compressed = [
+            {'role': 'user', 'content': f'[Earlier in this conversation, we discussed the following — use as context but do not repeat back to me:\n{summary}]'},
+            {'role': 'assistant', 'content': 'Got it, I have context from our earlier conversation. What would you like to do now?'},
+        ] + keep_recent
+
+        return jsonify({
+            'compressed': compressed,
+            'original_count': len(messages),
+            'compressed_count': len(compressed),
+            'summary': summary,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Summarization failed: {e}'}), 500
+
 # ── Screenshot upload (from frontend, for take_screenshot tool) ──────────
 @app.route('/api/chat/screenshot', methods=['POST'])
 def chat_screenshot():

@@ -1337,12 +1337,12 @@ function displayMarkets(markets) {
     fetch(`${API_BASE}/scan/middles`).then(r => r.json()).then(data => {
         const rMap = {};
         for (const opp of (data.middles || [])) {
-            if ((opp.catch_score || 0) >= 6 || (opp.guaranteed_profit || 0) > 0) {
+            if ((opp.catch_score || 0) >= 6) {
                 const ta = opp.ticker_a || '', tb = opp.ticker_b || '';
-                const gp = opp.guaranteed_profit || 0;
                 const sc = Math.round(opp.catch_score || 0);
-                if (ta) rMap[ta] = { partner: tb, guaranteed: gp, score: sc };
-                if (tb) rMap[tb] = { partner: ta, guaranteed: gp, score: sc };
+                const mw = opp.middle_width || 0;
+                if (ta) rMap[ta] = { partner: tb, score: sc, width: mw };
+                if (tb) rMap[tb] = { partner: ta, score: sc, width: mw };
             }
         }
         window._middleRecoMap = rMap;
@@ -2231,7 +2231,7 @@ function createMarketRow(market, label) {
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
     if (middleReco && !botTypes.meridian) {
-        recoTypes.push({ type: 'meridian', tip: `Middle: pair with ${middleReco.partner}, ${middleReco.guaranteed > 0 ? middleReco.guaranteed + '¢ guaranteed' : 'score ' + middleReco.score}` });
+        recoTypes.push({ type: 'meridian', tip: `Meridian: ${middleReco.width}pt middle, catch score ${middleReco.score}` });
     }
     if (recoTypes.length > 0) {
         const rWrap = document.createElement('span');

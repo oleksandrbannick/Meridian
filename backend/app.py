@@ -8323,6 +8323,21 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         wait_s = now - dog_filled_at
         if wait_s >= hedge_timeout_s:
             avg_dog = bot.get('avg_fill_price', 0)
+            # Check if market is dead (settled/closed) — don't retry sells on dead markets
+            try:
+                _mkt_check = kalshi_client.get_market(ticker)
+                _mkt_data = _mkt_check.get('market', _mkt_check)
+                _mkt_status = _mkt_data.get('status', '')
+                if _mkt_status not in ('active', 'open', ''):
+                    print(f'⏰ PHANTOM MARKET SETTLED: {bot_id} market={_mkt_status} — waiting for auto-settlement (no sell needed)')
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    bot['result'] = 'market_settled_with_position'
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'phantom_market_settled'})
+                    return
+            except Exception:
+                pass
             print(f'⏰ PHANTOM NO-FAV TIMEOUT: {bot_id} waited {wait_s:.0f}s for fav bid — selling back')
             _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
             return

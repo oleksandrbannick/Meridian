@@ -2297,6 +2297,9 @@ class KalshiWSManager:
         def on_close(ws, close_status_code, close_msg):
             self._connected = False
             self._sids = {}  # Clear stale subscription IDs so re-subscribe sends fresh commands
+            # Save tickers before clearing so reconnect can resubscribe
+            self._reconnect_tickers = set(self._subscribed_tickers)
+            self._subscribed_tickers = set()  # Clear so subscribe() treats them as new
             print(f'🔌 Kalshi WS closed: {close_status_code} {close_msg}')
             # Auto-reconnect after 5 seconds
             threading.Timer(5.0, lambda: self._auto_reconnect(kalshi_api)).start()
@@ -2327,10 +2330,11 @@ class KalshiWSManager:
         print('🔄 WS auto-reconnect...')
         try:
             self.connect(kalshi_api)
-            # Re-subscribe after reconnect
+            # Re-subscribe after reconnect using tickers saved before close cleared them
             time.sleep(1)
-            if self._subscribed_tickers:
-                self.subscribe(list(self._subscribed_tickers))
+            reconnect_tickers = getattr(self, '_reconnect_tickers', set())
+            if reconnect_tickers:
+                self.subscribe(list(reconnect_tickers))
             threading.Timer(1.0, self._subscribe_portfolio).start()
         except Exception as e:
             print(f'❌ WS reconnect failed: {e}')
@@ -2787,13 +2791,14 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             else:
                 bot['no_fill_qty'] = total_fill
             print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
-            # All rungs filled? Hedge immediately
+            # All rungs filled? Hedge immediately (guard against double-fire)
             _hedge_spawned = False
-            if total_fill >= bot['total_dog_qty']:
+            if total_fill >= bot['total_dog_qty'] and not bot.get('_hedge_fired'):
+                bot['_hedge_fired'] = True
                 bot['dog_filled_at'] = time.time()
                 threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
                 _hedge_spawned = True
-            elif not bot.get('_sweep_timer_started'):
+            elif not bot.get('_sweep_timer_started') and not bot.get('_hedge_fired'):
                 # Partial fill — hedge immediately with whatever is filled, cancel remainder after
                 bot['_sweep_timer_started'] = True
                 bot['first_fill_at'] = time.time()
@@ -3082,8 +3087,9 @@ def _execute_phantom_ladder_hedge(bot_id):
         total_fill_qty = bot.get('total_dog_fill_qty', 0)
         precalc_hedges = bot.get('_precalc_hedge_prices', {})
         precalc_avgs = bot.get('_precalc_avg_prices', {})
-        hedge_price = precalc_hedges.get(total_fill_qty, 0)
-        avg_price = precalc_avgs.get(total_fill_qty, 0)
+        # JSON round-trip converts int keys to strings — try both
+        hedge_price = precalc_hedges.get(total_fill_qty) or precalc_hedges.get(str(total_fill_qty), 0)
+        avg_price = precalc_avgs.get(total_fill_qty) or precalc_avgs.get(str(total_fill_qty), 0)
 
         if hedge_price > 0 and avg_price > 0 and total_fill_qty > 0:
             # Instant path — all values pre-calculated, straight to API
@@ -3137,7 +3143,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
 
             # Try precalc with computed qty, else compute from scratch
-            hedge_price = precalc_hedges.get(total_fill_qty, 0)
+            hedge_price = precalc_hedges.get(total_fill_qty) or precalc_hedges.get(str(total_fill_qty), 0)
             if hedge_price <= 0:
                 target_width = bot.get('target_width', 5)
                 hedge_price = _precalc_phantom_hedge(avg_price, target_width, dog_side, total_fill_qty)
@@ -5419,7 +5425,7 @@ def _check_apex_rung_completions(bot_id, bot):
                 api_rate_limiter.wait()
                 order_resp = kalshi_client.get_order(hedge_oid)
                 order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
-                actual_fills = order_data.get('fill_count', 0) or order_data.get('filled_count', 0) or 0
+                actual_fills = _parse_fill_count(order_data)
                 order_status = order_data.get('status', '')
                 if actual_fills == 0 and order_status in ('canceled', 'cancelled', 'expired', ''):
                     print(f'🚨 HEDGE VERIFICATION FAILED: {bot_id} order {hedge_oid[:12]} has 0 fills (status={order_status}) — clearing phantom fills')
@@ -5502,59 +5508,65 @@ def _cancel_with_retry(oid, max_retries=2):
 
 def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
     """Late Fill Protocol — recalc weighted avg, amend hedge, preserve walk timer."""
-    filled_side = bot.get('first_fill_side')
-    unfilled_side = 'no' if filled_side == 'yes' else 'yes'
-    qty_per = bot.get('quantity', 1)
+    # Phase 1: compute new values inside lock (fast)
+    with ws_fill_lock:
+        filled_side = bot.get('first_fill_side')
+        unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+        qty_per = bot.get('quantity', 1)
 
-    # 1. Recalculate weighted average across ALL filled anchors
-    total_qty = 0
-    total_cost = 0
-    total_width_x_qty = 0
-    for r in bot.get('rungs', []):
-        fq = min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
-        if fq > 0:
-            total_qty += fq
-            total_cost += fq * r.get(f'{filled_side}_price', 0)
-            total_width_x_qty += fq * r.get('width', 0)
-    if total_qty <= 0:
-        return
+        # 1. Recalculate weighted average across ALL filled anchors
+        total_qty = 0
+        total_cost = 0
+        total_width_x_qty = 0
+        for r in bot.get('rungs', []):
+            fq = min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+            if fq > 0:
+                total_qty += fq
+                total_cost += fq * r.get(f'{filled_side}_price', 0)
+                total_width_x_qty += fq * r.get('width', 0)
+        if total_qty <= 0:
+            return
 
-    new_avg_price = total_cost / total_qty
-    new_avg_width = total_width_x_qty / total_qty
-    new_target = round(100 - new_avg_price - new_avg_width)
+        new_avg_price = total_cost / total_qty
+        new_avg_width = total_width_x_qty / total_qty
+        new_target = round(100 - new_avg_price - new_avg_width)
 
-    old_hedge_qty = bot.get('hedge_qty', 0)
-    bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
-    old_target = bot.get('_target_hedge_price', new_target)
-    bot['_target_hedge_price'] = new_target
+        old_hedge_qty = bot.get('hedge_qty', 0)
+        bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
+        old_target = bot.get('_target_hedge_price', new_target)
+        bot['_target_hedge_price'] = new_target
 
-    # 2. Price = new target + walk offset (preserve walk progress, adjust for new avg width)
-    hedge_oid = bot.get('hedge_order_id')
-    if not hedge_oid:
-        return
+        # 2. Price = new target + walk offset (preserve walk progress, adjust for new avg width)
+        hedge_oid = bot.get('hedge_order_id')
+        if not hedge_oid:
+            return
 
-    current_hedge_price = bot.get('hedge_price', 0)
-    walk_offset = max(0, current_hedge_price - old_target)
-    amend_price = max(1, new_target + walk_offset)
+        current_hedge_price = bot.get('hedge_price', 0)
+        walk_offset = max(0, current_hedge_price - old_target)
+        amend_price = max(1, new_target + walk_offset)
+        ticker = bot['ticker']
 
-    # 4. DO NOT reset walk timer — walk_start_time / step count preserved
-
+    # Phase 2: API call OUTSIDE lock (no contention)
+    # DO NOT reset walk timer — walk_start_time / step count preserved
     try:
         amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
         api_rate_limiter.wait()
         kalshi_client.amend_order(
-            hedge_oid, ticker=bot['ticker'],
+            hedge_oid, ticker=ticker,
             side=unfilled_side, count=total_qty,
             **amend_kwargs
         )
-        bot['hedge_qty'] = total_qty
-        if amend_price != bot.get('hedge_price'):
-            bot['hedge_price'] = amend_price
+        # Phase 3: write results back inside lock
+        with ws_fill_lock:
+            bot['hedge_qty'] = total_qty
+            if amend_price != bot.get('hedge_price'):
+                bot['hedge_price'] = amend_price
         print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
               f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
     except Exception as e:
         print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
-        bot['hedge_qty'] = old_hedge_qty  # rollback on failure
+        with ws_fill_lock:
+            bot['hedge_qty'] = old_hedge_qty  # rollback on failure
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
@@ -7514,6 +7526,10 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['no_order_id'] = new_order_id
                     bot['no_price'] = actual_new_price
 
+                # Recalculate precalc hedge price for new dog price
+                target_width = bot.get('target_width', 5)
+                bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_new_price, target_width, dog_side, qty)
+
                 print(f'🔄 PHANTOM REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
                       f'({trigger_reason} bid={current_dog_bid}¢ ask={current_dog_ask}¢ #{bot["dog_repost_count"]})')
                 actions.append({'bot_id': bot_id, 'action': 'anchor_dog_repost',
@@ -8110,6 +8126,23 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     session_pnl['gross_loss_cents'] += loss
                     session_pnl['stopped_bots'] += 1
                     print(f'🏁 PHANTOM LADDER SETTLED LOSS: {bot_id} dog={dog_side} result={mkt_al_result} loss={loss}¢')
+                profit = pnl if dog_won else -loss
+                _record_trade({
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': int(avg_price) if dog_side == 'yes' else 0,
+                    'no_price': int(avg_price) if dog_side == 'no' else 0,
+                    'quantity': total_fill,
+                    'profit_cents': max(0, profit), 'loss_cents': max(0, -profit),
+                    'result': f'settled_{"win" if dog_won else "loss"}_{dog_side}',
+                    'exit_via': 'anchor_ladder_settlement',
+                    'first_leg': dog_side,
+                    'timestamp': now,
+                    'placed_at': bot.get('created_at', now),
+                    'arb_width': bot.get('target_width', 0),
+                    'game_phase': 'settled',
+                    'fill_source': 'anchor_ladder_settlement',
+                    'bot_category': 'anchor_ladder',
+                }, bot)
             bot['status'] = 'completed'
             bot['completed_at'] = now
             bot['_trade_recorded'] = True
@@ -8179,6 +8212,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['fav_last_walk_at'] = None
                 bot['avg_fill_price'] = None
                 bot['hedge_qty'] = None
+                bot['first_fill_at'] = None  # clear stale latency from prior cycle
                 bot['status'] = 'ladder_posted'
                 bot['posted_at'] = now
                 bot['_order_group_id'] = repeat_ph_group
@@ -9172,6 +9206,7 @@ def _handle_apex(bot_id, bot, actions):
                 print(f'📊 APEX HEDGE CALC: {bot_id} avg_anchor={avg_filled_price}¢ weighted_width={weighted_avg_width:.1f}¢ target={target_hedge}¢ bid={unfilled_bid}¢ ask={unfilled_ask}¢ placing@{hedge_price}¢')
 
                 # ── HEDGE FIRST — gets priority burst token before cancels ──
+                _pre_cancel_oids = []
                 if hedge_price > 0:
                     try:
                         hedge_resp, actual_hedge = create_order_maker(
@@ -9211,7 +9246,7 @@ def _handle_apex(bot_id, bot, actions):
 
                 # ── THEN cancel remaining UNFILLED-SIDE orders (collected before clearing) ──
                 # NEVER cancel anchor (filled_side) orders — they stay alive for late fills
-                cancel_oids = _pre_cancel_oids if '_pre_cancel_oids' in dir() else []
+                cancel_oids = _pre_cancel_oids
                 if not cancel_oids:
                     # Fallback: collect from rungs (for non-consolidation path)
                     for _rung in bot.get('rungs', []):

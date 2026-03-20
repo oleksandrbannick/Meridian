@@ -4820,17 +4820,17 @@ async function placeSelectedWidthsBots() {
     console.log(`[DEPLOY] validWidths=${validWidths.length}, routing to ladder-arb (Apex)`);
 
     // Close modal IMMEDIATELY — don't wait for Kalshi API round trips
+    const deployTicker = currentArbMarket.ticker;
     closeModal();
-    if (deployBtn) { deployBtn.disabled = false; _updateDeployButton(); }
     if (!autoMonitorInterval) toggleAutoMonitor();
-    showNotification(`△ Deploying Apex: ${validWidths.length} widths on ${currentArbMarket.ticker}...`);
+    showNotification(`△ Deploying Apex: ${validWidths.length} widths on ${deployTicker}...`);
 
     // Fire API call in background — notification updates when done
     fetch(`${API_BASE}/bot/ladder-arb`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            ticker: currentArbMarket.ticker,
+            ticker: deployTicker,
             widths: validWidths.map(v => v.w),
             quantity: qty,
             width_scaling: useScaling,

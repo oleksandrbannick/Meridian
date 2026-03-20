@@ -5947,14 +5947,32 @@ def _execute_apex_completion(bot_id):
                     _eh_status = _eh_data.get('status', '')
                     _eh_fills = _parse_fill_count(_eh_data)
                     if _eh_fills > 0:
-                        # Extra hedge got fills — recompute already counted these in filled_qty,
-                        # so only add fills ABOVE what's already tracked to avoid double-counting.
-                        already_counted = bot.get('_hedge_fill_count', 0)
-                        extra_new = max(0, _eh_fills - already_counted)
-                        if extra_new > 0:
-                            hedge_qty += extra_new
-                        unhedged = anchor_qty - hedge_qty
-                        print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} has {_eh_fills} fills (already counted={already_counted}), unhedged now {unhedged}')
+                        # Extra hedge fills settle against unhedged anchors on Kalshi instantly.
+                        # Query Kalshi for ACTUAL remaining position instead of using stale local counts.
+                        try:
+                            api_rate_limiter.wait()
+                            _pos_resp = kalshi_client.get_positions(ticker=bot.get('ticker', ''))
+                            _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                            _real_qty = 0
+                            for _p in _positions:
+                                if _p.get('ticker') == bot.get('ticker', ''):
+                                    _real_qty = abs(_parse_position_qty(_p))
+                                    break
+                            if _real_qty == 0:
+                                # No position on Kalshi — everything settled, we're done
+                                print(f'✅ APEX EXTRA HEDGE SETTLED: {bot_id} — Kalshi position is 0, all settled')
+                                unhedged = 0
+                            else:
+                                unhedged = _real_qty
+                                print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} has {_eh_fills} fills, Kalshi position={_real_qty}, unhedged={unhedged}')
+                        except Exception as _pe:
+                            # Can't verify — fall back to local tracking
+                            already_counted = bot.get('_hedge_fill_count', 0)
+                            extra_new = max(0, _eh_fills - already_counted)
+                            if extra_new > 0:
+                                hedge_qty += extra_new
+                            unhedged = anchor_qty - hedge_qty
+                            print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} fills={_eh_fills} (Kalshi check failed: {_pe}), unhedged={unhedged}')
                     elif _eh_status in ('resting', 'pending'):
                         # Still alive and waiting — don't spam new ones
                         return

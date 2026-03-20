@@ -12743,24 +12743,26 @@ def settle_middle(trade_id):
             trade['middle_hit'] = middle_hit
             trade['status'] = 'settled'
 
+            # Fees: maker fee on each NO leg
+            fee = _kalshi_side_fee_cents(p1, qty) + _kalshi_side_fee_cents(p2, qty)
             if middle_hit:
-                profit = round(((100 - p1) + (100 - p2)) * qty)
+                profit = round(((100 - p1) + (100 - p2)) * qty - fee)
                 trade['profit_cents'] = profit
                 trade['loss_cents']   = 0
                 trade['result']       = 'middle_hit'
             elif r1 == 'win':
-                net = round((100 - p1) * qty - p2 * qty)
+                net = round((100 - p1) * qty - p2 * qty - fee)
                 trade['profit_cents'] = max(0, net)
                 trade['loss_cents']   = max(0, -net)
                 trade['result']       = 'arb_win' if net >= 0 else 'loss'
             elif r2 == 'win':
-                net = round((100 - p2) * qty - p1 * qty)
+                net = round((100 - p2) * qty - p1 * qty - fee)
                 trade['profit_cents'] = max(0, net)
                 trade['loss_cents']   = max(0, -net)
                 trade['result']       = 'arb_win' if net >= 0 else 'loss'
             else:
                 trade['profit_cents'] = 0
-                trade['loss_cents']   = round((p1 + p2) * qty)
+                trade['loss_cents']   = round((p1 + p2) * qty + fee)
                 trade['result']       = 'loss'
 
             save_state()
@@ -13280,7 +13282,9 @@ def cancel_bot(bot_id):
                 watch_entry = bot.get('entry_price', 0) or (entry_yes if watch_side == 'yes' else entry_no)
                 watch_sell = sell_prices.get(watch_side, 0)
                 watch_qty = bot.get('fill_qty', bot.get('quantity', 1))
-                profit = (watch_sell - watch_entry) * watch_qty
+                buy_fee = _kalshi_side_fee_cents(watch_entry, watch_qty)
+                sell_fee = _kalshi_taker_side_fee_cents(watch_sell, watch_qty) if watch_sell else 0
+                profit = (watch_sell - watch_entry) * watch_qty - buy_fee - sell_fee
                 _record_trade({
                     'bot_id': bot_id, 'ticker': ticker,
                     'yes_price': watch_entry if watch_side == 'yes' else 0,
@@ -13304,7 +13308,9 @@ def cancel_bot(bot_id):
                     # Both legs exited — either amend-completed arb or both sold at market
                     actual_yes_fill = sell_prices.get('yes', entry_yes)
                     actual_no_fill  = sell_prices.get('no', entry_no)
-                    profit = (100 - actual_yes_fill - actual_no_fill) * min(yes_sold_qty, no_sold_qty)
+                    exit_qty = min(yes_sold_qty, no_sold_qty)
+                    fee = kalshi_fee_cents(actual_yes_fill, actual_no_fill, exit_qty)
+                    profit = (100 - actual_yes_fill - actual_no_fill) * exit_qty - fee
                     trade_result = ('amended' if profit < 0 else 'completed') if arb_completed_via_amend else 'manual_exit_completed'
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
@@ -13330,7 +13336,9 @@ def cancel_bot(bot_id):
                 elif yes_sold_qty > 0:
                     # Only YES was filled and sold at market
                     yes_sell = sell_prices.get('yes', 0)
-                    profit = (yes_sell - entry_yes) * yes_sold_qty
+                    buy_fee = _kalshi_side_fee_cents(entry_yes, yes_sold_qty)
+                    sell_fee = _kalshi_taker_side_fee_cents(yes_sell, yes_sold_qty) if yes_sell else 0
+                    profit = (yes_sell - entry_yes) * yes_sold_qty - buy_fee - sell_fee
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': entry_yes, 'no_price': entry_no,
@@ -13354,7 +13362,9 @@ def cancel_bot(bot_id):
                 elif no_sold_qty > 0:
                     # Only NO was filled and sold at market
                     no_sell = sell_prices.get('no', 0)
-                    profit = (no_sell - entry_no) * no_sold_qty
+                    buy_fee = _kalshi_side_fee_cents(entry_no, no_sold_qty)
+                    sell_fee = _kalshi_taker_side_fee_cents(no_sell, no_sold_qty) if no_sell else 0
+                    profit = (no_sell - entry_no) * no_sold_qty - buy_fee - sell_fee
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': entry_yes, 'no_price': entry_no,

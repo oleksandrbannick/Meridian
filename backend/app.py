@@ -5390,7 +5390,23 @@ def _record_rung_completion(bot_id, bot, rung):
                 no_p = actual_hedge_price
 
     pnl_cents = (100 - yes_p - no_p) * rq
-    fee = kalshi_fee_cents(yes_p, no_p, rq)
+
+    # Fee calculation: anchor side = separate order per rung (ceil per-rung is correct).
+    # Hedge side = single consolidated order — compute fee on total qty and prorate to this rung
+    # to match what Kalshi actually charges (one ceil on full order, not ceil-per-rung).
+    filled_side = bot.get('first_fill_side', 'yes')
+    anchor_price = yes_p if filled_side == 'yes' else no_p
+    hedge_price_val = no_p if filled_side == 'yes' else yes_p
+    anchor_fee = _kalshi_side_fee_cents(anchor_price, rq)
+
+    hedge_total_qty = bot.get('hedge_qty', rq)
+    if hedge_total_qty > 0 and hedge_total_qty != rq:
+        total_hedge_fee = _kalshi_side_fee_cents(hedge_price_val, hedge_total_qty)
+        rung_hedge_fee = round(total_hedge_fee * rq / hedge_total_qty)
+    else:
+        rung_hedge_fee = _kalshi_side_fee_cents(hedge_price_val, rq)
+
+    fee = anchor_fee + rung_hedge_fee
     net_pnl = pnl_cents - fee
 
     if net_pnl >= 0:
@@ -11509,7 +11525,10 @@ def _run_monitor():
                                  (sell_info or {}).get('sell_price', 0)
 
                     if status == 'one_filled':
-                        loss_cents = (fill_price - (sell_price or fill_price)) * qty
+                        buy_fee = _kalshi_side_fee_cents(fill_price, qty)
+                        sell_fee = _kalshi_taker_side_fee_cents(sell_price, qty) if sell_price else 0
+                        scrape_fees = buy_fee + sell_fee
+                        loss_cents = (fill_price - (sell_price or fill_price)) * qty + scrape_fees
                         bot['status'] = 'stopped'
                         bot['stopped_at'] = now_m
                         bot['sl_sell_price'] = sell_price
@@ -11524,6 +11543,7 @@ def _run_monitor():
                             'target_price': bot.get('target_price'), 'qty': qty,
                             'filled_leg': check_leg, 'fill_price': fill_price,
                             'sl_sell_price': sell_price, 'loss_cents': loss_cents,
+                            'fee_cents': scrape_fees,
                             'result': 'rebalancer_scrape', 'timestamp': now_m,
                             'note': f'rebalancer scrape: {team_code} margin={margin} spread={check_spread} bid={live_bid}c secs={secs}',
                         }, bot)
@@ -11892,7 +11912,10 @@ def _run_monitor():
                                 # Market-sell the filled leg
                                 sold_sl, sell_info_sl = execute_sell(filled_ticker, 'no', qty_m, reason=f'middle_sl_{bot_id}')
                                 sell_price_sl = (sell_info_sl or {}).get('actual_fill_price') or (sell_info_sl or {}).get('sell_price', 0)
-                                loss_cents = (fill_price - (sell_price_sl or fill_price)) * qty_m
+                                sl_buy_fee = _kalshi_side_fee_cents(fill_price, qty_m)
+                                sl_sell_fee = _kalshi_taker_side_fee_cents(sell_price_sl, qty_m) if sell_price_sl else 0
+                                sl_fees = sl_buy_fee + sl_sell_fee
+                                loss_cents = (fill_price - (sell_price_sl or fill_price)) * qty_m + sl_fees
                                 bot['status'] = 'stopped'
                                 bot['stopped_at'] = now_m
                                 bot['sl_sell_price'] = sell_price_sl
@@ -11906,6 +11929,7 @@ def _run_monitor():
                                     'target_price': bot.get('target_price'), 'qty': qty_m,
                                     'filled_leg': filled_leg, 'fill_price': fill_price,
                                     'sl_sell_price': sell_price_sl, 'loss_cents': loss_cents,
+                                    'fee_cents': sl_fees,
                                     'result': 'stopped_sl', 'timestamp': now_m,
                                     'note': f'stop-loss: {filled_leg} bid={live_bid}¢ < trigger={sl_trigger}¢',
                                 }, bot)
@@ -12013,7 +12037,11 @@ def _run_monitor():
                     middle_hit = leg_a_win and leg_b_win
                     profit_a = (100 - fill_a) * qty_s if leg_a_win else (-fill_a * qty_s)
                     profit_b = (100 - fill_b) * qty_s if leg_b_win else (-fill_b * qty_s)
-                    total_profit = profit_a + profit_b
+                    # Maker fees on both NO legs (each is a posted limit order)
+                    fee_a = _kalshi_side_fee_cents(fill_a, qty_s)
+                    fee_b = _kalshi_side_fee_cents(fill_b, qty_s)
+                    total_fee = fee_a + fee_b
+                    total_profit = profit_a + profit_b - total_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
                     bot['leg_a_result'] = 'win' if leg_a_win else 'loss'
@@ -12036,6 +12064,7 @@ def _run_monitor():
                         'middle_hit': middle_hit,
                         'profit_cents': max(0, total_profit),
                         'loss_cents': max(0, -total_profit),
+                        'fee_cents': total_fee,
                         'result': 'middle_hit' if middle_hit else ('arb_win' if (leg_a_win or leg_b_win) else 'loss'),
                         'timestamp': now_s,
                         'note': f'{"MIDDLE HIT" if middle_hit else ("partial win" if (leg_a_win or leg_b_win) else "both lost")} — A:{result_a} B:{result_b}',
@@ -12070,7 +12099,8 @@ def _run_monitor():
                     filled_leg_win = (result_f == 'no')
                     qty_s = bot.get('qty', 1)
                     fill_price = bot.get(f'leg_{filled_leg}_fill_price') or bot.get('target_price', 49)
-                    profit = (100 - fill_price) * qty_s if filled_leg_win else (-fill_price * qty_s)
+                    one_leg_fee = _kalshi_side_fee_cents(fill_price, qty_s)
+                    profit = ((100 - fill_price) * qty_s if filled_leg_win else (-fill_price * qty_s)) - one_leg_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
                     bot[f'leg_{filled_leg}_result'] = 'win' if filled_leg_win else 'loss'
@@ -12093,6 +12123,7 @@ def _run_monitor():
                         'middle_hit': False,
                         'profit_cents': max(0, profit),
                         'loss_cents': max(0, -profit),
+                        'fee_cents': one_leg_fee,
                         'result': 'arb_win' if profit > 0 else 'loss',
                         'timestamp': now_s,
                         'note': f'one-leg settle: {filled_leg} {"win" if filled_leg_win else "loss"}, {unfilled_leg} cancelled/unfilled',
@@ -17471,9 +17502,9 @@ def bot_stats_by_type():
         if not trades:
             stats[cat] = {'trades': 0, 'win_rate': 0, 'avg_profit': 0, 'total_profit': 0}
             continue
-        # Win = net profit on the trade is positive (profit - loss - fees > 0)
-        wins = sum(1 for t in trades if ((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) - (t.get('fee_cents', 0) or 0)) > 0)
-        total_profit = sum((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) - (t.get('fee_cents', 0) or 0) for t in trades)
+        # Win = net profit on the trade is positive (profit_cents already has fees deducted)
+        wins = sum(1 for t in trades if ((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0)) > 0)
+        total_profit = sum((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) for t in trades)
         stats[cat] = {
             'trades': len(trades),
             'win_rate': round(wins / len(trades) * 100) if trades else 0,

@@ -5815,6 +5815,22 @@ def _execute_apex_completion(bot_id):
         now = time.time()
         qty_per = bot.get('quantity', 1)
 
+        # ── Record any pending rung completions BEFORE finalizing ──
+        _recompute_apex_fills(bot)
+        _check_apex_rung_completions(bot_id, bot)
+
+        # ── Guard: don't complete with 0 rungs if there are filled positions ──
+        filled_side_for_guard = bot.get('first_fill_side', 'yes')
+        filled_rungs_count = sum(1 for r in bot.get('rungs', [])
+                                 if r.get(f'{filled_side_for_guard}_fill_qty', 0) > 0)
+        if bot.get('completed_rungs_count', 0) == 0 and filled_rungs_count > 0:
+            print(f'🚨 APEX ABORT COMPLETION: {bot_id} has {filled_rungs_count} filled rungs but 0 completions recorded — NOT completing')
+            bot_log('ERROR', bot_id, {'step': 'apex_completion_aborted',
+                                      'reason': '0_rungs_with_fills',
+                                      'filled_rungs': filled_rungs_count})
+            _audit('APEX_COMPLETION_ABORTED', bot_id, {'filled_rungs': filled_rungs_count, 'completed_rungs': 0})
+            return
+
         # ── INSTANT KILL: cancel order group first (1 API call kills all anchors) ──
         _og = bot.get('_order_group_id')
         _group_cancelled = False
@@ -5928,10 +5944,14 @@ def _execute_apex_completion(bot_id):
                     _eh_status = _eh_data.get('status', '')
                     _eh_fills = _parse_fill_count(_eh_data)
                     if _eh_fills > 0:
-                        # Extra hedge got fills — update and let completion proceed
-                        hedge_qty += _eh_fills
+                        # Extra hedge got fills — recompute already counted these in filled_qty,
+                        # so only add fills ABOVE what's already tracked to avoid double-counting.
+                        already_counted = bot.get('_hedge_fill_count', 0)
+                        extra_new = max(0, _eh_fills - already_counted)
+                        if extra_new > 0:
+                            hedge_qty += extra_new
                         unhedged = anchor_qty - hedge_qty
-                        print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} has {_eh_fills} fills, unhedged now {unhedged}')
+                        print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} has {_eh_fills} fills (already counted={already_counted}), unhedged now {unhedged}')
                     elif _eh_status in ('resting', 'pending'):
                         # Still alive and waiting — don't spam new ones
                         return
@@ -12872,7 +12892,7 @@ def history_stats():
     total_arb = len(arb_wins) + len(arb_losses)
     # Use same PNL_WIN_RESULTS / PNL_LOSS_RESULTS logic as /api/pnl endpoint
     # so Lifetime P&L card and Daily P&L card always show the same number
-    pnl_bucket = _compute_pnl_bucket(arb_trades)
+    pnl_bucket = _compute_pnl_bucket(arb_trades, 'arb')
     total_profit = pnl_bucket['gross_profit_cents']
     total_loss   = pnl_bucket['gross_loss_cents']
     # avg profit/loss still based on wins/loss buckets for meaningful averages
@@ -14207,7 +14227,11 @@ def get_pnl():
         if day_reset > 0 and (t.get('timestamp') or 0) < day_reset:
             continue  # skip pre-reset trades for this day
         lifetime_trades.append(t)
-    lifetime = _compute_pnl_bucket(lifetime_trades, 'arb')
+    lifetime     = _compute_pnl_bucket(lifetime_trades, 'arb')
+    lifetime_bet = _compute_pnl_bucket(lifetime_trades, 'bet')
+    lifetime_mid = _compute_pnl_bucket(lifetime_trades, 'middle')
+    lifetime_dog_trades = [t for t in lifetime_trades if t.get('bot_category') in ('anchor_dog', 'anchor_ladder')]
+    lifetime_dog = _compute_pnl_bucket(lifetime_dog_trades)
     arb_d    = _compute_pnl_bucket(today_trades, 'arb')
     bet_d    = _compute_pnl_bucket(today_trades, 'bet')
     mid_d    = _compute_pnl_bucket(today_trades, 'middle')
@@ -14258,6 +14282,16 @@ def get_pnl():
         'lifetime_net_dollars':        lifetime['net_dollars'],
         'lifetime_completed':          lifetime['completed_bots'],
         'lifetime_stopped':            lifetime['stopped_bots'],
+        # Lifetime per-category
+        'lifetime_bet_net_cents':  lifetime_bet['net_cents'],
+        'lifetime_bet_wins':       lifetime_bet['completed_bots'],
+        'lifetime_bet_losses':     lifetime_bet['stopped_bots'],
+        'lifetime_mid_net_cents':  lifetime_mid['net_cents'],
+        'lifetime_mid_wins':       lifetime_mid['completed_bots'],
+        'lifetime_mid_losses':     lifetime_mid['stopped_bots'],
+        'lifetime_dog_net_cents':  lifetime_dog['net_cents'],
+        'lifetime_dog_wins':       lifetime_dog['completed_bots'],
+        'lifetime_dog_losses':     lifetime_dog['stopped_bots'],
         # Category breakdown (today)
         'arb_net_cents':    arb_d['net_cents'],
         'arb_profit_cents': arb_d['gross_profit_cents'],

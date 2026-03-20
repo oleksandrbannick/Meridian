@@ -10315,10 +10315,28 @@ async function loadBetsHistory() {
         }
         const streakCol = streakType === 'W' ? '#00ff88' : streakType === 'L' ? '#ff4444' : '#555';
 
+        // Fetch /api/pnl for lifetime + daily cards
+        let pnl = {};
+        try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
+        const ltNet = pnl.lifetime_bet_net_cents || 0;
+        const ltCol = ltNet >= 0 ? '#00ff88' : '#ff4444';
+        const dNet_bet = pnl.bet_net_cents || 0;
+        const dCol_bet = dNet_bet >= 0 ? '#00ff88' : '#ff4444';
+
         if (statsEl) {
             statsEl.innerHTML = trades.length === 0
                 ? '<p style="color:#555;text-align:center;font-size:12px;">No straight bets recorded yet.</p>'
                 : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:8px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&amp;L</div>
+                        <div style="color:${ltCol};font-size:24px;font-weight:800;">${ltNet>=0?'+':''}$${(ltNet/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.lifetime_bet_wins||0)}W / ${(pnl.lifetime_bet_losses||0)}L</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&amp;L <span style="font-size:8px;color:#555;">${pnl.day_key||''}</span></div>
+                        <div style="color:${dCol_bet};font-size:24px;font-weight:800;">${dNet_bet>=0?'+':''}$${(dNet_bet/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.bet_wins||0)}W / ${(pnl.bet_losses||0)}L today</div>
+                    </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&amp;L</div>
                         <div style="color:${netCol};font-size:24px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
@@ -10404,11 +10422,13 @@ async function loadBetsHistory() {
                     <div style="color:#555;font-size:10px;margin-bottom:4px;">${t.ticker||''}</div>
                     <div style="display:flex;gap:10px;font-size:11px;flex-wrap:wrap;">
                         <span style="color:${sideCol};font-weight:700;">${(t.side||'YES').toUpperCase()} @ ${t.entry_price||'?'}¢</span>
+                        ${t.exit_price || t.sl_sell_price ? `<span style="color:#8892a6;">→ ${t.exit_price || t.sl_sell_price}¢</span>` : ''}
                         <span style="color:#8892a6;">×${t.quantity||1}</span>
                         ${t.stop_loss_cents ? `<span style="color:#ff4444;font-size:10px;">SL: ${t.stop_loss_cents}¢</span>` : ''}
                         ${t.take_profit_cents ? `<span style="color:#00ff88;font-size:10px;">TP: ${t.take_profit_cents}¢</span>` : ''}
+                        ${t.fee_cents ? `<span style="color:#555;font-size:10px;">Fee: ${t.fee_cents}¢</span>` : ''}
                     </div>
-                    <div style="color:#555;font-size:10px;margin-top:4px;">${dateStr}</div>
+                    <div style="color:#555;font-size:10px;margin-top:4px;">${dateStr}${t.fill_duration_s ? ` · ${t.fill_duration_s < 60 ? t.fill_duration_s + 's' : Math.floor(t.fill_duration_s/60) + 'm ' + (t.fill_duration_s%60) + 's'}` : ''}</div>
                     ${t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:2px;"><span style="color:#3a4560;font-size:9px;font-family:monospace;">${(t.bot_id||'').slice(-12)}</span><button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button></div>` : ''}
                 </div>
                 <div style="text-align:right;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:3px;">
@@ -10472,10 +10492,28 @@ async function loadMiddleHistory() {
             }, 0) / settled.length).toFixed(1)
             : 0;
 
+        // Fetch /api/pnl for lifetime + daily cards
+        let pnl = {};
+        try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
+        const mLtNet = pnl.lifetime_mid_net_cents || 0;
+        const mLtCol = mLtNet >= 0 ? '#00ff88' : '#ff4444';
+        const mDNet = pnl.mid_net_cents || 0;
+        const mDCol = mDNet >= 0 ? '#00ff88' : '#ff4444';
+
         if (statsEl) {
             statsEl.innerHTML = trades.length === 0
                 ? '<p style="color:#555;text-align:center;font-size:12px;">No middles recorded yet. Launch a middle bot from the Middles scanner to start tracking.</p>'
                 : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&amp;L</div>
+                        <div style="color:${mLtCol};font-size:24px;font-weight:800;">${mLtNet>=0?'+':''}$${(mLtNet/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.lifetime_mid_wins||0)}W / ${(pnl.lifetime_mid_losses||0)}L</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&amp;L <span style="font-size:8px;color:#555;">${pnl.day_key||''}</span></div>
+                        <div style="color:${mDCol};font-size:24px;font-weight:800;">${mDNet>=0?'+':''}$${(mDNet/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.mid_wins||0)}W / ${(pnl.mid_losses||0)}L today</div>
+                    </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&amp;L</div>
                         <div style="color:${netCol};font-size:24px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
@@ -10636,6 +10674,7 @@ async function loadMiddleHistory() {
                 <div style="display:flex;gap:12px;font-size:10px;flex-wrap:wrap;margin-top:6px;color:#555;">
                     ${placedTime ? `<span>Placed: ${placedTime}</span>` : ''}
                     <span>Settled: ${dateStr}</span>
+                    ${t.fee_cents ? `<span>Fees: ${t.fee_cents}¢</span>` : ''}
                     ${gameId ? `<span style="font-family:monospace;font-size:8px;">${gameId.split('-').slice(-1)[0]}</span>` : ''}
                 </div>
                 ${orderA || orderB ? `<div style="font-size:8px;margin-top:4px;color:#3a4560;word-break:break-all;">
@@ -10697,9 +10736,27 @@ async function loadDogHistory() {
             const losses = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n < 0; }).length;
             const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.arb_width||0), 0) / trades.length).toFixed(1) : '—';
             const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
+            // Fetch /api/pnl for lifetime + daily cards
+            let pnl = {};
+            try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
+            const dLtNet = pnl.lifetime_dog_net_cents || 0;
+            const dLtCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
+            const dDNet = pnl.dog_net_cents || 0;
+            const dDCol = dDNet >= 0 ? '#00ff88' : '#ff4444';
+
             statsPanel.innerHTML = trades.length === 0
                 ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
                 : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&L</div>
+                        <div style="color:${dLtCol};font-size:24px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.lifetime_dog_wins||0)}W / ${(pnl.lifetime_dog_losses||0)}L</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key||''}</span></div>
+                        <div style="color:${dDCol};font-size:24px;font-weight:800;">${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.dog_wins||0)}W / ${(pnl.dog_losses||0)}L today</div>
+                    </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&L</div>
                         <div style="color:${netCol};font-size:24px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>

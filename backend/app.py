@@ -2221,6 +2221,9 @@ def load_state():
             t['result'] = 'completed'
             if not t.get('exit_via'):
                 t['exit_via'] = 'timeout_amend'
+        # Rung completions are separate trades per rung — never dedup them
+        if t.get('exit_via') == 'ladder_arb_rung_complete':
+            continue
         if bid in _seen_bots and abs(ts - _seen_bots[bid]) < 60:
             _remove_idx.add(i)
         else:
@@ -5980,6 +5983,7 @@ def _execute_apex_completion(bot_id):
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
         bot['_bot_completed'] = True
+        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
         session_pnl['completed_bots'] += 1
 
         if will_repeat:
@@ -5989,6 +5993,7 @@ def _execute_apex_completion(bot_id):
             bot['_consolidated'] = False
             bot['_bot_completed'] = False
             bot['hedge_history'] = []
+            bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
             bot['cumulative_pnl'] = 0
             bot['completed_rungs_count'] = 0
             bot['hedge_order_id'] = None

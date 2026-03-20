@@ -1907,7 +1907,7 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
 
 def _apex_snap_check(anchor_price, bid_price, qty=1):
     """Return True if snapping to bid is profitable. Simple cents check — no fee math.
-    Snap only if combined <= SNAP_CEILING_CENTS (95¢ = 5¢ minimum profit)."""
+    Snap only if combined <= SNAP_CEILING_CENTS (98¢ = 2¢ minimum profit)."""
     combined = anchor_price + bid_price
     return combined <= SNAP_CEILING_CENTS
 
@@ -7171,7 +7171,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 # ANCHOR-DOG MONITOR LOGIC
 # ═══════════════════════════════════════════════════════════════════
 HARD_CEILING_CENTS = 98
-SNAP_CEILING_CENTS = 95  # snap to bid only when combined <= 95¢ (5¢ minimum profit)
+SNAP_CEILING_CENTS = 98  # snap to bid only when combined <= 98¢ (2¢ minimum profit)
 
 def _handle_phantom(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""
@@ -7799,7 +7799,7 @@ def _handle_phantom(bot_id, bot, actions):
                 new_fav_price = walk_target
                 walk_type = 'drop_to_bid'
 
-            # PRIORITY 2: Profit snap to bid (up or down) if >= 5¢ profit
+            # PRIORITY 2: Profit snap to bid (up or down) if >= 2¢ profit
             elif snap_ready and walk_target > current_fav_price:
                 new_fav_price = walk_target
                 walk_type = 'profit_snap'
@@ -8497,7 +8497,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 new_fav_price = walk_target
                 walk_type = 'drop_to_bid'
 
-            # PRIORITY 2: Profit snap to bid if >= 5¢ profit
+            # PRIORITY 2: Profit snap to bid if >= 2¢ profit
             elif snap_ready and walk_target > current_fav_price:
                 new_fav_price = walk_target
                 walk_type = 'profit_snap'
@@ -14292,6 +14292,51 @@ def get_active_positions():
         positions = kalshi_client.get_positions(limit=200)
         pos_list = positions.get('market_positions', positions.get('positions', []))
 
+        # Build bot breakdown per (ticker, side) → [{type, qty}]
+        def _si(v):
+            if isinstance(v, (list, dict)): return 0
+            try: return int(v or 0)
+            except (TypeError, ValueError): return 0
+
+        _bot_breakdown = {}  # (ticker, side) → {type_label: qty}
+        for _bid, b in active_bots.items():
+            if b.get('status') in ('completed', 'stopped', 'cancelled'):
+                continue
+            t = b.get('ticker', '')
+            cat = b.get('bot_category', '')
+            btype = b.get('type', '')
+
+            def _add(tk, sd, label, q):
+                if q > 0 and tk and sd:
+                    key = (tk, sd)
+                    if key not in _bot_breakdown:
+                        _bot_breakdown[key] = {}
+                    _bot_breakdown[key][label] = _bot_breakdown[key].get(label, 0) + q
+
+            if cat in ('anchor_dog', 'anchor_ladder'):
+                dog_side = b.get('dog_side', '')
+                dog_qty = _si(b.get('total_dog_fill_qty')) or _si(b.get('dog_fill_qty')) or _si(b.get('quantity'))
+                fav_side = b.get('fav_side', '')
+                fav_qty = _si(b.get('fav_fill_qty'))
+                _add(t, dog_side, 'phantom', dog_qty)
+                _add(t, fav_side, 'phantom', fav_qty)
+            elif cat == 'ladder_arb':
+                _add(t, 'yes', 'apex', _si(b.get('filled_yes_qty')))
+                _add(t, 'no', 'apex', _si(b.get('filled_no_qty')))
+            elif btype == 'middle':
+                for leg in ('a', 'b'):
+                    mt = b.get(f'ticker_{leg}', '')
+                    if mt and b.get(f'leg_{leg}_filled'):
+                        _add(mt, 'no', 'meridian', _si(b.get('qty', 1)))
+            elif btype == 'watch':
+                ws = b.get('side', '')
+                wq = _si(b.get('quantity', 0))
+                _add(t, ws, 'scout', wq)
+
+        def _breakdown_list(tk, sd):
+            raw = _bot_breakdown.get((tk, sd), {})
+            return [{'type': tp, 'qty': q} for tp, q in raw.items() if q > 0]
+
         enriched = []
         for pos in pos_list:
             qty = _parse_position_qty(pos)
@@ -14342,6 +14387,7 @@ def get_active_positions():
                                         and b['status'] == 'watching'), None),
                     'is_orphaned': bool(orphan_info),
                     'orphaned_qty': orphan_info.get('orphaned_qty', 0),
+                    'managing_bots': _breakdown_list(ticker, side),
                 })
             except Exception:
                 enriched.append({
@@ -14351,6 +14397,7 @@ def get_active_positions():
                     'market_exposure': pos.get('market_exposure', 0),
                     'realized_pnl': pos.get('realized_pnl', 0),
                     'watched_by': None,
+                    'managing_bots': _breakdown_list(ticker, side),
                 })
 
         return jsonify({'positions': enriched, 'count': len(enriched)})

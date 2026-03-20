@@ -4,6 +4,22 @@ function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 
+// Global pixel art bot icons (10×10 base64 PNGs)
+const BOT_ICONS = {
+    apex: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=',
+    phantom: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC',
+    meridian: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=',
+    scout: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAPElEQVR4nGNgQAf/O/6DMUFAUCFMATpGAatCwYKr/p+BK4CzMRSeyQIJQjAyG6tCbJg8hSBAtEJsiskBANz2aymn/yC2AAAAAElFTkSuQmCC',
+};
+const BOT_COLORS = { phantom: '#ff9900', apex: '#00d4ff', meridian: '#cc66ff', scout: '#9966ff' };
+function botIconImg(type, size, opacity) {
+    const src = BOT_ICONS[type];
+    if (!src) return '';
+    const s = size || 12;
+    const o = opacity != null ? opacity : 1;
+    return `<img src="${src}" style="image-rendering:pixelated;width:${s}px;height:${s}px;vertical-align:middle;opacity:${o};">`;
+}
+
 // Scroll to a market card in the marketplace and highlight it
 function scrollToMarket(ticker) {
     // Switch to Markets tab first
@@ -1220,19 +1236,50 @@ function displayMarkets(markets) {
         return;
     }
     
-    // Pre-build ticker → active bot count map (O(n) once, not per row)
-    const botMap = {};
+    // Pre-build ticker → active bot type map (O(n) once, not per row)
+    const botMap = {};  // ticker → {phantom: N, apex: N, meridian: N, scout: N}
     if (window._lastBotsData) {
         const deadSt = new Set(['completed','stopped','cancelled','drift_cancelled']);
+        const catLabel = { anchor_dog: 'phantom', anchor_ladder: 'phantom', ladder_arb: 'apex' };
         for (const bid in window._lastBotsData) {
             const b = window._lastBotsData[bid];
             if (deadSt.has(b.status)) continue;
             const t = b.ticker || '';
-            if (t) botMap[t] = (botMap[t] || 0) + 1;
+            if (!t) continue;
+            let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
+            if (!label) continue;
+            if (!botMap[t]) botMap[t] = {};
+            botMap[t][label] = (botMap[t][label] || 0) + 1;
+            // Middle bots have two tickers
+            if (b.type === 'middle') {
+                for (const leg of ['ticker_a', 'ticker_b']) {
+                    const lt = b[leg] || '';
+                    if (lt && lt !== t) {
+                        if (!botMap[lt]) botMap[lt] = {};
+                        botMap[lt].meridian = (botMap[lt].meridian || 0) + 1;
+                    }
+                }
+            }
         }
     }
-    window._botCountMap = botMap;
-    
+    window._botTypeMap = botMap;
+
+    // Fetch middle scanner results for recommendation icons (non-blocking)
+    if (!window._middleRecoMap) window._middleRecoMap = {};
+    fetch(`${API_BASE}/scan/middles`).then(r => r.json()).then(data => {
+        const rMap = {};
+        for (const opp of (data.middles || [])) {
+            if ((opp.catch_score || 0) >= 6 || (opp.guaranteed_profit || 0) > 0) {
+                const ta = opp.ticker_a || '', tb = opp.ticker_b || '';
+                const gp = opp.guaranteed_profit || 0;
+                const sc = Math.round(opp.catch_score || 0);
+                if (ta) rMap[ta] = { partner: tb, guaranteed: gp, score: sc };
+                if (tb) rMap[tb] = { partner: ta, guaranteed: gp, score: sc };
+            }
+        }
+        window._middleRecoMap = rMap;
+    }).catch(() => {});
+
     console.log(`Organizing ${markets.length} markets into trading floor layout...`);
     
     // Group by event (game) - one compact card per game
@@ -2090,14 +2137,50 @@ function createMarketRow(market, label) {
         labelDiv.appendChild(edgeDot);
     }
 
-    // ── Active bot count badge ──
-    const botCount = (window._botCountMap || {})[market.ticker] || 0;
-    if (botCount > 0) {
-        const botBadge = document.createElement('span');
-        botBadge.style.cssText = 'color:#818cf8;font-size:10px;font-weight:700;margin-left:5px;white-space:nowrap;';
-        botBadge.textContent = `🤖${botCount}`;
-        botBadge.title = `${botCount} active bot${botCount > 1 ? 's' : ''} on this market`;
-        labelDiv.appendChild(botBadge);
+    // ── Active bot type icons ──
+    const botTypes = (window._botTypeMap || {})[market.ticker] || {};
+    const activeBotTypes = Object.keys(botTypes);
+    if (activeBotTypes.length > 0) {
+        const wrap = document.createElement('span');
+        wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
+        for (const bt of activeBotTypes) {
+            const c = BOT_COLORS[bt] || '#818cf8';
+            const n = botTypes[bt];
+            const pill = document.createElement('span');
+            pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+            pill.innerHTML = `${botIconImg(bt, 10)}${n > 1 ? n : ''}`;
+            pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
+            wrap.appendChild(pill);
+        }
+        labelDiv.appendChild(wrap);
+    }
+
+    // ── Bot recommendation icons (dimmed) ──
+    const recoTypes = [];
+    if (liq.arbEdge >= 1 && liq.arbEdge <= 10 && liq.avgSpread <= 8 && !botTypes.apex) {
+        recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
+    }
+    if ((liq.yesBid >= 60 || liq.noBid >= 60) && liq.avgSpread < 20 && !botTypes.phantom) {
+        const dogPrice = Math.min(liq.yesBid, liq.noBid);
+        const dogSide = liq.yesBid < liq.noBid ? 'YES' : 'NO';
+        recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢` });
+    }
+    const middleReco = (window._middleRecoMap || {})[market.ticker];
+    if (middleReco && !botTypes.meridian) {
+        recoTypes.push({ type: 'meridian', tip: `Middle: pair with ${middleReco.partner}, ${middleReco.guaranteed > 0 ? middleReco.guaranteed + '¢ guaranteed' : 'score ' + middleReco.score}` });
+    }
+    if (recoTypes.length > 0) {
+        const rWrap = document.createElement('span');
+        rWrap.style.cssText = 'margin-left:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
+        for (const r of recoTypes) {
+            const c = BOT_COLORS[r.type] || '#888';
+            const pill = document.createElement('span');
+            pill.style.cssText = `display:inline-flex;align-items:center;padding:1px 3px;border:1px dashed ${c}55;border-radius:4px;opacity:0.4;`;
+            pill.innerHTML = botIconImg(r.type, 10, 0.5);
+            pill.title = r.tip;
+            rWrap.appendChild(pill);
+        }
+        labelDiv.appendChild(rWrap);
     }
     
     // Read all prices first for cross-referencing
@@ -5737,14 +5820,8 @@ async function loadBots() {
         const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle' && bots[id].type !== 'watch' && !['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const middleBotIds = activeBots.filter(id => bots[id].type === 'middle');
 
-        // Update tab badges with static pixel art img icons
-        const _botIcons = {
-            apex: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=',
-            phantom: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC',
-            meridian: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=',
-            scout: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAPElEQVR4nGNgQAf/O/6DMUFAUCFMATpGAatCwYKr/p+BK4CzMRSeyQIJQjAyG6tCbJg8hSBAtEJsiskBANz2aymn/yC2AAAAAElFTkSuQmCC',
-        };
-        const _tabImg = (type) => `<img src="${_botIcons[type]}" style="image-rendering:pixelated;width:14px;height:14px;vertical-align:middle;">`;
+        // Update tab badges with global pixel art icons
+        const _tabImg = (type) => botIconImg(type, 14);
         const midBtn = document.getElementById('bots-tab-middle');
         if (midBtn) midBtn.innerHTML = `${_tabImg('meridian')} MERIDIAN${middleBotIds.length > 0 ? ' (' + middleBotIds.length + ')' : ''}`;
         const dogBtn = document.getElementById('bots-tab-dog');
@@ -10441,6 +10518,10 @@ async function loadPositions() {
                     <div>Realized: <strong style="color:${pnlColor};">$${realizedPnl}</strong></div>
                 </div>
                 ${pos.resting_orders ? `<div style="margin-top:6px;font-size:10px;color:#555;">${pos.resting_orders} resting order(s)</div>` : ''}
+                ${(pos.managing_bots && pos.managing_bots.length > 0) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${pos.managing_bots.map(mb => {
+                    const c = BOT_COLORS[mb.type] || '#888';
+                    return `<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:${c}22;border:1px solid ${c}44;border-radius:6px;font-size:11px;font-weight:600;color:${c};">${botIconImg(mb.type, 12)} ×${mb.qty}</span>`;
+                }).join('')}</div>` : ''}
                 ${isOrphaned ? `<div style="margin-top:6px;padding:4px 8px;background:#ff444422;border:1px solid #ff444444;border-radius:6px;font-size:11px;color:#ff4444;font-weight:600;">⚠ ${pos.orphaned_qty} orphaned contract${pos.orphaned_qty > 1 ? 's' : ''} — no bot managing</div>` : ''}
             </div>`;
         }).join('');

@@ -1156,7 +1156,7 @@ async function loadMarkets() {
         // Use higher limit — NCAAB alone can have 2000+ markets (spreads, totals, props)
         // 'live' filter is client-side only, fetch all
         const isAllOrLive = !currentSportFilter || currentSportFilter === 'all' || currentSportFilter === 'live';
-        const fetchLimit = isAllOrLive ? 5000 : 3000;
+        const fetchLimit = isAllOrLive ? 2000 : 3000;
         let url = `${API_BASE}/markets?status=open&limit=${fetchLimit}`;
         if (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live') {
             url += `&sport=${currentSportFilter}`;

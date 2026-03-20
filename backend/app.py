@@ -15548,7 +15548,9 @@ CLAUDE_TOOLS = [
                     "items": {"type": "integer"},
                     "description": "Array of width values in cents (e.g. [5, 8, 12]). Each width = target profit per contract. Prices are auto-calculated from the orderbook."
                 },
-                "count": {"type": "integer", "description": "Contracts per rung (default 1)"},
+                "count": {"type": "integer", "description": "Base contracts per rung (default 1). Wider rungs auto-scale up."},
+                "repeat_count": {"type": "integer", "description": "How many times to repeat after completion (0 = single run)"},
+                "game_phase": {"type": "string", "enum": ["live", "pregame"], "description": "Game phase filter"},
                 "timeout": {"type": "integer", "description": "Timeout in seconds"}
             },
             "required": ["ticker", "widths"]
@@ -16283,6 +16285,9 @@ def _execute_chat_tool(tool_name, tool_input):
                 'ticker': tool_input['ticker'],
                 'widths': tool_input['widths'],
                 'quantity': tool_input.get('count', 1),
+                'width_scaling': len(tool_input.get('widths', [])) >= 2,
+                'repeat_count': tool_input.get('repeat_count', 0),
+                'game_phase': tool_input.get('game_phase', 'live'),
                 'timeout': tool_input.get('timeout', 300),
             }, timeout=15)
             return r.json()

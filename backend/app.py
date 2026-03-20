@@ -11391,72 +11391,94 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'middle_leg_b_filled'})
                         save_state()
                     else:
-                        # Neither leg filled — check for stale repost
-                        # Distance-based resize: check every 5s via WS cache (free),
-                        # only cancel+replace if NO bid drifted ≥3¢ from posted price.
-                        # NEVER repost once one leg is filled — that would violate the spread.
-                        MIDDLE_GAP_THRESHOLD = 3  # cents
+                        # Neither leg filled — coordinated dual-leg repost.
+                        # Gets BOTH bids, calculates shave to maintain original combined
+                        # cost, splits evenly so orders stay competitive + arb preserved.
+                        MIDDLE_GAP_THRESHOLD = 3  # cents total drift before repost
                         MIDDLE_POLL_S = 5
                         last_gap_check = bot.get('_last_gap_check', 0)
                         if now_m - last_gap_check >= MIDDLE_POLL_S:
                             bot['_last_gap_check'] = now_m
-                            reposted = False
-                            for leg, order_key, ticker_key, price_key in [
-                                ('a', 'order_a_id', 'ticker_a', 'target_price_a'),
-                                ('b', 'order_b_id', 'ticker_b', 'target_price_b'),
-                            ]:
-                                ticker_lr = bot.get(ticker_key, '')
-                                old_order_id = bot.get(order_key)
-                                cur_target = bot.get(price_key) or bot.get('target_price', 49)
-                                if not ticker_lr or not old_order_id:
-                                    continue
-                                try:
-                                    # Check WS cache first (free, no API call)
-                                    cur_bid_lr = 0
-                                    ws_p_lr = ws_manager.get_price(ticker_lr) if ws_manager else None
-                                    if ws_p_lr:
-                                        cur_bid_lr = ws_p_lr.get('no_bid', 0) or 0
-                                    if not cur_bid_lr:
-                                        continue  # no WS data, skip (don't burn API call)
-                                    gap = abs(cur_bid_lr - cur_target)
-                                    if gap < MIDDLE_GAP_THRESHOLD:
-                                        continue  # within tolerance, don't touch
-                                    # Gap ≥ 3¢ — cancel and replace at current bid
-                                    new_price = max(1, min(90, cur_bid_lr))
-                                    # ── Arb guard: don't repost if combined cost kills the arb ──
-                                    other_price_key = 'target_price_b' if leg == 'a' else 'target_price_a'
-                                    other_leg_price = bot.get(other_price_key) or bot.get('target_price', 49)
-                                    if new_price + other_leg_price >= 98:
-                                        continue  # Combined cost too high — arb is gone, don't chase
-                                    try:
-                                        api_rate_limiter.wait()
-                                        kalshi_client.cancel_order(old_order_id)
-                                    except Exception:
-                                        pass
-                                    api_rate_limiter.wait()
-                                    new_resp = kalshi_client.create_order(
-                                        ticker=ticker_lr, side='no', action='buy',
-                                        count=qty_m, no_price=new_price, post_only=True
-                                    )
-                                    new_order_id = _extract_order_id(new_resp, f'middle resize {bot_id} leg {leg}')
-                                    if not new_order_id:
-                                        continue
-                                    bot[order_key] = new_order_id
-                                    bot[price_key] = new_price
-                                    if leg == 'a':
-                                        bot['target_price'] = new_price
-                                    reposted = True
-                                    bot_log('MIDDLE_RESIZE', bot_id, {
-                                        'leg': leg, 'old_target': cur_target,
-                                        'new_price': new_price, 'cur_bid': cur_bid_lr, 'gap': gap,
-                                    })
-                                    print(f'📐 MIDDLE RESIZE leg {leg}: {bot_id} {cur_target}¢→{new_price}¢ (bid={cur_bid_lr}¢ gap={gap}¢)')
-                                except Exception as rp_err:
-                                    bot_log('ERROR', bot_id, {'step': f'middle_resize_{leg}', 'error': str(rp_err)}, level='WARN')
-                            if reposted:
-                                bot['last_repost_at'] = now_m
-                                bot['repost_count'] = bot.get('repost_count', 0) + 1
-                                save_state()
+                            # Get both NO bids from WS
+                            bid_a = 0
+                            bid_b = 0
+                            ws_a = ws_manager.get_price(bot.get('ticker_a', '')) if ws_manager else None
+                            ws_b = ws_manager.get_price(bot.get('ticker_b', '')) if ws_manager else None
+                            if ws_a:
+                                bid_a = ws_a.get('no_bid', 0) or 0
+                            if ws_b:
+                                bid_b = ws_b.get('no_bid', 0) or 0
+
+                            if bid_a > 0 and bid_b > 0:
+                                cur_price_a = bot.get('target_price_a') or bot.get('target_price', 49)
+                                cur_price_b = bot.get('target_price_b') or bot.get('target_price', 49)
+                                # Original combined cost the user selected
+                                target_cost = bot.get('_original_cost') or (cur_price_a + cur_price_b)
+
+                                total_bid = bid_a + bid_b
+                                shave = max(0, total_bid - target_cost)
+                                shave_each = shave / 2.0
+
+                                new_a = max(1, round(bid_a - shave_each))
+                                new_b = max(1, round(bid_b - shave_each))
+
+                                # Fix rounding so combined never exceeds target
+                                while new_a + new_b > target_cost and (new_a > 1 or new_b > 1):
+                                    if new_a >= new_b and new_a > 1:
+                                        new_a -= 1
+                                    elif new_b > 1:
+                                        new_b -= 1
+
+                                gap_a = abs(new_a - cur_price_a)
+                                gap_b = abs(new_b - cur_price_b)
+
+                                if gap_a + gap_b >= MIDDLE_GAP_THRESHOLD:
+                                    reposted = False
+                                    for leg, order_key, ticker_key, price_key, new_price, cur_bid in [
+                                        ('a', 'order_a_id', 'ticker_a', 'target_price_a', new_a, bid_a),
+                                        ('b', 'order_b_id', 'ticker_b', 'target_price_b', new_b, bid_b),
+                                    ]:
+                                        old_order_id = bot.get(order_key)
+                                        ticker_lr = bot.get(ticker_key, '')
+                                        cur_target = bot.get(price_key) or bot.get('target_price', 49)
+                                        if not ticker_lr or not old_order_id:
+                                            continue
+                                        if new_price == cur_target:
+                                            continue  # no change for this leg
+                                        try:
+                                            try:
+                                                api_rate_limiter.wait()
+                                                kalshi_client.cancel_order(old_order_id)
+                                            except Exception:
+                                                pass
+                                            api_rate_limiter.wait()
+                                            new_resp = kalshi_client.create_order(
+                                                ticker=ticker_lr, side='no', action='buy',
+                                                count=qty_m, no_price=new_price, post_only=True
+                                            )
+                                            new_order_id = _extract_order_id(new_resp, f'middle resize {bot_id} leg {leg}')
+                                            if not new_order_id:
+                                                continue
+                                            bot[order_key] = new_order_id
+                                            bot[price_key] = new_price
+                                            if leg == 'a':
+                                                bot['target_price'] = new_price
+                                            reposted = True
+                                            bot_log('MIDDLE_RESIZE', bot_id, {
+                                                'leg': leg, 'old_target': cur_target,
+                                                'new_price': new_price, 'cur_bid': cur_bid,
+                                                'total_bid': total_bid, 'target_cost': target_cost,
+                                                'shave_each': round(shave_each, 1),
+                                                'combined': new_a + new_b,
+                                            })
+                                            print(f'📐 MIDDLE RESIZE {leg.upper()}: {bot_id} {cur_target}¢→{new_price}¢ '
+                                                  f'(bid={cur_bid}¢ shave={shave_each:.0f}¢ combined={new_a+new_b}¢/{target_cost}¢)')
+                                        except Exception as rp_err:
+                                            bot_log('ERROR', bot_id, {'step': f'middle_resize_{leg}', 'error': str(rp_err)}, level='WARN')
+                                    if reposted:
+                                        bot['last_repost_at'] = now_m
+                                        bot['repost_count'] = bot.get('repost_count', 0) + 1
+                                        save_state()
 
                 # ── Status: one_filled — check other leg and stop-loss ──
                 elif bot['status'] == 'one_filled':
@@ -11860,6 +11882,7 @@ def create_middle_bot():
             'filled_leg':       None,
             'created_at':       time.time(),
             'placed_at':        time.time(),
+            '_original_cost':   target_price_a + target_price_b,
             # Rebalancer (last-resort, late-game smart exit)
             'rebalancer_enabled':        rebalancer_enabled,
             'rebalancer_mode':           rebalancer_mode,

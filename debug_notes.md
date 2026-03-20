@@ -19,16 +19,9 @@ FAB button background changed from orange gradient to dark (#0c1020) with orange
 
 ---
 
-## [BUG] NCAAB schedule times not showing in UI
-**2026-03-20 15:14** | system
+## [FIXED] NCAAB cards showing yesterday's "Final" scores on today's pregame games
+**2026-03-20 15:14** | system | **Resolved 2026-03-20 15:25 by Claude Code**
 
-User reports NCAAB game times are no longer showing in the schedule/market view. This broke around the same time as the Houston Rockets logo bleeding into college game cards bug fix. The fix for the logo bleed likely broke the time display for NCAAB games. Times ARE returning correctly from ESPN API (confirmed via get_schedule), so the issue is in the frontend rendering layer for NCAAB game cards.
-
----
-
-## [BUG] get_schedule() returning NCAAB games as "Final" when they haven't started
-**2026-03-20 15:23** | system
-
-When I called get_schedule() for NCAAB, it returned today's March Madness games as already "Final/completed" even though none of them had started yet. This caused me to incorrectly tell the user that all NCAA games were done for the day. The games had tip times starting at 9:15 AM AZ time and none had begun. Likely related to the recent fix for the Houston Rockets logo bleeding into college games — that fix may have broken the NCAAB game status/schedule parsing. The schedule call returned wrong status (Final instead of Pregame) for NCAAB games. Please investigate get_schedule() for NCAAB and check what changed recently that could affect game status detection.
+Root cause: `_gameIdDateMatchesESPN()` had a -1 day tolerance for UTC midnight crossing, but this also let yesterday's finished games match today's tickers for the same team (e.g. TENN played yesterday AND today). Fix: finished games (state=post) now require exact date match — only live/pregame games get ±1 day UTC tolerance. Also fixed late-night games with ESPN dates 1 day ahead (UTC midnight) not matching. The get_schedule() tool was NOT broken — it correctly returned games as "pre" — the issue was only in frontend card rendering. Commit e514315.
 
 ---

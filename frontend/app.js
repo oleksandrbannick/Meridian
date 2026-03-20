@@ -7032,9 +7032,9 @@ async function showBotDetail(botId) {
         html += `<div style="font-size:10px;font-family:monospace;color:#556;word-break:break-all;">`;
         const oidKeys = ['dog_order_id','fav_order_id','yes_order_id','no_order_id','hedge_order_id','order_id'];
         oidKeys.forEach(k => {
-            if (bot[k]) html += `<div style="margin-bottom:2px;"><span style="color:#8892a6;">${k.replace(/_/g,' ')}:</span> ${bot[k]}</div>`;
+            if (bot[k]) html += `<div style="margin-bottom:2px;display:flex;align-items:center;gap:4px;"><span style="color:#8892a6;">${k.replace(/_/g,' ')}:</span> <span style="color:#556;">${bot[k].slice(-12)}</span><button onclick="event.stopPropagation();navigator.clipboard.writeText('${bot[k]}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#3a4560;" title="Copy full ID: ${bot[k]}">📋</button></div>`;
         });
-        html += `<div style="margin-top:4px;"><span style="color:#8892a6;">bot_id:</span> ${botId}</div>`;
+        html += `<div style="margin-top:4px;display:flex;align-items:center;gap:4px;"><span style="color:#8892a6;">bot_id:</span> <span style="color:#556;">${botId.slice(-12)}</span><button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#3a4560;" title="Copy full ID: ${botId}">📋</button></div>`;
         html += `</div></div>`;
 
         // ── Activity Log section ──
@@ -10104,14 +10104,15 @@ async function loadTradeHistoryList() {
                             <span style="color:#8892a6;">${date}</span>
                         </div>
                         ${(() => {
+                            const idBtn = (label, id, color) => `<span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:${color};">${label}: ${id.slice(-8)}</span><button onclick="event.stopPropagation();navigator.clipboard.writeText('${id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#3a4560;" title="Copy ${label} ID: ${id}">📋</button></span>`;
                             const ids = [
-                                t.yes_order_id && `<span style="color:#00ff88;">Y: ${t.yes_order_id}</span>`,
-                                t.no_order_id && `<span style="color:#ff4444;">N: ${t.no_order_id}</span>`,
-                                t.dog_order_id && `<span style="color:#ffaa00;">Dog: ${t.dog_order_id}</span>`,
-                                t.fav_order_id && `<span style="color:#aa66ff;">Fav: ${t.fav_order_id}</span>`,
-                                t.hedge_order_id && `<span style="color:#00aaff;">Hedge: ${t.hedge_order_id}</span>`,
+                                t.yes_order_id && idBtn('Y', t.yes_order_id, '#00ff88'),
+                                t.no_order_id && idBtn('N', t.no_order_id, '#ff4444'),
+                                t.dog_order_id && idBtn('Dog', t.dog_order_id, '#ffaa00'),
+                                t.fav_order_id && idBtn('Fav', t.fav_order_id, '#aa66ff'),
+                                t.hedge_order_id && idBtn('Hedge', t.hedge_order_id, '#00aaff'),
                             ].filter(Boolean);
-                            return ids.length ? `<div style="font-size:9px;margin-top:2px;color:#555;word-break:break-all;">${ids.join(' · ')}</div>` : '';
+                            return ids.length ? `<div style="font-size:9px;margin-top:2px;color:#555;display:flex;flex-wrap:wrap;gap:4px 10px;">${ids.join('')}</div>` : '';
                         })()}
                         <div style="display:flex;gap:12px;font-size:11px;margin-top:4px;flex-wrap:wrap;">
                             ${isAnchorSellback && t.filled_side && t.avg_fill_price ? `

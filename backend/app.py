@@ -5777,6 +5777,11 @@ def _execute_apex_completion(bot_id):
 
         unhedged = anchor_qty - hedge_qty
         if unhedged > 0:
+            # Guard: don't re-place if we already have a live hedge for this exact scenario
+            existing_hedge = bot.get('hedge_order_id')
+            if existing_hedge and bot.get('_extra_hedge_placed'):
+                # Already placed an extra hedge — wait for it to fill, don't spam new ones
+                return
             # Late anchor fills came in — place a new hedge for the difference
             ticker = bot.get('ticker', '')
             avg_anchor = bot.get(f'avg_{filled_side}_price', 0)
@@ -5800,6 +5805,7 @@ def _execute_apex_completion(bot_id):
                 bot['_hedge_verified'] = False
                 bot['_ws_fill_handling'] = False
                 bot['_bot_completed'] = False
+                bot['_extra_hedge_placed'] = True
                 bot['status'] = f'ladder_arb_{filled_side}_filled'
                 all_ids = bot.get('_all_hedge_order_ids', [])
                 all_ids.append(extra_oid)

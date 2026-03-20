@@ -5058,10 +5058,8 @@ def create_bot():
             if no_price >= live_no_ask and live_no_ask > 0:
                 return jsonify({'error': f'NO price {no_price}¢ is AT or ABOVE ask {live_no_ask}¢ — would cross spread. Refresh and retry.'}), 400
 
-            # Also check the spread still makes sense
+            # bid sum >= 100 is normal — volatility play, not instant arb
             live_total = live_yes_bid + live_no_bid
-            if live_total >= 100:
-                return jsonify({'error': f'Market bids now total {live_total}¢ ≥ 100 — no arb exists. Refresh and retry.'}), 400
 
             print(f'✅ Price validation: YES {yes_price}¢ (bid={live_yes_bid}¢ ask={live_yes_ask}¢), NO {no_price}¢ (bid={live_no_bid}¢ ask={live_no_ask}¢)')
 
@@ -5989,8 +5987,10 @@ def create_ladder_arb_bot():
             return jsonify({'error': 'No YES bids in orderbook — phantom arb'}), 400
         if live_no_bid <= 0:
             return jsonify({'error': 'No NO bids in orderbook — phantom arb'}), 400
-        if live_yes_bid + live_no_bid >= 100:
-            return jsonify({'error': f'Market bids total {live_yes_bid + live_no_bid}¢ ≥ 100 — no arb'}), 400
+        # NOTE: bid sum >= 100 is normal for most markets. The strategy is posting
+        # maker orders and letting game volatility fill them — NOT waiting for instant arb.
+        # Only block if there are literally no bids (dead market).
+
 
         # Compute prices for each width and validate
         rung_specs = []

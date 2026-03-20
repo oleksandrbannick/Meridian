@@ -2211,8 +2211,8 @@ function createMarketRow(market, label) {
 
     // ── Bot recommendation icons (dimmed) ──
     const recoTypes = [];
-    // Apex: both sides need bids, at least 2¢ edge (98¢ ceiling), reasonable spread
-    if (liq.yesBid > 0 && liq.noBid > 0 && liq.arbEdge >= 2 && liq.avgSpread <= 8 && !botTypes.apex) {
+    // Apex: both sides need bids, at least 2¢ edge (98¢ ceiling). Wider spreads = more room = better.
+    if (liq.yesBid > 0 && liq.noBid > 0 && liq.arbEdge >= 2 && !botTypes.apex) {
         recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
     }
     // Phantom: clear fav/dog split, dog is cheap (<35¢), arb math works (fav hedge leaves ≥2¢ profit)

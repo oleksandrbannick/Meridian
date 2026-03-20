@@ -6944,8 +6944,23 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             else:
                 sell_kwargs['no_price'] = cur_bid
 
-            api_rate_limiter.wait()
-            resp = kalshi_client.create_order(**sell_kwargs)
+            try:
+                api_rate_limiter.wait()
+                resp = kalshi_client.create_order(**sell_kwargs)
+            except Exception as sell_err:
+                err_str = str(sell_err)
+                # 409 Conflict = market closed/settled — position will auto-settle
+                if '409' in err_str or 'Conflict' in err_str:
+                    print(f'✅ execute_sell({reason}): 409 Conflict — market is settled/closed. Position will auto-settle.')
+                    return True, {'order_id': 'market_settled', 'filled': count,
+                                  'sell_price': 0, 'already_cleared': True,
+                                  'verified_cleared': True, 'remaining': 0,
+                                  'actual_fill_price': 0}
+                print(f'❌ execute_sell({reason}) attempt {attempt}: exception: {sell_err}')
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(1)
+                    continue
+                return False, {'error': err_str}
             resp_ord = resp.get('order', resp) if isinstance(resp, dict) else {}
             order_id = resp_ord.get('order_id')
 

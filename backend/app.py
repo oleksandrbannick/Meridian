@@ -11989,6 +11989,60 @@ def _run_monitor():
                 print(f'Error settling one_leg_timeout bot {bot_id}: {ol_err}')
                 continue
 
+        # ── Stale bot cleanup: auto-complete dead bots that have no positions to track ──
+        _cleanup_now = time.time()
+        for _cid, _cb in list(active_bots.items()):
+            _cs = _cb.get('status', '')
+            # Skip already terminal or genuinely active bots
+            if _cs in ('completed', 'cancelled', 'error'):
+                continue
+            if _cs in active_statuses and _cs != 'stopped':
+                # Active bot — check if market expired with no fills (stuck unfilled bot)
+                _age_h = (_cleanup_now - (_cb.get('created_at', _cleanup_now))) / 3600
+                if _age_h < 6:
+                    continue  # too young to reap
+                # Check for any fills
+                _has_fills = False
+                for _rung in _cb.get('rungs', []):
+                    if (_rung.get('yes_fill_qty', 0) or 0) > 0 or (_rung.get('no_fill_qty', 0) or 0) > 0:
+                        _has_fills = True
+                        break
+                if not _has_fills:
+                    _has_fills = ((_cb.get('dog_fill_qty', 0) or 0) > 0 or
+                                 (_cb.get('fav_fill_qty', 0) or 0) > 0 or
+                                 (_cb.get('yes_fill_qty', 0) or 0) > 0 or
+                                 (_cb.get('no_fill_qty', 0) or 0) > 0 or
+                                 (_cb.get('fill_qty', 0) or 0) > 0)
+                if _has_fills:
+                    continue  # has positions — keep for settlement tracking
+                # No fills + old → auto-complete
+                _cb['status'] = 'completed'
+                _cb['completed_at'] = _cleanup_now
+                _cb['_auto_cleaned'] = True
+                print(f'🧹 AUTO-CLEAN: {_cid} ({_cs}) — {_age_h:.1f}h old, no fills, marking completed')
+                actions.append({'bot_id': _cid, 'action': 'auto_clean_stale'})
+            elif _cs == 'stopped':
+                # Stopped bots: clean up after 1 hour if no fills to track
+                _stopped_age = (_cleanup_now - (_cb.get('stopped_at', _cb.get('created_at', _cleanup_now)))) / 3600
+                if _stopped_age < 1:
+                    continue
+                _has_fills = ((_cb.get('dog_fill_qty', 0) or 0) > 0 or
+                              (_cb.get('fav_fill_qty', 0) or 0) > 0 or
+                              (_cb.get('yes_fill_qty', 0) or 0) > 0 or
+                              (_cb.get('no_fill_qty', 0) or 0) > 0 or
+                              (_cb.get('fill_qty', 0) or 0) > 0)
+                for _rung in _cb.get('rungs', []):
+                    if (_rung.get('yes_fill_qty', 0) or 0) > 0 or (_rung.get('no_fill_qty', 0) or 0) > 0 or (_rung.get('fill_qty', 0) or 0) > 0:
+                        _has_fills = True
+                        break
+                if _has_fills:
+                    continue  # holding position for settlement
+                _cb['status'] = 'completed'
+                _cb['completed_at'] = _cleanup_now
+                _cb['_auto_cleaned'] = True
+                print(f'🧹 AUTO-CLEAN: {_cid} (stopped) — {_stopped_age:.1f}h stopped, no fills, marking completed')
+                actions.append({'bot_id': _cid, 'action': 'auto_clean_stopped'})
+
         # Only persist when something actually changed — saves ~50ms per idle cycle
         if actions:
             save_state()

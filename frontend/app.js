@@ -10522,11 +10522,34 @@ async function loadPositions() {
                     const c = BOT_COLORS[mb.type] || '#888';
                     return `<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:${c}22;border:1px solid ${c}44;border-radius:6px;font-size:11px;font-weight:600;color:${c};">${botIconImg(mb.type, 12)} ×${mb.qty}</span>`;
                 }).join('')}</div>` : ''}
-                ${isOrphaned ? `<div style="margin-top:6px;padding:4px 8px;background:#ff444422;border:1px solid #ff444444;border-radius:6px;font-size:11px;color:#ff4444;font-weight:600;">⚠ ${pos.orphaned_qty} orphaned contract${pos.orphaned_qty > 1 ? 's' : ''} — no bot managing</div>` : ''}
+                ${isOrphaned ? `<div style="margin-top:6px;padding:6px 10px;background:#ff444422;border:1px solid #ff444444;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:11px;color:#ff4444;font-weight:600;">👻 ${pos.orphaned_qty} orphaned — no bot managing</span>
+                    <button onclick="sellOrphan('${pos.ticker}','${pos.side}',${pos.orphaned_qty})" style="background:#ff4444;color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;">Sell Orphan</button>
+                </div>` : ''}
             </div>`;
         }).join('');
     } catch (err) {
         el.innerHTML = `<p style="color:#ff4444;text-align:center;">Failed to load positions: ${err.message}</p>`;
+    }
+}
+
+async function sellOrphan(ticker, side, qty) {
+    if (!confirm(`Sell ${qty} orphaned ${side.toUpperCase()} contract(s) on ${ticker}?`)) return;
+    try {
+        const resp = await fetch(`${API_BASE}/emergency-sell`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ticker, side, count: qty})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`Orphan sold: ${qty}x ${side.toUpperCase()} on ${ticker} at ${data.sell_price}¢`);
+            loadPositions();
+        } else {
+            showNotification(`Sell failed: ${data.error || 'unknown'}`, 'error');
+        }
+    } catch (err) {
+        showNotification(`Sell error: ${err.message}`, 'error');
     }
 }
 

@@ -4888,10 +4888,14 @@ def place_straight_order():
         watch_bot_id = None
         if add_watch:
             # Check if the order filled immediately (at or above ask)
-            api_rate_limiter.wait()
-            order_check = kalshi_client.get_order(order_id)
-            order_obj = order_check.get('order', order_check)
-            initial_fill_qty = _parse_fill_count(order_obj) or order_obj.get('amount_filled', 0)
+            initial_fill_qty = 0
+            try:
+                api_rate_limiter.wait()
+                order_check = kalshi_client.get_order(order_id)
+                order_obj = order_check.get('order', order_check)
+                initial_fill_qty = _parse_fill_count(order_obj) or order_obj.get('amount_filled', 0)
+            except Exception:
+                pass  # Order may have been rejected/removed — treat as unfilled
 
             watch_bot_id = f"watch_{ticker}_{side}_{int(time.time())}"
             active_bots[watch_bot_id] = {

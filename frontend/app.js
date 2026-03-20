@@ -4867,7 +4867,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     }
 
     const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;`;
+    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
+    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -5370,7 +5371,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     }
 
     const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;`;
+    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
+    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -5527,7 +5529,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
 
     const el = document.createElement('div');
     el.className = 'bot-item';
-    el.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${borderCol};`;
+    el.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${borderCol};cursor:pointer;`;
+    el.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     el.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -5622,7 +5625,8 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
 
     const item = document.createElement('div');
     item.className = 'bot-item';
-    item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #9966ff;';
+    item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #9966ff;cursor:pointer;';
+    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -5632,6 +5636,7 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
                 <span class="bot-status watching">${orderFilled ? 'WATCHING' : 'PENDING'}</span>
                 <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
                 ${fillStatusHtml}
+                <span style="color:#555;font-size:10px;">${ageMin >= 60 ? Math.floor(ageMin/60)+'h '+ageMin%60+'m' : ageMin+'m'} ago</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
@@ -6590,7 +6595,8 @@ async function loadBots() {
 
             const item = document.createElement('div');
             item.className = 'bot-item';
-            item.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${healthColor};${healthAnim}`;
+            item.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${healthColor};${healthAnim}cursor:pointer;`;
+            item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
             const botEventPrefix = (bot.ticker || '').toUpperCase().split('-').slice(0, 2).join('-');
             item.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -6821,6 +6827,169 @@ async function autoResumeMonitor() {
     buddyMonitorStart = Date.now();
     buddyMonitorCycles = 0;
     monitorBots();
+}
+
+// ── Bot Detail Modal ────────────────────────────────────────────
+function closeBotDetail() { document.getElementById('bot-detail-modal').classList.remove('show'); }
+
+async function showBotDetail(botId) {
+    const modal = document.getElementById('bot-detail-modal');
+    const content = document.getElementById('bd-content');
+    const title = document.getElementById('bd-title');
+    const subtitle = document.getElementById('bd-subtitle');
+    const icon = document.getElementById('bd-icon');
+    content.innerHTML = '<div style="text-align:center;padding:40px;color:#8892a6;">Loading...</div>';
+    modal.classList.add('show');
+
+    try {
+        // Fetch bot detail + activity log in parallel
+        const [botResp, logResp] = await Promise.all([
+            fetch(`${API_BASE}/bot/list`).then(r => r.json()),
+            fetch(`${API_BASE}/activity-log?bot_id=${encodeURIComponent(botId)}&minutes=1440&limit=50`).then(r => r.json()).catch(() => ({events:[]})),
+        ]);
+        const bots = botResp.bots || {};
+        const bot = bots[botId];
+        if (!bot) { content.innerHTML = '<div style="color:#ff4444;padding:20px;">Bot not found</div>'; return; }
+
+        const cat = bot.bot_category || bot.type || 'arb';
+        const typeMap = {anchor_dog:'Phantom',anchor_ladder:'Phantom Ladder',ladder_arb:'Apex',watch:'Scout',middle:'Meridian',arb:'Arb',both_posted:'Arb'};
+        const colorMap = {anchor_dog:'#ff9900',anchor_ladder:'#ff9900',ladder_arb:'#00d4ff',watch:'#9966ff',middle:'#cc66ff',arb:'#00d4ff'};
+        const iconMap = {anchor_dog:'👻',anchor_ladder:'👻',ladder_arb:'△',watch:'💰',middle:'🔀',arb:'⚡'};
+        const typeName = typeMap[cat] || cat;
+        const color = colorMap[cat] || '#00d4ff';
+        title.textContent = formatBotDisplayName(bot.ticker, bot.spread_line);
+        subtitle.textContent = `${typeName} · ${bot.status || '?'}`;
+        subtitle.style.color = color;
+        icon.textContent = iconMap[cat] || '⚡';
+
+        let html = '';
+        const nowSec = Date.now() / 1000;
+        const ageMin = bot.created_at ? Math.round((nowSec - bot.created_at) / 60) : 0;
+        const ageStr = ageMin >= 60 ? `${Math.floor(ageMin/60)}h ${ageMin%60}m` : `${ageMin}m`;
+
+        // ── Overview section ──
+        html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">`;
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
+            <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Status</div>
+            <div style="color:${color};font-weight:700;font-size:12px;">${bot.status || '?'}</div></div>`;
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
+            <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Age</div>
+            <div style="color:#fff;font-weight:700;font-size:12px;">${ageStr}</div></div>`;
+        const qty = bot.quantity || bot.qty || 1;
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
+            <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Qty</div>
+            <div style="color:#fff;font-weight:700;font-size:12px;">×${qty}</div></div>`;
+        html += `</div>`;
+
+        // ── Latency section (Phantom/Apex) ──
+        const rawMs = bot.raw_hedge_ms || bot.hedge_latency_ms;
+        const fillMs = bot.hedge_fill_latency_ms;
+        if (rawMs || fillMs) {
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+            html += `<div style="color:#ffaa00;font-size:10px;font-weight:700;margin-bottom:6px;">⚡ LATENCY</div>`;
+            html += `<div style="display:flex;gap:20px;font-size:11px;">`;
+            if (rawMs) html += `<div><span style="color:#8892a6;">Hedge posted:</span> <strong style="color:#00ff88;">${rawMs}ms</strong></div>`;
+            if (fillMs) html += `<div><span style="color:#8892a6;">Hedge filled:</span> <strong style="color:#00ff88;">${fillMs}ms</strong></div>`;
+            html += `</div></div>`;
+        }
+
+        // ── Prices section ──
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+        html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">PRICES</div>`;
+        if (cat === 'anchor_dog' || cat === 'anchor_ladder') {
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
+            html += `<div>Dog (${bot.dog_side||'?'}): <strong style="color:#ff9900;">${bot.dog_price||'?'}¢</strong></div>`;
+            html += `<div>Fav: <strong style="color:#00ff88;">${bot.fav_price||'pending'}¢</strong></div>`;
+            html += `<div>Width: <strong>${bot.target_width||'?'}¢</strong></div>`;
+            html += `<div>Ceiling: <strong>98¢</strong></div>`;
+            html += `</div>`;
+        } else if (cat === 'watch') {
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
+            html += `<div>Entry: <strong style="color:#fff;">${bot.entry_price||'?'}¢</strong></div>`;
+            html += `<div>Live bid: <strong style="color:#00ff88;">${bot.live_bid||'?'}¢</strong></div>`;
+            html += `<div>SL: <strong style="color:#ff4444;">${(bot.entry_price||50) - (bot.stop_loss_cents||5)}¢</strong></div>`;
+            if (bot.take_profit_cents > 0) html += `<div>TP: <strong style="color:#00ff88;">${(bot.entry_price||50) + bot.take_profit_cents}¢</strong></div>`;
+            html += `</div>`;
+        } else {
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
+            html += `<div>YES: <strong style="color:#00ff88;">${bot.yes_price||'?'}¢</strong></div>`;
+            html += `<div>NO: <strong style="color:#ff4444;">${bot.no_price||'?'}¢</strong></div>`;
+            const total = (bot.yes_price||0) + (bot.no_price||0);
+            if (total > 0) html += `<div>Spread: <strong>${100-total}¢</strong></div>`;
+            html += `</div>`;
+        }
+        html += `</div>`;
+
+        // ── Rungs section (Apex / Phantom Ladder) ──
+        const rungs = bot.rungs || bot.placed_rungs;
+        if (rungs && rungs.length > 0) {
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+            html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">RUNGS (${rungs.length})</div>`;
+            html += `<div style="font-size:10px;">`;
+            rungs.forEach((r, i) => {
+                const fillKey = cat === 'anchor_ladder' ? 'fill_qty' : (bot.first_fill_side === 'yes' ? 'yes_fill_qty' : 'no_fill_qty');
+                const filled = r[fillKey] || r.fill_qty || 0;
+                const rQty = r.quantity || r.qty || qty;
+                const pct = rQty > 0 ? Math.round((filled/rQty)*100) : 0;
+                const priceLabel = r.width ? `${r.width}¢ wide` : `${r.price||r.yes_price||'?'}¢`;
+                const completedBadge = r.completed ? ' <span style="color:#00ff88;">✓</span>' : '';
+                html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+                    <span style="color:#555;width:16px;">#${i+1}</span>
+                    <span style="width:70px;">${priceLabel}${completedBadge}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${pct}%;height:100%;background:${pct>=100?'#00ff88':'#ffaa00'};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${pct>=100?'#00ff88':'#8892a6'};width:40px;text-align:right;">${filled}/${rQty}</span>
+                </div>`;
+            });
+            html += `</div></div>`;
+        }
+
+        // ── Order IDs section ──
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+        html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">ORDER IDS</div>`;
+        html += `<div style="font-size:10px;font-family:monospace;color:#556;word-break:break-all;">`;
+        const oidKeys = ['dog_order_id','fav_order_id','yes_order_id','no_order_id','hedge_order_id','order_id'];
+        oidKeys.forEach(k => {
+            if (bot[k]) html += `<div style="margin-bottom:2px;"><span style="color:#8892a6;">${k.replace(/_/g,' ')}:</span> ${bot[k]}</div>`;
+        });
+        html += `<div style="margin-top:4px;"><span style="color:#8892a6;">bot_id:</span> ${botId}</div>`;
+        html += `</div></div>`;
+
+        // ── Activity Log section ──
+        const events = logResp.events || logResp.log || [];
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+        html += `<div style="color:#ffaa00;font-size:10px;font-weight:700;margin-bottom:6px;">📋 EVENT LOG (${events.length})</div>`;
+        if (events.length === 0) {
+            html += `<div style="color:#555;font-size:10px;">No events found</div>`;
+        } else {
+            html += `<div style="max-height:200px;overflow-y:auto;font-size:10px;">`;
+            events.slice(0, 30).forEach(evt => {
+                const ts = evt.timestamp ? new Date(evt.timestamp * 1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'}) : '';
+                const evtName = evt.event || evt.type || '?';
+                const evtColor = evtName.includes('ERROR') || evtName.includes('FAIL') ? '#ff4444' :
+                    evtName.includes('FILL') || evtName.includes('COMPLETE') ? '#00ff88' :
+                    evtName.includes('REPOST') || evtName.includes('WALK') ? '#ffaa00' : '#8892a6';
+                html += `<div style="display:flex;gap:8px;padding:2px 0;border-bottom:1px solid #111;">
+                    <span style="color:#555;min-width:65px;">${ts}</span>
+                    <span style="color:${evtColor};font-weight:600;min-width:120px;">${evtName}</span>
+                    <span style="color:#556;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${JSON.stringify(evt.data||{}).slice(0,100)}</span>
+                </div>`;
+            });
+            html += `</div>`;
+        }
+        html += `</div>`;
+
+        // ── Ticker link ──
+        html += `<div style="text-align:center;font-size:10px;color:#555;">
+            <a href="#" onclick="navigateToMarket('${(bot.ticker||'').toUpperCase().split('-').slice(0,2).join('-')}');closeBotDetail();return false;" style="color:#00d4ff;">View in Markets</a>
+            · <a href="https://kalshi.com/markets/${bot.ticker}" target="_blank" style="color:#8892a6;">Kalshi ↗</a>
+        </div>`;
+
+        content.innerHTML = html;
+    } catch (e) {
+        content.innerHTML = `<div style="color:#ff4444;padding:20px;">Error: ${e.message}</div>`;
+    }
 }
 
 // Cancel bot

@@ -852,6 +852,23 @@
     <!-- MODALS                                                     -->
     <!-- ═══════════════════════════════════════════════════════════ -->
 
+    <!-- Bot Detail Modal -->
+    <div class="modal" id="bot-detail-modal" onclick="if(event.target===this)closeBotDetail()">
+        <div class="modal-content" style="max-width:640px;border:1px solid #2a3550;border-top:3px solid #00d4ff;padding:0;overflow-y:auto;max-height:85vh;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:#0d1120;border-bottom:1px solid #1e2740;position:sticky;top:0;z-index:1;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span id="bd-icon" style="font-size:18px;">△</span>
+                    <div>
+                        <div id="bd-title" style="color:#fff;font-weight:700;font-size:14px;">Bot Detail</div>
+                        <div id="bd-subtitle" style="color:#8892a6;font-size:10px;letter-spacing:.04em;text-transform:uppercase;">Loading...</div>
+                    </div>
+                </div>
+                <button onclick="closeBotDetail()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;" onmouseenter="this.style.borderColor='#ff4444';this.style.color='#ff4444'" onmouseleave="this.style.borderColor='#2a3550';this.style.color='#8892a6'">✕</button>
+            </div>
+            <div id="bd-content" style="padding:16px 20px;"></div>
+        </div>
+    </div>
+
     <!-- Unified Trade Modal (Straight Bet / Dual Arb Bot) -->
     <div class="modal" id="bot-modal">
         <div class="modal-content" style="max-width: 580px; border: 1px solid #2a3550; border-top: 3px solid #00ff88; padding: 0; overflow-y: auto;">

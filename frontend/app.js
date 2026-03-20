@@ -4435,17 +4435,9 @@ function updateAllWidthsPreview() {
 async function createBot() {
     if (!currentArbMarket) { alert('No market selected'); return; }
 
-    // If multiple widths selected, delegate to multi-bot handler
-    if (_selectedWidths.size > 1) {
+    // All width selections go through Apex (ladder-arb) endpoint
+    if (_selectedWidths.size >= 1) {
         return placeSelectedWidthsBots();
-    }
-    // If exactly one width selected, use that width instead of the manual input
-    if (_selectedWidths.size === 1) {
-        const selW = [..._selectedWidths][0];
-        const selArb = calculateArbPrices(currentArbMarket, selW);
-        document.getElementById('bot-yes-price').value = selArb.targetYes;
-        document.getElementById('bot-no-price').value = selArb.targetNo;
-        document.getElementById('bot-arb-width').value = selW;
     }
 
     // ── Fetch fresh prices from ORDERBOOK right before submitting ──
@@ -4501,27 +4493,26 @@ async function createBot() {
     if (!confirm(`△ Deploy Apex Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nWalk-up if one fills (+1¢/20s toward bid, maker only)${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
-        const resp = await fetch(`${API_BASE}/bot/create`, {
+        const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ticker: currentArbMarket.ticker,
-                yes_price, no_price, quantity,
-                repeat_count, arb_width,
+                widths: [arb_width],
+                quantity,
+                width_scaling: false,
+                repeat_count,
             }),
         });
         const data = await resp.json();
 
-        if (data.success) {
-            const profit = 100 - yes_price - no_price;
-            const cycles = repeat_count > 0 ? repeat_count + 1 : 1;
-            const cycleNote = cycles > 1 ? ` × ${cycles} cycles` : '';
-            showNotification(`✅ ARB deployed: ${quantity} contracts | ${profit}¢ width${cycleNote}`);
+        if (data.bot_id) {
+            showNotification(`△ Apex deployed: 1 rung · ${quantity} contracts`);
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
         } else {
-            alert('Error: ' + data.error);
+            alert('Error: ' + (data.error || 'Unknown error'));
         }
     } catch (err) {
         alert('Network error: ' + err.message);
@@ -4651,59 +4642,30 @@ async function placeSelectedWidthsBots() {
 
     let notifMsg;
 
-    console.log(`[DEPLOY] validWidths=${validWidths.length}, routing to ${validWidths.length >= 2 ? 'ladder-arb' : 'legacy'}`);
+    console.log(`[DEPLOY] validWidths=${validWidths.length}, routing to ladder-arb (Apex)`);
 
-    if (validWidths.length >= 2) {
-        // ── LADDER-ARB: single unified bot with rungs ─────────────────────────
-        try {
-            const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ticker: currentArbMarket.ticker,
-                    widths: validWidths.map(v => v.w),
-                    quantity: qty,
-                    width_scaling: useScaling,
-                    repeat_count: repeatCount,
-                    game_phase: gamePhase,
-                }),
-            });
-            const data = await resp.json();
-            if (data.bot_id) {
-                const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
-                notifMsg = `△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`;
-            } else {
-                notifMsg = `❌ Apex failed: ${data.error || 'Unknown error'}`;
-            }
-        } catch (err) {
-            notifMsg = `❌ Apex failed: Network error`;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: currentArbMarket.ticker,
+                widths: validWidths.map(v => v.w),
+                quantity: qty,
+                width_scaling: useScaling,
+                repeat_count: repeatCount,
+                game_phase: gamePhase,
+            }),
+        });
+        const data = await resp.json();
+        if (data.bot_id) {
+            const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
+            notifMsg = `△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`;
+        } else {
+            notifMsg = `❌ Apex failed: ${data.error || 'Unknown error'}`;
         }
-    } else {
-        // ── SINGLE WIDTH: use legacy bot/create endpoint ──────────────────────
-        const { w, arb } = validWidths[0];
-        try {
-            const resp = await fetch(`${API_BASE}/bot/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ticker: currentArbMarket.ticker,
-                    yes_price: arb.targetYes,
-                    no_price:  arb.targetNo,
-                    quantity: qty,
-                    arb_width: w,
-                    repeat_count: repeatCount,
-                    game_phase: gamePhase,
-                }),
-            });
-            const data = await resp.json();
-            if (data.bot_id) {
-                notifMsg = `⚡ ${w}¢ width placed successfully`;
-            } else {
-                notifMsg = `❌ Failed: ${data.error || 'Unknown error'}`;
-            }
-        } catch (err) {
-            notifMsg = `❌ Failed: Network error`;
-        }
+    } catch (err) {
+        notifMsg = `❌ Apex failed: Network error`;
     }
 
     if (deployBtn) { deployBtn.disabled = false; _updateDeployButton(); }

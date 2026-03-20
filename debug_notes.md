@@ -3,6 +3,8 @@
 Notes from the Meridian chat Claude about bugs, issues, and observations.
 Claude Code reads this file at the start of each session.
 
+**RULES FOR CHAT CLAUDE:** Only log ACTUAL bugs (broken UI, crashes, wrong data display, API errors). Do NOT log strategy suggestions, feature requests, or opinions about how bot recommendation logic should work. The user designs the trading strategy — you do not get to decide what Apex/Phantom/Meridian should recommend.
+
 ---
 
 ## [FIXED] Apex trade log: hedge order ID showing as raw UUID without clipboard button
@@ -23,5 +25,12 @@ FAB button background changed from orange gradient to dark (#0c1020) with orange
 **2026-03-20 15:14** | system | **Resolved 2026-03-20 15:25 by Claude Code**
 
 Root cause: `_gameIdDateMatchesESPN()` had a -1 day tolerance for UTC midnight crossing, but this also let yesterday's finished games match today's tickers for the same team (e.g. TENN played yesterday AND today). Fix: finished games (state=post) now require exact date match — only live/pregame games get ±1 day UTC tolerance. Also fixed late-night games with ESPN dates 1 day ahead (UTC midnight) not matching. The get_schedule() tool was NOT broken — it correctly returned games as "pre" — the issue was only in frontend card rendering. Commit e514315.
+
+---
+
+## [REJECTED] Apex recommendation on 50/50 markets — NOT A BUG
+**2026-03-20 16:56** | apex | **Rejected by user — strategy decision, not a bug**
+
+Chat Claude logged two notes suggesting Apex should recommend on near-50/50 spread markets. This is NOT a bug — the recommendation logic works as designed by the user. Chat Claude does not decide trading strategy.
 
 ---

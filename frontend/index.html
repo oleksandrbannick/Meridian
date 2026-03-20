@@ -2753,11 +2753,19 @@
                 // Highlight
                 for(let x=12;x<=18;x++) p(x,10,CL);
                 for(let x=11;x<=15;x++) p(x,11,CL);
-                // Eyes
+                // Eyes with eyelashes
                 fr(15,18,4,4,BG); fr(27,18,4,4,BG);
                 p(16,19,GN); p(28,19,GN);
-                // Small mouth
-                for(let x=20;x<=26;x++) p(x,27,BG);
+                // Eyelashes (2px flicks above each eye)
+                p(14,17,CD);p(15,16,CD); // left eye lashes
+                p(19,17,CD);p(18,16,CD);
+                p(26,17,CD);p(27,16,CD); // right eye lashes
+                p(31,17,CD);p(30,16,CD);
+                // Small curved smile
+                p(20,27,BG);p(21,28,BG);for(let x=22;x<=24;x++) p(x,28,BG);p(25,27,BG);
+                // Blush dots
+                p(12,23,'#ff88cc44');p(13,23,'#ff88cc44');
+                p(33,23,'#ff88cc44');p(34,23,'#ff88cc44');
                 // Arms
                 for(let y=20;y<=22;y++){p(7,y,CC);p(8,y,CC);}
                 for(let y=20;y<=22;y++){p(39,y,CC);p(40,y,CC);}
@@ -2827,7 +2835,7 @@
             meridian: {
                 name: 'Meridian', color: '#aa66ff', gradient: 'linear-gradient(90deg,#aa66ff,#cc88ff)',
                 tagline: '"Finds the line between two worlds."',
-                desc: 'Meridian is the flagship. He finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.',
+                desc: 'Meridian is the flagship. She finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.',
                 traits: ['elegant', 'precise', 'flagship'],
                 signature: 'Best at: Spread markets where both sides have deep NO liquidity',
             },
@@ -2914,6 +2922,6 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260320h"></script>
+    <script src="app.js?v=20260320i"></script>
 </body>
 </html>

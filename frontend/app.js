@@ -40,15 +40,22 @@ function botIconSvg(type, size) {
             `</svg>`;
     }
     if (type === 'meridian') {
-        // Wide pill body + crown + dot eyes
+        // Wide pill body + tiara crown + eyes with lashes
         return `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">` +
-            // Crown
+            // Tiara crown
             `<path d="M4 4L5.5 2L8 3.5L10.5 2L12 4Z" fill="${c}" stroke="${c}" stroke-width="0.5"/>` +
             // Pill body
             `<rect x="3" y="4.5" width="10" height="9" rx="4.5" fill="${cf}" stroke="${c}" stroke-width="1"/>` +
+            // Eyes
             `<circle cx="6" cy="8.5" r="1" fill="${c}"/>` +
             `<circle cx="10" cy="8.5" r="1" fill="${c}"/>` +
-            `<line x1="6.5" y1="11" x2="9.5" y2="11" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
+            // Eyelashes
+            `<line x1="4.8" y1="7.8" x2="5.3" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
+            `<line x1="7" y1="7.8" x2="6.5" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
+            `<line x1="8.8" y1="7.8" x2="9.3" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
+            `<line x1="11" y1="7.8" x2="10.5" y2="7" stroke="${c}" stroke-width="0.5" stroke-linecap="round"/>` +
+            // Curved smile
+            `<path d="M6.5 11 Q8 12 9.5 11" stroke="${c}" stroke-width="0.6" fill="none" stroke-linecap="round"/>` +
             // Tiny arms
             `<line x1="3" y1="9" x2="1.5" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +
             `<line x1="13" y1="9" x2="14.5" y2="8" stroke="${c}" stroke-width="0.8" stroke-linecap="round"/>` +

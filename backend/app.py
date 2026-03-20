@@ -67,6 +67,48 @@ _notification_counter = 0
 # Orphaned positions detected on startup (ticker → {side, orphaned_qty, exposure})
 _orphaned_positions = {}  # ticker -> {side, orphaned_qty, exposure, detected_at}
 
+# ── Persistent bot audit log — survives restarts, tracks every lifecycle transition ──
+_AUDIT_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot_audit.jsonl')
+_audit_lock = threading.Lock()
+
+def _audit(event, bot_id, data=None):
+    """Append a JSON line to bot_audit.jsonl — persistent, never wiped by restarts."""
+    entry = {
+        'ts': time.time(),
+        'dt': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+        'event': event,
+        'bot_id': bot_id,
+    }
+    if data:
+        entry.update(data)
+    try:
+        with _audit_lock:
+            with open(_AUDIT_LOG_PATH, 'a') as f:
+                f.write(json.dumps(entry) + '\n')
+    except Exception:
+        pass
+
+def _audit_position_check(bot_id, ticker, dog_side, context):
+    """Check Kalshi position for a ticker and log it to the audit trail."""
+    try:
+        api_rate_limiter.wait()
+        pos_resp = kalshi_client.get_positions(ticker=ticker)
+        positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+        net_pos = 0
+        for p in positions:
+            if p.get('ticker') == ticker:
+                net_pos = _parse_position_qty(p)
+        _audit('POSITION_CHECK', bot_id, {
+            'ticker': ticker, 'dog_side': dog_side,
+            'kalshi_position_fp': net_pos, 'context': context,
+        })
+        return net_pos
+    except Exception as e:
+        _audit('POSITION_CHECK_FAIL', bot_id, {
+            'ticker': ticker, 'context': context, 'error': str(e),
+        })
+        return None
+
 # Game watchlist — proactive updates
 _watched_games = []  # [{id, game_id, sport, teams, ticker_pattern, notify_on, last_score_home, last_score_away, last_status}]
 _watch_counter = 0
@@ -2794,6 +2836,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             else:
                 bot['no_fill_qty'] = total_fill
             print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
+            _audit('LADDER_RUNG_FILL', bot_id, {'ticker': bot['ticker'], 'rung_price': rung.get('price'), 'fill_qty': rung.get('fill_qty'), 'total_fills': total_fill})
             # All rungs filled? Hedge immediately (guard against double-fire)
             _hedge_spawned = False
             if total_fill >= bot['total_dog_qty'] and not bot.get('_hedge_fired'):
@@ -2887,6 +2930,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         rung_info = f'rung[{matched_rung}] {matched_side.upper()}' if matched_rung is not None else 'hedge-only'
         print(f'△ WS APEX FILL: {bot_id} {rung_info} +{count}{hedge_info} '
               f'→ YES={total_yes}/{total_expected_per_side} NO={total_no}/{total_expected_per_side}')
+        _audit('APEX_RUNG_FILL', bot_id, {'ticker': bot.get('ticker', ''), 'side': matched_side, 'rung_idx': matched_rung, 'count': count, 'is_hedge': is_hedge_fill, 'total_yes': total_yes, 'total_no': total_no})
         bot_log('LADDER_ARB_WS_FILL', bot_id, {
             'rung_idx': matched_rung, 'side': matched_side, 'count': count,
             'is_hedge_fill': is_hedge_fill,
@@ -3190,6 +3234,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['no_price'] = actual_fav_price
             bot['no_order_id'] = fav_order_id
         print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={avg_price + actual_fav_price}¢ + fees')
+        _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
         # Track fill-to-hedge latency
         fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
         if fill_at:
@@ -3370,6 +3415,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
             save_state()
             return
         print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry (attempt {attempts})')
+        _audit('LADDER_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': attempts})
         bot['status'] = 'ladder_filled_no_fav'  # go back so monitor retries
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': attempts})
         return
@@ -3424,6 +3470,8 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
             rung['fill_qty'] = 0
             rung['order_id'] = None
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+        _audit('LADDER_SELLBACK_REPEAT', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
+        _audit_position_check(bot_id, ticker, dog_side, 'entering_sellback_repeat')
     else:
         bot['status'] = 'stopped'
         bot['stopped_at'] = now
@@ -3435,6 +3483,8 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
 
     bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + (profit_cents - loss_cents)
     print(f'🔙 PHANTOM SELLBACK: {bot_id} | dog={dog_side.upper()} avg@{avg_price}¢ → sold@{sell_price}¢ | qty={total_fill_qty} | {"profit" if profit_cents else "loss"}={profit_cents or loss_cents}¢ | fav_bid={fav_bid}¢ ceiling={total_cost}¢')
+    _audit('LADDER_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'qty': total_fill_qty, 'sold': True})
+    _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_sellback')
 
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,
@@ -3681,6 +3731,8 @@ def _execute_ws_completion(bot_id):
             })
             print(f'⚡ WS COMPLETED: {bot_id} +{profit_cents}¢ (YES={real_yes}¢ NO={real_no}¢)'
                   + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
+            _audit('WS_COMPLETION', bot_id, {'ticker': ticker, 'yes_fill': bot.get('yes_fill_qty'), 'no_fill': bot.get('no_fill_qty'), 'will_repeat': will_repeat})
+            _audit_position_check(bot_id, ticker, bot.get('dog_side', 'yes'), 'after_ws_completion')
             # Queue action so frontend gets confetti/sound/notification
             with _pending_ws_actions_lock:
                 _pending_ws_actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': profit_cents})
@@ -5710,6 +5762,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
                     r[f'{_unfilled_side}_order_id'] = None
             bot['_consolidated'] = True
             print(f'🎯 WS SWEEP CONSOLIDATE: {bot_id} {_filled_side.upper()} avg={_avg_filled}¢ → {_unfilled_side.upper()} hedge @{actual_hedge}¢ × {_total_qty}')
+            _audit('APEX_HEDGE_POSTED', bot_id, {'ticker': _ticker, 'filled_side': _filled_side, 'hedge_side': _unfilled_side, 'hedge_price': actual_hedge, 'hedge_qty': _total_qty, 'hedge_order_id': hedge_oid, 'source': 'ws_sweep'})
             # Track fill-to-hedge latency
             fill_at = bot.get('first_fill_at')
             if fill_at:
@@ -5956,6 +6009,7 @@ def _execute_apex_completion(bot_id):
         })
         print(f'🏁 APEX FULLY DONE: {bot_id} {completed_count} rungs completed, total P&L: {total_pnl}¢'
               + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
+        _audit('APEX_COMPLETE', bot_id, {'ticker': bot.get('ticker', ''), 'total_pnl': total_pnl, 'completed_rungs': completed_count, 'will_repeat': will_repeat})
 
         with _pending_ws_actions_lock:
             _pending_ws_actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': total_pnl})
@@ -7425,6 +7479,8 @@ def _handle_phantom(bot_id, bot, actions):
             bot['dog_filled_at'] = now
             actual_dog_price = get_actual_fill_price(dog_order_id, dog_side) or bot['dog_price']
             bot['dog_price'] = actual_dog_price
+            _audit('DOG_FILLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'dog_price': actual_dog_price, 'qty': qty})
+            _audit_position_check(bot_id, ticker, dog_side, 'after_dog_fill')
 
             # Get current fav bid from orderbook
             try:
@@ -7485,6 +7541,7 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['no_order_id'] = fav_order_id
 
                 print(f'👻 PHANTOM HEDGE: {bot_id} dog filled @{actual_dog_price}¢ → fav {fav_side.upper()} posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
+                _audit('FAV_HEDGE_POSTED', bot_id, {'ticker': ticker, 'fav_side': fav_side, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
                 bot_log('ANCHOR_FAV_POSTED', bot_id, {
                     'dog_price': actual_dog_price, 'fav_price': actual_fav_price,
                     'fav_bid': fav_bid, 'total': actual_dog_price + actual_fav_price,
@@ -7645,6 +7702,8 @@ def _handle_phantom(bot_id, bot, actions):
                 }, bot)
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
+                _audit('PHANTOM_SETTLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'result': mkt_result, 'dog_won': dog_won, 'profit': profit})
+                _audit_position_check(bot_id, ticker, dog_side, 'after_settlement')
                 save_state()
                 actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                 return
@@ -7808,6 +7867,8 @@ def _handle_phantom(bot_id, bot, actions):
                 'hedge_fill_latency_ms': bot.get('hedge_fill_latency_ms'),
             })
             print(f'✅ PHANTOM COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms')
+            _audit('PHANTOM_COMPLETE', bot_id, {'ticker': ticker, 'dog_price': dog_price, 'fav_price': actual_fav_price, 'pnl': net_pnl, 'qty': qty})
+            _audit_position_check(bot_id, ticker, dog_side, 'after_phantom_complete')
 
             # Repeat logic
             repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -7827,6 +7888,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
                 print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total}')
+                _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
+                _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
             else:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
@@ -8111,6 +8174,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_price'] = actual_price
 
             print(f'🔄 PHANTOM REPOST: {bot_id} dog re-anchored @{actual_price}¢ (smart price from orderbook)')
+            _audit('PHANTOM_REANCHOR', bot_id, {'ticker': ticker, 'new_dog_price': actual_price, 'dog_order_id': bot['dog_order_id']})
+            _audit_position_check(bot_id, ticker, dog_side, 'after_reanchor')
             save_state()
         except Exception as e:
             print(f'❌ PHANTOM {bot_id}: repeat repost failed: {e}')
@@ -8208,6 +8273,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot['status'] = 'completed'
             bot['completed_at'] = now
             bot['_trade_recorded'] = True
+            _audit('LADDER_SETTLED', bot_id, {'ticker': ticker, 'market_status': mkt_al_status, 'result': mkt_al_result, 'total_fill': total_fill})
+            _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_settlement')
             actions.append({'bot_id': bot_id, 'action': 'anchor_ladder_settled', 'result': mkt_al_result})
             save_state()
             return
@@ -8287,6 +8354,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 )
                 rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
                 print(f'🔄 PHANTOM LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
+                _audit('LADDER_REANCHOR', bot_id, {'ticker': ticker, 'rungs': len(new_rungs), 'first_price': new_rungs[0]['price'] if new_rungs else 0, 'cycle': bot.get('repeats_done', 0)})
+                _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_reanchor')
                 save_state()
             else:
                 print(f'❌ PHANTOM REPEAT {bot_id}: no rungs placed — waiting')
@@ -8641,6 +8710,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 hedge_fill_latency_ms = round((now - dog_fill_at) * 1000, 1)
                 bot['hedge_fill_latency_ms'] = hedge_fill_latency_ms
             print(f'👻 PHANTOM P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
+            _audit('LADDER_COMPLETE', bot_id, {'ticker': ticker, 'hedge_qty': hedge_qty, 'yes_price': yes_p, 'no_price': no_p, 'pnl': net_pnl})
+            _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_complete')
 
             # Repeat logic — re-anchor if repeats remain
             repeats_done_now = bot.get('repeats_done', 0) + 1
@@ -8659,6 +8730,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None
                 print(f'👻 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — resetting for re-anchor')
+                _audit('LADDER_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
+                _audit_position_check(bot_id, ticker, dog_side, 'entering_ladder_repeat')
             else:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
@@ -8852,6 +8925,7 @@ def _handle_apex(bot_id, bot, actions):
                 bot['completed_at'] = now
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_settled', 'result': mkt_la_result})
                 print(f'🏁 APEX SETTLED: {bot_id} market={mkt_la_status} result={mkt_la_result}')
+                _audit('APEX_SETTLED', bot_id, {'ticker': ticker, 'market_status': mkt_la_status, 'result': mkt_la_result})
                 save_state()
                 return
         except Exception as e:
@@ -8967,6 +9041,7 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_order_group_id'] = repeat_group_id
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_repeat_repost'})
                 print(f'🔄 APEX REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs reposted (group={repeat_group_id[:8]})')
+                _audit('APEX_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': bot.get('repeats_done', 0), 'total': bot.get('repeat_count', 0), 'rungs': len(new_rungs)})
             else:
                 return  # No profitable rungs — wait
         except Exception as e:
@@ -9295,6 +9370,7 @@ def _handle_apex(bot_id, bot, actions):
                             r[f'{unfilled_side}_order_id'] = None
                         bot['_consolidated'] = True
                         print(f'🎯 APEX CONSOLIDATE: {bot_id} {filled_side.upper()} filled (avg={avg_filled_price}¢) → single {unfilled_side.upper()} hedge @{actual_hedge}¢ × {total_filled_qty}')
+                        _audit('APEX_HEDGE_POSTED', bot_id, {'ticker': ticker, 'filled_side': filled_side, 'hedge_side': unfilled_side, 'hedge_price': actual_hedge, 'hedge_qty': total_filled_qty, 'hedge_order_id': hedge_oid})
                         # Track fill-to-hedge latency
                         fill_at = bot.get('first_fill_at')
                         if fill_at:
@@ -9717,6 +9793,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
         bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
         bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
+        _audit('PHANTOM_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': bot['_sellback_attempts']})
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
         return
 
@@ -9782,6 +9859,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'loss_cents': loss_cents, 'fav_bid': fav_bid,
     })
     print(f'🔙 PHANTOM SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
+    _audit('PHANTOM_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'sell_price': sell_price, 'qty': qty, 'sold': True})
+    _audit_position_check(bot_id, ticker, dog_side, 'after_sellback')
 
     # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1

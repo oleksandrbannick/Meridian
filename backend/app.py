@@ -15796,6 +15796,20 @@ CLAUDE_TOOLS = [
             "required": ["query"]
         }
     },
+    {
+        "name": "save_debug_note",
+        "description": "Save a debug note for the developer (Claude Code) to read in future sessions. Use this when the user asks you to document a bug, issue, or observation about bot behavior, system problems, or anything that needs attention. Notes are timestamped and appended to a file that Claude Code reads.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short title for the issue (e.g. 'Phantom hedge not firing on NBA spreads')"},
+                "description": {"type": "string", "description": "Detailed description of the issue — what happened, what was expected, any relevant bot IDs, tickers, or error messages"},
+                "severity": {"type": "string", "enum": ["critical", "bug", "observation", "idea"], "description": "How urgent this is"},
+                "bot_type": {"type": "string", "description": "Which bot type is affected (apex, phantom, meridian, scout, or 'system')"}
+            },
+            "required": ["title", "description"]
+        }
+    },
 ]
 
 def _execute_chat_tool(tool_name, tool_input):
@@ -16660,6 +16674,19 @@ def _execute_chat_tool(tool_name, tool_input):
 
             return result
 
+        elif tool_name == 'save_debug_note':
+            import datetime as _dt
+            notes_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'debug_notes.md')
+            title = tool_input['title']
+            desc = tool_input['description']
+            severity = tool_input.get('severity', 'observation')
+            bot_type = tool_input.get('bot_type', 'system')
+            ts = _dt.datetime.now().strftime('%Y-%m-%d %H:%M')
+            entry = f"\n## [{severity.upper()}] {title}\n**{ts}** | {bot_type}\n\n{desc}\n\n---\n"
+            with open(notes_file, 'a') as f:
+                f.write(entry)
+            return {'success': True, 'message': f'Debug note saved: {title}', 'file': notes_file}
+
         else:
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
@@ -16703,7 +16730,8 @@ def claude_chat():
         'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
         'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
         'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',
-        'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts), sell_position (limit sell at target price), get_bot_detail (full detail for one bot), create_watch_bot (attach SL/TP to existing position), cancel_order (cancel single order by ID), get_game_context (combined scores+markets+bots for a game).',
+        'SYSTEM TOOLS: get_orders (all resting Kalshi orders), get_order_status (check specific order), amend_order (change resting order price), get_fills (recent trade fills), set_bot_phase (switch pregame/live), modify_bot (change repeat/timeout/SL on active bot), sweep_orphans (clean orphaned orders), get_orphaned_positions, reconcile_positions (Meridian vs Kalshi mismatch check), get_ws_status (WebSocket health), get_latency (API speed), create_middle_bot (spread arb), get_pnl_calendar (daily P&L history), get_bot_stats (performance analytics), get_risk_exposure (capital at risk), read_activity_log (search bot events), get_system_status (full health check), get_notifications (pending alerts), sell_position (limit sell at target price), get_bot_detail (full detail for one bot), create_watch_bot (attach SL/TP to existing position), cancel_order (cancel single order by ID), get_game_context (combined scores+markets+bots for a game), save_debug_note (document bugs/issues for the developer to fix).',
+        'DEBUG NOTES: When the user asks you to "tell Claude Code about this", "save this for debugging", "leave a note about this bug", or similar — use save_debug_note. Include specific details: bot IDs, tickers, what happened vs expected, timestamps. The developer reads these notes at the start of each session.',
         'For change_view: you can change the sport filter, live filter, and search query. The UI updates immediately. Do NOT call change_view repeatedly — one call is enough.',
         'EFFICIENCY: You have up to 12 tool calls per message. When the user asks what games are live or what to trade, use get_live_kalshi_markets — it returns all currently live Kalshi markets in one call. Use search_markets only for specific teams/tickers. Use get_schedule() for ESPN game times. The visible_markets in context shows what is on the user\'s screen.',
         'For bulk_deploy: ALWAYS preview targets first (without confirm=true), then get user approval before deploying.',

@@ -2402,6 +2402,8 @@
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
+                    // Yield to browser between chunks so UI stays responsive
+                    await new Promise(r => setTimeout(r, 0));
                     const chunk = decoder.decode(value, { stream: true });
                     const lines = chunk.split('\n');
                     for (const line of lines) {
@@ -2562,16 +2564,21 @@
                 const wasOpen = chatPanel && chatPanel.classList.contains('open');
                 if (wasOpen) chatPanel.style.visibility = 'hidden';
 
-                // Capture the main content area (not the chat widget itself)
+                // Yield to browser first so UI stays responsive
+                await new Promise(r => setTimeout(r, 50));
+
+                // Capture only the VISIBLE viewport, not the full scrollable page
                 const target = document.querySelector('.main-content') || document.body;
                 const canvas = await html2canvas(target, {
                     backgroundColor: '#0c1020',
-                    scale: 1,  // 1x for smaller file size
+                    scale: 0.75,  // 0.75x for smaller payload + faster capture
                     logging: false,
                     useCORS: true,
                     allowTaint: true,
-                    width: Math.min(target.scrollWidth, 1600),
-                    height: Math.min(target.scrollHeight, 1200),
+                    width: Math.min(window.innerWidth, 1400),
+                    height: Math.min(window.innerHeight, 900),
+                    windowWidth: window.innerWidth,
+                    windowHeight: window.innerHeight,
                 });
 
                 // Restore chat panel
@@ -2895,6 +2902,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260320ai"></script>
+    <script src="app.js?v=20260320aj"></script>
 </body>
 </html>

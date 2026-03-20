@@ -2215,12 +2215,16 @@ function createMarketRow(market, label) {
     if (liq.yesBid > 0 && liq.noBid > 0 && liq.arbEdge >= 2 && !botTypes.apex) {
         recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
     }
-    // Phantom: clear fav/dog split, dog is cheap (<35¢), arb math works (fav hedge leaves ≥2¢ profit)
+    // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
+    // arb math works, and lowest rung won't hit 1¢ floor
     if (!botTypes.phantom) {
         const dogPrice = Math.min(liq.yesBid, liq.noBid);
         const favBid = Math.max(liq.yesBid, liq.noBid);
-        const hedgeRoom = 98 - dogPrice - (100 - favBid); // profit if hedge fills at fav ask
-        if (dogPrice > 0 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2) {
+        const hedgeRoom = 98 - dogPrice - (100 - favBid);
+        // Lowest rung check: 3 rungs spaced 2¢ apart, bottom rung must be ≥3¢
+        // (at 2¢ the hedge needs 96¢ fav which never fills)
+        const lowestRung = dogPrice - 4; // 3rd rung ~4¢ below top
+        if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2) {
             const dogSide = liq.yesBid < liq.noBid ? 'YES' : 'NO';
             recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room` });
         }

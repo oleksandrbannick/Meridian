@@ -246,6 +246,12 @@ class KalshiAPI:
         return self._make_request('POST', '/portfolio/orders/batched',
                                   data={'orders': orders}, authenticated=True)
 
+    def create_order_group(self, contracts_limit: int = 1000) -> str:
+        """Create an order group for atomic cancel. Returns the order_group_id string."""
+        resp = self._make_request('POST', '/portfolio/order_groups/create',
+                                  data={'contracts_limit': contracts_limit}, authenticated=True)
+        return resp['order_group_id']
+
     def cancel_order_group(self, order_group_id: str) -> Dict:
         """Cancel all orders in a group atomically."""
         return self._make_request('DELETE', f'/portfolio/order_groups/{order_group_id}', authenticated=True)

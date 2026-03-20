@@ -5879,9 +5879,8 @@ def create_ladder_arb_bot():
         total_scaled_qty = 0
         all_placed_oids = []  # Master list of ALL order IDs for cleanup
 
-        import uuid as _uuid
-        _order_group_id = str(_uuid.uuid4())
-        print(f'△ APEX PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling}) group={_order_group_id[:8]}')
+        _order_group_id = _create_order_group()
+        print(f'△ APEX PLACING: {ticker} | {len(rung_specs)} rungs to place (base_qty={quantity}, scaling={width_scaling}) group={(_order_group_id or "none")[:8]}')
 
         # Batch YES orders and NO orders
         yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in rung_specs]
@@ -6285,8 +6284,7 @@ def create_ladder_bot():
                 print(f'   rung[{idx}] → {r["price"]}¢ (depth={anchor_depth + idx * 2}¢)')
 
         # Place all rung orders via batch
-        import uuid as _uuid
-        phantom_group_id = str(_uuid.uuid4())
+        phantom_group_id = _create_order_group()
         rung_specs = [{'ticker': ticker, 'side': dog_side, 'count': int(r.get('qty', 1)), 'price': int(r['price'])} for r in rungs_input]
         try:
             batch_results = create_orders_batch(rung_specs, order_group_id=phantom_group_id)
@@ -6503,6 +6501,18 @@ def simulate_ladder():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ─── ORDER GROUP CREATION ──────────────────────────────────────────
+def _create_order_group(contracts_limit=200):
+    """Create an order group via Kalshi API for atomic cancel.
+    Returns order_group_id string, or None on failure."""
+    try:
+        api_rate_limiter.wait()
+        return kalshi_client.create_order_group(contracts_limit=contracts_limit)
+    except Exception as e:
+        print(f'⚠ Failed to create order group: {e}')
+        return None
 
 
 # ─── BATCH ORDER PLACEMENT ─────────────────────────────────────────
@@ -7972,8 +7982,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
 
             # Batch-place all rungs for new cycle
-            import uuid as _uuid
-            repeat_ph_group = str(_uuid.uuid4())
+            repeat_ph_group = _create_order_group()
             repeat_specs = []
             repeat_qtys = []
             for rung in bot.get('rungs', []):
@@ -8153,8 +8162,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                                 _safe_cancel(rung['order_id'], f'phantom rung repost {bot_id}')
 
                     # Batch-place new orders for unfilled rungs
-                    import uuid as _uuid
-                    new_ph_group = str(_uuid.uuid4())
+                    new_ph_group = _create_order_group()
                     repost_specs = []
                     repost_indices = []
                     for idx, rung in enumerate(bot.get('rungs', [])):
@@ -8592,8 +8600,7 @@ def _handle_apex(bot_id, bot, actions):
                     continue
                 rung_qty = _scale_qty_for_width(qty_per, w) if use_scaling else qty_per
                 valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn, 'rung_qty': rung_qty})
-            import uuid as _uuid
-            repeat_group_id = str(_uuid.uuid4())
+            repeat_group_id = _create_order_group()
             if valid_specs:
                 yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in valid_specs]
                 no_specs  = [{'ticker': ticker, 'side': 'no',  'count': s['rung_qty'], 'price': s['no_price']}  for s in valid_specs]
@@ -8784,8 +8791,7 @@ def _handle_apex(bot_id, bot, actions):
 
             # Fetch fresh orderbook
             try:
-                import uuid as _uuid
-                new_group_id = str(_uuid.uuid4())
+                new_group_id = _create_order_group()
                 api_rate_limiter.wait()
                 ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                 ob = ob_data.get('orderbook', ob_data)

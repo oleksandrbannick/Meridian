@@ -15149,24 +15149,17 @@ CLAUDE_TOOLS = [
     },
     {
         "name": "create_ladder_arb",
-        "description": "Create an Apex bot — multi-width arb with multiple rungs at different YES/NO price widths. Places both sides simultaneously and hedges on fill.",
+        "description": "Create an Apex bot — multi-width arb with multiple rungs at different profit widths. Prices are computed from the live orderbook. Places both sides simultaneously and hedges on fill.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "ticker": {"type": "string", "description": "Market ticker"},
                 "widths": {
                     "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "yes_price": {"type": "integer"},
-                            "no_price": {"type": "integer"},
-                            "count": {"type": "integer"}
-                        },
-                        "required": ["yes_price", "no_price", "count"]
-                    },
-                    "description": "Array of {yes_price, no_price, count} rungs"
+                    "items": {"type": "integer"},
+                    "description": "Array of width values in cents (e.g. [5, 8, 12]). Each width = target profit per contract. Prices are auto-calculated from the orderbook."
                 },
+                "count": {"type": "integer", "description": "Contracts per rung (default 1)"},
                 "timeout": {"type": "integer", "description": "Timeout in seconds"}
             },
             "required": ["ticker", "widths"]
@@ -15736,9 +15729,10 @@ def _execute_chat_tool(tool_name, tool_input):
                 'ticker': tool_input['ticker'],
                 'side': tool_input['side'],
                 'price': tool_input['price'],
-                'count': tool_input['count'],
-                'stop_loss': tool_input.get('stop_loss'),
-                'take_profit': tool_input.get('take_profit'),
+                'quantity': tool_input['count'],
+                'add_watch': True,  # always create watch bot so trades are tracked
+                'stop_loss_cents': tool_input.get('stop_loss', 5),
+                'take_profit_cents': tool_input.get('take_profit', 0),
             }, timeout=15)
             return r.json()
         elif tool_name == 'create_arb_bot':
@@ -15746,7 +15740,7 @@ def _execute_chat_tool(tool_name, tool_input):
                 'ticker': tool_input['ticker'],
                 'yes_price': tool_input['yes_price'],
                 'no_price': tool_input['no_price'],
-                'count': tool_input['count'],
+                'quantity': tool_input['count'],
                 'timeout': tool_input.get('timeout', 300),
             }, timeout=15)
             return r.json()
@@ -15754,6 +15748,7 @@ def _execute_chat_tool(tool_name, tool_input):
             r = requests.post(f'{base}/bot/ladder-arb', json={
                 'ticker': tool_input['ticker'],
                 'widths': tool_input['widths'],
+                'quantity': tool_input.get('count', 1),
                 'timeout': tool_input.get('timeout', 300),
             }, timeout=15)
             return r.json()
@@ -15762,8 +15757,8 @@ def _execute_chat_tool(tool_name, tool_input):
                 'ticker': tool_input['ticker'],
                 'dog_side': tool_input['dog_side'],
                 'dog_price': tool_input['dog_price'],
-                'count': tool_input['count'],
-                'timeout': tool_input.get('timeout', 300),
+                'quantity': tool_input['count'],
+                'hedge_timeout_s': tool_input.get('timeout', 300),
             }, timeout=15)
             return r.json()
         elif tool_name == 'create_anchor_ladder':
@@ -16483,9 +16478,9 @@ def claude_chat():
 
     # Model selection — default to Sonnet
     AVAILABLE_MODELS = {
-        'sonnet': 'claude-sonnet-4-20250514',
+        'sonnet': 'claude-sonnet-4-6-20250627',
         'haiku': 'claude-haiku-4-5-20251001',
-        'opus': 'claude-opus-4-20250514',
+        'opus': 'claude-opus-4-6-20250627',
     }
     selected_model_key = body.get('model', 'sonnet')
     selected_model = AVAILABLE_MODELS.get(selected_model_key, AVAILABLE_MODELS['sonnet'])

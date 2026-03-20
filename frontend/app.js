@@ -668,8 +668,12 @@ function _gameIdDateMatchesESPN(gameId, espnGame) {
     // The 1-day tolerance exists only for UTC midnight crossing on today's games,
     // not to allow today's live team data to bleed into tomorrow's markets.
     if (tickerDateNorm.getTime() > todayNorm.getTime()) return daysDiff === 0;
-    // For today/past tickers: allow ESPN date same day or 1 day before (UTC midnight crossing)
-    return daysDiff >= -1 && daysDiff <= 0;
+    // For today/past tickers: allow ESPN date same day, 1 day before, or 1 day ahead (UTC midnight crossing)
+    // But if the game is finished (post) and the date doesn't match exactly, reject it —
+    // yesterday's final score must NOT bleed into today's card for the same team
+    if (daysDiff !== 0 && espnGame.state === 'post') return false;
+    // Allow ±1 day for live/pregame games (handles late-night UTC → local date crossing)
+    return daysDiff >= -1 && daysDiff <= 1;
 }
 
 function _findGameInLookup(lookup, gameId, sport, strict) {

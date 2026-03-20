@@ -6684,11 +6684,22 @@ def create_orders_batch(order_specs, order_group_id=None):
         batch_orders.append(order)
 
     try:
-        api_rate_limiter.wait()
-        t0 = time.time()
-        resp = kalshi_client.create_orders_batch(batch_orders)
-        _record_latency('order_place', (time.time() - t0) * 1000,
-                        {'ticker': order_specs[0]['ticker'], 'batch': len(batch_orders)})
+        # Retry batch up to 3 times on 429 (rate limit) before falling back to individual
+        resp = None
+        for _attempt in range(3):
+            api_rate_limiter.wait(priority=True)  # priority so monitor loop doesn't starve us
+            try:
+                t0 = time.time()
+                resp = kalshi_client.create_orders_batch(batch_orders)
+                _record_latency('order_place', (time.time() - t0) * 1000,
+                                {'ticker': order_specs[0]['ticker'], 'batch': len(batch_orders)})
+                break  # success
+            except Exception as batch_err:
+                if '429' in str(batch_err) and _attempt < 2:
+                    print(f'  ⚠ Batch 429 — retrying in 1s (attempt {_attempt + 2}/3)')
+                    time.sleep(1.0)  # wait for rate limit window to reset
+                    continue
+                raise  # non-429 error or final attempt
         results = resp.get('orders', [])
         out = []
         for i, spec in enumerate(order_specs):

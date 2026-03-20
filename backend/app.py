@@ -2749,6 +2749,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     args=(bot_id,),
                     daemon=True
                 ).start()
+                # Defer save_state to background — don't block WS handler while hedge thread needs GIL
+                threading.Thread(target=save_state, daemon=True).start()
+                break
         elif matched == 'fav':
             bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
             if bot['fav_side'] == 'yes':
@@ -2785,16 +2788,23 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['no_fill_qty'] = total_fill
             print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
             # All rungs filled? Hedge immediately
+            _hedge_spawned = False
             if total_fill >= bot['total_dog_qty']:
                 bot['dog_filled_at'] = time.time()
                 threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
+                _hedge_spawned = True
             elif not bot.get('_sweep_timer_started'):
                 # Partial fill — hedge immediately with whatever is filled, cancel remainder after
                 bot['_sweep_timer_started'] = True
                 bot['first_fill_at'] = time.time()
                 print(f'⚡ WS PHANTOM SWEEP: {bot_id} first partial fill — hedging immediately')
                 threading.Thread(target=_ladder_sweep_then_hedge, args=(bot_id,), daemon=True).start()
-            save_state()
+                _hedge_spawned = True
+            if _hedge_spawned:
+                # Defer save_state to background — don't block WS handler while hedge thread needs GIL
+                threading.Thread(target=save_state, daemon=True).start()
+            else:
+                save_state()
             break
         elif bot.get('status') == 'fav_hedge_posted':
             if order_id != bot.get('fav_order_id'):
@@ -2956,11 +2966,12 @@ def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
 
 
 def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
-    """Pre-calculate hedge prices for every possible fill count (1, 2, 3 rungs).
+    """Pre-calculate hedge prices AND avg fill prices for every fill count (1, 2, 3 rungs).
     Assumes top-down fill order (highest price fills first).
-    Returns dict keyed by cumulative fill qty → hedge price."""
+    Returns (hedge_dict, avg_dict) — both keyed by cumulative fill qty."""
     sorted_rungs = sorted(rungs, key=lambda r: r['price'], reverse=True)
-    result = {}
+    hedges = {}
+    avgs = {}
     cum_qty = 0
     cum_price_x_qty = 0
     for r in sorted_rungs:
@@ -2968,8 +2979,9 @@ def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
         cum_qty += rq
         cum_price_x_qty += r['price'] * rq
         avg = round(cum_price_x_qty / cum_qty)
-        result[cum_qty] = _precalc_phantom_hedge(avg, target_width, dog_side, cum_qty)
-    return result
+        hedges[cum_qty] = _precalc_phantom_hedge(avg, target_width, dog_side, cum_qty)
+        avgs[cum_qty] = avg
+    return hedges, avgs
 
 
 def _execute_phantom_hedge(bot_id):
@@ -3047,9 +3059,9 @@ def _execute_phantom_hedge(bot_id):
 
 
 def _execute_phantom_ladder_hedge(bot_id):
-    """Post fav hedge based on weighted average of filled ladder rungs.
-    Called from WS handler (all rungs fill) or monitor (bounce detected).
-    Uses pre-calculated hedge price when all rungs fill for speed."""
+    """Post fav hedge based on filled ladder rungs — SPEED IS EVERYTHING.
+    Uses pre-calculated hedge price + avg price for instant execution.
+    Falls back to runtime computation only for legacy bots or recovery paths."""
     try:
         bot = active_bots.get(bot_id)
         if not bot or bot.get('status') in ('stopped', 'completed', 'fav_hedge_posted'):
@@ -3059,66 +3071,69 @@ def _execute_phantom_ladder_hedge(bot_id):
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
 
-        # Calculate weighted average price and total quantity FIRST (before cancels)
-        filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
-        if not filled_rungs:
-            # Recovery: bot-level fill data exists but rung-level doesn't
-            bot_fill = bot.get('total_dog_fill_qty', 0) or bot.get(f'{dog_side}_fill_qty', 0) or 0
-            if bot_fill > 0 and bot.get('avg_fill_price'):
-                bot['rungs'][0]['fill_qty'] = min(bot_fill, bot['rungs'][0]['qty'])
-                filled_rungs = [bot['rungs'][0]]
-                print(f'🔧 PHANTOM HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
-            else:
-                # Before completing with 0 fills, check Kalshi for actual positions
-                try:
-                    api_rate_limiter.wait()
-                    _pos_r = kalshi_client.get_positions(ticker=ticker)
-                    _pos_list = _pos_r.get('market_positions', _pos_r.get('positions', []))
-                    for _p in _pos_list:
-                        if _p.get('ticker') == ticker:
-                            _actual_qty = abs(_parse_position_qty(_p))
-                            if _actual_qty > 0:
-                                # Position EXISTS but WS missed the fills — reconstruct
-                                print(f'⚠ PHANTOM HEDGE {bot_id}: 0 local fills but Kalshi has {_actual_qty} contracts — reconstructing')
-                                # Distribute across rungs
-                                _remaining = _actual_qty
-                                for _r in bot['rungs']:
-                                    _assign = min(_r['qty'], _remaining)
-                                    _r['fill_qty'] = _assign
-                                    _remaining -= _assign
-                                    if _remaining <= 0:
-                                        break
-                                filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
-                                break
-                except Exception as _pe:
-                    print(f'⚠ PHANTOM HEDGE position check failed: {_pe}')
-                if not filled_rungs:
-                    print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs confirmed — marking complete')
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = time.time()
-                    save_state()
-                    return
+        # ── FAST PATH: use precalculated values (zero computation) ──
+        total_fill_qty = bot.get('total_dog_fill_qty', 0)
+        precalc_hedges = bot.get('_precalc_hedge_prices', {})
+        precalc_avgs = bot.get('_precalc_avg_prices', {})
+        hedge_price = precalc_hedges.get(total_fill_qty, 0)
+        avg_price = precalc_avgs.get(total_fill_qty, 0)
 
-        total_fill_qty = sum(r['fill_qty'] for r in filled_rungs)
-        avg_price = round(sum(r['price'] * r['fill_qty'] for r in filled_rungs) / total_fill_qty)
-        bot['avg_fill_price'] = avg_price
-        bot['hedge_qty'] = total_fill_qty
-        bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
-
-        rungs_str = ', '.join(f'{r["price"]}¢×{r["fill_qty"]}' for r in filled_rungs)
-
-        # Use pre-calculated hedge price for this fill count (covers 1, 2, or 3 rungs)
-        precalc_dict = bot.get('_precalc_hedge_prices', {})
-        precalc = precalc_dict.get(total_fill_qty, 0)
-
-        if precalc > 0:
-            hedge_price = precalc
-            print(f'👻 PHANTOM HEDGE (PRECALC): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | precalc hedge={hedge_price}¢')
+        if hedge_price > 0 and avg_price > 0 and total_fill_qty > 0:
+            # Instant path — all values pre-calculated, straight to API
+            bot['avg_fill_price'] = avg_price
+            bot['hedge_qty'] = total_fill_qty
+            bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
+            print(f'👻 PHANTOM HEDGE (PRECALC): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | hedge={hedge_price}¢')
         else:
-            # Fallback: compute from width + ceiling (non-standard fill qty or old bot without precalc dict)
-            target_width = bot.get('target_width', 5)
-            hedge_price = _precalc_phantom_hedge(avg_price, target_width, dog_side, total_fill_qty)
-            # Also check legacy single-value precalc for backward compat
+            # ── SLOW PATH: runtime computation (recovery, legacy bots, non-standard qty) ──
+            filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
+            if not filled_rungs:
+                # Recovery: bot-level fill data exists but rung-level doesn't
+                bot_fill = bot.get('total_dog_fill_qty', 0) or bot.get(f'{dog_side}_fill_qty', 0) or 0
+                if bot_fill > 0 and bot.get('avg_fill_price'):
+                    bot['rungs'][0]['fill_qty'] = min(bot_fill, bot['rungs'][0]['qty'])
+                    filled_rungs = [bot['rungs'][0]]
+                    print(f'🔧 PHANTOM HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
+                else:
+                    # Before completing with 0 fills, check Kalshi for actual positions
+                    try:
+                        api_rate_limiter.wait()
+                        _pos_r = kalshi_client.get_positions(ticker=ticker)
+                        _pos_list = _pos_r.get('market_positions', _pos_r.get('positions', []))
+                        for _p in _pos_list:
+                            if _p.get('ticker') == ticker:
+                                _actual_qty = abs(_parse_position_qty(_p))
+                                if _actual_qty > 0:
+                                    print(f'⚠ PHANTOM HEDGE {bot_id}: 0 local fills but Kalshi has {_actual_qty} contracts — reconstructing')
+                                    _remaining = _actual_qty
+                                    for _r in bot['rungs']:
+                                        _assign = min(_r['qty'], _remaining)
+                                        _r['fill_qty'] = _assign
+                                        _remaining -= _assign
+                                        if _remaining <= 0:
+                                            break
+                                    filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
+                                    break
+                    except Exception as _pe:
+                        print(f'⚠ PHANTOM HEDGE position check failed: {_pe}')
+                    if not filled_rungs:
+                        print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs confirmed — marking complete')
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = time.time()
+                        save_state()
+                        return
+
+            total_fill_qty = sum(r['fill_qty'] for r in filled_rungs)
+            avg_price = round(sum(r['price'] * r['fill_qty'] for r in filled_rungs) / total_fill_qty)
+            bot['avg_fill_price'] = avg_price
+            bot['hedge_qty'] = total_fill_qty
+            bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
+
+            # Try precalc with computed qty, else compute from scratch
+            hedge_price = precalc_hedges.get(total_fill_qty, 0)
+            if hedge_price <= 0:
+                target_width = bot.get('target_width', 5)
+                hedge_price = _precalc_phantom_hedge(avg_price, target_width, dog_side, total_fill_qty)
             if hedge_price <= 0:
                 hedge_price = bot.get('_precalc_hedge_price', 0)
             if hedge_price <= 0:
@@ -3134,7 +3149,6 @@ def _execute_phantom_ladder_hedge(bot_id):
             return
 
         # ── HEDGE FIRST — gets priority burst token ──
-        print(f'👻 PHANTOM HEDGE: {bot_id} | dog={dog_side.upper()} rungs=[{rungs_str}] avg={avg_price}¢ qty={total_fill_qty} | hedge@{hedge_price}¢')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price, priority=True,
@@ -6390,6 +6404,9 @@ def create_ladder_bot():
         if ws_manager:
             ws_manager.add_ticker(ticker)
 
+        # Pre-calculate hedge prices + avg fill prices for every fill count
+        _precalc_h, _precalc_a = _precalc_phantom_ladder_hedges(placed_rungs, target_width, dog_side)
+
         active_bots[bot_id] = {
             'ticker': ticker,
             'bot_category': 'anchor_ladder',
@@ -6432,8 +6449,9 @@ def create_ladder_bot():
             'fav_walk_count': 0,
             'fav_walk_ceiling': HARD_CEILING_CENTS,
             'fav_last_walk_at': None,
-            # Pre-calculated hedge prices for every fill count (1, 2, 3 rungs)
-            '_precalc_hedge_prices': _precalc_phantom_ladder_hedges(placed_rungs, target_width, dog_side),
+            # Pre-calculated hedge prices + avg prices for every fill count (1, 2, 3 rungs)
+            '_precalc_hedge_prices': _precalc_h,
+            '_precalc_avg_prices': _precalc_a,
             '_bid_at_post': current_dog_bid if current_dog_bid > 0 else 0,
             '_last_repost_at': 0,
             '_order_group_id': phantom_group_id,
@@ -8135,8 +8153,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 ws_rp = (ws_manager.get_price(ticker) if ws_manager else None) or {}
                 bot['_bid_at_post'] = ws_rp.get(f'{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
-                # Pre-calculate hedge prices for new rung prices
-                bot['_precalc_hedge_prices'] = _precalc_phantom_ladder_hedges(
+                # Pre-calculate hedge prices + avg prices for new rung prices
+                bot['_precalc_hedge_prices'], bot['_precalc_avg_prices'] = _precalc_phantom_ladder_hedges(
                     new_rungs, bot.get('target_width', 5), dog_side
                 )
                 rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
@@ -8297,8 +8315,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     bot['_bid_at_post'] = rp_dog_bid
                     bot['_last_repost_at'] = now
                     bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
-                    # Re-precalculate hedge prices with updated rung prices
-                    bot['_precalc_hedge_prices'] = _precalc_phantom_ladder_hedges(
+                    # Re-precalculate hedge prices + avg prices with updated rung prices
+                    bot['_precalc_hedge_prices'], bot['_precalc_avg_prices'] = _precalc_phantom_ladder_hedges(
                         bot['rungs'], bot.get('target_width', 5), dog_side
                     )
                     print(f'🔄 PHANTOM REPOST: {bot_id} {old_first_price}¢→{smart_first}¢ '

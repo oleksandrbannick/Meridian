@@ -1265,7 +1265,7 @@ async function refreshVisiblePrices() {
             const lYesSp  = p.yes_ask > 0 && p.yes_bid > 0 ? p.yes_ask - p.yes_bid : 99;
             const lNoSp   = p.no_ask  > 0 && p.no_bid  > 0 ? p.no_ask  - p.no_bid  : 99;
             const lAvgSp  = (lYesSp + lNoSp) / 2;
-            const lTier   = lBidSum > 100 ? 'over100' : lAvgSp <= 3 ? 'tight' : 'medium';
+            const lTier   = lAvgSp <= 3 ? 'tight' : lAvgSp <= 8 ? 'medium' : 'wide';
 
             // Find YES button for this ticker
             const yesBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="yes"]`);
@@ -2221,18 +2221,25 @@ function createMarketRow(market, label) {
 
     // ── Bot recommendation icons (dimmed) ──
     const recoTypes = [];
-    // Apex: both sides need bids. Recommend when instant arb exists (arbEdge >= 2)
-    // OR when a live game is close (coin-flip) — volatility will swing prices through resting orders.
+    // Apex: both sides need bids. The strategy is posting maker orders and letting
+    // volatility fill them — NOT waiting for instant arb (bids under 100¢ is rare and irrelevant).
+    // Recommend on any live game with decent liquidity on both sides.
     if (liq.yesBid > 0 && liq.noBid > 0 && !botTypes.apex) {
-        const hasInstantEdge = liq.arbEdge >= 2;
-        // Coin-flip detection: bids sum to 96-103 (near 50/50) on a live game
         const bidSum = liq.yesBid + liq.noBid;
-        const isCoinFlip = bidSum >= 96 && bidSum <= 103 && Math.abs(liq.yesBid - liq.noBid) <= 15;
-        const isLiveGame = isLive;  // from the enclosing card builder scope
-        if (hasInstantEdge) {
-            recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
-        } else if (isCoinFlip && isLiveGame) {
-            recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — volatility play` });
+        const spread = Math.abs(liq.yesBid - liq.noBid);
+        const isLiveGame = isLive;
+        if (isLiveGame && bidSum >= 90) {
+            // Live game with real liquidity — always recommend
+            if (spread <= 10) {
+                recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility` });
+            } else if (spread <= 25) {
+                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths` });
+            } else if (spread <= 50) {
+                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths` });
+            }
+        } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && liq.avgSpread <= 5) {
+            // Pregame with tight spreads — can post early
+            recoTypes.push({ type: 'apex', tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢, ${liq.avgSpread}¢ spread` });
         }
     }
     // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
@@ -2278,14 +2285,15 @@ function createMarketRow(market, label) {
     const yesPrice = (yesAsk >= 99 && noBid <= 1) ? yesBid : (yesAsk > 0 ? yesAsk : 0);
     const noPrice = (noAsk >= 99 && yesBid <= 1) ? noBid : (noAsk > 0 ? noAsk : 0);
 
-    // Market tier for button brightness: bid_sum vs spread quality
+    // Market tier for button brightness: spread quality is what matters, not bid sum.
+    // bid_sum > 100 is normal (99% of markets) — don't dim them.
     const bidSum = (yesBid || 0) + (noBid || 0);
     const yesSpread = yesAsk > 0 && yesBid > 0 ? yesAsk - yesBid : 99;
     const noSpread  = noAsk  > 0 && noBid  > 0 ? noAsk  - noBid  : 99;
     const avgSpread = (yesSpread + noSpread) / 2;
-    const mktTier = bidSum > 100 ? 'over100'
-                  : avgSpread <= 3 ? 'tight'
-                  : 'medium';
+    const mktTier = avgSpread <= 3 ? 'tight'
+                  : avgSpread <= 8 ? 'medium'
+                  : 'wide';
 
     const yesStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes', mktTier) : 'background: #1a1f2e; color: #555;';
     
@@ -2335,18 +2343,18 @@ function createMarketRow(market, label) {
 
 // Get button styling based on price — highlights ANCHOR zone (65-85¢) for volatility capture
 // Strong favorites are where the bot places limit orders to catch dips
-// marketTier: 'tight' | 'medium' | 'over100'
-//   tight   = bid/ask spread ≤ 3¢ both sides → full glow, solid border (best fills)
-//   medium  = spread > 3¢, bid_sum < 100 → moderate glow (normal / thin arb market)
-//   over100 = bid_sum > 100 → muted/dark — paying >100c for 100c payout, not profitable for dual arb
+// marketTier: 'tight' | 'medium' | 'wide'
+//   tight  = bid/ask spread ≤ 3¢ → full glow, solid border (best fills)
+//   medium = spread 4-8¢ → moderate glow (normal market)
+//   wide   = spread > 8¢ → slightly muted (thin liquidity)
 function getPriceButtonStyle(price, side, marketTier) {
     const yesBase = '#00ff88';
     const noBase  = '#ff4444';
     const color   = side === 'yes' ? yesBase : noBase;
 
-    if (marketTier === 'over100') {
-        // bid_sum > 100 → can't buy both profitably. Dim these out.
-        return `background: rgba(60,60,60,0.08); color: #444; border: 1px solid #2a2a2a;`;
+    if (marketTier === 'wide') {
+        // Wide spread — thin liquidity, slightly muted but still visible
+        return `background: rgba(${side==='yes'?'0,255,136':'255,68,68'},0.08); color: ${color}99; border: 1px solid ${color}44;`;
     }
 
     if (marketTier === 'tight') {
@@ -3940,7 +3948,7 @@ function openBotModal(market, _side, _price) {
     const signal = getGameSignal(gameId, sport, [market]);
     const sigType = signal.type; // anchor, swing, caution, pregame, none
     const recEl = document.getElementById('preset-recommendation');
-    if (recEl && liq.arbEdge <= 20 && liq.arbEdge >= 1) {
+    if (recEl && liq.yesBid > 0 && liq.noBid > 0) {
         const recPresets = getRecommendedPresets(liq.tier, sigType);
         const recLabel = recPresets.join('¢, ') + '¢';
         // Signal-aware recommendation text
@@ -3972,7 +3980,7 @@ function openBotModal(market, _side, _price) {
         recEl.style.display = 'block';
         recEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">`
             + `<span style="color:${sigColor};font-weight:700;">${sigText}</span>`
-            + `<span style="color:#8892a6;font-size:10px;">edge ${liq.arbEdge}¢ · spread ${liq.avgSpread}¢</span>`
+            + `<span style="color:#8892a6;font-size:10px;">${liq.yesBid}+${liq.noBid}=${liq.bidSum}¢ · spread ${liq.avgSpread}¢</span>`
             + `</div>`
             + (signal.description ? `<div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>` : '');
         // Highlight recommended tier buttons + add ★ to recommended

@@ -1339,10 +1339,9 @@ function displayMarkets(markets) {
         for (const opp of (data.middles || [])) {
             const cost = opp.cost || 999;
             const sc = opp.catch_score || 0;
-            const isLive = opp.is_live || opp.live || false;
-            // Only recommend live games — pregame spreads don't have the volatility.
             // Under 100¢ = arb exists now. Otherwise need catch score + close to 100.
-            if (isLive && (cost <= 100 || (cost <= 115 && sc >= 6))) {
+            // Place pregame, catch dips when game goes live and score changes.
+            if (cost <= 100 || (cost <= 115 && sc >= 6)) {
                 const ta = opp.ticker_a || '', tb = opp.ticker_b || '';
                 const mw = opp.middle_width || 0;
                 const tip = cost <= 100

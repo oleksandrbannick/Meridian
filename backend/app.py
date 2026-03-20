@@ -11089,7 +11089,7 @@ def _run_monitor():
             """
             if not bot.get('rebalancer_enabled', True):
                 return False
-            mode = bot.get('rebalancer_mode', 'dry_run')  # 'dry_run' or 'live'
+            mode = bot.get('rebalancer_mode', 'live')  # 'dry_run' or 'live'
 
             PROTECT_FLOOR   = bot.get('rebalancer_protect_floor', 80)
             LATE_GAME_SECS  = bot.get('rebalancer_late_game_secs', 180)
@@ -11859,7 +11859,7 @@ def create_middle_bot():
         game_id         = data.get('game_id', '')
         # Rebalancer config
         rebalancer_enabled    = data.get('rebalancer_enabled', True)
-        rebalancer_mode       = data.get('rebalancer_mode', 'dry_run')  # 'dry_run' or 'live'
+        rebalancer_mode       = data.get('rebalancer_mode', 'live')  # 'dry_run' or 'live'
         rebalancer_protect    = int(data.get('rebalancer_protect_floor', 80))
         rebalancer_late_secs  = int(data.get('rebalancer_late_game_secs', 180))
         rebalancer_scrape     = int(data.get('rebalancer_scrape_ceil', 10))

@@ -5649,6 +5649,12 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             <div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
             <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
+            <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
+                <div style="width:${watchQty > 0 ? Math.round((fillQty / watchQty) * 100) : 0}%;height:100%;background:${orderFilled?'#00ff88':(fillQty>0?'#ffaa00':'#333')};border-radius:3px;transition:width 0.3s;"></div>
+            </div>
+            <span style="color:${orderFilled?'#00ff88':(fillQty>0?'#ffaa00':'#8892a6')};font-weight:700;font-size:10px;">${fillQty}/${watchQty}${orderFilled?' ✓':''}</span>
+        </div>
         ${bot.fair_value_cents ? (() => {
             const fv = bot.fair_value_cents;
             const edgeVal = fv - entry;

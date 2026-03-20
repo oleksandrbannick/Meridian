@@ -3052,11 +3052,35 @@ def _execute_phantom_ladder_hedge(bot_id):
                 filled_rungs = [bot['rungs'][0]]
                 print(f'🔧 PHANTOM HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
             else:
-                print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs — marking complete')
-                bot['status'] = 'completed'
-                bot['completed_at'] = time.time()
-                save_state()
-                return
+                # Before completing with 0 fills, check Kalshi for actual positions
+                try:
+                    api_rate_limiter.wait()
+                    _pos_r = kalshi_client.get_positions(ticker=ticker)
+                    _pos_list = _pos_r.get('market_positions', _pos_r.get('positions', []))
+                    for _p in _pos_list:
+                        if _p.get('ticker') == ticker:
+                            _actual_qty = abs(_parse_position_qty(_p))
+                            if _actual_qty > 0:
+                                # Position EXISTS but WS missed the fills — reconstruct
+                                print(f'⚠ PHANTOM HEDGE {bot_id}: 0 local fills but Kalshi has {_actual_qty} contracts — reconstructing')
+                                # Distribute across rungs
+                                _remaining = _actual_qty
+                                for _r in bot['rungs']:
+                                    _assign = min(_r['qty'], _remaining)
+                                    _r['fill_qty'] = _assign
+                                    _remaining -= _assign
+                                    if _remaining <= 0:
+                                        break
+                                filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
+                                break
+                except Exception as _pe:
+                    print(f'⚠ PHANTOM HEDGE position check failed: {_pe}')
+                if not filled_rungs:
+                    print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs confirmed — marking complete')
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = time.time()
+                    save_state()
+                    return
 
         total_fill_qty = sum(r['fill_qty'] for r in filled_rungs)
         avg_price = round(sum(r['price'] * r['fill_qty'] for r in filled_rungs) / total_fill_qty)
@@ -3278,9 +3302,26 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     if not sold_back:
         attempts = bot.get('_sellback_attempts', 0) + 1
         bot['_sellback_attempts'] = attempts
-        # After 3 failed attempts, position likely doesn't exist — ghost data from repeat cycle
+        # After 3 failed attempts, verify position on Kalshi before giving up
         if attempts >= 3:
-            print(f'🔧 PHANTOM SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, no position exists. Completing bot.')
+            # CHECK: does the position actually exist on Kalshi?
+            try:
+                api_rate_limiter.wait()
+                _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                for _p in _positions:
+                    if _p.get('ticker') == ticker:
+                        _actual = abs(_parse_position_qty(_p))
+                        if _actual > 0:
+                            # Position EXISTS — don't ghost-complete, keep retrying
+                            print(f'⚠ PHANTOM SELLBACK: {bot_id} — {attempts} sells failed but Kalshi still shows {_actual} contracts! Keeping alive.')
+                            bot['_sellback_attempts'] = 0  # reset so we retry
+                            bot['status'] = 'ladder_filled_no_fav'
+                            actions.append({'bot_id': bot_id, 'action': 'sellback_position_exists', 'kalshi_qty': _actual})
+                            return
+            except Exception as _pe:
+                print(f'⚠ PHANTOM SELLBACK position check failed: {_pe} — proceeding with ghost complete')
+            print(f'🔧 PHANTOM SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, position confirmed gone. Completing bot.')
             # Record estimated loss so trade doesn't disappear from history
             est_loss = avg_price * total_fill_qty  # worst case: dog price × qty
             session_pnl['gross_loss_cents'] += est_loss
@@ -4430,8 +4471,10 @@ def _is_late_game(ticker):
     if rule.get('block_ot') and period > rule['final']:
         return True, f"{rule['name']}: OT — too late to open new bots"
     # Block only in the final 60s of the last regulation period
-    if period == rule['block_period'] and secs is not None and secs <= rule['block_secs']:
-        return True, f"{rule['name']}: {secs}s remaining — final minute, no new bots"
+    if period >= rule['block_period'] and secs is not None and secs <= rule['block_secs']:
+        espn_age = time.time() - (_espn_cache.get('ts', 0) or 0)
+        print(f'🚫 LATE GAME BLOCK: {ticker} period={period} clock={clock_str} secs={secs} rule={rule["name"]} espn_age={espn_age:.0f}s')
+        return True, f"{rule['name']}: Q{period} {clock_str} ({secs}s left)"
     return False, ''
 
 

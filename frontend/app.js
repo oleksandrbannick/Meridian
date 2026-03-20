@@ -8573,17 +8573,26 @@ function showMiddlesResults(data) {
             </div>`;
         }
 
-        let html = '';
+        // Build game data for tab navigation
+        const gameList = [];
         for (const [gameId, entries] of gameGroups) {
             const first = entries[0].m;
             const hasLive = entries.some(e => e.m.is_live);
             const hasGuar = entries.some(e => e.m.guaranteed_profit > 0);
-            const mDate = first.game_date ? ` · ${first.game_date}` : '';
             const teamNames = `${first.team_a_name || first.team_a} vs ${first.team_b_name || first.team_b}`;
-            // Score badge for live games — color-coded by middle range
+            const shortNames = `${(first.team_a || '').slice(0,3)} v ${(first.team_b || '').slice(0,3)}`;
+            gameList.push({ gameId, entries, first, hasLive, hasGuar, teamNames, shortNames });
+        }
+
+        function renderGameTab(gameIdx) {
+            const g = gameList[gameIdx];
+            if (!g) return;
+            const { entries, first, hasLive, hasGuar, teamNames } = g;
+            const mDate = first.game_date ? ` · ${first.game_date}` : '';
+
+            // Score badge
             let scoreBadge = '';
             if (hasLive && first.score_home != null) {
-                // Check if score is in middle range for this game
                 let gameLegAIn = false, gameLegBIn = false;
                 const tP = (first.ticker_a || '').split('-');
                 if (tP.length >= 3) {
@@ -8605,23 +8614,51 @@ function showMiddlesResults(data) {
                 scoreBadge = `<span style="background:${scoreBg};color:${scoreCol};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;border:1px solid ${scoreCol}44;">${rangeEmoji} ${first.score_away}–${first.score_home}</span>
                               <span style="color:#556;font-size:9px;">${first.score_detail || ''}</span>`;
             }
-            // Use ticker_a from first entry to build a clickable link
+
             const viewTicker = first.ticker_a || '';
             const viewBtn = viewTicker ? `<button onclick="closeMiddlesModal(); openMarketByTicker('${viewTicker}')" style="background:#1e2740;color:#818cf8;border:1px solid #818cf844;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;margin-left:auto;">View Market</button>` : '';
-            html += `<div style="margin-bottom:18px;">
-                <div style="display:flex;align-items:center;gap:6px;padding:6px 0;margin-bottom:6px;border-bottom:1px solid #1e2740;">
+
+            const gameContent = document.getElementById('middles-game-content');
+            if (!gameContent) return;
+            gameContent.innerHTML = `
+                <div style="display:flex;align-items:center;gap:6px;padding:6px 0;margin-bottom:8px;border-bottom:1px solid #1e2740;flex-wrap:wrap;">
                     <span style="color:#fff;font-weight:800;font-size:13px;">${teamNames}</span>
                     ${hasLive ? '<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 LIVE</span>' : ''}
                     ${scoreBadge}
                     ${hasGuar ? '<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">✓ ARB</span>' : ''}
                     <span style="color:#444;font-size:10px;">${mDate}</span>
                     ${viewBtn}
-                    <span style="color:#444;font-size:10px;">${entries.length} middle${entries.length > 1 ? 's' : ''}</span>
+                    <span style="color:#444;font-size:10px;">${entries.length} pair${entries.length > 1 ? 's' : ''}</span>
                 </div>
                 ${entries.map(({ m, idx }) => buildMiddleCard(m, idx)).join('')}
-            </div>`;
+            `;
+
+            // Update active tab
+            document.querySelectorAll('.mid-game-tab').forEach((el, i) => {
+                const isActive = i === gameIdx;
+                el.style.background = isActive ? '#aa66ff22' : '#0a0e1a';
+                el.style.color = isActive ? '#cc66ff' : '#8892a6';
+                el.style.borderBottom = isActive ? '2px solid #cc66ff' : '2px solid transparent';
+            });
         }
-        results.innerHTML = html;
+
+        // Build tabs + content area
+        let tabsHtml = `<div style="display:flex;gap:0;overflow-x:auto;border:1px solid #1e2740;border-radius:8px;margin-bottom:12px;-webkit-overflow-scrolling:touch;">`;
+        gameList.forEach((g, i) => {
+            const liveDot = g.hasLive ? '<span style="color:#ff3333;font-size:8px;">●</span> ' : '';
+            const arbBadge = g.hasGuar ? ' <span style="color:#00ff88;font-size:8px;">✓</span>' : '';
+            tabsHtml += `<button class="mid-game-tab" onclick="window._midRenderGameTab(${i})"
+                style="flex:none;padding:8px 14px;border:none;cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;
+                background:${i===0?'#aa66ff22':'#0a0e1a'};color:${i===0?'#cc66ff':'#8892a6'};
+                border-bottom:${i===0?'2px solid #cc66ff':'2px solid transparent'};">
+                ${liveDot}${g.shortNames}${arbBadge}</button>`;
+        });
+        tabsHtml += `</div><div id="middles-game-content"></div>`;
+        results.innerHTML = tabsHtml;
+
+        // Store render function globally and show first game
+        window._midRenderGameTab = renderGameTab;
+        if (gameList.length > 0) renderGameTab(0);
     }
     // modal is already shown by scanMiddles(); don't re-open here
 }

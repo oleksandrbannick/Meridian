@@ -2196,7 +2196,8 @@ function createMarketRow(market, label) {
     if (activeBotTypes.length > 0) {
         const wrap = document.createElement('span');
         wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
-        for (const bt of activeBotTypes) {
+        const botOrder = ['apex','phantom','meridian','scout'];
+        for (const bt of botOrder.filter(b => activeBotTypes.includes(b))) {
             const c = BOT_COLORS[bt] || '#818cf8';
             const n = botTypes[bt];
             const pill = document.createElement('span');

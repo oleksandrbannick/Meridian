@@ -5,7 +5,7 @@ function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 
 // Bot type colors, labels, and icons
-const BOT_COLORS = { phantom: '#ff9900', apex: '#00d4ff', meridian: '#cc66ff', scout: '#9966ff' };
+const BOT_COLORS = { phantom: '#ff9900', apex: '#00d4ff', meridian: '#cc66ff', scout: '#00ff88' };
 const BOT_LABELS = { phantom: '👻', apex: '△', meridian: '♛', scout: '◎' };
 const BOT_NAMES = { phantom: 'Phantom', apex: 'Apex', meridian: 'Meridian', scout: 'Scout' };
 
@@ -5689,12 +5689,12 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
 
     const item = document.createElement('div');
     item.className = 'bot-item';
-    item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #9966ff;cursor:pointer;';
+    item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #00ff88;cursor:pointer;';
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="color:#9966ff;font-size:11px;font-weight:700;">💰 BET</span>
+                <span style="color:#00ff88;font-size:11px;font-weight:700;">💰 BET</span>
                 <a href="#" onclick="navigateToMarket('${ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${watchDisplayName}</a>
                 ${watchScoreBadge}
                 <span class="bot-status watching">${orderFilled ? 'WATCHING' : 'PENDING'}</span>
@@ -6917,7 +6917,7 @@ async function showBotDetail(botId) {
 
         const cat = bot.bot_category || bot.type || 'arb';
         const typeMap = {anchor_dog:'Phantom',anchor_ladder:'Phantom Ladder',ladder_arb:'Apex',watch:'Scout',middle:'Meridian',arb:'Arb',both_posted:'Arb'};
-        const colorMap = {anchor_dog:'#ff9900',anchor_ladder:'#ff9900',ladder_arb:'#00d4ff',watch:'#9966ff',middle:'#cc66ff',arb:'#00d4ff'};
+        const colorMap = {anchor_dog:'#ff9900',anchor_ladder:'#ff9900',ladder_arb:'#00d4ff',watch:'#00ff88',middle:'#cc66ff',arb:'#00d4ff'};
         const iconMap = {anchor_dog:'👻',anchor_ladder:'👻',ladder_arb:'△',watch:'💰',middle:'🔀',arb:'⚡'};
         const typeName = typeMap[cat] || cat;
         const color = colorMap[cat] || '#00d4ff';

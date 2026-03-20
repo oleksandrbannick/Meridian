@@ -10359,9 +10359,9 @@ def _run_monitor():
                                     session_pnl['gross_loss_cents'] += loss_cents
                                     session_pnl['stopped_bots']     += 1
                                 else:
-                                    # Result unknown yet; skip recording until we know
-                                    profit_cents = loss_cents = 0
-                                    res_label    = 'settled_unknown'
+                                    # Result unknown yet — don't complete, retry next cycle
+                                    print(f'⏳ WATCH SETTLED (no result yet): {bot_id} market={mkt_status_w} — waiting for result')
+                                    continue
                                 if mkt_result_w:  # only record if we have a result
                                     _record_trade({
                                         'bot_id': bot_id, 'ticker': ticker,

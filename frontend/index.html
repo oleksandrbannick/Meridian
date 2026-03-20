@@ -549,19 +549,19 @@
                         </div>
                         <div>
                             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#00ff8808;border:1px solid #00ff8833;border-radius:6px;">
-                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAO0lEQVR4nGPgEVDAgxhQOKv+AxF2aYgcmgqoNEP5XTSEkIYK3f2PxkDVDQQQaTCDaMMxVWBzOX5prAgA5gFDl6eByKAAAAAASUVORK5CYII=" style="image-rendering:pixelated;width:28px;height:28px;">
-                                <div><strong style="color:#00ff88;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
+                                <span class="legend-icon" data-bot="apex" style="flex-shrink:0;"></span>
+                                <div><strong style="color:#00d4ff;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
                             </div>
                             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#ffaa0008;border:1px solid #ffaa0033;border-radius:6px;">
-                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAOUlEQVR4nGPgEVDAgxjgrP+rGOAIXRpZDlkFA0LuLgMaA0VaUFAQjQGVPlPOgBVRURorgwFXgEAQAIhdWM/jwFUeAAAAAElFTkSuQmCC" style="image-rendering:pixelated;width:28px;height:28px;">
+                                <span class="legend-icon" data-bot="phantom" style="flex-shrink:0;"></span>
                                 <div><strong style="color:#ffaa00;">Phantom</strong><br><span style="color:#8892a6;font-size:10px;">Underdog anchor — fills on volatility spikes</span></div>
                             </div>
                             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#aa66ff08;border:1px solid #aa66ff33;border-radius:6px;">
-                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAQUlEQVR4nGPgEVCAoDMd/9FIIGJAlkZGCOlVaf+xIpA0LjkIQkgzMDCgMUDscpczeBAhaaD9uOQQHsMqh+JvrAgAE/mDFW1P4SAAAAAASUVORK5CYII=" style="image-rendering:pixelated;width:28px;height:28px;">
-                                <div><strong style="color:#aa66ff;">Meridian</strong><br><span style="color:#8892a6;font-size:10px;">Middle bot — NO on both sides of a spread pair</span></div>
+                                <span class="legend-icon" data-bot="meridian" style="flex-shrink:0;"></span>
+                                <div><strong style="color:#cc66ff;">Meridian</strong><br><span style="color:#8892a6;font-size:10px;">Middle bot — NO on both sides of a spread pair</span></div>
                             </div>
                             <div style="display:flex;align-items:center;gap:10px;padding:8px;background:#9966ff08;border:1px solid #9966ff33;border-radius:6px;">
-                                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAPElEQVR4nGNgQAf/O/6DMUFAUCFMATpGAatCwYKr/p+BK4CzMRSeyQIJQjAyG6tCbJg8hSBAtEJsiskBANz2aymn/yC2AAAAAElFTkSuQmCC" style="image-rendering:pixelated;width:28px;height:28px;">
+                                <span class="legend-icon" data-bot="scout" style="flex-shrink:0;"></span>
                                 <div><strong style="color:#9966ff;">Scout</strong><br><span style="color:#8892a6;font-size:10px;">Stop-loss / take-profit guard on existing bets</span></div>
                             </div>
                         </div>
@@ -2642,8 +2642,6 @@
             if (!canvas) return;
             const c = canvas.getContext('2d');
             const p = (x,y,col) => { c.fillStyle = col; c.fillRect(x,y,1,1); };
-            // Fill rect helper
-            const fr = (x,y,w,h,col) => { c.fillStyle = col; c.fillRect(x,y,w,h); };
             c.clearRect(0,0,48,48);
 
             let CC, CL, CD, GN;
@@ -2651,169 +2649,64 @@
             else if (type === 'phantom') { CC='#ffaa00'; CL='#ffdd00'; CD='#885500'; GN='#ffdd00'; }
             else if (type === 'meridian') { CC='#aa66ff'; CL='#cc88ff'; CD='#553399'; GN='#cc88ff'; }
             else { CC='#00ff88'; CL='#55ffaa'; CD='#006644'; GN='#00ff88'; }
-            const BG = '#0c1020';
 
+            // Ghost body — same template as welcome ghost
+            for(let x=16;x<=31;x++) p(x,8,CD);
+            for(let x=14;x<=33;x++) p(x,9,CD);
+            for(let x=12;x<=35;x++) p(x,10,CD);
+            for(let x=11;x<=36;x++) p(x,11,CD);
+            for(let x=10;x<=37;x++) p(x,12,CD);
+            for(let y=13;y<=36;y++) { const l=y<14?10:9, r=y<14?37:38; for(let x=l;x<=r;x++) p(x,y,CC); }
+            for(let x=16;x<=31;x++) p(x,9,CC);
+            for(let x=14;x<=33;x++) p(x,10,CC);
+            for(let x=12;x<=35;x++) p(x,11,CC);
+            for(let x=11;x<=36;x++) p(x,12,CC);
+            for(let x=17;x<=22;x++) p(x,10,CL);
+            for(let x=13;x<=18;x++) p(x,11,CL);
+            for(let x=12;x<=15;x++) p(x,12,CL);
+            // Wavy bottom
+            for(let x=9;x<=14;x++){p(x,37,CC);p(x,38,CC);}
+            for(let x=17;x<=22;x++){p(x,37,CC);p(x,38,CC);p(x,39,CC);}
+            for(let x=25;x<=30;x++){p(x,37,CC);p(x,38,CC);}
+            for(let x=33;x<=38;x++){p(x,37,CC);p(x,38,CC);p(x,39,CC);}
+            // Side outlines
+            for(let y=13;y<=36;y++){p(8,y,CD);p(39,y,CD);}
+            // Eyes
+            const BG = '#0c1020';
+            for(let x=14;x<=17;x++) for(let y=18;y<=22;y++) p(x,y,BG);
+            for(let x=26;x<=29;x++) for(let y=18;y<=22;y++) p(x,y,BG);
+            p(15,18,GN);p(27,18,GN);
+
+            // Per-type unique features
             if (type === 'apex') {
-                // Shield/hex body — narrow top, wide bottom
-                // Antenna
-                fr(23,2,2,6,CC); p(23,1,CL); p(24,1,CL);
-                // Shield top slope
-                for(let x=18;x<=29;x++) p(x,8,CD);
-                for(let x=16;x<=31;x++) p(x,9,CD);
-                for(let x=14;x<=33;x++) p(x,10,CD);
-                // Shield body
-                for(let y=10;y<=36;y++) { const l=y<14?14-Math.floor((y-10)/2):10, r=y<14?33+Math.floor((y-10)/2):37; for(let x=l;x<=r;x++) p(x,y,CC); }
-                // Outline
-                for(let y=10;y<=36;y++){p(9,y,CD);p(38,y,CD);}
-                // Highlight
-                for(let x=16;x<=20;x++) p(x,10,CL);
-                for(let x=14;x<=17;x++) p(x,11,CL);
-                // Flat bottom
-                for(let x=10;x<=37;x++) p(x,37,CD);
-                // Rectangular eyes
-                fr(14,18,5,5,BG); fr(26,18,5,5,BG);
-                // Scope crosshair on right eye
-                p(26,17,GN);p(30,17,GN);p(26,23,GN);p(30,23,GN);
-                p(28,16,GN);p(28,24,GN);p(25,20,GN);p(31,20,GN);
-                // Pupils
-                p(15,19,GN); p(27,19,GN);
-                // Mouth
-                for(let x=18;x<=28;x++) p(x,28,BG);
-                // >_ prompt
-                p(14,30,GN);p(15,31,GN);p(16,32,GN);
-                p(15,33,GN);p(14,34,GN);
-                for(let x=19;x<=24;x++) p(x,34,GN);
-                // Sparkles
-                p(5,14,CL);p(42,10,CL);
+                // Scope glow on right eye
+                p(26,17,GN);p(29,17,GN);p(26,23,GN);p(29,23,GN);
             } else if (type === 'phantom') {
-                // Ghost body — rounded top, wavy tentacle bottom
-                for(let x=16;x<=29;x++) p(x,8,CD);
-                for(let x=14;x<=31;x++) p(x,9,CD);
-                for(let x=12;x<=33;x++) p(x,10,CD);
-                for(let x=11;x<=34;x++) p(x,11,CD);
-                for(let x=10;x<=35;x++) p(x,12,CD);
-                for(let y=13;y<=34;y++) { for(let x=9;x<=36;x++) p(x,y,CC); }
-                // Fill top
-                for(let x=16;x<=29;x++) p(x,9,CC);
-                for(let x=14;x<=31;x++) p(x,10,CC);
-                for(let x=12;x<=33;x++) p(x,11,CC);
-                for(let x=11;x<=34;x++) p(x,12,CC);
-                // Highlight
-                for(let x=16;x<=20;x++) p(x,10,CL);
-                for(let x=13;x<=17;x++) p(x,11,CL);
-                // Wavy tentacle bottom
-                for(let x=9;x<=13;x++){p(x,35,CC);p(x,36,CC);}
-                for(let x=16;x<=20;x++){p(x,35,CC);p(x,36,CC);p(x,37,CC);}
-                for(let x=23;x<=27;x++){p(x,35,CC);p(x,36,CC);}
-                for(let x=30;x<=36;x++){p(x,35,CC);p(x,36,CC);p(x,37,CC);}
-                // Outlines
-                for(let y=13;y<=34;y++){p(8,y,CD);p(37,y,CD);}
-                // Big round eyes (sleepy half-closed)
-                for(let x=13;x<=18;x++) for(let y=17;y<=23;y++) p(x,y,BG);
-                for(let x=25;x<=30;x++) for(let y=17;y<=23;y++) p(x,y,BG);
-                // Eyelids (half-closed)
-                for(let x=13;x<=18;x++){p(x,17,CC);p(x,18,CC);}
-                for(let x=25;x<=30;x++){p(x,17,CC);p(x,18,CC);}
-                // Pupils
-                p(15,20,GN);p(16,20,GN); p(27,20,GN);p(28,20,GN);
-                // Open mouth
-                for(let x=19;x<=24;x++) for(let y=26;y<=28;y++) p(x,y,BG);
-                // Cat companion (right side!)
-                fr(39,24,2,5,CD); // cat body
-                fr(40,23,3,6,CC); // cat body
-                fr(41,22,4,7,CC);
-                p(39,21,CC);p(40,20,CC); // left ear
-                p(44,21,CC);p(43,20,CC); // right ear
-                p(41,24,BG);p(43,24,BG); // cat eyes
-                fr(44,29,3,1,CC); // tail
-                fr(45,28,2,1,CC);
-                p(46,27,CC);
-                // Sparkles
-                p(5,12,CL);p(3,20,CL);
+                // Half-closed eyes (sleepy/shifty)
+                for(let x=14;x<=17;x++) p(x,18,CC); // eyelid top
+                for(let x=26;x<=29;x++) p(x,18,CC);
             } else if (type === 'meridian') {
-                // Crown above
-                for(let x=14;x<=33;x++) p(x,7,CL);
-                p(16,4,CL);p(17,5,CL);p(18,6,CL);
-                p(23,3,CL);p(23,4,CL);p(23,5,CL);p(24,4,CL);p(24,5,CL);
-                p(29,4,CL);p(30,5,CL);p(31,6,CL);
-                for(let x=17;x<=30;x++) p(x,6,CL);
-                // Wide pill body
-                for(let x=10;x<=37;x++) for(let y=8;y<=36;y++) {
-                    const dx = x < 15 ? 15-x : (x > 32 ? x-32 : 0);
-                    const dy = y < 12 ? 12-y : (y > 33 ? y-33 : 0);
-                    if (dx*dx+dy*dy <= 20) p(x,y,CC);
-                }
-                // Outline
-                for(let x=10;x<=37;x++) for(let y=8;y<=36;y++) {
-                    const dx = x < 15 ? 15-x : (x > 32 ? x-32 : 0);
-                    const dy = y < 12 ? 12-y : (y > 33 ? y-33 : 0);
-                    const d = dx*dx+dy*dy;
-                    if (d > 16 && d <= 25) p(x,y,CD);
-                }
-                // Highlight
-                for(let x=12;x<=18;x++) p(x,10,CL);
-                for(let x=11;x<=15;x++) p(x,11,CL);
-                // Eyes with eyelashes
-                fr(15,18,4,4,BG); fr(27,18,4,4,BG);
-                p(16,19,GN); p(28,19,GN);
-                // Eyelashes (2px flicks above each eye)
-                p(14,17,CD);p(15,16,CD); // left eye lashes
-                p(19,17,CD);p(18,16,CD);
-                p(26,17,CD);p(27,16,CD); // right eye lashes
-                p(31,17,CD);p(30,16,CD);
-                // Small curved smile
-                p(20,27,BG);p(21,28,BG);for(let x=22;x<=24;x++) p(x,28,BG);p(25,27,BG);
-                // Blush dots
-                p(12,23,'#ff88cc44');p(13,23,'#ff88cc44');
-                p(33,23,'#ff88cc44');p(34,23,'#ff88cc44');
-                // Arms
-                for(let y=20;y<=22;y++){p(7,y,CC);p(8,y,CC);}
-                for(let y=20;y<=22;y++){p(39,y,CC);p(40,y,CC);}
-                // >_ prompt
-                p(15,29,GN);p(16,30,GN);p(17,31,GN);
-                p(16,32,GN);p(15,33,GN);
-                for(let x=20;x<=25;x++) p(x,33,GN);
-                // Sparkles
-                p(5,14,CL);p(42,10,CL);
-            } else {
-                // Scout — rounded square body + antenna
-                // Antenna
-                for(let y=2;y<=9;y++) { p(23,y,CC);p(24,y,CC); }
-                p(22,1,CL);p(23,1,CL);p(24,1,CL);p(25,1,CL);
-                p(23,2,CL);p(24,2,CL);
-                // Rounded square body
-                for(let x=11;x<=36;x++) for(let y=10;y<=36;y++) {
-                    const dx = x < 14 ? 14-x : (x > 33 ? x-33 : 0);
-                    const dy = y < 13 ? 13-y : (y > 33 ? y-33 : 0);
-                    if (dx+dy <= 3) p(x,y,CC);
-                }
-                // Outline
-                for(let x=11;x<=36;x++) for(let y=10;y<=36;y++) {
-                    const dx = x < 14 ? 14-x : (x > 33 ? x-33 : 0);
-                    const dy = y < 13 ? 13-y : (y > 33 ? y-33 : 0);
-                    const d = dx+dy;
-                    if (d > 2 && d <= 4) p(x,y,CD);
-                }
-                // Highlight
-                for(let x=14;x<=19;x++) p(x,11,CL);
-                for(let x=12;x<=16;x++) p(x,12,CL);
-                // Round alert eyes
-                for(let x=14;x<=18;x++) for(let y=18;y<=22;y++) p(x,y,BG);
-                for(let x=26;x<=30;x++) for(let y=18;y<=22;y++) p(x,y,BG);
-                p(15,19,GN);p(16,19,GN);p(15,20,GN);p(16,20,GN);
-                p(27,19,GN);p(28,19,GN);p(27,20,GN);p(28,20,GN);
-                // Smile
-                p(18,26,BG);p(19,27,BG);for(let x=20;x<=26;x++) p(x,28,BG);p(27,27,BG);p(28,26,BG);
-                // Arms
-                for(let y=22;y<=24;y++){p(8,y,CC);p(9,y,CC);}
-                for(let y=22;y<=24;y++){p(38,y,CC);p(39,y,CC);}
-                // >_ prompt
-                p(15,30,GN);p(16,31,GN);p(17,32,GN);
-                p(16,33,GN);p(15,34,GN);
-                for(let x=20;x<=25;x++) p(x,34,GN);
-                // Sparkles
-                p(5,14,CL);p(42,10,CL);
+                // Crown above head
+                for(let x=16;x<=31;x++) p(x,7,CL);
+                p(18,5,CL);p(22,5,CL);p(26,5,CL);
+                p(18,6,CL);p(19,6,CL);p(20,6,CL);p(21,6,CL);p(22,6,CL);
+                p(23,6,CL);p(24,6,CL);p(25,6,CL);p(26,6,CL);
+                p(18,7,CL);p(22,7,CL);p(26,7,CL);
+            } else if (type === 'scout') {
+                // Backpack on left side
+                for(let y=18;y<=30;y++) p(7,y,CD);
+                for(let y=19;y<=29;y++) p(6,y,CD);
+                for(let y=20;y<=28;y++) p(5,y,CC);
+                // Taller antenna
+                for(let y=2;y<=8;y++) p(24,y,GN);
+                p(24,1,CL);
             }
+            // >_ prompt on body
+            p(14,27,GN);p(15,28,GN);p(16,29,GN);p(17,30,GN);
+            p(16,31,GN);p(15,32,GN);p(14,33,GN);
+            for(let x=20;x<=25;x++) p(x,33,GN);
+            // Sparkles
+            p(5,14,CL);p(42,12,CL);
         }
 
         // Bot legend data — full profiles
@@ -2835,7 +2728,7 @@
             meridian: {
                 name: 'Meridian', color: '#aa66ff', gradient: 'linear-gradient(90deg,#aa66ff,#cc88ff)',
                 tagline: '"Finds the line between two worlds."',
-                desc: 'Meridian is the flagship. She finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.',
+                desc: 'Meridian is the flagship. He finds opposing spread markets and posts NO on both sides. Only one team can cover the spread, so at least one NO wins. If the game lands in the middle, both win. Elegant, profitable, the strategy the platform is named after.',
                 traits: ['elegant', 'precise', 'flagship'],
                 signature: 'Best at: Spread markets where both sides have deep NO liquidity',
             },
@@ -2922,6 +2815,6 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260320j"></script>
+    <script src="app.js?v=20260320k"></script>
 </body>
 </html>

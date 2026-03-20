@@ -256,6 +256,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.tab-icon[data-bot]').forEach(el => {
         el.innerHTML = botIconSvg(el.dataset.bot, 14);
     });
+    // Populate marketplace legend icons at 28px
+    document.querySelectorAll('.legend-icon[data-bot]').forEach(el => {
+        el.innerHTML = botIconSvg(el.dataset.bot, 28);
+    });
     // Check for orphaned positions after a short delay (let server finish startup)
     setTimeout(checkOrphanedPositions, 5000);
 });
@@ -2186,27 +2190,25 @@ function createMarketRow(market, label) {
 
     const liq = getMarketLiquidity(market);
 
-    // ── Active bot indicators (solid pills with label) ──
+    // ── Active bot type icons ──
     const botTypes = (window._botTypeMap || {})[market.ticker] || {};
     const activeBotTypes = Object.keys(botTypes);
     if (activeBotTypes.length > 0) {
         const wrap = document.createElement('span');
-        wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;';
+        wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
         for (const bt of activeBotTypes) {
             const c = BOT_COLORS[bt] || '#818cf8';
             const n = botTypes[bt];
-            const emoji = BOT_LABELS[bt] || '?';
-            const name = BOT_NAMES[bt] || bt;
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-            pill.innerHTML = `${emoji}${n > 1 ? ' ×'+n : ''}`;
-            pill.title = `${n} active ${name} bot${n > 1 ? 's' : ''}`;
+            pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+            pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
+            pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
             wrap.appendChild(pill);
         }
         labelDiv.appendChild(wrap);
     }
 
-    // ── Bot recommendation indicators (dashed pills with label) ──
+    // ── Bot recommendation icons (dimmed) ──
     const recoTypes = [];
     if (liq.arbEdge >= 1 && liq.arbEdge <= 10 && liq.avgSpread <= 8 && !botTypes.apex) {
         recoTypes.push({ type: 'apex', tip: `Apex: ${liq.arbEdge}¢ edge, ${liq.avgSpread}¢ spread` });
@@ -2218,17 +2220,16 @@ function createMarketRow(market, label) {
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
     if (middleReco && !botTypes.meridian) {
-        recoTypes.push({ type: 'meridian', tip: `Meridian: pair with ${middleReco.partner}, ${middleReco.guaranteed > 0 ? middleReco.guaranteed + '¢ guaranteed' : 'score ' + middleReco.score}` });
+        recoTypes.push({ type: 'meridian', tip: `Middle: pair with ${middleReco.partner}, ${middleReco.guaranteed > 0 ? middleReco.guaranteed + '¢ guaranteed' : 'score ' + middleReco.score}` });
     }
     if (recoTypes.length > 0) {
         const rWrap = document.createElement('span');
-        rWrap.style.cssText = 'margin-left:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;';
+        rWrap.style.cssText = 'margin-left:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
         for (const r of recoTypes) {
             const c = BOT_COLORS[r.type] || '#888';
-            const emoji = BOT_LABELS[r.type] || '?';
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 5px;border:1px dashed ${c}66;border-radius:4px;font-size:9px;color:${c};opacity:0.6;`;
-            pill.innerHTML = emoji;
+            pill.style.cssText = `display:inline-flex;align-items:center;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
+            pill.innerHTML = botIconImg(r.type, 14, 0.75);
             pill.title = r.tip;
             rWrap.appendChild(pill);
         }

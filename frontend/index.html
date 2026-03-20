@@ -2268,8 +2268,8 @@
                 trade: ['place_bet','close_position','amend_order'],
                 bot: ['create_arb_bot','create_ladder_arb','create_anchor_dog','create_anchor_ladder','create_middle_bot','create_smart_bot','bulk_deploy','cancel_bot','cancel_bots_bulk','modify_bot','set_bot_phase','diagnose_bots'],
                 portfolio: ['get_pnl','get_balance','get_positions','get_orders','get_order_status','get_fills','get_pnl_calendar','get_bot_stats','get_risk_exposure','get_leaderboard','get_trade_history'],
-                system: ['get_ws_status','get_latency','sweep_orphans','get_orphaned_positions','reconcile_positions','read_activity_log','get_system_status','get_active_bots','get_notifications'],
-                ui: ['change_view','set_alert','watch_game']
+                system: ['get_ws_status','get_latency','sweep_orphans','get_orphaned_positions','reconcile_positions','read_activity_log','get_system_status','get_active_bots','get_notifications','take_screenshot','save_debug_note','restart_server','read_server_logs','server_status'],
+                ui: ['change_view','set_alert','watch_game','save_memory','read_memories']
             };
             const colors = { market: '#f59e0b', trade: '#00ff88', bot: '#00cc6a', portfolio: '#60a5fa', system: '#8892a6', ui: '#d97706' };
             for (const [cat, tools] of Object.entries(cats)) {
@@ -2439,7 +2439,9 @@
                                     get_risk_exposure: 'Checking exposure', read_activity_log: 'Reading log',
                                     get_system_status: 'Health check', get_boxscore: 'Loading boxscore',
                                     get_opening_lines: 'Checking lines', get_notifications: 'Checking alerts',
-                                    get_live_kalshi_markets: 'Checking live markets'
+                                    get_live_kalshi_markets: 'Checking live markets',
+                                    take_screenshot: 'Capturing screen',
+                                    save_memory: 'Saving to memory', read_memories: 'Reading memories'
                                 };
                                 _toolCallCount++;
                                 const label = actionNames[data.action] || data.action;
@@ -2472,6 +2474,10 @@
                                     const searchInput = document.getElementById('search-box');
                                     if (searchInput) { searchInput.value = cmd.search_query; applyFilters(); }
                                 }
+                            }
+                            else if (data.screenshot_request) {
+                                // Claude wants a screenshot — capture and send
+                                captureScreenForClaude();
                             }
                             else if (data.triggered_alerts) {
                                 // Show triggered alert notifications
@@ -2517,6 +2523,50 @@
         function scrollChat() {
             const msgsEl = document.getElementById('claude-chat-messages');
             msgsEl.scrollTop = msgsEl.scrollHeight;
+        }
+
+        // ── Screenshot capture for Claude's take_screenshot tool ──
+        async function captureScreenForClaude() {
+            try {
+                // Hide chat panel temporarily so it doesn't cover the UI
+                const chatPanel = document.getElementById('claude-chat-panel');
+                const wasOpen = chatPanel && chatPanel.classList.contains('open');
+                if (wasOpen) chatPanel.style.visibility = 'hidden';
+
+                // Capture the main content area (not the chat widget itself)
+                const target = document.querySelector('.main-content') || document.body;
+                const canvas = await html2canvas(target, {
+                    backgroundColor: '#0c1020',
+                    scale: 1,  // 1x for smaller file size
+                    logging: false,
+                    useCORS: true,
+                    allowTaint: true,
+                    width: Math.min(target.scrollWidth, 1600),
+                    height: Math.min(target.scrollHeight, 1200),
+                });
+
+                // Restore chat panel
+                if (wasOpen) chatPanel.style.visibility = '';
+
+                // Convert to JPEG base64 (smaller than PNG)
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                const base64 = dataUrl.split(',')[1];
+
+                // POST to backend
+                await fetch(`${API_BASE}/chat/screenshot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: base64 }),
+                });
+            } catch (e) {
+                console.error('Screenshot capture failed:', e);
+                // Send error response so the tool doesn't time out forever
+                await fetch(`${API_BASE}/chat/screenshot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: '' }),
+                });
+            }
         }
 
         // ── Notification polling — proactive updates from backend ──
@@ -2815,6 +2865,7 @@
         });
     })();
     </script>
-    <script src="app.js?v=20260320ab"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="app.js?v=20260320ac"></script>
 </body>
 </html>

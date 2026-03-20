@@ -20,6 +20,9 @@ import anthropic
 
 AZ_TZ = timezone(timedelta(hours=-7))  # Arizona = UTC-7, no DST
 
+# Screenshot exchange for chat Claude's take_screenshot tool
+_screenshot_store = {'data': None, 'event': threading.Event()}
+
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
 
@@ -15842,6 +15845,16 @@ CLAUDE_TOOLS = [
         }
     },
     {
+        "name": "take_screenshot",
+        "description": "Capture a screenshot of the user's current Meridian screen. Use this when the user says 'look at my screen', 'what do you see', 'check this', 'look at this', or similar. The screenshot shows exactly what the user sees — market cards, bot panels, scores, etc. You can also use this to visually verify UI changes or spot issues. After viewing, you can save observations via save_debug_note for Claude Code to fix.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Brief reason for taking screenshot (shown to user)"}
+            }
+        }
+    },
+    {
         "name": "save_memory",
         "description": "Save a persistent memory so you can learn and improve across conversations. Use this to remember: trading mistakes and what went wrong, successful strategies and patterns, user preferences, Meridian system quirks you discover, market behavior insights. Memories persist across sessions — you read them at the start of every conversation.",
         "input_schema": {
@@ -16795,6 +16808,18 @@ def _execute_chat_tool(tool_name, tool_input):
             except Exception as e:
                 return {'error': f'Status check failed: {e}'}
 
+        elif tool_name == 'take_screenshot':
+            # Reset the event and wait for the frontend to POST the screenshot
+            _screenshot_store['data'] = None
+            _screenshot_store['event'].clear()
+            # The generator will emit a screenshot_request SSE before we get here,
+            # so the frontend should be capturing right now
+            got_it = _screenshot_store['event'].wait(timeout=8)
+            if got_it and _screenshot_store['data']:
+                # Return special key so the generator knows to use image content
+                return {'_screenshot_image': _screenshot_store['data']}
+            return {'error': 'Screenshot capture timed out — the user may have the chat minimized'}
+
         elif tool_name == 'save_memory':
             import datetime as _dt
             memory_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chat_claude_memory')
@@ -16846,6 +16871,18 @@ def _execute_chat_tool(tool_name, tool_input):
             return {'error': f'Unknown tool: {tool_name}'}
     except Exception as e:
         return {'error': str(e)}
+
+# ── Screenshot upload (from frontend, for take_screenshot tool) ──────────
+@app.route('/api/chat/screenshot', methods=['POST'])
+def chat_screenshot():
+    """Receive a screenshot from the frontend for the take_screenshot tool."""
+    body = request.json or {}
+    img_data = body.get('image', '')
+    if not img_data:
+        return jsonify({'error': 'No image data'}), 400
+    _screenshot_store['data'] = img_data
+    _screenshot_store['event'].set()
+    return jsonify({'ok': True})
 
 # ── Claude Chat Endpoint ─────────────────────────────────────────────────
 @app.route('/api/chat', methods=['POST'])
@@ -16899,6 +16936,7 @@ def claude_chat():
         'BOT RULES: Maker orders must be AT or BELOW current bid. Apex anchors stay open after first fill — late fills amend the hedge. Phantom posts dog only, hedges instantly on fill. Meridian posts both NO legs on opposing spreads. Scout places single limit orders.',
         'BOT STATE: Phantom and ladder bots only post ONE side (the dog/underdog). The other side shows as 0¢ or "pending" in bot state — this is NOT a real order. There is no such thing as a 0¢ limit order on Kalshi. A 0¢ price means that side has not been posted yet and is waiting for the dog to fill before hedging. Do NOT flag 0¢ prices as errors on phantom/anchor bots.',
         'SMART BOT MANAGEMENT: When the user asks you to manage a bot\'s lifecycle, use modify_bot and set_bot_phase. If a repeating bot is profitable over its cycles, keep it running (increase repeat_count). If it\'s losing money on cycles, stop it (set repeat_count to 0). If the game is close to ending (final 5 min), reduce repeats or stop the bot. Use read_activity_log to check a bot\'s recent cycle history. Use get_bot_stats to compare strategy performance. When the user says "keep it going" or "let it ride", increase repeat_count. When they say "shut it down" or "stop that bot", cancel it. You can also use amend_order to adjust resting order prices if a bot\'s orders aren\'t filling.',
+        'SCREENSHOT: You can take a screenshot of the user\'s screen with take_screenshot. Use it when they say "look at my screen", "check this", "what do you see", "look at this", or anything about what\'s on their screen. You\'ll get a real screenshot of the Meridian UI. If you spot UI bugs or issues, use save_debug_note to log them for Claude Code to fix.',
         'PERSISTENT MEMORY: You have a memory system that persists across conversations. Use save_memory to record lessons learned — especially trading mistakes, successful patterns, user preferences, and system quirks. Use read_memories to recall past learnings. WHEN TO SAVE: after a trade goes wrong (what happened and why), after discovering a market pattern, when the user corrects you, when you discover a Meridian quirk. WHEN TO READ: at the start of conversations when you need context on past trades or strategies. Your memories make you smarter over time — use them.',
     ]
     # Auto-inject saved memories into system prompt
@@ -17041,6 +17079,11 @@ def claude_chat():
                 tool_results = []
                 for tu in tool_uses:
                     yield f"data: {json.dumps({'action': tu.name, 'input': tu.input})}\n\n"
+                    # Screenshot tool needs SSE signal BEFORE execution (so frontend captures while tool waits)
+                    if tu.name == 'take_screenshot':
+                        _screenshot_store['data'] = None
+                        _screenshot_store['event'].clear()
+                        yield f"data: {json.dumps({'screenshot_request': True})}\n\n"
                     result = _execute_chat_tool(tu.name, tu.input)
                     # Emit UI command if change_view was called
                     if hasattr(_execute_chat_tool, '_pending_ui_command') and _execute_chat_tool._pending_ui_command:
@@ -17052,15 +17095,27 @@ def claude_chat():
                         for a in triggered:
                             a['_notified'] = True
                         yield f"data: {json.dumps({'triggered_alerts': [{'id': a['id'], 'ticker': a['ticker'], 'description': a['description'], 'price': a['price']} for a in triggered]})}\n\n"
-                    # Truncate large results to save tokens
-                    result_str = json.dumps(result, default=str)
-                    if len(result_str) > 4000:
-                        result_str = result_str[:4000] + '...(truncated)'
-                    tool_results.append({
-                        'type': 'tool_result',
-                        'tool_use_id': tu.id,
-                        'content': result_str,
-                    })
+                    # Handle screenshot image results specially — include as image content block
+                    if isinstance(result, dict) and result.get('_screenshot_image'):
+                        img_data = result['_screenshot_image']
+                        tool_results.append({
+                            'type': 'tool_result',
+                            'tool_use_id': tu.id,
+                            'content': [
+                                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': img_data}},
+                                {'type': 'text', 'text': 'Screenshot of the user\'s current Meridian screen. Describe what you see.'},
+                            ],
+                        })
+                    else:
+                        # Truncate large results to save tokens
+                        result_str = json.dumps(result, default=str)
+                        if len(result_str) > 4000:
+                            result_str = result_str[:4000] + '...(truncated)'
+                        tool_results.append({
+                            'type': 'tool_result',
+                            'tool_use_id': tu.id,
+                            'content': result_str,
+                        })
 
                 api_messages.append({'role': 'user', 'content': tool_results})
 

@@ -3389,14 +3389,11 @@ function renderAnchorRungs() {
     if (window._anchorInputFocused) return;
     const countEl = document.getElementById('anchor-rung-count');
     if (countEl) {
-        const priceLabel = _anchorAutoPrice
-            ? '<span style="color:#00ff88;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">PRICE AUTO</span>'
-            : '<span style="color:#ff8800;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">PRICE MANUAL</span>';
-        const qtyLabel = _anchorAutoQty
-            ? '<span style="color:#00ff88;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoQty()">QTY AUTO</span>'
-            : '<span style="color:#ff8800;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoQty()">QTY MANUAL</span>';
-        const spacingLabel = `<span style="color:#60a5fa;font-size:9px;cursor:pointer;" onclick="toggleAnchorSpacing()">${_anchorRungSpacing}¢ APART</span>`;
-        countEl.innerHTML = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''} · ${priceLabel} · ${qtyLabel} · ${spacingLabel}`;
+        const scaleLabel = _anchorAutoQty
+            ? '<span style="background:#00ff8822;color:#00ff88;font-size:9px;cursor:pointer;padding:1px 5px;border-radius:3px;" onclick="toggleAnchorAutoQty()">AUTO SCALE</span>'
+            : '<span style="background:#ff880022;color:#ff8800;font-size:9px;cursor:pointer;padding:1px 5px;border-radius:3px;" onclick="toggleAnchorAutoQty()">MANUAL QTY</span>';
+        const spacingLabel = `<span style="background:#60a5fa22;color:#60a5fa;font-size:9px;cursor:pointer;padding:1px 5px;border-radius:3px;" onclick="toggleAnchorSpacing()">RUNG GAP ${_anchorRungSpacing}¢</span>`;
+        countEl.innerHTML = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''} · ${scaleLabel} · ${spacingLabel}`;
     }
 
     if (_anchorRungs.length === 0) {
@@ -4550,7 +4547,7 @@ const MIN_FAV_ENTRY_FOR_BOT = 65;
 // ── Width-based quantity scaling (matches backend WIDTH_QTY_TIERS) ──
 function getWidthQtyMultiplier(width) {
     if (width >= 13) return 3;
-    if (width >= 9)  return 1.5;
+    if (width >= 9)  return 2;
     return 1;
 }
 function scaleQtyForWidth(baseQty, width) {

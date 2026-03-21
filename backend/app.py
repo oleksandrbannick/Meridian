@@ -6125,12 +6125,15 @@ def _execute_apex_completion(bot_id):
 
         # Build master set of ALL order IDs to cancel (catches hedges + anything group missed)
         all_cancel_ids = set()
+        _anchor_oids = {}  # oid → (rung_idx, side) for cancel-race fill detection
         # From rungs
-        for rung in bot.get('rungs', []):
+        for _ri, rung in enumerate(bot.get('rungs', [])):
             for side in ('yes', 'no'):
                 oid = rung.get(f'{side}_order_id')
                 if oid:
                     all_cancel_ids.add(oid)
+                    if side == bot.get('first_fill_side', 'yes'):
+                        _anchor_oids[oid] = (_ri, side)
                     rung[f'{side}_order_id'] = None
         # From hedge tracking
         if bot.get('hedge_order_id'):
@@ -6185,16 +6188,51 @@ def _execute_apex_completion(bot_id):
                 'total_hedge_fills': sum(v['fills'] for v in _pre_cancel_fills.values() if isinstance(v.get('fills'), int)),
             })
 
+        _failed_cancel_oids = []
         for oid in all_cancel_ids:
             if _cancel_with_retry(oid):
                 cancel_ok += 1
             else:
                 cancel_fail += 1
+                if oid in _anchor_oids:
+                    _failed_cancel_oids.append(oid)
         print(f'🧹 FULL COMPLETION {bot_id}: cancelled {cancel_ok}/{len(all_cancel_ids)} orders ({cancel_fail} already gone)')
         bot_log('APEX_COMPLETION_CANCELLED', bot_id, {
             'total_orders': len(all_cancel_ids), 'cancelled': cancel_ok, 'already_gone': cancel_fail,
             'group_cancelled': _group_cancelled,
         })
+
+        # ── Cancel-race detection: check if any anchor orders filled instead of cancelling ──
+        _cancel_race_fills = 0
+        if _failed_cancel_oids or _group_cancelled:
+            # After group cancel, check ALL anchor orders since we can't tell which filled
+            _oids_to_check = list(_anchor_oids.keys()) if _group_cancelled else _failed_cancel_oids
+            for _cr_oid in _oids_to_check:
+                try:
+                    api_read_limiter.wait()
+                    _cr_resp = kalshi_client.get_order(_cr_oid)
+                    _cr_data = _cr_resp.get('order', _cr_resp) if isinstance(_cr_resp, dict) else {}
+                    _cr_fills = _parse_fill_count(_cr_data)
+                    _cr_ri, _cr_side = _anchor_oids[_cr_oid]
+                    _rung = bot['rungs'][_cr_ri]
+                    _tracked = _rung.get(f'{_cr_side}_fill_qty', 0)
+                    if _cr_fills > _tracked:
+                        _surprise = _cr_fills - _tracked
+                        _cancel_race_fills += _surprise
+                        _rung[f'{_cr_side}_fill_qty'] = _cr_fills
+                        if not _rung.get(f'{_cr_side}_filled_at'):
+                            _rung[f'{_cr_side}_filled_at'] = now
+                        print(f'⚡ CANCEL-RACE FILL: {bot_id} rung[{_cr_ri}] {_cr_side} +{_surprise} (tracked {_tracked} → actual {_cr_fills})')
+                except Exception:
+                    pass
+            if _cancel_race_fills > 0:
+                _recompute_apex_fills(bot)
+                bot_log('APEX_CANCEL_RACE_FILLS', bot_id, {
+                    'surprise_fills': _cancel_race_fills,
+                    'checked_orders': len(_oids_to_check),
+                    'filled_yes_qty': bot.get('filled_yes_qty', 0),
+                    'filled_no_qty': bot.get('filled_no_qty', 0),
+                })
 
         # ── Safety: verify ACTUAL fills on Kalshi for every order this bot placed ──
         # Local fill tracking can be wrong (post_only price adjustment, WS race, etc.)

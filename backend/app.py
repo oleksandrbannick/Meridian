@@ -9138,6 +9138,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 _mkt_status = _mkt_data.get('status', '')
                 if _mkt_status not in ('active', 'open', ''):
                     print(f'⏰ PHANTOM MARKET SETTLED: {bot_id} market={_mkt_status} — waiting for auto-settlement (no sell needed)')
+                    bot_log('PHANTOM_LADDER_MARKET_SETTLED_TIMEOUT', bot_id, {
+                        'market_status': _mkt_status, 'wait_s': round(wait_s, 1),
+                    })
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     bot['result'] = 'market_settled_with_position'
@@ -9147,8 +9150,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             except Exception:
                 pass
             print(f'⏰ PHANTOM NO-FAV TIMEOUT: {bot_id} waited {wait_s:.0f}s for fav bid — selling back')
+            bot_log('PHANTOM_LADDER_NO_FAV_TIMEOUT', bot_id, {
+                'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
+                'avg_dog': avg_dog, 'total_fill_qty': bot.get('total_dog_fill_qty', 0),
+            })
             _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
             return
+        bot_log('PHANTOM_LADDER_NO_FAV_RETRY', bot_id, {
+            'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
+        })
         threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
         return
 
@@ -9156,6 +9166,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
     if status == 'fav_hedge_posted':
         fav_order_id = bot.get('fav_order_id')
         if not fav_order_id:
+            bot_log('PHANTOM_LADDER_NO_FAV_ORDER', bot_id, {'status': status}, level='WARN')
             return
         hedge_qty = bot.get('hedge_qty', bot.get('total_dog_fill_qty', 1))
 
@@ -9185,6 +9196,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         actual_v = _parse_fill_count(ord_v)
                         if actual_v > rung.get('fill_qty', 0):
                             print(f'⚠ PHANTOM RUNG VERIFY: {bot_id} rung @{rung.get("price")}¢ local={rung.get("fill_qty",0)} Kalshi={actual_v} — updating')
+                            bot_log('PHANTOM_LADDER_RUNG_VERIFY_UPDATE', bot_id, {
+                                'rung_price': rung.get('price'), 'local_fill': rung.get('fill_qty', 0),
+                                'kalshi_fill': actual_v, 'order_id': oid[:12],
+                            })
                             rung['fill_qty'] = actual_v
                         verified_total += max(actual_v, rung.get('fill_qty', 0))
                     except Exception:
@@ -9207,17 +9222,32 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=verified_total, **amend_kw)
                         bot['fav_price'] = amend_p
                         print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} qty {hedge_qty-verified_total+verified_total}→{verified_total} avg={new_avg}¢ hedge@{amend_p}¢')
+                        bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND', bot_id, {
+                            'verified_total': verified_total, 'new_avg': new_avg,
+                            'amend_price': amend_p, 'walk_offset': w_off,
+                        })
                     except Exception as ae:
                         print(f'⚠ PHANTOM LATE FILL AMEND FAIL: {bot_id}: {ae}')
+                        bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND_FAIL', bot_id, {
+                            'error': str(ae)[:300], 'verified_total': verified_total,
+                        }, level='ERROR')
             except Exception as rv_err:
                 print(f'⚠ PHANTOM RUNG VERIFY FAIL: {bot_id}: {rv_err}')
+                bot_log('PHANTOM_LADDER_RUNG_VERIFY_ERROR', bot_id, {'error': str(rv_err)[:300]}, level='ERROR')
 
         if fav_filled >= hedge_qty:
             print(f'👻 PHANTOM COMPLETE: {bot_id} fav filled {fav_filled}/{hedge_qty}')
+            bot_log('PHANTOM_LADDER_FAV_FILLED', bot_id, {
+                'fav_filled': fav_filled, 'hedge_qty': hedge_qty,
+                'fav_order_id': fav_order_id[:12], 'fav_side': fav_side,
+            })
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
             # re-run the completion so the trade actually gets recorded in history
             if bot.get('_trade_recorded') and bot.get('status') != 'completed':
                 print(f'🔄 PHANTOM RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
+                bot_log('PHANTOM_LADDER_RECOVERY_TRADE_RERUN', bot_id, {
+                    '_trade_recorded': True, 'status': bot.get('status'),
+                })
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
             # COMPLETE — calculate P&L
@@ -9288,6 +9318,14 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 hedge_fill_latency_ms = round((now - dog_fill_at) * 1000, 1)
                 bot['hedge_fill_latency_ms'] = hedge_fill_latency_ms
             print(f'👻 PHANTOM P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
+            bot_log('PHANTOM_LADDER_COMPLETE', bot_id, {
+                'net_pnl': net_pnl, 'yes_price': yes_p, 'no_price': no_p,
+                'hedge_qty': hedge_qty, 'fee': fee, 'avg_dog': avg_dog,
+                'actual_fav_price': actual_fav_price,
+                'hedge_fill_latency_ms': bot.get('hedge_fill_latency_ms'),
+                'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                'rungs_filled': filled_rung_count, 'rungs_total': len(bot['rungs']),
+            })
             _audit('LADDER_COMPLETE', bot_id, {'ticker': ticker, 'hedge_qty': hedge_qty, 'yes_price': yes_p, 'no_price': no_p, 'pnl': net_pnl})
             _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_complete')
 
@@ -9308,6 +9346,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None
                 print(f'👻 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — resetting for re-anchor')
+                bot_log('PHANTOM_LADDER_ENTER_REPEAT', bot_id, {
+                    'cycle': repeats_done_now, 'total': repeat_total, 'net_pnl': net_pnl,
+                })
                 _audit('LADDER_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_ladder_repeat')
             else:
@@ -9334,6 +9375,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # Absolute timeout
         if wait_s >= hedge_timeout_s:
             print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling back')
+            bot_log('PHANTOM_LADDER_FAV_TIMEOUT', bot_id, {
+                'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
+                'avg_dog': avg_dog, 'fav_price': bot.get('fav_price', 0),
+                'fav_filled': fav_filled, 'hedge_qty': hedge_qty,
+            })
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(fav_order_id)
@@ -9420,6 +9466,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
                       f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
+                bot_log('PHANTOM_LADDER_WALK_SUCCESS', bot_id, {
+                    'walk_type': walk_type, 'old_price': current_fav_price,
+                    'new_price': new_fav_price, 'fav_bid': current_fav_bid,
+                    'fav_ask': current_fav_ask, 'fav_spread': fav_spread,
+                    'avg_dog': avg_dog, 'combined': combined,
+                    'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
+                    'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
+                    'wait_s': round(wait_s, 1),
+                })
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
                 bot['fav_last_walk_at'] = now
@@ -9430,6 +9485,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 save_state()
             except Exception as e:
                 print(f'❌ PHANTOM {bot_id}: fav {walk_type} failed: {e}')
+                bot_log('PHANTOM_LADDER_WALK_ERROR', bot_id, {
+                    'walk_type': walk_type, 'error': str(e)[:300],
+                    'old_price': current_fav_price, 'target_price': new_fav_price,
+                    'fav_order_id': fav_order_id[:12],
+                }, level='ERROR')
                 bot['fav_last_walk_at'] = now
         return
 

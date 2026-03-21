@@ -6118,6 +6118,12 @@ def _execute_apex_completion(bot_id):
         _recompute_apex_fills(bot)
         _check_apex_rung_completions(bot_id, bot)
 
+        # ── Guard: don't complete if bot just reset for repeat (no fills yet) ──
+        if bot.get('status') == 'waiting_repeat' or (not bot.get('_consolidated') and not bot.get('first_fill_at')):
+            print(f'⏳ APEX COMPLETION SKIP: {bot_id} — waiting for repeat or no fills yet')
+            bot['_ws_fill_handling'] = False
+            return
+
         # ── Guard: don't complete with 0 rungs if there are filled positions ──
         filled_side_for_guard = bot.get('first_fill_side', 'yes')
         filled_rungs_count = sum(1 for r in bot.get('rungs', [])
@@ -6524,6 +6530,8 @@ def _execute_apex_completion(bot_id):
             bot['first_fill_side'] = None
             bot['_consolidated'] = False
             bot['_bot_completed'] = False
+            bot['_ws_fill_handling'] = False
+            bot['_hedge_verified'] = False
             bot['hedge_history'] = []
             bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
             bot['cumulative_pnl'] = 0
@@ -6535,6 +6543,8 @@ def _execute_apex_completion(bot_id):
             bot['_all_hedge_order_ids'] = []
             bot['_all_placed_order_ids'] = []
             bot['walk_count'] = 0
+            bot['first_fill_at'] = None
+            bot['first_fill_side'] = None
             for rung in bot.get('rungs', []):
                 rung['completed'] = False
                 rung['_profit_recorded'] = False

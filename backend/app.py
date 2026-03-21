@@ -13583,7 +13583,7 @@ def history_stats():
     LOSS_RESULTS = (
         'stop_loss_yes', 'stop_loss_no', 'flip_yes', 'flip_no',
         'force_exit_yes', 'force_exit_no', 'settled_loss_yes', 'settled_loss_no',
-        'amended',
+        'amended', 'arb_loss',
     )
 
     def _is_win(t):
@@ -13684,6 +13684,7 @@ def history_stats():
         'force_exit_yes', 'force_exit_no',
         'settled_loss_yes', 'settled_loss_no',
         'amended',  # timeout amend losses (migration 004 relabeled these)
+        'arb_loss',  # rung completions where fees > spread (Apex/Phantom)
     )
     flip_system_results = current_system_results  # alias kept for below code
     width_stats = {}

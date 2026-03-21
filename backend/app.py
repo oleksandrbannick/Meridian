@@ -694,6 +694,7 @@ def get_markets():
                 page_result = None
                 for attempt in range(3):
                     try:
+                        api_read_limiter.wait()
                         page_result = kalshi_client.get_markets_by_series(
                             series, status=status, limit=200, cursor=cursor)
                         break
@@ -2270,6 +2271,7 @@ class RateLimiter:
             time.sleep(sleep_time)
 
 api_rate_limiter = RateLimiter(burst=10)  # Kalshi basic tier: 10 writes/s burst
+api_read_limiter = RateLimiter(burst=15)  # Kalshi basic tier: 20 reads/s (keep 5 headroom)
 
 # ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
 import websocket as _ws_lib
@@ -10168,6 +10170,7 @@ def _handle_apex(bot_id, bot, actions):
                 _oid = _rung.get(f'{unfilled_side}_order_id')
                 if _oid and _oid != hedge_oid:
                     try:
+                        api_rate_limiter.wait()
                         kalshi_client.cancel_order(_oid)
                         print(f'🧹 STALE ORDER CLEANUP: {bot_id} cancelled {unfilled_side} {_oid[:8]}...')
                     except Exception:
@@ -13812,6 +13815,7 @@ def cancel_bot(bot_id):
                 for order_key in ('order_a_id', 'order_b_id'):
                     if bot.get(order_key):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot[order_key])
                             cancelled.append(order_key)
                         except Exception as me:
@@ -13843,6 +13847,7 @@ def cancel_bot(bot_id):
                         warnings.append(f'FAILED to sell {watch_side.upper()} {watch_qty}x — position may still be open on Kalshi!')
                 elif bot.get('order_id'):
                     try:
+                        api_rate_limiter.wait()
                         kalshi_client.cancel_order(bot['order_id'])
                         cancelled.append(watch_side.upper())
                     except Exception as e:
@@ -14029,6 +14034,7 @@ def cancel_bot(bot_id):
                         # Also cancel the pending NO order
                         if no_order_id:
                             try:
+                                api_rate_limiter.wait()
                                 kalshi_client.cancel_order(no_order_id)
                                 cancelled.append('NO')
                             except Exception as e:
@@ -14064,6 +14070,7 @@ def cancel_bot(bot_id):
                         # Also cancel the pending YES order
                         if yes_order_id:
                             try:
+                                api_rate_limiter.wait()
                                 kalshi_client.cancel_order(yes_order_id)
                                 cancelled.append('YES')
                             except Exception as e:
@@ -14080,6 +14087,7 @@ def cancel_bot(bot_id):
                     # Cancel resting YES order first
                     if bot.get('yes_order_id'):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
                             cancelled.append('YES order')
                         except Exception as e:
@@ -14087,6 +14095,7 @@ def cancel_bot(bot_id):
                     # Also cancel NO order
                     if bot.get('no_order_id'):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
                             cancelled.append('NO order')
                         except Exception as e:
@@ -14107,12 +14116,14 @@ def cancel_bot(bot_id):
                     # Cancel resting orders
                     if bot.get('yes_order_id'):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
                             cancelled.append('YES order')
                         except Exception as e:
                             print(f'⚠ cancel_bot({bot_id}): cancel YES order failed: {e}')
                     if bot.get('no_order_id'):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
                             cancelled.append('NO order')
                         except Exception as e:
@@ -14131,6 +14142,7 @@ def cancel_bot(bot_id):
                 else:
                     if bot.get('yes_order_id'):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['yes_order_id'])
                             cancelled.append('YES')
                         except Exception as e:
@@ -14138,6 +14150,7 @@ def cancel_bot(bot_id):
                             warnings.append(f'Could not cancel YES order: {e}')
                     if bot.get('no_order_id'):
                         try:
+                            api_rate_limiter.wait()
                             kalshi_client.cancel_order(bot['no_order_id'])
                             cancelled.append('NO')
                         except Exception as e:
@@ -14410,6 +14423,7 @@ def _sweep_orphaned_orders():
         ticker = o.get('ticker', '?')
         side = o.get('side', '?')
         try:
+            api_rate_limiter.wait()
             kalshi_client.cancel_order(oid)
             cancelled.append({'order_id': oid, 'ticker': ticker, 'side': side})
             print(f'🧹 Orphan sweep: cancelled {side} order {oid[:8]}... on {ticker}')
@@ -15169,6 +15183,7 @@ def scan_middles():
             cursor = None
             while True:
                 try:
+                    api_read_limiter.wait()
                     result = kalshi_client.get_markets_by_series(series, status='open', limit=200, cursor=cursor)
                 except Exception:
                     break

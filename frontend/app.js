@@ -1379,27 +1379,9 @@ function displayMarkets(markets) {
     }
     window._botTypeMap = botMap;
 
-    // Fetch Meridian scanner results for recommendation icons (non-blocking)
+    // Middle scanner auto-fetch removed — was firing 12 Kalshi reads on every render,
+    // starving bot operations. Use Meridian tab to scan manually.
     if (!window._middleRecoMap) window._middleRecoMap = {};
-    fetch(`${API_BASE}/scan/middles`).then(r => r.json()).then(data => {
-        const rMap = {};
-        for (const opp of (data.middles || [])) {
-            const cost = opp.cost || 999;
-            const sc = opp.catch_score || 0;
-            // Under 100¢ = arb exists now. Otherwise need catch score + close to 100.
-            // Place pregame, catch dips when game goes live and score changes.
-            if (cost <= 100 || (cost <= 115 && sc >= 6)) {
-                const ta = opp.ticker_a || '', tb = opp.ticker_b || '';
-                const mw = opp.middle_width || 0;
-                const tip = cost <= 100
-                    ? `${100 - cost}¢ arb, ${mw}pt middle`
-                    : `${mw}pt middle, ${cost}¢ cost (catch on vol)`;
-                if (ta) rMap[ta] = { partner: tb, score: Math.round(sc), width: mw, cost, tip };
-                if (tb) rMap[tb] = { partner: ta, score: Math.round(sc), width: mw, cost, tip };
-            }
-        }
-        window._middleRecoMap = rMap;
-    }).catch(() => {});
 
     console.log(`Organizing ${markets.length} markets into trading floor layout...`);
     

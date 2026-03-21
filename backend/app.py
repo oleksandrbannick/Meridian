@@ -9538,6 +9538,34 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _audit('LADDER_COMPLETE', bot_id, {'ticker': ticker, 'hedge_qty': hedge_qty, 'yes_price': yes_p, 'no_price': no_p, 'pnl': net_pnl})
             _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_complete')
 
+            # Verify no leftover positions from missed WS fills
+            try:
+                api_read_limiter.wait()
+                _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                _leftover = 0
+                for _p in _positions:
+                    if _p.get('ticker') == ticker:
+                        _leftover = abs(_parse_position_qty(_p))
+                if _leftover > 0:
+                    _sold, _sell_info = execute_sell(ticker, dog_side, _leftover,
+                                                     reason=f'phantom_extra_{bot_id}')
+                    _sell_price = _sell_info.get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+                    _extra_pnl = (_sell_price - avg_dog) * _leftover
+                    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _extra_pnl
+                    if _extra_pnl >= 0:
+                        session_pnl['gross_profit_cents'] += _extra_pnl
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(_extra_pnl)
+                    print(f'👻 PHANTOM EXTRA SELLBACK: {bot_id} {_leftover} leftover contracts sold @{_sell_price}¢ pnl={_extra_pnl}¢')
+                    bot_log('PHANTOM_LADDER_EXTRA_SELLBACK', bot_id, {
+                        'leftover': _leftover, 'sell_price': _sell_price,
+                        'extra_pnl': _extra_pnl, 'combined_pnl': bot.get('net_pnl_cents', 0),
+                    })
+            except Exception as _pe:
+                print(f'⚠ PHANTOM EXTRA CHECK FAIL: {bot_id}: {_pe}')
+                bot_log('PHANTOM_LADDER_EXTRA_CHECK_FAIL', bot_id, {'error': str(_pe)[:300]}, level='ERROR')
+
             # Repeat logic — re-anchor if repeats remain
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
@@ -14992,6 +15020,7 @@ PNL_LOSS_RESULTS = (
     'ladder_arb_sellback',  # ladder arb: sold filled leg back
     'stop_loss_watch',  # straight bet stop-loss triggered
     'arb_loss',  # anchor-ladder/dog: completed with negative P&L (fees exceeded spread)
+    'rebalancer_scrape',  # meridian rebalancer sold a filled leg back
     # timeout_exit_* removed — amend completes the arb, recorded as 'completed' now
 )
 PNL_WIN_RESULTS = (

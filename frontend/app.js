@@ -781,7 +781,14 @@ function getMarketLiquidity(market) {
         tier = 'wide'; tierLabel = 'WIDE'; tierColor = '#ffaa33';
     }
 
-    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum };
+    // Per-side spread (tight = thick liquidity, wide = thin)
+    const yesSpread = yesAsk - yesBid;
+    const noSpread = noAsk - noBid;
+    const thinSide = yesSpread > noSpread ? 'yes' : 'no';
+    const thickSide = thinSide === 'yes' ? 'no' : 'yes';
+    const spreadImbalance = Math.abs(yesSpread - noSpread);
+
+    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance };
 }
 
 // ─── GAME SIGNAL — arb-focused: score stability + liquidity, NOT phase-gated ──
@@ -2254,13 +2261,16 @@ function createMarketRow(market, label) {
         const spread = Math.abs(liq.yesBid - liq.noBid);
         const isLiveGame = isKalshiLive(market);
         if (isLiveGame && bidSum >= 90) {
-            // Live game with real liquidity — always recommend
+            // Live game with real liquidity — recommend with liquidity context
+            const liqTip = liq.spreadImbalance >= 3
+                ? ` · ${liq.thinSide.toUpperCase()} thin (${liq[liq.thinSide + 'Spread']}¢) / ${liq.thickSide.toUpperCase()} thick (${liq[liq.thickSide + 'Spread']}¢)`
+                : '';
             if (spread <= 10) {
-                recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility` });
+                recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility${liqTip}` });
             } else if (spread <= 25) {
-                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths` });
+                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths${liqTip}` });
             } else if (spread <= 50) {
-                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths` });
+                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths${liqTip}` });
             }
         } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && liq.avgSpread <= 5) {
             // Pregame with tight spreads — can post early
@@ -2276,9 +2286,13 @@ function createMarketRow(market, label) {
         // Lowest rung check: 3 rungs spaced 2¢ apart, bottom rung must be ≥3¢
         // (at 2¢ the hedge needs 96¢ fav which never fills)
         const lowestRung = dogPrice - 4; // 3rd rung ~4¢ below top
-        if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2) {
+        // Fav side needs thick liquidity (tight spread) for instant hedge fills
+        const favSide = liq.yesBid < liq.noBid ? 'no' : 'yes';
+        const favSpread = favSide === 'yes' ? liq.yesSpread : liq.noSpread;
+        if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && favSpread <= 5) {
             const dogSide = liq.yesBid < liq.noBid ? 'YES' : 'NO';
-            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room` });
+            const liqLabel = favSpread <= 2 ? 'thick' : favSpread <= 3 ? 'good' : 'ok';
+            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · fav ${liqLabel} (${favSpread}¢ spread)` });
         }
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
@@ -5276,16 +5290,39 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // ── CONSOLIDATED VIEW: anchor summary + per-rung breakdown + hedge detail ──
         const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
 
-        // Anchor summary block
-        const anchorSummary = `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
-            <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
-            <span style="color:${filledColor};font-size:11px;font-weight:700;">${filledQty} contracts @ avg ${avgFilled}¢</span>
-            <span style="color:#555;font-size:9px;">bid ${filledBid}¢ · ask ${filledAsk}¢</span>
-        </div>`;
-
         // Split rungs into filled (consolidated) and unfilled (show individually)
         const filledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) > 0);
         const unfilledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) === 0 && !r.completed && !r.cancelled);
+
+        // Cleanup generation: split anchors into completed (hedged) vs cleanup (unhedged)
+        const hasCleanup = hedgeHistory.length > 0 && hedgeQty > 0 && currentHedgePrice > 0;
+        const historyHedgedQty = hedgeHistory.reduce((s, h) => s + (h.fill_qty || h.qty || 0), 0);
+        const cleanupQty = hasCleanup ? Math.max(0, filledQty - historyHedgedQty) : 0;
+        const completedQty = hasCleanup ? historyHedgedQty : 0;
+
+        // Anchor summary block — split into COMPLETED + CLEANUP if cleanup generation active
+        let anchorSummary;
+        if (hasCleanup && completedQty > 0) {
+            anchorSummary = `
+                <div style="color:#556;font-size:8px;font-weight:700;letter-spacing:.08em;margin-bottom:4px;">── COMPLETED ──</div>
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}22;border-radius:6px;margin-bottom:4px;opacity:0.35;">
+                    <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+                    <span style="color:${filledColor};font-size:11px;font-weight:700;">${completedQty} contracts · HEDGED</span>
+                </div>
+                ${cleanupQty > 0 ? `
+                <div style="color:#ffaa00;font-size:8px;font-weight:700;letter-spacing:.08em;margin:8px 0 4px;">── CLEANUP ──</div>
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
+                    <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+                    <span style="color:${filledColor};font-size:11px;font-weight:700;">${cleanupQty} contracts @ avg ${avgFilled}¢</span>
+                    <span style="color:#ffaa00;font-size:8px;">cancel-race fills</span>
+                </div>` : ''}`;
+        } else {
+            anchorSummary = `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
+                <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+                <span style="color:${filledColor};font-size:11px;font-weight:700;">${filledQty} contracts @ avg ${avgFilled}¢</span>
+                <span style="color:#555;font-size:9px;">bid ${filledBid}¢ · ask ${filledAsk}¢</span>
+            </div>`;
+        }
 
         // Unfilled anchors — show individually so user can see where limit orders sit
         const unfilledRows = unfilledRungs.map(r => {
@@ -10075,6 +10112,7 @@ async function loadTradeHistoryList() {
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
+            const isRebalancerScrape = t.result === 'rebalancer_scrape';
             // Timeout amend: both legs completed via amend after one leg timed out
             // Still detect for detailed analytics display, but result label is just 'FILLED'
             const isTimeoutExit = t.exit_via === 'timeout_amend' || t.exit_via === 'amend_fallback'
@@ -10089,6 +10127,8 @@ async function loadTradeHistoryList() {
                 pnl = (t.profit_cents || 0);
             } else if (isManualExit && !t.loss_cents) {
                 pnl = (t.profit_cents || 0);
+            } else if (isRebalancerScrape) {
+                pnl = t.profit_cents ? t.profit_cents : -(t.loss_cents || 0);
             } else {
                 pnl = -(t.loss_cents || 0);
             }
@@ -10096,7 +10136,7 @@ async function loadTradeHistoryList() {
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
             const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (pnl >= 0 ? '✅' : '⛔'));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isAnchorSellback ? (t.result === 'ladder_arb_sellback' ? 'SELLBACK' : 'ANCHOR SELLBACK') : (isCeilingExit ? 'CEILING EXIT' : (isManualExit ? 'MANUAL EXIT' : (pnl < 0 ? 'AMENDED' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))))))));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isRebalancerScrape ? 'REBALANCER' : (isAnchorSellback ? (t.result === 'ladder_arb_sellback' ? 'SELLBACK' : 'ANCHOR SELLBACK') : (isCeilingExit ? 'CEILING EXIT' : (isManualExit ? 'MANUAL EXIT' : (pnl < 0 ? 'AMENDED' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))))))));
             const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : ((isAnchorSellback || isCeilingExit) ? '#ffaa0033' : (isTimeoutExit ? (pnl >= 0 ? '#ffaa0022' : '#ff880033') : ((isWin) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'))));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             

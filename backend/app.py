@@ -3083,9 +3083,15 @@ def _execute_phantom_hedge(bot_id):
             # Fallback: recalculate (shouldn't happen)
             hedge_price = _precalc_phantom_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
         print(f'👻 PHANTOM HEDGE START: {bot_id} | dog={dog_side.upper()}@{dog_price}¢ | precalc hedge={hedge_price}¢ | fav={fav_side.upper()} qty={qty}')
+        bot_log('PHANTOM_WS_HEDGE_START', bot_id, {
+            'dog_side': dog_side, 'dog_price': dog_price,
+            'precalc_hedge': hedge_price, 'fav_side': fav_side, 'qty': qty,
+            'path': 'ws_fast',
+        })
 
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
+            bot_log('PHANTOM_HEDGE_TOO_LOW', bot_id, {'hedge_price': hedge_price, 'dog_price': dog_price, 'path': 'ws_fast'})
             bot['status'] = 'dog_filled'
             return
 
@@ -3118,6 +3124,16 @@ def _execute_phantom_hedge(bot_id):
             bot['no_order_id'] = fav_order_id
 
         print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={dog_price + actual_fav_price}¢ + fees')
+        bot_log('PHANTOM_WS_HEDGE_POSTED', bot_id, {
+            'fav_side': fav_side, 'fav_price': actual_fav_price,
+            'fav_order_id': fav_order_id[:12], 'dog_price': dog_price,
+            'combined': dog_price + actual_fav_price, 'qty': qty,
+            'path': 'ws_fast',
+        })
+        _audit('PHANTOM_WS_HEDGE_POSTED', bot_id, {
+            'ticker': ticker, 'fav_side': fav_side, 'fav_price': actual_fav_price,
+            'fav_order_id': fav_order_id, 'dog_price': dog_price, 'qty': qty,
+        })
         # Track fill-to-hedge latency
         fill_at = bot.get('dog_filled_at')
         if fill_at:
@@ -3125,6 +3141,10 @@ def _execute_phantom_hedge(bot_id):
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
             _record_latency('fill_to_hedge_phantom', f2h_ms, {'bot_id': bot_id, 'type': 'phantom', 'fav_price': actual_fav_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
+            bot_log('PHANTOM_HEDGE_LATENCY', bot_id, {
+                'raw_hedge_ms': bot.get('raw_hedge_ms'), 'fill_to_hedge_ms': round(f2h_ms, 1),
+                'path': 'ws_fast',
+            })
 
         # Async: verify actual dog fill price (non-blocking, after hedge is already placed)
         try:
@@ -3132,12 +3152,17 @@ def _execute_phantom_hedge(bot_id):
             if verified_price and verified_price != dog_price:
                 bot['dog_price'] = verified_price
                 print(f'   📋 Dog fill price verified: {dog_price}¢ → {verified_price}¢')
+                bot_log('PHANTOM_DOG_PRICE_VERIFIED', bot_id, {'old': dog_price, 'verified': verified_price})
         except Exception:
             pass  # Non-critical — dog_price estimate is fine
 
         save_state()
     except Exception as e:
         print(f'❌ WS PHANTOM HEDGE {bot_id}: {e}')
+        import traceback
+        traceback.print_exc()
+        bot_log('PHANTOM_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:300], 'path': 'ws_fast'}, level='ERROR')
+        _audit('PHANTOM_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:200]})
         bot = active_bots.get(bot_id)
         if bot:
             bot['status'] = 'dog_filled'  # fallback to monitor
@@ -7675,6 +7700,10 @@ def _handle_phantom(bot_id, bot, actions):
     if bot.get('_hedge_fired') and not bot.get('fav_order_id') and status == 'dog_filled':
         # Hedge was flagged but never posted (exception mid-hedge) — reset so we retry
         print(f'🔧 PHANTOM RECOVERY: {bot_id} _hedge_fired but no fav_order_id — resetting flag')
+        bot_log('PHANTOM_RECOVERY', bot_id, {
+            '_hedge_fired': True, 'fav_order_id': None, 'status': status,
+            'dog_price': bot.get('dog_price'), 'dog_side': dog_side,
+        })
         bot['_hedge_fired'] = False
 
     # Update live bid/ask from WS cache
@@ -7692,6 +7721,7 @@ def _handle_phantom(bot_id, bot, actions):
     if status == 'dog_anchor_posted':
         dog_order_id = bot.get('dog_order_id')
         if not dog_order_id:
+            bot_log('PHANTOM_NO_DOG_ORDER', bot_id, {'status': status}, level='WARN')
             return
 
         api_rate_limiter.wait()
@@ -7709,6 +7739,10 @@ def _handle_phantom(bot_id, bot, actions):
         if dog_filled >= qty:
             # Guard: WS handler may have already fired the hedge
             if bot.get('_hedge_fired'):
+                bot_log('PHANTOM_DOG_FILLED_WS_HANDLING', bot_id, {
+                    'dog_filled': dog_filled, 'qty': qty, '_hedge_fired': True,
+                    'fav_order_id': bot.get('fav_order_id', 'none')[:12] if bot.get('fav_order_id') else 'none',
+                })
                 bot['status'] = 'dog_filled'  # let WS thread handle it
                 return
             # DOG FILLED — immediately hedge the favorite
@@ -7716,6 +7750,11 @@ def _handle_phantom(bot_id, bot, actions):
             bot['dog_filled_at'] = now
             actual_dog_price = get_actual_fill_price(dog_order_id, dog_side) or bot['dog_price']
             bot['dog_price'] = actual_dog_price
+            print(f'🐕 PHANTOM DOG FILLED: {bot_id} {dog_side.upper()}@{actual_dog_price}¢ qty={qty} (monitor path)')
+            bot_log('PHANTOM_DOG_FILLED', bot_id, {
+                'dog_side': dog_side, 'dog_price': actual_dog_price, 'qty': qty,
+                'dog_order_id': dog_order_id[:12], 'path': 'monitor',
+            })
             _audit('DOG_FILLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'dog_price': actual_dog_price, 'qty': qty})
             _audit_position_check(bot_id, ticker, dog_side, 'after_dog_fill')
 
@@ -7729,6 +7768,10 @@ def _handle_phantom(bot_id, bot, actions):
 
             if fav_bid <= 0:
                 print(f'⚠ PHANTOM {bot_id}: dog filled but no fav bid — holding')
+                bot_log('PHANTOM_NO_FAV_BID', bot_id, {
+                    'dog_price': actual_dog_price, 'fav_side': fav_side, 'fav_bid': 0,
+                    'path': 'monitor',
+                })
                 bot['status'] = 'dog_filled'
                 actions.append({'bot_id': bot_id, 'action': 'dog_filled_no_fav_bid'})
                 return
@@ -7739,6 +7782,10 @@ def _handle_phantom(bot_id, bot, actions):
             hedge_price = max_fav_price
             if hedge_price < 1:
                 print(f'⚠ PHANTOM {bot_id}: hedge price {hedge_price}¢ too low — selling dog back')
+                bot_log('PHANTOM_HEDGE_TOO_LOW_SELLBACK', bot_id, {
+                    'hedge_price': hedge_price, 'dog_price': actual_dog_price,
+                    'fav_bid': fav_bid, 'target_width': target_width,
+                })
                 _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
                 return
 
@@ -7748,9 +7795,17 @@ def _handle_phantom(bot_id, bot, actions):
                 safe_hedge = HARD_CEILING_CENTS - actual_dog_price
                 if safe_hedge < 1:
                     print(f'🛑 PHANTOM CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
+                    bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
+                        'dog_price': actual_dog_price, 'hedge_price': hedge_price,
+                        'total_cost': total_cost, 'safe_hedge': safe_hedge,
+                    })
                     _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
                     return
                 print(f'⚠ PHANTOM CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
+                bot_log('PHANTOM_CEILING_CAP', bot_id, {
+                    'dog_price': actual_dog_price, 'original_hedge': hedge_price,
+                    'capped_hedge': safe_hedge, 'total_was': total_cost,
+                })
                 hedge_price = safe_hedge
 
             # Guard: WS handler may have already posted the fav hedge
@@ -7779,14 +7834,22 @@ def _handle_phantom(bot_id, bot, actions):
 
                 print(f'👻 PHANTOM HEDGE: {bot_id} dog filled @{actual_dog_price}¢ → fav {fav_side.upper()} posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
                 _audit('FAV_HEDGE_POSTED', bot_id, {'ticker': ticker, 'fav_side': fav_side, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
-                bot_log('ANCHOR_FAV_POSTED', bot_id, {
+                bot_log('PHANTOM_FAV_POSTED', bot_id, {
                     'dog_price': actual_dog_price, 'fav_price': actual_fav_price,
-                    'fav_bid': fav_bid, 'total': actual_dog_price + actual_fav_price,
+                    'fav_order_id': fav_order_id[:12], 'fav_bid': fav_bid,
+                    'combined': actual_dog_price + actual_fav_price,
+                    'target_width': target_width, 'path': 'monitor',
                 })
                 actions.append({'bot_id': bot_id, 'action': 'anchor_fav_posted',
                                 'dog_price': actual_dog_price, 'fav_price': actual_fav_price})
             except Exception as e:
                 print(f'❌ PHANTOM {bot_id}: fav post failed: {e} — holding dog')
+                bot_log('PHANTOM_FAV_POST_ERROR', bot_id, {
+                    'error': str(e)[:300], 'dog_price': actual_dog_price,
+                    'hedge_price': hedge_price, 'fav_side': fav_side,
+                    'path': 'monitor',
+                }, level='ERROR')
+                _audit('PHANTOM_FAV_POST_ERROR', bot_id, {'error': str(e)[:200], 'ticker': ticker})
                 bot['status'] = 'dog_filled'
             save_state()
             return
@@ -7901,16 +7964,36 @@ def _handle_phantom(bot_id, bot, actions):
 
                 print(f'🔄 PHANTOM REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
                       f'({trigger_reason} bid={current_dog_bid}¢ ask={current_dog_ask}¢ #{bot["dog_repost_count"]})')
+                bot_log('PHANTOM_DOG_REPOST', bot_id, {
+                    'old_price': old_price, 'new_price': actual_new_price,
+                    'dog_bid': current_dog_bid, 'dog_ask': current_dog_ask,
+                    'trigger': trigger_reason, 'repost_count': bot['dog_repost_count'],
+                    'new_order_id': new_order_id[:12],
+                    'precalc_hedge': bot.get('_precalc_hedge_price'),
+                    'anchor_depth': anchor_depth, 'spread': spread,
+                })
+                _audit('PHANTOM_DOG_REPOST', bot_id, {
+                    'ticker': ticker, 'old_price': old_price, 'new_price': actual_new_price,
+                    'trigger': trigger_reason, 'new_order_id': new_order_id,
+                })
                 actions.append({'bot_id': bot_id, 'action': 'anchor_dog_repost',
                                 'old_price': old_price, 'new_price': actual_new_price,
                                 'dog_bid': current_dog_bid, 'trigger': trigger_reason})
                 save_state()
             except Exception as rp_err:
                 print(f'⚠ PHANTOM REPOST {bot_id}: {rp_err}')
+                bot_log('PHANTOM_REPOST_ERROR', bot_id, {'error': str(rp_err)[:300]}, level='ERROR')
         return
 
     # ── STATE: dog_filled — dog filled but fav post failed, retry ──
     if status == 'dog_filled':
+        bot_log('PHANTOM_DOG_FILLED_POLL', bot_id, {
+            'dog_price': bot['dog_price'], 'dog_side': dog_side,
+            'fav_side': fav_side, '_hedge_fired': bot.get('_hedge_fired'),
+            'fav_order_id': (bot.get('fav_order_id') or 'none')[:12],
+            'dog_filled_at': bot.get('dog_filled_at'),
+            'sellback_attempts': bot.get('_sellback_attempts', 0),
+        })
         # Settlement check: if market is closed/settled, record result based on outcome
         try:
             api_rate_limiter.wait()
@@ -8027,15 +8110,30 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_price'] = actual_fav_price
                 bot['no_order_id'] = fav_order_id
             print(f'👻 PHANTOM HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢ (shave={fav_shave}¢)')
+            bot_log('PHANTOM_FAV_RETRY_POSTED', bot_id, {
+                'fav_price': actual_fav_price, 'dog_price': dog_price,
+                'fav_bid': fav_bid, 'fav_shave': fav_shave,
+                'combined': dog_price + actual_fav_price,
+                'fav_order_id': fav_order_id[:12],
+                'hedge_latency_ms': bot.get('hedge_latency_ms'),
+            })
+            _audit('PHANTOM_FAV_RETRY_POSTED', bot_id, {
+                'ticker': ticker, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id,
+            })
             save_state()
         except Exception as e:
             print(f'❌ PHANTOM {bot_id}: fav retry failed: {e}')
+            bot_log('PHANTOM_FAV_RETRY_ERROR', bot_id, {
+                'error': str(e)[:300], 'dog_price': dog_price,
+                'hedge_price': hedge_price, 'fav_bid': fav_bid,
+            }, level='ERROR')
         return
 
     # ── STATE: fav_hedge_posted — fav posted, waiting for fill ────
     if status == 'fav_hedge_posted':
         fav_order_id = bot.get('fav_order_id')
         if not fav_order_id:
+            bot_log('PHANTOM_NO_FAV_ORDER', bot_id, {'status': status}, level='WARN')
             return
 
         api_rate_limiter.wait()
@@ -8049,6 +8147,14 @@ def _handle_phantom(bot_id, bot, actions):
             bot['yes_fill_qty'] = fav_filled
         else:
             bot['no_fill_qty'] = fav_filled
+
+        bot_log('PHANTOM_FAV_POLL', bot_id, {
+            'fav_filled': fav_filled, 'qty': qty,
+            'fav_price': bot.get('fav_price'), 'dog_price': bot.get('dog_price'),
+            'fav_order_id': fav_order_id[:12],
+            'fav_walk_count': bot.get('fav_walk_count', 0),
+            'wait_s': round(now - (bot.get('fav_posted_at') or now), 1),
+        })
 
         if fav_filled >= qty:
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
@@ -8200,6 +8306,12 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Check absolute timeout — give up after hedge_timeout_s total
         if wait_s >= hedge_timeout_s:
+            bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
+                'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
+                'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),
+                'fav_price': bot.get('fav_price'), 'dog_price': dog_price,
+                'fav_walk_count': bot.get('fav_walk_count', 0),
+            })
             # Query fav fill count before cancelling — partial fills may exist
             fav_filled = bot.get('fav_fill_qty', 0)
             try:
@@ -8275,6 +8387,11 @@ def _handle_phantom(bot_id, bot, actions):
 
         if current_fav_bid <= 0:
             # No bid — check if we should bail
+            bot_log('PHANTOM_NO_FAV_BID_WALK', bot_id, {
+                'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
+                'bail_threshold': round(hedge_timeout_s * 0.75, 1),
+                'will_bail': wait_s >= hedge_timeout_s * 0.75,
+            })
             if wait_s >= hedge_timeout_s * 0.75:
                 try:
                     kalshi_client.cancel_order(fav_order_id)
@@ -8347,6 +8464,15 @@ def _handle_phantom(bot_id, bot, actions):
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
                       f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
+                bot_log('PHANTOM_WALK_SUCCESS', bot_id, {
+                    'walk_type': walk_type, 'old_price': current_fav_price,
+                    'new_price': new_fav_price, 'fav_bid': current_fav_bid,
+                    'fav_ask': current_fav_ask, 'fav_spread': fav_spread,
+                    'dog_price': dog_price, 'combined': combined,
+                    'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
+                    'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
+                    'wait_s': round(wait_s, 1),
+                })
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
                 bot['fav_last_walk_at'] = now
@@ -8360,6 +8486,11 @@ def _handle_phantom(bot_id, bot, actions):
                                 'walk_count': walk_count, 'combined': combined})
             except Exception as e:
                 print(f'❌ PHANTOM {bot_id}: fav {walk_type} amend failed: {e}')
+                bot_log('PHANTOM_WALK_ERROR', bot_id, {
+                    'walk_type': walk_type, 'error': str(e)[:300],
+                    'old_price': current_fav_price, 'target_price': new_fav_price,
+                    'fav_order_id': fav_order_id[:12],
+                }, level='ERROR')
                 bot['fav_last_walk_at'] = now
         return
 
@@ -10058,6 +10189,11 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     qty = bot.get('quantity', 1)
+    bot_log('PHANTOM_SELLBACK_START', bot_id, {
+        'dog_price': dog_price, 'fav_bid': fav_bid, 'total_cost': total_cost,
+        'qty': qty, 'dog_side': dog_side, 'ticker': ticker,
+        'sellback_attempts': bot.get('_sellback_attempts', 0),
+    })
 
     # Verify actual fill by checking the dog order on Kalshi (not positions —
     # positions are aggregate across all bots on the same ticker)
@@ -10082,6 +10218,11 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
         bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
         bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
+        bot_log('PHANTOM_SELLBACK_FAILED', bot_id, {
+            'dog_price': dog_price, 'qty': qty, 'dog_side': dog_side,
+            'attempt': bot['_sellback_attempts'],
+            'sell_info': str(sell_info)[:200] if sell_info else 'none',
+        }, level='ERROR')
         _audit('PHANTOM_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': bot['_sellback_attempts']})
         actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
         return
@@ -15354,9 +15495,9 @@ def _run_startup():
         try:
             # Cancel orphaned limit orders
             sweep_result = _sweep_orphaned_orders()
-            cancelled = sweep_result.get('cancelled', 0)
-            if cancelled > 0:
-                msg = f'🧹 Startup: cancelled {cancelled} orphaned order(s)'
+            cancelled_count = sweep_result.get('cancelled_count', 0)
+            if cancelled_count > 0:
+                msg = f'🧹 Startup: cancelled {cancelled_count} orphaned order(s)'
                 print(msg)
                 _push_notification('orphan_sweep', msg, sweep_result)
             else:

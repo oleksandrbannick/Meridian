@@ -2969,10 +2969,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         _all_rungs_filled = (total_yes >= total_expected_per_side and total_no >= total_expected_per_side)
 
         # Check if hedge is fully done — require API verification to prevent phantom fill completion
+        # Also verify hedge covers ALL anchor fills (late anchors may still be amending)
+        _filled_side_chk = bot.get('first_fill_side', 'yes')
+        _total_anchor_fills = sum(
+            min(r.get(f'{_filled_side_chk}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
+            for r in bot.get('rungs', [])
+        )
         _hedge_fully_done = (bot.get('_consolidated')
                              and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
                              and bot.get('hedge_qty', 0) > 0
-                             and bot.get('_hedge_verified'))
+                             and bot.get('_hedge_verified')
+                             and bot.get('hedge_qty', 0) >= _total_anchor_fills)
 
         if _all_rungs_filled or _hedge_fully_done:
             # Both sides fully filled OR hedge fully done — complete!
@@ -5724,9 +5731,16 @@ def _check_apex_rung_completions(bot_id, bot):
     # Check if ALL rungs are resolved
     all_resolved = True
     # When hedge is fully filled (consolidated), partial rungs are resolved
+    # Also verify hedge covers all anchor fills (late anchors may still be amending)
+    _fs_chk = bot.get('first_fill_side', 'yes')
+    _total_af = sum(
+        min(r.get(f'{_fs_chk}_fill_qty', 0), r.get('quantity', qty_per))
+        for r in bot.get('rungs', [])
+    )
     hedge_fully_done = (bot.get('_consolidated')
                         and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
-                        and bot.get('hedge_qty', 0) > 0)
+                        and bot.get('hedge_qty', 0) > 0
+                        and bot.get('hedge_qty', 0) >= _total_af)
     for rung in bot.get('rungs', []):
         if rung.get('completed'):
             continue
@@ -5869,7 +5883,10 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
                 'amend_price': amend_price, 'hedge_order_id': hedge_oid,
                 'error': str(e), 'rung_idx': rung_idx,
             }, level='ERROR')
-            # Don't rollback — another thread may have set hedge_qty higher already
+            # Hedge likely already filled (Kalshi auto-settled) — still update hedge_qty
+            # so completion flow knows anchors > hedge and places a new generation
+            with ws_fill_lock:
+                bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
@@ -6323,7 +6340,28 @@ def _execute_apex_completion(bot_id):
                     else:
                         # Can't verify — wait and retry next cycle
                         return
-            # Late anchor fills came in — place a new hedge for the difference
+            # Late anchor fills came in — save completed hedge to history, place new generation
+            _old_hedge_oid = bot.get('hedge_order_id')
+            _old_hedge_fills = bot.get('_hedge_fill_count', 0)
+            _old_hedge_qty = bot.get('hedge_qty', 0)
+            _old_hedge_price = bot.get('hedge_price', 0)
+            if _old_hedge_oid and _old_hedge_fills > 0:
+                _hh = bot.get('hedge_history', [])
+                _hh.append({
+                    'order_id': _old_hedge_oid,
+                    'order_ids': list(bot.get('_all_hedge_order_ids', [])),
+                    'side': unfilled_side,
+                    'price': _old_hedge_price,
+                    'qty': _old_hedge_qty,
+                    'fill_qty': _old_hedge_fills,
+                })
+                bot['hedge_history'] = _hh
+                bot_log('APEX_HEDGE_GEN_COMPLETE', bot_id, {
+                    'old_hedge_oid': _old_hedge_oid, 'old_fills': _old_hedge_fills,
+                    'old_qty': _old_hedge_qty, 'old_price': _old_hedge_price,
+                    'unhedged': unhedged,
+                })
+
             ticker = bot.get('ticker', '')
             avg_anchor = bot.get(f'avg_{filled_side}_price', 0)
             target_hedge = round(100 - avg_anchor - bot.get('_avg_width', 5))

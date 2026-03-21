@@ -2642,6 +2642,10 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
 
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
 ws_fill_lock = threading.Lock()
+# ─── Late Anchor Amend Lock: serialize late anchor amend API calls ────────────
+# Prevents race where multiple WS fill threads read stale hedge_qty/hedge_price
+# and overwrite each other's walk_offset calculations.
+_late_anchor_amend_lock = threading.Lock()
 
 # ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
 # This ensures the frontend sees 'completed' / 'timeout_exit' actions even when
@@ -3175,6 +3179,9 @@ def _execute_phantom_ladder_hedge(bot_id):
     try:
         bot = active_bots.get(bot_id)
         if not bot or bot.get('status') in ('stopped', 'completed', 'fav_hedge_posted'):
+            bot_log('PHANTOM_LADDER_WS_HEDGE_SKIP', bot_id, {
+                'status': bot.get('status') if bot else 'no_bot',
+            })
             return
 
         ticker = bot['ticker']
@@ -3195,9 +3202,18 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['hedge_qty'] = total_fill_qty
             bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
             print(f'👻 PHANTOM HEDGE (PRECALC): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | hedge={hedge_price}¢')
+            bot_log('PHANTOM_LADDER_WS_HEDGE_START', bot_id, {
+                'path': 'precalc', 'avg_price': avg_price, 'hedge_price': hedge_price,
+                'total_fill_qty': total_fill_qty, 'dog_side': dog_side, 'fav_side': fav_side,
+            })
         else:
             # ── SLOW PATH: runtime computation (recovery, legacy bots, non-standard qty) ──
             filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
+            bot_log('PHANTOM_LADDER_WS_HEDGE_START', bot_id, {
+                'path': 'computed', 'filled_rungs': len(filled_rungs),
+                'total_fill_qty': total_fill_qty, 'dog_side': dog_side, 'fav_side': fav_side,
+                'precalc_hedge': hedge_price, 'precalc_avg': avg_price,
+            })
             if not filled_rungs:
                 # Recovery: bot-level fill data exists but rung-level doesn't
                 bot_fill = bot.get('total_dog_fill_qty', 0) or bot.get(f'{dog_side}_fill_qty', 0) or 0
@@ -3205,6 +3221,10 @@ def _execute_phantom_ladder_hedge(bot_id):
                     bot['rungs'][0]['fill_qty'] = min(bot_fill, bot['rungs'][0]['qty'])
                     filled_rungs = [bot['rungs'][0]]
                     print(f'🔧 PHANTOM HEDGE RECOVERY: {bot_id} reconstructed rung fills from bot-level data (fill={bot_fill})')
+                    bot_log('PHANTOM_LADDER_RECOVERY_RUNG', bot_id, {
+                        'bot_fill': bot_fill, 'avg_fill_price': bot.get('avg_fill_price'),
+                        'reconstructed_qty': min(bot_fill, bot['rungs'][0]['qty']),
+                    })
                 else:
                     # Before completing with 0 fills, check Kalshi for actual positions
                     try:
@@ -3216,6 +3236,9 @@ def _execute_phantom_ladder_hedge(bot_id):
                                 _actual_qty = abs(_parse_position_qty(_p))
                                 if _actual_qty > 0:
                                     print(f'⚠ PHANTOM HEDGE {bot_id}: 0 local fills but Kalshi has {_actual_qty} contracts — reconstructing')
+                                    bot_log('PHANTOM_LADDER_RECOVERY_POSITION', bot_id, {
+                                        'local_fills': 0, 'kalshi_qty': _actual_qty,
+                                    })
                                     _remaining = _actual_qty
                                     for _r in bot['rungs']:
                                         _assign = min(_r['qty'], _remaining)
@@ -3227,8 +3250,12 @@ def _execute_phantom_ladder_hedge(bot_id):
                                     break
                     except Exception as _pe:
                         print(f'⚠ PHANTOM HEDGE position check failed: {_pe}')
+                        bot_log('PHANTOM_LADDER_POSITION_CHECK_FAIL', bot_id, {'error': str(_pe)[:300]}, level='ERROR')
                     if not filled_rungs:
                         print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs confirmed — marking complete')
+                        bot_log('PHANTOM_LADDER_NO_FILLS_COMPLETE', bot_id, {
+                            'total_fill_qty': total_fill_qty, 'status': 'completed',
+                        })
                         bot['status'] = 'completed'
                         bot['completed_at'] = time.time()
                         save_state()
@@ -3249,12 +3276,20 @@ def _execute_phantom_ladder_hedge(bot_id):
                 hedge_price = bot.get('_precalc_hedge_price', 0)
             if hedge_price <= 0:
                 print(f'   ⚠ Hedge price {hedge_price}¢ too low — selling back')
+                bot_log('PHANTOM_LADDER_HEDGE_TOO_LOW_SELLBACK', bot_id, {
+                    'hedge_price': hedge_price, 'avg_price': avg_price,
+                    'total_fill_qty': total_fill_qty, 'path': 'ws_fast',
+                })
                 _phantom_ladder_sell_back(bot_id, bot, avg_price, 0, 999, [])
                 return
             print(f'👻 PHANTOM HEDGE (COMPUTED): {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | hedge={hedge_price}¢')
 
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
+            bot_log('PHANTOM_LADDER_HEDGE_DEFERRED', bot_id, {
+                'hedge_price': hedge_price, 'avg_price': avg_price,
+                'total_fill_qty': total_fill_qty, 'path': 'ws_fast',
+            })
             bot['status'] = 'ladder_filled_no_fav'
             save_state()
             return
@@ -3285,6 +3320,12 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['no_price'] = actual_fav_price
             bot['no_order_id'] = fav_order_id
         print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={avg_price + actual_fav_price}¢ + fees')
+        bot_log('PHANTOM_LADDER_WS_HEDGE_POSTED', bot_id, {
+            'fav_side': fav_side, 'fav_price': actual_fav_price,
+            'fav_order_id': fav_order_id[:12], 'avg_dog': avg_price,
+            'combined': avg_price + actual_fav_price, 'hedge_qty': total_fill_qty,
+            'path': 'ws_fast',
+        })
         _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
         # Track fill-to-hedge latency
         fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
@@ -3293,6 +3334,10 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['hedge_latency_ms'] = round(f2h_ms, 1)
             _record_latency('fill_to_hedge_phantom', f2h_ms, {'bot_id': bot_id, 'type': 'phantom_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
             print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
+            bot_log('PHANTOM_LADDER_HEDGE_LATENCY', bot_id, {
+                'raw_hedge_ms': bot.get('raw_hedge_ms'), 'fill_to_hedge_ms': round(f2h_ms, 1),
+                'path': 'ws_fast',
+            })
 
         # ── THEN cancel unfilled rung orders (lower priority) ──
         # Verify each rung on Kalshi before cancelling — fills may have arrived
@@ -3315,15 +3360,26 @@ def _execute_phantom_ladder_hedge(bot_id):
                         rung['filled_at'] = time.time()
                     late_fill_qty += actual_fills
                     print(f'   ⚡ RUNG VERIFIED FILLED: {bot_id} rung @{rung.get("price")}¢ has {actual_fills} fills — keeping')
+                    bot_log('PHANTOM_LADDER_LATE_FILL_DETECTED', bot_id, {
+                        'rung_price': rung.get('price'), 'actual_fills': actual_fills,
+                        'rung_qty': rung['qty'], 'order_id': rung['order_id'][:12],
+                    })
                     continue
             except Exception as ve:
                 print(f'   ⚠ RUNG VERIFY FAIL: {bot_id} rung @{rung.get("price")}¢: {ve}')
+                bot_log('PHANTOM_LADDER_RUNG_VERIFY_FAIL', bot_id, {
+                    'rung_price': rung.get('price'), 'error': str(ve)[:300],
+                    'order_id': rung.get('order_id', '')[:12] if rung.get('order_id') else 'none',
+                }, level='ERROR')
             # Confirmed unfilled — safe to cancel
             if _cancel_with_retry(rung['order_id']):
                 rung['cancelled'] = True
                 cancelled_rungs += 1
             else:
                 print(f'⚠ RUNG CANCEL FAIL: {bot_id} rung {rung.get("price")}¢')
+                bot_log('PHANTOM_LADDER_RUNG_CANCEL_FAIL', bot_id, {
+                    'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
+                }, level='ERROR')
         if cancelled_rungs:
             print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
         # If late fills found, amend hedge with updated qty + price
@@ -3351,12 +3407,26 @@ def _execute_phantom_ladder_hedge(bot_id):
                     else:
                         bot['no_price'] = amend_price
                     print(f'   📈 LATE FILL AMEND: {bot_id} qty={new_total_fill} avg={new_avg}¢ hedge@{amend_price}¢ (walk+{walk_offset}¢)')
+                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND', bot_id, {
+                        'new_total_fill': new_total_fill, 'new_avg': new_avg,
+                        'amend_price': amend_price, 'walk_offset': walk_offset,
+                        'late_fill_qty': late_fill_qty,
+                    })
+                    _audit('PHANTOM_LADDER_LATE_FILL_AMEND', bot_id, {
+                        'ticker': ticker, 'new_qty': new_total_fill, 'amend_price': amend_price,
+                    })
                 except Exception as ae:
                     print(f'   ⚠ LATE FILL AMEND FAIL: {bot_id}: {ae}')
+                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND_FAIL', bot_id, {
+                        'error': str(ae)[:300], 'new_total_fill': new_total_fill,
+                        'amend_price': amend_price,
+                    }, level='ERROR')
 
         save_state()
     except Exception as e:
         print(f'❌ PHANTOM HEDGE {bot_id}: {e}')
+        bot_log('PHANTOM_LADDER_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:300], 'path': 'ws_fast'}, level='ERROR')
+        _audit('PHANTOM_LADDER_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:200]})
         bot = active_bots.get(bot_id)
         if bot:
             bot['status'] = 'ladder_filled_no_fav'
@@ -3387,6 +3457,13 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     total_fill_qty = bot.get('hedge_qty') or sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
+    bot_log('PHANTOM_LADDER_SELLBACK_START', bot_id, {
+        'avg_price': avg_price, 'fav_bid': fav_bid, 'total_cost': total_cost,
+        'total_fill_qty': total_fill_qty, 'dog_side': dog_side, 'ticker': ticker,
+    })
+    _audit('PHANTOM_LADDER_SELLBACK_START', bot_id, {
+        'ticker': ticker, 'avg_price': avg_price, 'total_fill_qty': total_fill_qty,
+    })
 
     # Verify actual fills by checking each rung's ORDER on Kalshi (not positions —
     # positions are aggregate across all bots on the same ticker)
@@ -3410,12 +3487,17 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
                 verified_fill += rung.get('fill_qty', 0)
         if verified_fill > total_fill_qty:
             print(f'⚠ PHANTOM SELLBACK ORDER CHECK: {bot_id} local={total_fill_qty} verified={verified_fill} — using verified')
+            bot_log('PHANTOM_LADDER_SELLBACK_VERIFY_UPDATE', bot_id, {
+                'local_fill': total_fill_qty, 'verified_fill': verified_fill,
+            })
             total_fill_qty = verified_fill
             bot['hedge_qty'] = verified_fill
     except Exception as vf_err:
         print(f'⚠ PHANTOM SELLBACK order check failed: {bot_id}: {vf_err} — using local qty')
+        bot_log('PHANTOM_LADDER_SELLBACK_VERIFY_FAIL', bot_id, {'error': str(vf_err)[:300]}, level='ERROR')
 
     if total_fill_qty <= 0:
+        bot_log('PHANTOM_LADDER_SELLBACK_ZERO_QTY', bot_id, {'total_fill_qty': 0, 'status': 'completed'})
         bot['status'] = 'completed'
         bot['completed_at'] = now
         save_state()
@@ -3427,6 +3509,10 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     if not sold_back:
         attempts = bot.get('_sellback_attempts', 0) + 1
         bot['_sellback_attempts'] = attempts
+        bot_log('PHANTOM_LADDER_SELLBACK_FAIL', bot_id, {
+            'attempt': attempts, 'total_fill_qty': total_fill_qty,
+            'avg_price': avg_price, 'dog_side': dog_side,
+        }, level='WARN')
         # After 3 failed attempts, verify position on Kalshi before giving up
         if attempts >= 3:
             # CHECK: does the position actually exist on Kalshi?
@@ -3440,13 +3526,22 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
                         if _actual > 0:
                             # Position EXISTS — don't ghost-complete, keep retrying
                             print(f'⚠ PHANTOM SELLBACK: {bot_id} — {attempts} sells failed but Kalshi still shows {_actual} contracts! Keeping alive.')
+                            bot_log('PHANTOM_LADDER_SELLBACK_POSITION_EXISTS', bot_id, {
+                                'attempts': attempts, 'kalshi_qty': _actual,
+                                'resetting': True,
+                            })
                             bot['_sellback_attempts'] = 0  # reset so we retry
                             bot['status'] = 'ladder_filled_no_fav'
                             actions.append({'bot_id': bot_id, 'action': 'sellback_position_exists', 'kalshi_qty': _actual})
                             return
             except Exception as _pe:
                 print(f'⚠ PHANTOM SELLBACK position check failed: {_pe} — proceeding with ghost complete')
+                bot_log('PHANTOM_LADDER_SELLBACK_POS_CHECK_FAIL', bot_id, {'error': str(_pe)[:300]}, level='ERROR')
             print(f'🔧 PHANTOM SELLBACK GHOST: {bot_id} — {attempts} sell attempts failed, position confirmed gone. Completing bot.')
+            bot_log('PHANTOM_LADDER_SELLBACK_GHOST', bot_id, {
+                'attempts': attempts, 'est_loss': avg_price * total_fill_qty,
+                'total_fill_qty': total_fill_qty,
+            })
             # Record estimated loss so trade doesn't disappear from history
             est_loss = avg_price * total_fill_qty  # worst case: dog price × qty
             session_pnl['gross_loss_cents'] += est_loss
@@ -3473,10 +3568,17 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
 
     already_cleared = (sell_info or {}).get('already_cleared', False)
     sell_price = (sell_info or {}).get('actual_fill_price', 0)
+    bot_log('PHANTOM_LADDER_SELLBACK_SUCCESS', bot_id, {
+        'sold_back': True, 'sell_price': sell_price, 'avg_price': avg_price,
+        'total_fill_qty': total_fill_qty, 'already_cleared': already_cleared,
+    })
 
     if already_cleared and not sell_price:
         # Position was already gone (sold/settled elsewhere) — record 0 loss, not full loss
         print(f'🔙 PHANTOM SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
+        bot_log('PHANTOM_LADDER_SELLBACK_ALREADY_CLEARED', bot_id, {
+            'avg_price': avg_price, 'total_fill_qty': total_fill_qty,
+        })
         loss_cents = 0
         sell_price = avg_price  # assume break-even since we don't know actual price
     else:
@@ -3521,11 +3623,20 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
             rung['fill_qty'] = 0
             rung['order_id'] = None
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+        bot_log('PHANTOM_LADDER_SELLBACK_REPEAT', bot_id, {
+            'cycle': repeats_done_now, 'total': repeat_total,
+            'profit_cents': profit_cents, 'loss_cents': loss_cents,
+        })
         _audit('LADDER_SELLBACK_REPEAT', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
         _audit_position_check(bot_id, ticker, dog_side, 'entering_sellback_repeat')
     else:
         bot['status'] = 'stopped'
         bot['stopped_at'] = now
+        bot_log('PHANTOM_LADDER_SELLBACK_STOPPED', bot_id, {
+            'profit_cents': profit_cents, 'loss_cents': loss_cents,
+            'sell_price': sell_price, 'avg_price': avg_price,
+            'total_fill_qty': total_fill_qty,
+        })
 
     filled_rungs_detail = [
         {'price': r['price'], 'qty': r.get('fill_qty', 0)}
@@ -5649,89 +5760,112 @@ def _cancel_with_retry(oid, max_retries=2):
 
 
 def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
-    """Late Fill Protocol — recalc weighted avg, amend hedge, preserve walk timer."""
-    # Phase 1: compute new values inside lock (fast)
+    """Late Fill Protocol — recalc weighted avg, amend hedge, preserve walk timer.
+
+    Serialized via _late_anchor_amend_lock to prevent race where multiple WS fill
+    threads read stale hedge_qty/hedge_price and overwrite each other's walk_offset.
+    """
+    # Phase 1: quick pre-check inside ws_fill_lock (fast, no API calls)
     with ws_fill_lock:
         filled_side = bot.get('first_fill_side')
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
         qty_per = bot.get('quantity', 1)
 
-        # 1. Recalculate weighted average across ALL filled anchors
+        # Quick total_qty check — if no fills, bail early
         total_qty = 0
-        total_cost = 0
-        total_width_x_qty = 0
         for r in bot.get('rungs', []):
             fq = min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
             if fq > 0:
                 total_qty += fq
-                total_cost += fq * r.get(f'{filled_side}_price', 0)
-                total_width_x_qty += fq * r.get('width', 0)
         if total_qty <= 0:
             return
 
-        new_avg_price = total_cost / total_qty
-        new_avg_width = total_width_x_qty / total_qty
-        new_target = round(100 - new_avg_price - new_avg_width)
-
-        old_hedge_qty = bot.get('hedge_qty', 0)
-
-        # Race condition guard: if another thread already set hedge_qty higher, skip
-        if total_qty <= old_hedge_qty:
-            bot_log('APEX_LATE_ANCHOR_SKIP', bot_id, {
-                'reason': 'hedge_qty_already_higher',
-                'total_qty': total_qty, 'old_hedge_qty': old_hedge_qty,
-                'rung_idx': rung_idx, 'fill_count': fill_count,
-            })
-            return
-
-        bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
-        old_target = bot.get('_target_hedge_price', new_target)
-        bot['_target_hedge_price'] = new_target
-
-        # 2. Price = new target + walk offset (preserve walk progress, adjust for new avg width)
-        hedge_oid = bot.get('hedge_order_id')
-        if not hedge_oid:
-            return
-
-        current_hedge_price = bot.get('hedge_price', 0)
-        walk_offset = max(0, current_hedge_price - old_target)
-        amend_price = max(1, new_target + walk_offset)
-        ticker = bot['ticker']
-
-    # Phase 2: API call OUTSIDE lock (no contention)
-    # DO NOT reset walk timer — walk_start_time / step count preserved
-    try:
-        amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
-        api_rate_limiter.wait()
-        kalshi_client.amend_order(
-            hedge_oid, ticker=ticker,
-            side=unfilled_side, count=total_qty,
-            **amend_kwargs
-        )
-        # Phase 3: write results back inside lock — only increase, never decrease
+    # Phase 2: serialized amend — only one thread amends at a time
+    # When the next thread enters, it sees hedge_qty/hedge_price from the previous amend
+    with _late_anchor_amend_lock:
+        # Re-read everything inside ws_fill_lock to get FRESH state
         with ws_fill_lock:
-            pre_max_hedge_qty = bot.get('hedge_qty', 0)
-            bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
-            if amend_price != bot.get('hedge_price'):
-                bot['hedge_price'] = amend_price
-        print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
-              f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
-        bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
-            'old_hedge_qty': old_hedge_qty, 'total_qty_sent': total_qty,
-            'hedge_qty_before_max': pre_max_hedge_qty, 'hedge_qty_after': bot.get('hedge_qty', 0),
-            'amend_price': amend_price, 'hedge_order_id': hedge_oid,
-            'avg_width': round(new_avg_width, 1), 'new_target': new_target,
-            'walk_offset': walk_offset, 'rung_idx': rung_idx,
-            '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
-        })
-    except Exception as e:
-        print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
-        bot_log('APEX_LATE_ANCHOR_AMEND_FAIL', bot_id, {
-            'old_hedge_qty': old_hedge_qty, 'total_qty_attempted': total_qty,
-            'amend_price': amend_price, 'hedge_order_id': hedge_oid,
-            'error': str(e), 'rung_idx': rung_idx,
-        }, level='ERROR')
-        # Don't rollback — another thread may have set hedge_qty higher already
+            filled_side = bot.get('first_fill_side')
+            unfilled_side = 'no' if filled_side == 'yes' else 'yes'
+            qty_per = bot.get('quantity', 1)
+
+            # 1. Recalculate weighted average across ALL filled anchors
+            total_qty = 0
+            total_cost = 0
+            total_width_x_qty = 0
+            for r in bot.get('rungs', []):
+                fq = min(r.get(f'{filled_side}_fill_qty', 0), r.get('quantity', qty_per))
+                if fq > 0:
+                    total_qty += fq
+                    total_cost += fq * r.get(f'{filled_side}_price', 0)
+                    total_width_x_qty += fq * r.get('width', 0)
+            if total_qty <= 0:
+                return
+
+            new_avg_price = total_cost / total_qty
+            new_avg_width = total_width_x_qty / total_qty
+            new_target = round(100 - new_avg_price - new_avg_width)
+
+            old_hedge_qty = bot.get('hedge_qty', 0)
+
+            # Race condition guard: if another thread already set hedge_qty higher, skip
+            if total_qty <= old_hedge_qty:
+                bot_log('APEX_LATE_ANCHOR_SKIP', bot_id, {
+                    'reason': 'hedge_qty_already_higher',
+                    'total_qty': total_qty, 'old_hedge_qty': old_hedge_qty,
+                    'rung_idx': rung_idx, 'fill_count': fill_count,
+                })
+                return
+
+            bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
+            old_target = bot.get('_target_hedge_price', new_target)
+            bot['_target_hedge_price'] = new_target
+
+            # 2. Price = new target + walk offset (preserve walk progress, adjust for new avg width)
+            hedge_oid = bot.get('hedge_order_id')
+            if not hedge_oid:
+                return
+
+            current_hedge_price = bot.get('hedge_price', 0)
+            walk_offset = max(0, current_hedge_price - old_target)
+            amend_price = max(1, new_target + walk_offset)
+            ticker = bot['ticker']
+
+        # API call OUTSIDE ws_fill_lock but INSIDE _late_anchor_amend_lock
+        # This serializes amends so the next thread sees our updated hedge_qty/hedge_price
+        # DO NOT reset walk timer — walk_start_time / step count preserved
+        try:
+            amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
+            api_rate_limiter.wait()
+            kalshi_client.amend_order(
+                hedge_oid, ticker=ticker,
+                side=unfilled_side, count=total_qty,
+                **amend_kwargs
+            )
+            # Write results back inside ws_fill_lock — only increase, never decrease
+            with ws_fill_lock:
+                pre_max_hedge_qty = bot.get('hedge_qty', 0)
+                bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
+                if amend_price != bot.get('hedge_price'):
+                    bot['hedge_price'] = amend_price
+            print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
+                  f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
+            bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
+                'old_hedge_qty': old_hedge_qty, 'total_qty_sent': total_qty,
+                'hedge_qty_before_max': pre_max_hedge_qty, 'hedge_qty_after': bot.get('hedge_qty', 0),
+                'amend_price': amend_price, 'hedge_order_id': hedge_oid,
+                'avg_width': round(new_avg_width, 1), 'new_target': new_target,
+                'walk_offset': walk_offset, 'rung_idx': rung_idx,
+                '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+            })
+        except Exception as e:
+            print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
+            bot_log('APEX_LATE_ANCHOR_AMEND_FAIL', bot_id, {
+                'old_hedge_qty': old_hedge_qty, 'total_qty_attempted': total_qty,
+                'amend_price': amend_price, 'hedge_order_id': hedge_oid,
+                'error': str(e), 'rung_idx': rung_idx,
+            }, level='ERROR')
+            # Don't rollback — another thread may have set hedge_qty higher already
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
@@ -8600,6 +8734,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         mkt_al_result = mkt_al_data.get('result', '')
         if mkt_al_status not in ('active', 'open') or mkt_al_result:
             print(f'👻 PHANTOM SETTLEMENT: {bot_id} market={mkt_al_status} result={mkt_al_result} status={status}')
+            bot_log('PHANTOM_LADDER_SETTLEMENT_DETECTED', bot_id, {
+                'market_status': mkt_al_status, 'result': mkt_al_result,
+                'bot_status': status, 'ticker': ticker,
+            })
             # Market is done — cancel unfilled orders and stop
             for rung in bot.get('rungs', []):
                 oid = rung.get('order_id')
@@ -8628,12 +8766,20 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     session_pnl['gross_profit_cents'] += pnl
                     session_pnl['completed_bots'] += 1
                     print(f'🏁 PHANTOM LADDER SETTLED WIN: {bot_id} dog={dog_side} result={mkt_al_result} pnl={pnl}¢')
+                    bot_log('PHANTOM_LADDER_SETTLED_WIN', bot_id, {
+                        'dog_side': dog_side, 'result': mkt_al_result,
+                        'pnl': pnl, 'avg_price': round(avg_price), 'total_fill': total_fill,
+                    })
                 else:
                     avg_price = sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / max(total_fill, 1)
                     loss = int(avg_price * total_fill)
                     session_pnl['gross_loss_cents'] += loss
                     session_pnl['stopped_bots'] += 1
                     print(f'🏁 PHANTOM LADDER SETTLED LOSS: {bot_id} dog={dog_side} result={mkt_al_result} loss={loss}¢')
+                    bot_log('PHANTOM_LADDER_SETTLED_LOSS', bot_id, {
+                        'dog_side': dog_side, 'result': mkt_al_result,
+                        'loss': loss, 'avg_price': round(avg_price), 'total_fill': total_fill,
+                    })
                 profit = pnl if dog_won else -loss
                 _record_trade({
                     'bot_id': bot_id, 'ticker': ticker,
@@ -8661,12 +8807,18 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
       except Exception as e:
         print(f'⚠ anchor_ladder settlement check {bot_id}: {e}')
+        bot_log('PHANTOM_LADDER_SETTLEMENT_CHECK_ERROR', bot_id, {'error': str(e)[:300]}, level='ERROR')
 
     # ── STATE: waiting_repeat — repost ladder rungs fresh ──
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
         if now - wait_since < 10:  # 10s cooldown
             return
+        bot_log('PHANTOM_LADDER_WAITING_REPEAT_CHECK', bot_id, {
+            'wait_s': round(now - wait_since, 1),
+            'repeats_done': bot.get('repeats_done', 0),
+            'repeat_count': bot.get('repeat_count', 0),
+        })
         qty = bot.get('quantity', 1)
         anchor_depth = bot.get('anchor_depth', 5)
         try:
@@ -8745,13 +8897,20 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 )
                 rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
                 print(f'🔄 PHANTOM LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
+                bot_log('PHANTOM_LADDER_REPEAT_POSTED', bot_id, {
+                    'cycle': bot.get('repeats_done', 0), 'total_cycles': bot.get('repeat_count', 0),
+                    'rungs': len(new_rungs), 'first_price': new_rungs[0]['price'] if new_rungs else 0,
+                    'rung_desc': rung_desc,
+                })
                 _audit('LADDER_REANCHOR', bot_id, {'ticker': ticker, 'rungs': len(new_rungs), 'first_price': new_rungs[0]['price'] if new_rungs else 0, 'cycle': bot.get('repeats_done', 0)})
                 _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_reanchor')
                 save_state()
             else:
                 print(f'❌ PHANTOM REPEAT {bot_id}: no rungs placed — waiting')
+                bot_log('PHANTOM_LADDER_REPEAT_NO_RUNGS', bot_id, {}, level='WARN')
         except Exception as e:
             print(f'❌ PHANTOM REPEAT {bot_id}: {e}')
+            bot_log('PHANTOM_LADDER_REPEAT_ERROR', bot_id, {'error': str(e)[:300]}, level='ERROR')
         return
 
     # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
@@ -8786,6 +8945,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 rung['fill_qty'] = max(old_fill, filled)
                 if filled > old_fill:
                     print(f'👻 PHANTOM FILL UPDATE: {bot_id} rung@{rung.get("price")}¢ {old_fill}→{filled}/{rung["qty"]}')
+                    bot_log('PHANTOM_LADDER_FILL_UPDATE', bot_id, {
+                        'rung_price': rung.get('price'), 'old_fill': old_fill,
+                        'new_fill': filled, 'rung_qty': rung['qty'],
+                        'order_id': oid[:12], 'path': 'monitor',
+                    })
                 if filled >= rung['qty'] and not rung.get('filled_at'):
                     rung['filled_at'] = now
             except Exception:
@@ -8850,6 +9014,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                                 _safe_cancel(rung['order_id'], f'phantom drift {bot_id}')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
+                    bot_log('PHANTOM_LADDER_DRIFT_CANCEL', bot_id, {
+                        'dog_bid': rp_dog_bid, 'dog_side': dog_side,
+                    })
+                    _audit('PHANTOM_LADDER_DRIFT_CANCEL', bot_id, {'ticker': ticker, 'dog_bid': rp_dog_bid})
                     actions.append({'bot_id': bot_id, 'action': 'phantom_ladder_drift_cancel', 'dog_bid': rp_dog_bid})
                     save_state()
                     return
@@ -8909,6 +9077,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     )
                     print(f'🔄 PHANTOM REPOST: {bot_id} {old_first_price}¢→{smart_first}¢ '
                           f'({trigger_reason} bid={rp_dog_bid}¢ ask={rp_dog_ask}¢ #{bot["dog_repost_count"]})')
+                    bot_log('PHANTOM_LADDER_REPOST', bot_id, {
+                        'trigger': trigger_reason, 'old_first_price': old_first_price,
+                        'new_first_price': smart_first, 'dog_bid': rp_dog_bid,
+                        'dog_ask': rp_dog_ask, 'spread': (rp_dog_ask - rp_dog_bid) if rp_dog_ask > 0 else 0,
+                        'repost_count': bot['dog_repost_count'],
+                    })
+                    _audit('PHANTOM_LADDER_REPOST', bot_id, {
+                        'ticker': ticker, 'old_price': old_first_price,
+                        'new_price': smart_first, 'trigger': trigger_reason,
+                    })
                     actions.append({'bot_id': bot_id, 'action': 'phantom_rung_repost', 'trigger': trigger_reason})
                     save_state()
                     return
@@ -8918,6 +9096,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # All rungs fully filled? → hedge immediately
         if total_fill >= bot['total_dog_qty']:
             print(f'👻 PHANTOM ALL FILLED: {bot_id} {total_fill}/{bot["total_dog_qty"]} — hedging')
+            bot_log('PHANTOM_LADDER_ALL_FILLED', bot_id, {
+                'total_fill': total_fill, 'total_dog_qty': bot['total_dog_qty'],
+                'path': 'monitor',
+            })
+            _audit('PHANTOM_LADDER_ALL_FILLED', bot_id, {'ticker': ticker, 'total_fill': total_fill})
             bot['dog_filled_at'] = now
             threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
             return
@@ -8926,6 +9109,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # WS handler normally catches this first, but monitor is the safety net
         if total_fill > 0 and not bot.get('_sweep_timer_started'):
             print(f'👻 MONITOR PHANTOM FILL: {bot_id} detected {total_fill} fills WS missed — hedging instantly')
+            bot_log('PHANTOM_LADDER_MONITOR_FILL_DETECTED', bot_id, {
+                'total_fill': total_fill, 'total_dog_qty': bot.get('total_dog_qty'),
+                'path': 'monitor_safety_net',
+            })
             bot['_sweep_timer_started'] = True
             bot['dog_filled_at'] = now
             threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()

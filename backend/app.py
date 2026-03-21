@@ -2884,12 +2884,24 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         is_hedge_fill = False
         if order_id in bot.get('_all_hedge_order_ids', []):
             is_hedge_fill = True
-            bot['_hedge_fill_count'] = bot.get('_hedge_fill_count', 0) + count
+            _old_hfc = bot.get('_hedge_fill_count', 0)
+            bot['_hedge_fill_count'] = _old_hfc + count
             hedge_qty = bot.get('hedge_qty', 0)
+            _was_capped = False
             if hedge_qty > 0 and bot['_hedge_fill_count'] > hedge_qty:
+                _was_capped = True
                 bot['_hedge_fill_count'] = hedge_qty
             if not bot.get('hedge_fill_at'):
                 bot['hedge_fill_at'] = time.time()
+            bot_log('APEX_WS_HEDGE_FILL', bot_id, {
+                'order_id': order_id, 'fill_count': count,
+                'old_hedge_fill_count': _old_hfc, 'new_hedge_fill_count': bot['_hedge_fill_count'],
+                'hedge_qty': hedge_qty, 'was_capped': _was_capped,
+                'current_hedge_order_id': bot.get('hedge_order_id'),
+                'filled_yes_qty': bot.get('filled_yes_qty', 0),
+                'filled_no_qty': bot.get('filled_no_qty', 0),
+                '_hedge_verified': bot.get('_hedge_verified', False),
+            })
 
         matched_rung = None
         matched_side = None
@@ -2959,8 +2971,19 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if not bot.get('_ws_fill_handling'):
                 bot['_ws_fill_handling'] = True
                 bot_log('LADDER_ARB_BOTH_FILLED', bot_id, {
+                    'trigger': 'all_rungs_filled' if _all_rungs_filled else 'hedge_fully_done',
                     'total_yes': total_yes, 'total_no': total_no,
+                    'total_expected_per_side': total_expected_per_side,
                     'hedge_fully_done': _hedge_fully_done,
+                    '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                    'hedge_qty': bot.get('hedge_qty', 0),
+                    '_hedge_verified': bot.get('_hedge_verified', False),
+                    '_consolidated': bot.get('_consolidated', False),
+                    'hedge_order_id': bot.get('hedge_order_id'),
+                    '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
+                    'filled_yes_qty': bot.get('filled_yes_qty', 0),
+                    'filled_no_qty': bot.get('filled_no_qty', 0),
+                    'first_fill_side': bot.get('first_fill_side'),
                     'first_fill_at': bot.get('first_fill_at'),
                     'time_to_complete_s': round(time.time() - bot.get('first_fill_at', time.time()), 1),
                 })
@@ -5502,19 +5525,38 @@ def _check_apex_rung_completions(bot_id, bot):
                 order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
                 actual_fills = _parse_fill_count(order_data)
                 order_status = order_data.get('status', '')
+                _local_hfc = bot.get('_hedge_fill_count', 0)
+                _order_count = order_data.get('count', order_data.get('count_fp', ''))
                 if actual_fills == 0 and order_status in ('canceled', 'cancelled', 'expired', ''):
                     print(f'🚨 HEDGE VERIFICATION FAILED: {bot_id} order {hedge_oid[:12]} has 0 fills (status={order_status}) — clearing phantom fills')
+                    bot_log('APEX_HEDGE_VERIFY_PHANTOM', bot_id, {
+                        'order_id': hedge_oid, 'kalshi_status': order_status,
+                        'kalshi_fills': 0, 'kalshi_count': _order_count,
+                        'local_hedge_fill_count': _local_hfc,
+                        'hedge_qty': bot.get('hedge_qty', 0),
+                    })
                     bot['_hedge_fill_count'] = 0
                     bot['_hedge_verified'] = True
                     bot['_hedge_phantom'] = True
                 else:
-                    if actual_fills != bot.get('_hedge_fill_count', 0):
-                        print(f'🔧 HEDGE FILL CORRECTION: {bot_id} local={bot.get("_hedge_fill_count", 0)} actual={actual_fills}')
+                    if actual_fills != _local_hfc:
+                        print(f'🔧 HEDGE FILL CORRECTION: {bot_id} local={_local_hfc} actual={actual_fills}')
+                    bot_log('APEX_HEDGE_VERIFIED', bot_id, {
+                        'order_id': hedge_oid, 'kalshi_status': order_status,
+                        'kalshi_fills': actual_fills, 'kalshi_count': _order_count,
+                        'local_hedge_fill_count': _local_hfc,
+                        'hedge_qty': bot.get('hedge_qty', 0),
+                        'corrected': actual_fills != _local_hfc,
+                    })
                     bot['_hedge_fill_count'] = actual_fills
                     bot['_hedge_verified'] = True
             except Exception as e:
                 if '404' in str(e):
                     print(f'🚨 HEDGE ORDER GONE: {bot_id} order {hedge_oid[:12]} — 404, clearing phantom fills')
+                    bot_log('APEX_HEDGE_VERIFY_404', bot_id, {
+                        'order_id': hedge_oid, 'local_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                        'hedge_qty': bot.get('hedge_qty', 0),
+                    })
                     bot['_hedge_fill_count'] = 0
                     bot['_hedge_verified'] = True
                     bot['_hedge_phantom'] = True
@@ -5610,6 +5652,11 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
 
         # Race condition guard: if another thread already set hedge_qty higher, skip
         if total_qty <= old_hedge_qty:
+            bot_log('APEX_LATE_ANCHOR_SKIP', bot_id, {
+                'reason': 'hedge_qty_already_higher',
+                'total_qty': total_qty, 'old_hedge_qty': old_hedge_qty,
+                'rung_idx': rung_idx, 'fill_count': fill_count,
+            })
             return
 
         bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
@@ -5638,13 +5685,27 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         )
         # Phase 3: write results back inside lock — only increase, never decrease
         with ws_fill_lock:
+            pre_max_hedge_qty = bot.get('hedge_qty', 0)
             bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
             if amend_price != bot.get('hedge_price'):
                 bot['hedge_price'] = amend_price
         print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
               f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
+        bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
+            'old_hedge_qty': old_hedge_qty, 'total_qty_sent': total_qty,
+            'hedge_qty_before_max': pre_max_hedge_qty, 'hedge_qty_after': bot.get('hedge_qty', 0),
+            'amend_price': amend_price, 'hedge_order_id': hedge_oid,
+            'avg_width': round(new_avg_width, 1), 'new_target': new_target,
+            'walk_offset': walk_offset, 'rung_idx': rung_idx,
+            '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+        })
     except Exception as e:
         print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
+        bot_log('APEX_LATE_ANCHOR_AMEND_FAIL', bot_id, {
+            'old_hedge_qty': old_hedge_qty, 'total_qty_attempted': total_qty,
+            'amend_price': amend_price, 'hedge_order_id': hedge_oid,
+            'error': str(e), 'rung_idx': rung_idx,
+        }, level='ERROR')
         # Don't rollback — another thread may have set hedge_qty higher already
 
 
@@ -5763,8 +5824,18 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             skip_rate_limit=True,
         )
         hedge_oid = hedge_resp['order']['order_id']
+        bot_log('APEX_SWEEP_HEDGE_PLACED', bot_id, {
+            'side': _unfilled_side, 'qty_sent': _total_qty, 'price_sent': _hedge_price,
+            'actual_price': actual_hedge, 'order_id': hedge_oid,
+            'avg_anchor_price': _avg_filled, 'target_hedge': computed['target_hedge'],
+            'avg_width': round(computed['weighted_avg_width'], 1),
+        })
     except Exception as e:
         print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')
+        bot_log('APEX_SWEEP_HEDGE_FAIL', bot_id, {
+            'side': _unfilled_side, 'qty_sent': _total_qty, 'price_sent': _hedge_price,
+            'error': str(e),
+        }, level='ERROR')
 
     # ── Phase 1c: Store results back inside lock ──
     with ws_fill_lock:
@@ -5839,6 +5910,22 @@ def _execute_apex_completion(bot_id):
             _audit('APEX_COMPLETION_ABORTED', bot_id, {'filled_rungs': filled_rungs_count, 'completed_rungs': 0})
             return
 
+        # ── Log full state entering completion ──
+        bot_log('APEX_COMPLETION_START', bot_id, {
+            'hedge_qty': bot.get('hedge_qty', 0),
+            '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+            '_hedge_verified': bot.get('_hedge_verified', False),
+            '_consolidated': bot.get('_consolidated', False),
+            'hedge_order_id': bot.get('hedge_order_id'),
+            '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
+            'filled_yes_qty': bot.get('filled_yes_qty', 0),
+            'filled_no_qty': bot.get('filled_no_qty', 0),
+            'first_fill_side': bot.get('first_fill_side'),
+            'completed_rungs_count': bot.get('completed_rungs_count', 0),
+            '_extra_hedge_placed': bot.get('_extra_hedge_placed', False),
+            'cumulative_pnl': bot.get('cumulative_pnl', 0),
+        })
+
         # ── INSTANT KILL: cancel order group first (1 API call kills all anchors) ──
         _og = bot.get('_order_group_id')
         _group_cancelled = False
@@ -5896,12 +5983,38 @@ def _execute_apex_completion(bot_id):
                 for oid in hg.get('order_ids', []):
                     hedge_only_ids.add(oid)
             all_cancel_ids = hedge_only_ids
+
+        # ── Pre-cancel audit: check fills on hedge orders before killing them ──
+        _hedge_oids_set = set(bot.get('_all_hedge_order_ids', []))
+        _pre_cancel_fills = {}
+        for oid in all_cancel_ids:
+            if oid in _hedge_oids_set:
+                try:
+                    api_rate_limiter.wait()
+                    _pc_resp = kalshi_client.get_order(oid)
+                    _pc_data = _pc_resp.get('order', _pc_resp) if isinstance(_pc_resp, dict) else {}
+                    _pc_fills = _parse_fill_count(_pc_data)
+                    _pc_status = _pc_data.get('status', '')
+                    _pc_count = _pc_data.get('count', _pc_data.get('count_fp', ''))
+                    _pre_cancel_fills[oid] = {'fills': _pc_fills, 'status': _pc_status, 'count': _pc_count}
+                except Exception:
+                    _pre_cancel_fills[oid] = {'fills': 'error', 'status': 'unknown'}
+        if _pre_cancel_fills:
+            bot_log('APEX_PRE_CANCEL_HEDGE_AUDIT', bot_id, {
+                'hedge_orders': {k[:12]: v for k, v in _pre_cancel_fills.items()},
+                'total_hedge_fills': sum(v['fills'] for v in _pre_cancel_fills.values() if isinstance(v.get('fills'), int)),
+            })
+
         for oid in all_cancel_ids:
             if _cancel_with_retry(oid):
                 cancel_ok += 1
             else:
                 cancel_fail += 1
         print(f'🧹 FULL COMPLETION {bot_id}: cancelled {cancel_ok}/{len(all_cancel_ids)} orders ({cancel_fail} already gone)')
+        bot_log('APEX_COMPLETION_CANCELLED', bot_id, {
+            'total_orders': len(all_cancel_ids), 'cancelled': cancel_ok, 'already_gone': cancel_fail,
+            'group_cancelled': _group_cancelled,
+        })
 
         # ── Safety: check for unhedged anchors before completing ──
         # A late anchor fill may have arrived during cancellation.
@@ -5940,6 +6053,15 @@ def _execute_apex_completion(bot_id):
             print(f'⚠ APEX ORDER CHECK failed: {bot_id}: {vf_err} — using local state')
 
         unhedged = anchor_qty - hedge_qty
+        bot_log('APEX_UNHEDGED_CHECK', bot_id, {
+            'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
+            'filled_side': filled_side, 'unfilled_side': unfilled_side,
+            'filled_yes_qty': bot.get('filled_yes_qty', 0),
+            'filled_no_qty': bot.get('filled_no_qty', 0),
+            '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+            'hedge_order_id': bot.get('hedge_order_id'),
+            '_extra_hedge_placed': bot.get('_extra_hedge_placed', False),
+        })
         if unhedged > 0:
             # Guard: don't re-place if we already have a live hedge for this exact scenario
             existing_hedge = bot.get('hedge_order_id')
@@ -5951,6 +6073,13 @@ def _execute_apex_completion(bot_id):
                     _eh_data = _eh_resp.get('order', _eh_resp) if isinstance(_eh_resp, dict) else {}
                     _eh_status = _eh_data.get('status', '')
                     _eh_fills = _parse_fill_count(_eh_data)
+                    _eh_count = _eh_data.get('count', _eh_data.get('count_fp', ''))
+                    bot_log('APEX_EXTRA_HEDGE_CHECK', bot_id, {
+                        'order_id': existing_hedge, 'kalshi_status': _eh_status,
+                        'kalshi_fills': _eh_fills, 'kalshi_count': _eh_count,
+                        'local_hedge_qty': bot.get('hedge_qty', 0),
+                        'local_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                    })
                     if _eh_fills > 0:
                         # Extra hedge fills settle against unhedged anchors on Kalshi instantly.
                         # Query Kalshi for ACTUAL remaining position instead of using stale local counts.
@@ -5966,10 +6095,17 @@ def _execute_apex_completion(bot_id):
                             if _real_qty == 0:
                                 # No position on Kalshi — everything settled, we're done
                                 print(f'✅ APEX EXTRA HEDGE SETTLED: {bot_id} — Kalshi position is 0, all settled')
+                                bot_log('APEX_EXTRA_HEDGE_SETTLED', bot_id, {
+                                    'order_id': existing_hedge, 'fills': _eh_fills, 'kalshi_position': 0,
+                                })
                                 unhedged = 0
                             else:
                                 unhedged = _real_qty
                                 print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} has {_eh_fills} fills, Kalshi position={_real_qty}, unhedged={unhedged}')
+                                bot_log('APEX_EXTRA_HEDGE_PARTIAL', bot_id, {
+                                    'order_id': existing_hedge, 'fills': _eh_fills,
+                                    'kalshi_position': _real_qty, 'unhedged': unhedged,
+                                })
                         except Exception as _pe:
                             # Can't verify — fall back to local tracking
                             already_counted = bot.get('_hedge_fill_count', 0)
@@ -5978,18 +6114,30 @@ def _execute_apex_completion(bot_id):
                                 hedge_qty += extra_new
                             unhedged = anchor_qty - hedge_qty
                             print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} fills={_eh_fills} (Kalshi check failed: {_pe}), unhedged={unhedged}')
+                            bot_log('APEX_EXTRA_HEDGE_FALLBACK', bot_id, {
+                                'order_id': existing_hedge, 'fills': _eh_fills,
+                                'already_counted': already_counted, 'extra_new': extra_new,
+                                'unhedged': unhedged, 'error': str(_pe),
+                            })
                     elif _eh_status in ('resting', 'pending'):
                         # Still alive and waiting — don't spam new ones
                         return
                     else:
                         # Order is cancelled/expired/gone — clear flag, proceed to complete
                         print(f'⚠ APEX EXTRA HEDGE GONE: {bot_id} hedge {existing_hedge[:12]} status={_eh_status} — accepting {unhedged} unhedged, completing')
+                        bot_log('APEX_EXTRA_HEDGE_GONE', bot_id, {
+                            'order_id': existing_hedge, 'kalshi_status': _eh_status,
+                            'fills': _eh_fills, 'unhedged': unhedged,
+                        })
                         bot['_extra_hedge_placed'] = False
                         unhedged = 0  # Accept the loss, proceed to completion
                 except Exception as _eh_err:
                     if '404' in str(_eh_err):
                         # Order gone from Kalshi — clear flag and complete
                         print(f'⚠ APEX EXTRA HEDGE 404: {bot_id} hedge {existing_hedge[:12]} — accepting {unhedged} unhedged, completing')
+                        bot_log('APEX_EXTRA_HEDGE_404', bot_id, {
+                            'order_id': existing_hedge, 'unhedged': unhedged,
+                        })
                         bot['_extra_hedge_placed'] = False
                         unhedged = 0  # Accept the loss, proceed to completion
                     else:
@@ -6002,6 +6150,12 @@ def _execute_apex_completion(bot_id):
             max_safe = HARD_CEILING_CENTS - avg_anchor
             hedge_price = min(max(1, target_hedge), max(1, max_safe))
             print(f'⚠ APEX UNHEDGED ANCHORS: {bot_id} anchor={anchor_qty} hedge={hedge_qty} → placing {unhedged} extra hedge @ {hedge_price}¢')
+            bot_log('APEX_EXTRA_HEDGE_PLACING', bot_id, {
+                'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
+                'side': unfilled_side, 'price': hedge_price, 'avg_anchor': avg_anchor,
+                'target_hedge': target_hedge, 'max_safe': max_safe,
+                '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
+            })
             try:
                 resp, actual_price = create_order_maker(
                     ticker=ticker, side=unfilled_side, action='buy',
@@ -6010,6 +6164,11 @@ def _execute_apex_completion(bot_id):
                 )
                 extra_oid = resp['order']['order_id']
                 print(f'   ✅ Extra hedge placed: {unfilled_side.upper()} {unhedged}x @{actual_price}¢ | {extra_oid[:12]}')
+                bot_log('APEX_EXTRA_HEDGE_PLACED', bot_id, {
+                    'order_id': extra_oid, 'side': unfilled_side,
+                    'qty': unhedged, 'price_sent': hedge_price, 'actual_price': actual_price,
+                    'anchor_qty': anchor_qty, 'hedge_qty_before': hedge_qty,
+                })
                 # Don't mark bot complete yet — let monitor handle the extra hedge fill
                 bot['hedge_order_id'] = extra_oid
                 bot['hedge_price'] = actual_price
@@ -6027,6 +6186,10 @@ def _execute_apex_completion(bot_id):
                 return  # Don't complete — wait for extra hedge to fill
             except Exception as e:
                 print(f'   Extra hedge failed: {e} -- staying active to retry')
+                bot_log('APEX_EXTRA_HEDGE_FAIL', bot_id, {
+                    'side': unfilled_side, 'qty': unhedged, 'price': hedge_price,
+                    'error': str(e),
+                }, level='ERROR')
                 bot['_extra_hedge_placed'] = False
                 return
 
@@ -9194,6 +9357,16 @@ def _handle_apex(bot_id, bot, actions):
         # Record any newly completed rungs + check if bot fully done
         all_resolved = _check_apex_rung_completions(bot_id, bot)
         if all_resolved and bot.get('completed_rungs_count', 0) > 0:
+            bot_log('APEX_MONITOR_COMPLETION_TRIGGER', bot_id, {
+                'trigger': 'monitor_posted_all_resolved',
+                'completed_rungs_count': bot.get('completed_rungs_count', 0),
+                'hedge_qty': bot.get('hedge_qty', 0),
+                '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                'filled_yes_qty': bot.get('filled_yes_qty', 0),
+                'filled_no_qty': bot.get('filled_no_qty', 0),
+                '_consolidated': bot.get('_consolidated', False),
+                'hedge_order_id': bot.get('hedge_order_id'),
+            })
             threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
             return
 
@@ -9534,17 +9707,22 @@ def _handle_apex(bot_id, bot, actions):
             # 2) Poll ALL hedge orders for fill tracking
             total_hedge_polled = 0
             orders_polled_ok = 0
+            _per_order_fills = {}
             for hedge_oid in bot.get('_all_hedge_order_ids', []):
                 try:
                     api_rate_limiter.wait()
                     resp = kalshi_client.get_order(hedge_oid)
                     ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                     filled = _parse_fill_count(ord_data)
+                    _ord_status = ord_data.get('status', '')
+                    _ord_count = ord_data.get('count', ord_data.get('count_fp', ''))
                     total_hedge_polled += filled
                     orders_polled_ok += 1
+                    _per_order_fills[hedge_oid[:12]] = {'fills': filled, 'status': _ord_status, 'count': _ord_count}
                 except Exception as poll_err:
                     if '404' in str(poll_err):
                         print(f'⚠ APEX hedge order {hedge_oid[:8]}... 404 — checking portfolio positions')
+                        _per_order_fills[hedge_oid[:12]] = {'fills': 0, 'status': '404'}
                     pass
             if total_hedge_polled > bot.get('_hedge_fill_count', 0):
                 old_hfc = bot.get('_hedge_fill_count', 0)
@@ -9554,6 +9732,9 @@ def _handle_apex(bot_id, bot, actions):
                     'old_hedge_fill_count': old_hfc, 'new_hedge_fill_count': total_hedge_polled,
                     'orders_polled': orders_polled_ok, 'hedge_price': bot.get('hedge_price', 0),
                     'hedge_qty': bot.get('hedge_qty', 0),
+                    'per_order': _per_order_fills,
+                    'filled_yes_qty': bot.get('filled_yes_qty', 0),
+                    'filled_no_qty': bot.get('filled_no_qty', 0),
                 })
 
             # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
@@ -9592,6 +9773,17 @@ def _handle_apex(bot_id, bot, actions):
         # Record any newly completed rungs + check if bot fully done
         all_resolved = _check_apex_rung_completions(bot_id, bot)
         if all_resolved and bot.get('completed_rungs_count', 0) > 0:
+            bot_log('APEX_MONITOR_COMPLETION_TRIGGER', bot_id, {
+                'trigger': 'monitor_filled_all_resolved',
+                'completed_rungs_count': bot.get('completed_rungs_count', 0),
+                'hedge_qty': bot.get('hedge_qty', 0),
+                '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                'filled_yes_qty': bot.get('filled_yes_qty', 0),
+                'filled_no_qty': bot.get('filled_no_qty', 0),
+                '_consolidated': bot.get('_consolidated', False),
+                'hedge_order_id': bot.get('hedge_order_id'),
+                '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
+            })
             threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
             return
 

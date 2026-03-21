@@ -6537,8 +6537,18 @@ def create_ladder_arb_bot():
                 yes_oid = yr['order']['order_id']
                 no_oid  = nr['order']['order_id']
                 all_placed_oids.extend([yes_oid, no_oid])
+                # Recalculate width from actual posted prices (post_only may have adjusted them)
+                actual_width = 100 - yes_actual - no_actual
+                if yes_actual != spec['yes_price'] or no_actual != spec['no_price']:
+                    print(f'  ⚠ PRICE ADJUSTED rung {spec_idx+1}: Y{spec["yes_price"]}→{yes_actual}¢ N{spec["no_price"]}→{no_actual}¢ (width {spec["width"]}→{actual_width}¢)')
+                    bot_log('APEX_RUNG_PRICE_ADJUSTED', '', {
+                        'rung_idx': spec_idx, 'ticker': ticker,
+                        'req_yes': spec['yes_price'], 'actual_yes': yes_actual,
+                        'req_no': spec['no_price'], 'actual_no': no_actual,
+                        'req_width': spec['width'], 'actual_width': actual_width,
+                    })
                 placed_rungs.append({
-                    'width': spec['width'],
+                    'width': actual_width,
                     'yes_price': yes_actual, 'no_price': no_actual,
                     'yes_order_id': yes_oid, 'no_order_id': no_oid,
                     'yes_fill_qty': 0, 'no_fill_qty': 0,
@@ -6546,7 +6556,7 @@ def create_ladder_arb_bot():
                     'quantity': spec['rung_qty'],
                 })
                 total_scaled_qty += spec['rung_qty']
-                print(f'  ✅ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ Y{yes_actual}¢ N{no_actual}¢ ×{spec["rung_qty"]}')
+                print(f'  ✅ Rung {spec_idx+1}/{len(rung_specs)}: w={actual_width}¢ Y{yes_actual}¢ N{no_actual}¢ ×{spec["rung_qty"]}')
             except Exception as rung_err:
                 print(f'  ❌ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ FAILED: {rung_err}')
                 continue
@@ -7196,8 +7206,9 @@ def create_orders_batch(order_specs, order_group_id=None):
                 break  # success
             except Exception as batch_err:
                 if '429' in str(batch_err) and _attempt < 2:
-                    print(f'  ⚠ Batch 429 — retrying in 1s (attempt {_attempt + 2}/3)')
-                    time.sleep(1.0)  # wait for rate limit window to reset
+                    _wait = 2.0 * (_attempt + 1)  # 2s, 4s backoff
+                    print(f'  ⚠ Batch 429 — retrying in {_wait}s (attempt {_attempt + 2}/3)')
+                    time.sleep(_wait)
                     continue
                 raise  # non-429 error or final attempt
         results = resp.get('orders', [])
@@ -7207,6 +7218,19 @@ def create_orders_batch(order_specs, order_group_id=None):
                 order_data = results[i]['order']
                 price_key = 'yes_price' if spec['side'] == 'yes' else 'no_price'
                 actual_price = order_data.get(price_key, spec['price'])
+                # Verify: if Kalshi didn't return price, read back the order to get actual price
+                if actual_price == spec['price'] and price_key not in order_data:
+                    try:
+                        oid = order_data['order_id']
+                        api_rate_limiter.wait()
+                        verify_resp = kalshi_client.get_order(oid)
+                        verify_data = verify_resp.get('order', verify_resp) if isinstance(verify_resp, dict) else {}
+                        verified_price = verify_data.get(price_key)
+                        if verified_price and verified_price != spec['price']:
+                            print(f'  ⚠ BATCH PRICE MISMATCH: {spec["side"]}@{spec["price"]}¢ → Kalshi has {verified_price}¢ (post_only adjusted)')
+                            actual_price = verified_price
+                    except Exception:
+                        pass  # Non-critical — use what we have
                 out.append((results[i], actual_price))
             else:
                 # This order failed in the batch — fall back to individual

@@ -6179,43 +6179,70 @@ def _execute_apex_completion(bot_id):
             'group_cancelled': _group_cancelled,
         })
 
-        # ── Safety: check for unhedged anchors before completing ──
-        # A late anchor fill may have arrived during cancellation.
-        # Step 1: recompute from local state
+        # ── Safety: check for unhedged contracts using ACTUAL Kalshi position ──
+        # Local fill tracking can be wrong (post_only price adjustment, WS race, etc.)
+        # The only source of truth is Kalshi's position API.
         _recompute_apex_fills(bot)
         filled_side = bot.get('first_fill_side', 'yes')
         unfilled_side = 'no' if filled_side == 'yes' else 'yes'
         anchor_qty = bot.get(f'filled_{filled_side}_qty', 0)
         hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
 
-        # Step 2: verify anchor fills by checking each rung's ORDER on Kalshi
-        # (Don't use positions API — it's aggregate across all bots on the same ticker)
+        # Check ACTUAL position on Kalshi — this is the truth, not local fill counts
         try:
-            verified_anchor = 0
-            for rung in bot.get('rungs', []):
-                oid = rung.get(f'{filled_side}_order_id')
-                local_fill = rung.get(f'{filled_side}_fill_qty', 0)
-                if not oid:
-                    verified_anchor += local_fill
-                    continue
-                try:
-                    api_rate_limiter.wait()
-                    resp = kalshi_client.get_order(oid)
-                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                    actual = _parse_fill_count(ord_data)
-                    if actual > local_fill:
-                        print(f'⚠ APEX ORDER CHECK: {bot_id} rung {filled_side}@{rung.get(f"{filled_side}_price")}¢ local={local_fill} Kalshi={actual}')
-                        rung[f'{filled_side}_fill_qty'] = actual
-                    verified_anchor += max(actual, local_fill)
-                except Exception:
-                    verified_anchor += local_fill
-            if verified_anchor > anchor_qty:
-                print(f'⚠ APEX ORDER CHECK: {bot_id} total anchor local={anchor_qty} verified={verified_anchor} — updating')
-                anchor_qty = verified_anchor
-        except Exception as vf_err:
-            print(f'⚠ APEX ORDER CHECK failed: {bot_id}: {vf_err} — using local state')
+            api_rate_limiter.wait()
+            _pos_resp = kalshi_client.get_positions(ticker=bot.get('ticker', ''))
+            _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+            _kalshi_net = 0
+            for _p in _positions:
+                if _p.get('ticker') == bot.get('ticker', ''):
+                    _kalshi_net = _parse_position_qty(_p)  # positive=YES, negative=NO
+                    break
+            # If Kalshi says we have a position, something is unhedged
+            # _kalshi_net > 0 means holding YES, < 0 means holding NO
+            _kalshi_qty = abs(_kalshi_net)
+            _kalshi_side = 'yes' if _kalshi_net > 0 else 'no' if _kalshi_net < 0 else None
 
-        unhedged = anchor_qty - hedge_qty
+            # But other bots on the same ticker also contribute to the position.
+            # Subtract their managed qty to isolate THIS bot's unhedged amount.
+            _other_managed = 0
+            for _ob_id, _ob in active_bots.items():
+                if _ob_id == bot_id or _ob.get('ticker') != bot.get('ticker'):
+                    continue
+                if _ob.get('status') in ('completed', 'stopped', 'cancelled'):
+                    continue
+                _ob_cat = _ob.get('bot_category', '')
+                if _ob_cat in ('anchor_dog', 'anchor_ladder'):
+                    _ds = _ob.get('dog_side', '')
+                    if _ds == _kalshi_side:
+                        _other_managed += _ob.get('dog_fill_qty', 0) or _ob.get('total_dog_fill_qty', 0) or 0
+                    _fs = _ob.get('fav_side', '')
+                    if _fs == _kalshi_side:
+                        _other_managed += _ob.get('fav_fill_qty', 0) or 0
+                elif _ob_cat == 'ladder_arb':
+                    if _kalshi_side:
+                        _other_managed += _ob.get(f'filled_{_kalshi_side}_qty', 0) or 0
+
+            _this_bot_unhedged = max(0, _kalshi_qty - _other_managed)
+            if _kalshi_qty > 0 and _this_bot_unhedged > 0:
+                print(f'⚠ APEX POSITION CHECK: {bot_id} Kalshi has {_kalshi_qty} {_kalshi_side} (other bots manage {_other_managed}) → {_this_bot_unhedged} unhedged')
+                unhedged = _this_bot_unhedged
+            else:
+                unhedged = 0
+            bot_log('APEX_POSITION_VERIFY', bot_id, {
+                'kalshi_net': _kalshi_net, 'kalshi_qty': _kalshi_qty, 'kalshi_side': _kalshi_side,
+                'other_managed': _other_managed, 'this_bot_unhedged': _this_bot_unhedged,
+                'local_anchor_qty': anchor_qty, 'local_hedge_qty': hedge_qty,
+                'local_unhedged': anchor_qty - hedge_qty,
+            })
+        except Exception as _pv_err:
+            print(f'⚠ APEX POSITION VERIFY failed: {bot_id}: {_pv_err} — falling back to local')
+            bot_log('APEX_POSITION_VERIFY_FAIL', bot_id, {
+                'error': str(_pv_err)[:200],
+                'local_anchor_qty': anchor_qty, 'local_hedge_qty': hedge_qty,
+            }, level='ERROR')
+            # Fallback: use local fill counts (old behavior)
+            unhedged = anchor_qty - hedge_qty
         bot_log('APEX_UNHEDGED_CHECK', bot_id, {
             'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
             'filled_side': filled_side, 'unfilled_side': unfilled_side,
@@ -8386,7 +8413,47 @@ def _handle_phantom(bot_id, bot, actions):
             })
             print(f'✅ PHANTOM COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms')
             _audit('PHANTOM_COMPLETE', bot_id, {'ticker': ticker, 'dog_price': dog_price, 'fav_price': actual_fav_price, 'pnl': net_pnl, 'qty': qty})
-            _audit_position_check(bot_id, ticker, dog_side, 'after_phantom_complete')
+
+            # Verify ACTUAL Kalshi position — catch orphans that local tracking missed
+            try:
+                api_rate_limiter.wait()
+                _pv_resp = kalshi_client.get_positions(ticker=ticker)
+                _pv_positions = _pv_resp.get('market_positions', _pv_resp.get('positions', []))
+                _pv_net = 0
+                for _p in _pv_positions:
+                    if _p.get('ticker') == ticker:
+                        _pv_net = _parse_position_qty(_p)
+                        break
+                _pv_qty = abs(_pv_net)
+                _pv_side = 'yes' if _pv_net > 0 else 'no' if _pv_net < 0 else None
+                # Subtract positions managed by OTHER bots on same ticker
+                _pv_other = 0
+                for _ob_id, _ob in active_bots.items():
+                    if _ob_id == bot_id or _ob.get('ticker') != ticker:
+                        continue
+                    if _ob.get('status') in ('completed', 'stopped', 'cancelled'):
+                        continue
+                    _ob_cat = _ob.get('bot_category', '')
+                    if _ob_cat in ('anchor_dog', 'anchor_ladder'):
+                        if _ob.get('dog_side') == _pv_side:
+                            _pv_other += _ob.get('dog_fill_qty', 0) or _ob.get('total_dog_fill_qty', 0) or 0
+                        if _ob.get('fav_side') == _pv_side:
+                            _pv_other += _ob.get('fav_fill_qty', 0) or 0
+                    elif _ob_cat == 'ladder_arb' and _pv_side:
+                        _pv_other += _ob.get(f'filled_{_pv_side}_qty', 0) or 0
+                _pv_unhedged = max(0, _pv_qty - _pv_other)
+                if _pv_unhedged > 0:
+                    print(f'⚠ PHANTOM POSITION CHECK: {bot_id} Kalshi has {_pv_qty} {_pv_side} (other bots={_pv_other}) → {_pv_unhedged} ORPHANED contracts!')
+                    _push_notification('orphan_detected', f'⚠ Phantom {bot_id}: {_pv_unhedged} orphaned {_pv_side} on {ticker}', {
+                        'bot_id': bot_id, 'ticker': ticker, 'side': _pv_side, 'qty': _pv_unhedged,
+                    })
+                bot_log('PHANTOM_POSITION_VERIFY', bot_id, {
+                    'kalshi_net': _pv_net, 'kalshi_qty': _pv_qty, 'kalshi_side': _pv_side,
+                    'other_managed': _pv_other, 'unhedged': _pv_unhedged,
+                    'local_dog_fill': bot.get('dog_fill_qty', 0), 'local_fav_fill': fav_filled,
+                })
+            except Exception as _pv_err:
+                bot_log('PHANTOM_POSITION_VERIFY_FAIL', bot_id, {'error': str(_pv_err)[:200]}, level='ERROR')
 
             # Repeat logic
             repeats_done_now = bot.get('repeats_done', 0) + 1

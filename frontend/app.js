@@ -1147,10 +1147,16 @@ async function loadOpeningLines() {
 }
 
 // Load markets
+let _marketsAbort = null;  // cancel previous in-flight load when a new one starts
 async function loadMarkets() {
+    // Cancel any previous in-flight load so stale responses don't overwrite
+    if (_marketsAbort) { try { _marketsAbort.abort(); } catch(_) {} }
+    _marketsAbort = new AbortController();
+    const myAbort = _marketsAbort;
+
     const grid = document.getElementById('markets-grid');
     grid.innerHTML = '<p style="color: #00ff88; grid-column: 1 / -1;">Loading sports markets...</p>';
-    
+
     try {
         // Build URL with sport filter for backend
         // Use higher limit — NCAAB alone can have 2000+ markets (spreads, totals, props)
@@ -1161,19 +1167,22 @@ async function loadMarkets() {
         if (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live') {
             url += `&sport=${currentSportFilter}`;
         }
-        
+
         // Backend queries Kalshi by sports series (KXNBAGAME, KXNBASPREAD, etc.)
         // Retry up to 2 times with 30s timeout per attempt
         let response, data;
         for (let _attempt = 0; _attempt < 3; _attempt++) {
             try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 30000);
-                response = await fetch(url, { signal: controller.signal });
+                const timeoutId = setTimeout(() => myAbort.abort(), 30000);
+                response = await fetch(url, { signal: myAbort.signal });
                 clearTimeout(timeoutId);
                 data = await response.json();
                 if (!data.error) break;
             } catch (_retryErr) {
+                if (_retryErr.name === 'AbortError' && myAbort !== _marketsAbort) {
+                    // Superseded by a newer loadMarkets() call — silently exit
+                    return;
+                }
                 if (_attempt < 2) {
                     grid.innerHTML = `<p style="color: #ffaa00; grid-column: 1 / -1;">Retrying markets load... (attempt ${_attempt + 2}/3)</p>`;
                     await new Promise(r => setTimeout(r, 2000));
@@ -1182,6 +1191,9 @@ async function loadMarkets() {
                 throw _retryErr;
             }
         }
+
+        // If superseded by a newer call while we were fetching, discard this result
+        if (myAbort !== _marketsAbort) return;
 
         if (data.error) {
             grid.innerHTML = `<p style="color: #ff4444; grid-column: 1 / -1;">Error: ${data.error}</p>`;

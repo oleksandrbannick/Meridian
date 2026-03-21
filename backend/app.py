@@ -5607,6 +5607,11 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         new_target = round(100 - new_avg_price - new_avg_width)
 
         old_hedge_qty = bot.get('hedge_qty', 0)
+
+        # Race condition guard: if another thread already set hedge_qty higher, skip
+        if total_qty <= old_hedge_qty:
+            return
+
         bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
         old_target = bot.get('_target_hedge_price', new_target)
         bot['_target_hedge_price'] = new_target
@@ -5631,17 +5636,16 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             side=unfilled_side, count=total_qty,
             **amend_kwargs
         )
-        # Phase 3: write results back inside lock
+        # Phase 3: write results back inside lock — only increase, never decrease
         with ws_fill_lock:
-            bot['hedge_qty'] = total_qty
+            bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
             if amend_price != bot.get('hedge_price'):
                 bot['hedge_price'] = amend_price
         print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
               f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
     except Exception as e:
         print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
-        with ws_fill_lock:
-            bot['hedge_qty'] = old_hedge_qty  # rollback on failure
+        # Don't rollback — another thread may have set hedge_qty higher already
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
@@ -5770,7 +5774,8 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         if hedge_oid and actual_hedge is not None:
             bot['hedge_order_id'] = hedge_oid
             bot['hedge_price'] = actual_hedge
-            bot['hedge_qty'] = _total_qty
+            # Use max to avoid overwriting a higher value set by late anchor threads
+            bot['hedge_qty'] = max(bot.get('hedge_qty', 0), _total_qty)
             bot['_hedge_fill_count'] = 0
             all_ids = bot.get('_all_hedge_order_ids', [])
             all_ids.append(hedge_oid)

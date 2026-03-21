@@ -2078,12 +2078,36 @@ def _migrate_004_fix_completed_labels():
         fixed += 1
     print(f'📊 Migration 004: relabeled {fixed} mislabeled "completed" trades → "amended"')
 
+def _migrate_005_fix_rebalancer_pnl():
+    """Fix rebalancer_scrape and rebalancer_enhance trades with missing/incorrect P&L fields."""
+    global trade_history
+    fixed = 0
+    for t in trade_history:
+        if t.get('result') == 'rebalancer_scrape':
+            loss = t.get('loss_cents', 0) or 0
+            if loss < 0:
+                # Was profitable but stored as negative loss
+                t['profit_cents'] = abs(loss)
+                t['loss_cents'] = 0
+                fixed += 1
+            elif 'profit_cents' not in t:
+                t['profit_cents'] = 0
+                fixed += 1
+        elif t.get('result') == 'rebalancer_enhance':
+            recovery = t.get('recovery_cents', 0) or 0
+            if 'profit_cents' not in t:
+                t['profit_cents'] = recovery
+                t['loss_cents'] = 0
+                fixed += 1
+    print(f'📊 Migration 005: fixed P&L on {fixed} rebalancer trades')
+
 # Master migration list — add new migrations at the bottom
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
     ('003_reclean_mar12', _migrate_003_reclean_mar12),
     ('004_fix_completed_labels', _migrate_004_fix_completed_labels),
+    ('005_fix_rebalancer_pnl', _migrate_005_fix_rebalancer_pnl),
 ]
 
 def run_migrations():
@@ -5621,6 +5645,7 @@ def _record_rung_completion(bot_id, bot, rung):
         'rungs_total': len(bot.get('rungs', [])),
         'hedge_latency_ms': bot.get('hedge_latency_ms'),
         'raw_hedge_ms': bot.get('raw_hedge_ms'),
+        'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
         'timestamp': now,
         'placed_at': bot.get('created_at', now),
         'arb_width': width,
@@ -6061,12 +6086,11 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             bot['_consolidated'] = True
             print(f'🎯 WS SWEEP CONSOLIDATE: {bot_id} {_filled_side.upper()} avg={_avg_filled}¢ → {_unfilled_side.upper()} hedge @{actual_hedge}¢ × {_total_qty}')
             _audit('APEX_HEDGE_POSTED', bot_id, {'ticker': _ticker, 'filled_side': _filled_side, 'hedge_side': _unfilled_side, 'hedge_price': actual_hedge, 'hedge_qty': _total_qty, 'hedge_order_id': hedge_oid, 'source': 'ws_sweep'})
-            # Track fill-to-hedge latency
+            # Track fill-to-hedge latency (bot-level only — stats already recorded at line 6022)
             fill_at = bot.get('first_fill_at')
             if fill_at:
                 f2h_ms = (time.time() - fill_at) * 1000
                 bot['hedge_latency_ms'] = round(f2h_ms, 1)
-                _record_latency('fill_to_hedge_apex', f2h_ms, {'bot_id': bot_id, 'type': 'apex_sweep', 'hedge_price': actual_hedge, 'avg_anchor': _avg_filled})
                 print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
 
         # ── Anchor-side orders stay alive — do NOT cancel them ──
@@ -12456,12 +12480,17 @@ def _run_monitor():
                         buy_fee = _kalshi_side_fee_cents(fill_price, qty)
                         sell_fee = _kalshi_taker_side_fee_cents(sell_price, qty) if sell_price else 0
                         scrape_fees = buy_fee + sell_fee
-                        loss_cents = (fill_price - (sell_price or fill_price)) * qty + scrape_fees
+                        _scrape_net = (fill_price - (sell_price or fill_price)) * qty + scrape_fees
+                        _scrape_profit = max(0, -_scrape_net)  # positive when sold higher than bought
+                        _scrape_loss = max(0, _scrape_net)     # positive when lost money
                         bot['status'] = 'stopped'
                         bot['stopped_at'] = now_m
                         bot['sl_sell_price'] = sell_price
                         bot['rebalancer_exit_reason'] = 'scrape'
-                        session_pnl['gross_loss_cents'] += max(0, loss_cents)
+                        if _scrape_loss > 0:
+                            session_pnl['gross_loss_cents'] += _scrape_loss
+                        elif _scrape_profit > 0:
+                            session_pnl['gross_profit_cents'] += _scrape_profit
                         session_pnl['stopped_bots'] += 1
                         _record_trade({
                             'bot_id': bot_id, 'type': 'middle',
@@ -12470,7 +12499,8 @@ def _run_monitor():
                             'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
                             'target_price': bot.get('target_price'), 'qty': qty,
                             'filled_leg': check_leg, 'fill_price': fill_price,
-                            'sl_sell_price': sell_price, 'loss_cents': loss_cents,
+                            'sl_sell_price': sell_price,
+                            'profit_cents': _scrape_profit, 'loss_cents': _scrape_loss,
                             'fee_cents': scrape_fees,
                             'result': 'rebalancer_scrape', 'timestamp': now_m,
                             'note': f'rebalancer scrape: {team_code} margin={margin} spread={check_spread} bid={live_bid}c secs={secs}',
@@ -12485,6 +12515,7 @@ def _run_monitor():
                         bot['rebalancer_exit_reason'] = 'enhance'
                         bot[f'leg_{check_leg}_sold_early'] = True
                         bot[f'leg_{check_leg}_sell_price'] = sell_price
+                        session_pnl['gross_profit_cents'] += recovery_cents
                         _record_trade({
                             'bot_id': bot_id, 'type': 'middle',
                             'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
@@ -12493,6 +12524,7 @@ def _run_monitor():
                             'qty': qty, 'filled_leg': check_leg,
                             'fill_price': fill_price, 'sl_sell_price': sell_price,
                             'recovery_cents': recovery_cents,
+                            'profit_cents': recovery_cents, 'loss_cents': 0,
                             'result': 'rebalancer_enhance', 'timestamp': now_m,
                             'note': f'rebalancer enhance: sold dead leg {check_leg.upper()} ({team_code}) '
                                     f'at {sell_price}c (margin={margin} spread={check_spread})',
@@ -13397,7 +13429,7 @@ def bot_history():
         filtered = trade_history
     if category_filter:
         cats = category_filter.split(',')
-        filtered = [t for t in filtered if t.get('bot_category') in cats or t.get('fill_source') in cats]
+        filtered = [t for t in filtered if t.get('bot_category') in cats or t.get('fill_source') in cats or t.get('type') in cats]
     return jsonify({'trades': filtered[:limit], 'total': len(filtered)})
 
 

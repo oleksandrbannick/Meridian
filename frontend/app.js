@@ -5611,7 +5611,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
             ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
             ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
-            ${(() => { const hedged = bot._hedge_fired || (bot.dog_fill_qty || 0) > 0; const lat = hedged ? bot.hedge_latency_ms : null; const raw = hedged ? bot.raw_hedge_ms : null; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
+            ${(() => { const hedged = bot._hedge_fired || bot._consolidated || (bot.dog_fill_qty || 0) > 0; const lat = hedged ? bot.hedge_latency_ms : null; const raw = hedged ? bot.raw_hedge_ms : null; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
         </div>` : ''}
         ${walkInfo}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
@@ -9365,14 +9365,17 @@ async function loadLatency() {
                 <div style="color:${c.color};font-size:11px;font-weight:700;">${c.icon} ${c.label}</div>
                 <div style="color:#555;font-size:11px;margin-top:4px;">No data yet</div>
             </div>`;
-            const mainVal = c.live != null ? Math.round(c.live) : Math.round(s.avg);
+            const _fmtMs = v => v < 1 ? v.toFixed(1) : Math.round(v);
+            const mainVal = c.live != null ? _fmtMs(c.live) : _fmtMs(s.avg);
             const mainLabel = c.live != null ? 'now' : 'avg';
-            const valCol = mainVal < 200 ? '#00ff88' : mainVal < 500 ? '#ffaa00' : '#ff4444';
+            const _mainNum = parseFloat(mainVal);
+            const valCol = _mainNum < 200 ? '#00ff88' : _mainNum < 500 ? '#ffaa00' : '#ff4444';
             // Hedge tiles: side-by-side raw + round trip at equal size
             if (c.rawKey) {
                 const rs = data[c.rawKey] || {};
-                const rawVal = rs.count ? Math.round(rs.avg) : null;
-                const rawCol = rawVal != null ? (rawVal < 5 ? '#00ffcc' : rawVal < 15 ? '#00ff88' : rawVal < 50 ? '#ffaa00' : '#ff4444') : '#555';
+                const rawVal = rs.count ? _fmtMs(rs.avg) : null;
+                const _rawNum = rawVal != null ? parseFloat(rawVal) : null;
+                const rawCol = _rawNum != null ? (_rawNum < 5 ? '#00ffcc' : _rawNum < 15 ? '#00ff88' : _rawNum < 50 ? '#ffaa00' : '#ff4444') : '#555';
                 return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
                     <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:8px;">${c.icon} ${c.label}</div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -9380,8 +9383,8 @@ async function loadLatency() {
                             <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Speed</div>
                             <div style="color:${rawCol};font-size:18px;font-weight:800;white-space:nowrap;">${rawVal != null ? rawVal + 'ms' : '—'}</div>
                             ${rs.count ? `<div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
-                                <span>min ${Math.round(rs.min)}</span>
-                                <span>p95 ${Math.round(rs.p95)}</span>
+                                <span>min ${_fmtMs(rs.min)}</span>
+                                <span>p95 ${_fmtMs(rs.p95)}</span>
                             </div>
                             <div style="color:#555;font-size:8px;text-align:center;margin-top:1px;">${rs.count} samples</div>` : ''}
                         </div>
@@ -9389,8 +9392,8 @@ async function loadLatency() {
                             <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Round Trip</div>
                             <div style="color:${valCol};font-size:18px;font-weight:800;white-space:nowrap;">${mainVal}ms</div>
                             <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
-                                <span>min ${Math.round(s.min)}</span>
-                                <span>p95 ${Math.round(s.p95)}</span>
+                                <span>min ${_fmtMs(s.min)}</span>
+                                <span>p95 ${_fmtMs(s.p95)}</span>
                             </div>
                             <div style="color:#555;font-size:8px;text-align:center;margin-top:1px;">${s.count} samples</div>
                         </div>
@@ -10370,14 +10373,14 @@ async function loadBetsHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500&category=watch${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'watch');
 
         // ── Calendar (all bets, ignore date filter) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000`);
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000&category=watch`);
                 const calData = await calResp.json();
                 const allBets = (calData.trades || []).filter(t => t.type === 'watch');
                 const dayMap = {};
@@ -10559,14 +10562,14 @@ async function loadMiddleHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=500&category=middle${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'middle');
 
         // ── Calendar (all middles, ignore date filter) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000`);
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000&category=middle`);
                 const calData = await calResp.json();
                 const allMiddle = (calData.trades || []).filter(t => t.type === 'middle');
                 const dayMap = {};
@@ -10666,11 +10669,13 @@ async function loadMiddleHistory() {
             const isPend  = t.status === 'pending';
             const isHit   = t.middle_hit === true;
             const isArbW  = t.result === 'arb_win';
+            const isScrape  = t.result === 'rebalancer_scrape';
+            const isEnhance = t.result === 'rebalancer_enhance';
             const isLoss  = t.result === 'loss';
             const net = (t.profit_cents||0) - (t.loss_cents||0);
             const netCol = isPend ? '#ffaa00' : net >= 0 ? '#00ff88' : '#ff4444';
-            const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : isArbW ? '✅' : '⛔';
-            const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : isArbW ? 'ARB WIN' : 'LOSS';
+            const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : isArbW ? '✅' : isEnhance ? '💰' : isScrape ? '🔄' : '⛔';
+            const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : isArbW ? 'ARB WIN' : isEnhance ? 'ENHANCED' : isScrape ? 'SOLD BACK' : 'LOSS';
             const borderCol   = isPend ? '#ffaa0033' : net >= 0 ? '#00ff8822' : '#ff444422';
             // Support both manual log format (leg1/leg2) and bot-automated format (ticker_a/b, team_a/b_name)
             const isBot = !t.leg1 && (t.ticker_a || t.team_a_name);

@@ -5283,49 +5283,30 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <span style="color:#555;font-size:9px;">bid ${filledBid}¢ · ask ${filledAsk}¢</span>
         </div>`;
 
-        // Compute active hedge fill state (needed for rung shading)
-        const _hedgeFillForShade = bot[`filled_${hedgeSide}_qty`] || 0;
-        const _historyFillsForShade = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
-        const _activeHedgeFillForShade = Math.min(Math.max(0, _hedgeFillForShade - _historyFillsForShade), hedgeQty);
-        let _historyBudget = _historyFillsForShade;
+        // Split rungs into filled (consolidated) and unfilled (show individually)
+        const filledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) > 0);
+        const unfilledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) === 0 && !r.completed && !r.cancelled);
 
-        // Per-rung breakdown (compact, shows width + fill status)
-        const rungRows = rungs.map((r, i) => {
-            const fill = r[`${filledSideKey}_fill_qty`] || 0;
-            const rQty = r.quantity || qtyPer;
-            const isFilled_r = fill > 0;
-
-            // Only shade rungs covered by COMPLETED hedge generations (in hedge_history).
-            // Active hedge = all filled anchors stay lit (work in progress).
-            let isCompleted = false;
-            if (r.completed && hedgeHistory.length > 0 && _historyBudget >= rQty) {
-                _historyBudget -= rQty;
-                isCompleted = true;
-            }
-            const dimStyle = isCompleted ? 'opacity:0.35;' : !isFilled_r ? 'opacity:0.4;' : '';
+        // Unfilled anchors — show individually so user can see where limit orders sit
+        const unfilledRows = unfilledRungs.map(r => {
             const anchorPrice = r[`${filledSideKey}_price`] || 0;
-            const hedgePriceForRung = isCompleted ? (currentHedgePrice || r[`${hedgeSide}_price`] || 0) : 0;
-            const rungTotal = anchorPrice + hedgePriceForRung;
-            const rungFee = isCompleted && hedgePriceForRung > 0 ? kalshiFeeCents(filledSideKey === 'yes' ? anchorPrice : hedgePriceForRung, filledSideKey === 'yes' ? hedgePriceForRung : anchorPrice, rQty) : 0;
-            const rungPnl = isCompleted ? (100 - rungTotal) * rQty - rungFee : 0;
-            const pnlCol = rungPnl > 2 ? '#00ff88' : rungPnl > 0 ? '#ffaa00' : '#ff4444';
-            const statusTag = isCompleted
-                ? `<span style="color:${pnlCol};font-size:8px;font-weight:700;">${rungPnl > 0 ? '+' : ''}${rungPnl}¢</span>`
-                : fill >= rQty
-                    ? `<span style="color:#ffaa00;font-size:8px;">WAITING</span>`
-                    : fill > 0
-                        ? `<span style="color:#ffaa00;font-size:8px;">PARTIAL</span>`
-                        : `<span style="color:#335;font-size:8px;">LIVE</span>`;
-            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:1px 0;${dimStyle}">
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:1px 0;opacity:0.4;">
                 <span style="color:#ffaa00;font-weight:700;width:22px;">${r.width}¢</span>
                 <span style="color:${filledColor};width:30px;">${filledSideLabel[0]}${anchorPrice}</span>
                 <div style="flex:1;height:3px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${fill >= rQty ? 100 : fill > 0 ? Math.round(fill/rQty*100) : 0}%;height:100%;background:${fill >= rQty ? filledColor : fill > 0 ? '#ffaa00' : '#333'};border-radius:2px;${fill >= rQty ? 'box-shadow:0 0 6px ' + filledColor + '66;' : ''}"></div>
+                    <div style="width:0%;height:100%;background:#333;border-radius:2px;"></div>
                 </div>
-                <span style="color:#555;width:20px;text-align:right;">${fill}/${rQty}</span>
-                ${statusTag}
+                <span style="color:#555;width:20px;text-align:right;">0/${r.quantity || qtyPer}</span>
+                <span style="color:#335;font-size:8px;">LIVE</span>
             </div>`;
         }).join('');
+
+        const rungRows = (unfilledRungs.length > 0)
+            ? `<div style="padding:2px 8px;margin-top:4px;border-top:1px solid #1e274022;">
+                <div style="color:#556;font-size:8px;font-weight:600;margin-bottom:2px;">PENDING ANCHORS (${unfilledRungs.length})</div>
+                ${unfilledRows}
+               </div>`
+            : '';
 
         // Hedge detail block
         let hedgeBlock = '';
@@ -5377,7 +5358,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>` : '';
 
         rungsHTML = anchorSummary
-            + `<div style="padding:4px 8px;">${rungRows}</div>`
+            + rungRows
             + (historyHTML ? `<div style="padding:2px 8px;border-top:1px solid #1e274033;">${historyHTML}</div>` : '')
             + hedgeBlock
             + overflowBlock;

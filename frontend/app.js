@@ -2270,7 +2270,7 @@ function createMarketRow(market, label) {
     if (liq.yesBid > 0 && liq.noBid > 0 && !botTypes.apex) {
         const bidSum = liq.yesBid + liq.noBid;
         const spread = Math.abs(liq.yesBid - liq.noBid);
-        const isLiveGame = isLive;
+        const isLiveGame = isKalshiLive(market);
         if (isLiveGame && bidSum >= 90) {
             // Live game with real liquidity — always recommend
             if (spread <= 10) {

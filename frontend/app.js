@@ -6995,8 +6995,16 @@ async function showBotDetail(botId) {
         const iconMap = {anchor_dog:'👻',anchor_ladder:'👻',ladder_arb:'△',watch:'💰',middle:'🔀',arb:'⚡'};
         const typeName = typeMap[cat] || cat;
         const color = colorMap[cat] || '#00d4ff';
+        const statusDisplayMap = {
+            ladder_arb_posted: 'Both Live', ladder_arb_yes_filled: 'YES Filled',
+            ladder_arb_no_filled: 'NO Filled', completed: 'Completed',
+            stopped: 'Stopped', waiting_repeat: 'Waiting Repeat',
+            anchor_posted: 'Anchor Posted', anchor_filled: 'Anchor Filled',
+            hedge_posted: 'Hedge Posted', hedge_filled: 'Hedge Filled',
+        };
+        const displayStatus = statusDisplayMap[bot.status] || bot.status || '?';
         title.textContent = formatBotDisplayName(bot.ticker, bot.spread_line);
-        subtitle.textContent = `${typeName} · ${bot.status || '?'}`;
+        subtitle.textContent = `${typeName} · ${displayStatus}`;
         subtitle.style.color = color;
         icon.textContent = iconMap[cat] || '⚡';
 
@@ -7009,7 +7017,7 @@ async function showBotDetail(botId) {
         html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">`;
         html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
             <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Status</div>
-            <div style="color:${color};font-weight:700;font-size:12px;">${bot.status || '?'}</div></div>`;
+            <div style="color:${color};font-weight:700;font-size:12px;">${displayStatus}</div></div>`;
         html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
             <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Age</div>
             <div style="color:#fff;font-weight:700;font-size:12px;">${ageStr}</div></div>`;

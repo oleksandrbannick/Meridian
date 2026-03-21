@@ -3302,6 +3302,11 @@ function initAnchorDogPrices() {
             rung.price = Math.max(1, anchorBase - off);
         }
     }
+    // Apply auto-scale if already enabled
+    if (_anchorAutoQty && _anchorRungs.length > 0) {
+        const baseQty = _anchorRungs[0].qty;
+        _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
+    }
     renderAnchorRungs();
     updateAnchorPreview();
 }
@@ -3316,6 +3321,11 @@ function addAnchorRung() {
     const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
     const newPrice = Math.max(1, anchorBase - newOffset);
     _anchorRungs.push({ price: newPrice, qty: 1, offset: newOffset });
+    // Apply auto-scale if enabled
+    if (_anchorAutoQty) {
+        const baseQty = _anchorRungs[0].qty;
+        _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
+    }
     renderAnchorRungs();
     updateAnchorPreview();
 }
@@ -8100,7 +8110,10 @@ async function monitorBots() {
                         sendPushNotification('🔧 AMEND EXIT', `${profitStr} — arb completed via amend`);
                         showNotification(`🔧 AMEND EXIT: ${profitStr} — arb completed via timeout amend`);
                     } else if (action.action === 'repeat_spawned') {
-                        showNotification(`🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`);
+                        const repeatMsg = action.yes_price != null
+                            ? `🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`
+                            : `🔄 REPEAT #${action.repeat_num}/${action.repeat_total} spawned`;
+                        showNotification(repeatMsg);
                     } else if (action.action === 'auto_phase_live') {
                         showNotification(`🏟 Game went LIVE — bot ${action.bot_id} auto-switched to LIVE mode`);
                     } else if (action.action === 'stop_loss_yes') {

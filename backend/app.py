@@ -6206,7 +6206,8 @@ def _execute_apex_completion(bot_id):
         hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
 
         # Query every order this bot ever placed and sum actual fills per side
-        _all_oids = bot.get('_all_placed_order_ids', [])
+        # Include both placed order IDs AND hedge order IDs (extra hedges go in _all_hedge_order_ids)
+        _all_oids = list(set(bot.get('_all_placed_order_ids', []) + bot.get('_all_hedge_order_ids', [])))
         _verified_yes = 0
         _verified_no = 0
         _verified_count = 0
@@ -6400,6 +6401,10 @@ def _execute_apex_completion(bot_id):
                 all_ids = bot.get('_all_hedge_order_ids', [])
                 all_ids.append(extra_oid)
                 bot['_all_hedge_order_ids'] = all_ids
+                # Also track in placed IDs so verify loop counts its fills
+                _placed = bot.get('_all_placed_order_ids', [])
+                _placed.append(extra_oid)
+                bot['_all_placed_order_ids'] = _placed
                 save_state()
                 return  # Don't complete — wait for extra hedge to fill
             except Exception as e:

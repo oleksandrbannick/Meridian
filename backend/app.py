@@ -14426,7 +14426,27 @@ def cancel_bot(bot_id):
                 session_pnl['completed_bots'] += 1
 
             elif bot_type != 'watch':
-                if yes_sold_qty > 0 and no_sold_qty > 0:
+                # Apex/ladder_arb bots: rung completions already recorded P&L — skip re-recording
+                _apex_already_tracked = (bot.get('bot_category') == 'ladder_arb'
+                                         and bot.get('completed_rungs_count', 0) > 0)
+                if _apex_already_tracked and not arb_completed_via_amend:
+                    # P&L already recorded by _record_rung_completion — just log the manual exit
+                    _apex_cum_pnl = bot.get('cumulative_pnl', 0)
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': entry_yes, 'no_price': entry_no,
+                        'quantity': max(yes_sold_qty, no_sold_qty),
+                        'profit_cents': 0, 'loss_cents': 0,
+                        'result': 'manual_exit_apex',
+                        'exit_via': 'cancel_sell',
+                        'timestamp': time.time(),
+                        'note': f'Manual exit — P&L already tracked via rung completions ({_apex_cum_pnl}¢)',
+                        'game_phase': bot.get('game_phase', ''),
+                        'bot_category': 'ladder_arb',
+                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                    }, bot)
+                    session_pnl['completed_bots'] += 1
+                elif yes_sold_qty > 0 and no_sold_qty > 0:
                     # Both legs exited — either amend-completed arb or both sold at market
                     actual_yes_fill = sell_prices.get('yes', entry_yes)
                     actual_no_fill  = sell_prices.get('no', entry_no)

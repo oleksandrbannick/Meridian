@@ -781,9 +781,7 @@ function getMarketLiquidity(market) {
         tier = 'wide'; tierLabel = 'WIDE'; tierColor = '#ffaa33';
     }
 
-    // Per-side spread (tight = thick liquidity, wide = thin)
-    const yesSpread = yesAsk - yesBid;
-    const noSpread = noAsk - noBid;
+    // Liquidity imbalance (tight spread = thick liquidity, wide = thin)
     const thinSide = yesSpread > noSpread ? 'yes' : 'no';
     const thickSide = thinSide === 'yes' ? 'no' : 'yes';
     const spreadImbalance = Math.abs(yesSpread - noSpread);

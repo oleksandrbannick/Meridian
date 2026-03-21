@@ -1969,7 +1969,7 @@ def _apex_snap_check(anchor_price, bid_price, qty=1):
 # profitable — scale up contract size on wider rungs automatically.
 WIDTH_QTY_TIERS = [
     (13, 3.0),   # 13-16¢: 3× base
-    (9,  1.5),   # 9-12¢:  1.5× base
+    (9,  2.0),   # 9-12¢:  2× base
     (1,  1.0),   # 5-8¢:   1× base (fallback)
 ]
 

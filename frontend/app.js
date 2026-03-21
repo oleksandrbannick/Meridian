@@ -3243,6 +3243,8 @@ let _anchorFavSide = '';
 let _anchorIsBrokenSpread = false;
 let _anchorRungs = [];    // [{price, qty, offset}] — offset = distance below anchor base
 let _anchorAutoPrice = true;  // auto-adjust rung prices to market
+let _anchorAutoQty = false;   // auto-scale qty: rung 1=1x, rung 2=2x, rung 3=3x
+let _anchorRungSpacing = 2;   // spacing between rungs in cents (1 or 2)
 
 function initAnchorDogPrices() {
     if (!currentArbMarket) return;
@@ -3295,8 +3297,8 @@ function initAnchorDogPrices() {
     if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
         for (let i = 0; i < _anchorRungs.length; i++) {
             const rung = _anchorRungs[i];
-            if (isAutoDepth) rung.offset = anchorDepth + (i * 2);
-            const off = rung.offset || (anchorDepth + (i * 2));
+            if (isAutoDepth) rung.offset = anchorDepth + (i * _anchorRungSpacing);
+            const off = rung.offset || (anchorDepth + (i * _anchorRungSpacing));
             rung.price = Math.max(1, anchorBase - off);
         }
     }
@@ -3343,7 +3345,14 @@ function updateRungPrice(idx, val) {
 
 function updateRungQty(idx, val) {
     const v = parseInt(val);
-    if (v >= 1 && v <= 20) _anchorRungs[idx].qty = v;
+    if (v >= 1 && v <= 99) {
+        _anchorRungs[idx].qty = v;
+        // If auto-qty and user changed rung 1, rescale all others
+        if (_anchorAutoQty && idx === 0) {
+            _anchorRungs.forEach((r, i) => { if (i > 0) r.qty = v * (i + 1); });
+            renderAnchorRungs();
+        }
+    }
     updateAnchorPreview();
 }
 
@@ -3351,6 +3360,24 @@ function toggleAnchorAutoPrice() {
     _anchorAutoPrice = !_anchorAutoPrice;
     if (_anchorAutoPrice) initAnchorDogPrices();  // recalc immediately
     renderAnchorRungs();
+}
+
+function toggleAnchorSpacing() {
+    _anchorRungSpacing = _anchorRungSpacing === 2 ? 1 : 2;
+    if (_anchorAutoPrice) initAnchorDogPrices();
+    renderAnchorRungs();
+    updateAnchorPreview();
+}
+
+function toggleAnchorAutoQty() {
+    _anchorAutoQty = !_anchorAutoQty;
+    if (_anchorAutoQty) {
+        // Apply 1x/2x/3x scaling based on rung index
+        const baseQty = _anchorRungs.length > 0 ? _anchorRungs[0].qty : 1;
+        _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
+    }
+    renderAnchorRungs();
+    updateAnchorPreview();
 }
 
 function renderAnchorRungs() {
@@ -3362,10 +3389,14 @@ function renderAnchorRungs() {
     if (window._anchorInputFocused) return;
     const countEl = document.getElementById('anchor-rung-count');
     if (countEl) {
-        const autoLabel = _anchorAutoPrice
-            ? '<span style="color:#00ff88;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">AUTO</span>'
-            : '<span style="color:#ff8800;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">MANUAL</span>';
-        countEl.innerHTML = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''} · ${autoLabel}`;
+        const priceLabel = _anchorAutoPrice
+            ? '<span style="color:#00ff88;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">PRICE AUTO</span>'
+            : '<span style="color:#ff8800;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoPrice()">PRICE MANUAL</span>';
+        const qtyLabel = _anchorAutoQty
+            ? '<span style="color:#00ff88;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoQty()">QTY AUTO</span>'
+            : '<span style="color:#ff8800;font-size:9px;cursor:pointer;" onclick="toggleAnchorAutoQty()">QTY MANUAL</span>';
+        const spacingLabel = `<span style="color:#60a5fa;font-size:9px;cursor:pointer;" onclick="toggleAnchorSpacing()">${_anchorRungSpacing}¢ APART</span>`;
+        countEl.innerHTML = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''} · ${priceLabel} · ${qtyLabel} · ${spacingLabel}`;
     }
 
     if (_anchorRungs.length === 0) {
@@ -3390,9 +3421,11 @@ function renderAnchorRungs() {
                 </div>
                 <div style="display:flex;align-items:center;gap:3px;">
                     <span style="color:#8892a6;font-size:9px;">QTY</span>
-                    <input type="number" min="1" max="20" value="${rung.qty}" onchange="updateRungQty(${i}, this.value)"
+                    <input type="number" min="1" max="99" value="${rung.qty}" onchange="updateRungQty(${i}, this.value)"
                         onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
-                        style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;font-weight:700;text-align:center;">
+                        ${_anchorAutoQty && i > 0 ? 'readonly' : ''}
+                        style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoQty && i > 0 ? '#00ff8844' : '#1e2740'};border-radius:4px;color:${_anchorAutoQty && i > 0 ? '#00ff8888' : '#fff'};font-size:13px;font-weight:700;text-align:center;">
+                    ${_anchorAutoQty && i > 0 ? `<span style="color:#00ff8866;font-size:8px;">${i+1}x</span>` : ''}
                 </div>
                 <span style="color:#555;font-size:9px;">${offset}¢ below ${baseLabel}</span>
             </div>

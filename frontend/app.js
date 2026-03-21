@@ -1224,8 +1224,10 @@ async function loadMarkets() {
         // Start live price refresh (5s interval)
         startPriceRefresh();
     } catch (error) {
+        // Don't show error if this load was superseded by a newer one
+        if (error.name === 'AbortError' && myAbort !== _marketsAbort) return;
         console.error('Error loading markets:', error);
-        grid.innerHTML = '<p style="color: #ff4444; grid-column: 1 / -1;">Network error loading markets. Check console.</p>';
+        grid.innerHTML = `<p style="color: #ff4444; grid-column: 1 / -1;">Error loading markets: ${error.message || error}<br><small>Stack: ${error.stack || 'n/a'}</small></p>`;
     }
 }
 

@@ -7,10 +7,15 @@ from flask import Flask, jsonify, request, send_from_directory, make_response, R
 from flask_cors import CORS
 from kalshi_api import KalshiAPI
 import os
+import sys
 import json
 import requests
 from typing import Dict, List, Optional
 import time
+
+# Reduce GIL switch interval from 5ms to 0.5ms — critical for phantom hedge speed
+# The hedge worker thread needs the GIL immediately after WS handler pushes a job
+sys.setswitchinterval(0.0005)
 import threading
 import math as _math
 import re
@@ -2818,17 +2823,14 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['yes_fill_qty'] = bot['dog_fill_qty']
             else:
                 bot['no_fill_qty'] = bot['dog_fill_qty']
-            print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
-
             if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
-                # Dog filled! Set status BEFORE spawning thread to prevent monitor double-fire
+                # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after
                 bot['_hedge_fired'] = True
                 bot['dog_filled_at'] = time.time()
-                bot['status'] = 'dog_filled'  # block monitor from re-entering dog_anchor_posted
+                bot['status'] = 'dog_filled'
                 _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                # Defer save_state to background — don't block WS handler
-                threading.Thread(target=save_state, daemon=True).start()
                 break
+            print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
         elif matched == 'fav':
             bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
             if bot['fav_side'] == 'yes':
@@ -2863,9 +2865,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['yes_fill_qty'] = total_fill
             else:
                 bot['no_fill_qty'] = total_fill
-            print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
-            _audit('LADDER_RUNG_FILL', bot_id, {'ticker': bot['ticker'], 'rung_price': rung.get('price'), 'fill_qty': rung.get('fill_qty'), 'total_fills': total_fill})
-            # All rungs filled? Hedge immediately (guard against double-fire)
+            # SPEED CRITICAL — hedge fires BEFORE any logging
             _hedge_spawned = False
             if total_fill >= bot['total_dog_qty'] and not bot.get('_hedge_fired'):
                 bot['_hedge_fired'] = True
@@ -2873,12 +2873,13 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 _hedge_worker_queue.put((_execute_phantom_ladder_hedge, (bot_id,)))
                 _hedge_spawned = True
             elif not bot.get('_sweep_timer_started') and not bot.get('_hedge_fired'):
-                # Partial fill — hedge immediately with whatever is filled, cancel remainder after
                 bot['_sweep_timer_started'] = True
                 bot['first_fill_at'] = time.time()
-                print(f'⚡ WS PHANTOM SWEEP: {bot_id} first partial fill — hedging immediately')
                 _hedge_worker_queue.put((_ladder_sweep_then_hedge, (bot_id,)))
                 _hedge_spawned = True
+            # Log AFTER hedge is queued — not on hot path
+            print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
+            _audit('LADDER_RUNG_FILL', bot_id, {'ticker': bot['ticker'], 'rung_price': rung.get('price'), 'fill_qty': rung.get('fill_qty'), 'total_fills': total_fill})
             if _hedge_spawned:
                 # Defer save_state to background — don't block WS handler while hedge thread needs GIL
                 threading.Thread(target=save_state, daemon=True).start()
@@ -3126,12 +3127,18 @@ def _execute_phantom_hedge(bot_id):
             _raw_ms = (time.time() - _raw_fill_at) * 1000
             bot['raw_hedge_ms'] = round(_raw_ms, 1)
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom'})
-        # Use priority rate limit token so hedge never queues behind monitor calls
+        # SPEED CRITICAL — straight to API, no rate limiter
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',
             count=qty, price=hedge_price, priority=True,
             skip_rate_limit=True
         )
+        # Round trip measurement
+        _rt_ms = (time.time() - _raw_fill_at) * 1000 if _raw_fill_at else None
+        if _rt_ms is not None:
+            bot['hedge_latency_ms'] = round(_rt_ms, 1)
+            _record_latency('fill_to_hedge_phantom', _rt_ms, {'bot_id': bot_id, 'type': 'phantom', 'fav_price': actual_fav_price})
+
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
         bot['fav_price'] = actual_fav_price
@@ -3145,8 +3152,9 @@ def _execute_phantom_hedge(bot_id):
         else:
             bot['no_price'] = actual_fav_price
             bot['no_order_id'] = fav_order_id
+        save_state()  # deferred from WS handler — save after hedge is posted
 
-        print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={dog_price + actual_fav_price}¢ + fees')
+        print(f'👻 PHANTOM HEDGE: {bot_id} {fav_side.upper()} @{actual_fav_price}¢ | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
         bot_log('PHANTOM_WS_HEDGE_POSTED', bot_id, {
             'fav_side': fav_side, 'fav_price': actual_fav_price,
             'fav_order_id': fav_order_id[:12], 'dog_price': dog_price,

@@ -5256,7 +5256,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // Hedge history (completed hedge generations)
     const hedgeHistory = bot.hedge_history || [];
     const completedRungs = bot.completed_rungs_count || 0;
-    const cumulativePnl = bot.cumulative_pnl || 0;
+    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.cumulative_pnl || 0);
 
     // Shared fill-state variables
     const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes' : status === 'ladder_arb_no_filled' ? 'no' : null;

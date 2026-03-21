@@ -9923,6 +9923,13 @@ def _handle_apex(bot_id, bot, actions):
             else:
                 new_rungs = []
             if new_rungs:
+                # Collect all order IDs from new rungs for verification
+                _repeat_oids = []
+                for _nr in new_rungs:
+                    if _nr.get('yes_order_id'): _repeat_oids.append(_nr['yes_order_id'])
+                    if _nr.get('no_order_id'): _repeat_oids.append(_nr['no_order_id'])
+                bot['_all_placed_order_ids'] = _repeat_oids
+
                 bot['rungs'] = new_rungs
                 bot['total_rungs'] = len(new_rungs)
                 bot['posted_at'] = now

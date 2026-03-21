@@ -4402,6 +4402,9 @@ function closeModal() {
     _currentMiddleData = null;
     // Reset width selector
     clearSelectedWidths();
+    // Re-enable deploy button (gets disabled during placement)
+    const deployBtn = document.getElementById('deploy-btn');
+    if (deployBtn) { deployBtn.disabled = false; deployBtn.textContent = '△ Deploy Apex Bot'; }
 }
 
 // View orderbook for a market

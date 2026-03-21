@@ -6060,6 +6060,46 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         cancel_ok = sum(1 for oid in unfilled_oids if _cancel_with_retry(oid))
         print(f'△ APEX SWEEP PHASE2: {bot_id} — cancelled {cancel_ok}/{len(unfilled_oids)} {_unfilled_side} orders')
 
+    # ── Phase 3: Verify anchor fills against Kalshi — catch missed WS fills ──
+    if hedge_oid:
+        try:
+            _p3_bot = active_bots.get(bot_id)
+            if _p3_bot and _p3_bot.get('_consolidated'):
+                _p3_fs = _p3_bot.get('first_fill_side', _filled_side)
+                _p3_missed = 0
+                for _p3_ri, _p3_rung in enumerate(_p3_bot.get('rungs', [])):
+                    _p3_oid = _p3_rung.get(f'{_p3_fs}_order_id')
+                    if not _p3_oid:
+                        continue
+                    _p3_rq = _p3_rung.get('quantity', _p3_bot.get('quantity', 1))
+                    _p3_tracked = _p3_rung.get(f'{_p3_fs}_fill_qty', 0)
+                    if _p3_tracked >= _p3_rq:
+                        continue  # already fully filled
+                    try:
+                        api_read_limiter.wait()
+                        _p3_resp = kalshi_client.get_order(_p3_oid)
+                        _p3_data = _p3_resp.get('order', _p3_resp) if isinstance(_p3_resp, dict) else {}
+                        _p3_actual = _parse_fill_count(_p3_data)
+                        if _p3_actual > _p3_tracked:
+                            _p3_diff = _p3_actual - _p3_tracked
+                            _p3_missed += _p3_diff
+                            with ws_fill_lock:
+                                _p3_rung[f'{_p3_fs}_fill_qty'] = min(_p3_actual, _p3_rq)
+                                if not _p3_rung.get(f'{_p3_fs}_filled_at'):
+                                    _p3_rung[f'{_p3_fs}_filled_at'] = time.time()
+                            print(f'⚡ SWEEP VERIFY: {bot_id} rung[{_p3_ri}] missed {_p3_diff} {_p3_fs} fills (tracked {_p3_tracked} → actual {_p3_actual})')
+                    except Exception:
+                        pass
+                if _p3_missed > 0:
+                    bot_log('APEX_SWEEP_MISSED_FILLS', bot_id, {
+                        'missed_fills': _p3_missed,
+                        'old_hedge_qty': _p3_bot.get('hedge_qty', 0),
+                    })
+                    # Trigger late anchor amend to update hedge qty
+                    _handle_late_anchor_fill(bot_id, _p3_bot, 0, _p3_missed)
+        except Exception as _p3_err:
+            print(f'⚠ SWEEP VERIFY failed {bot_id}: {_p3_err}')
+
 
 def _execute_apex_completion(bot_id):
     """Handle full completion of a ladder-arb bot — all rungs resolved."""

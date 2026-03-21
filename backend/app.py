@@ -2651,6 +2651,27 @@ ws_fill_lock = threading.Lock()
 # and overwrite each other's walk_offset calculations.
 _late_anchor_amend_lock = threading.Lock()
 
+# ─── Phantom Hedge Worker: pre-spawned thread for instant hedge placement ─────
+# Eliminates ~8ms thread spawn overhead. WS handler pushes jobs, worker executes
+# instantly. The #1 speed priority in the entire app.
+import queue as _queue_mod
+_hedge_worker_queue = _queue_mod.Queue()
+
+def _hedge_worker_loop():
+    """Dedicated worker thread — always alive, waiting for hedge jobs."""
+    while True:
+        try:
+            job = _hedge_worker_queue.get()
+            if job is None:
+                break
+            fn, args = job
+            fn(*args)
+        except Exception as e:
+            print(f'⚠ HEDGE WORKER ERROR: {e}')
+
+_hedge_worker_thread = threading.Thread(target=_hedge_worker_loop, daemon=True)
+_hedge_worker_thread.start()
+
 # ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
 # This ensures the frontend sees 'completed' / 'timeout_exit' actions even when
 # the WS handler wins the race against the REST monitor loop.
@@ -2804,12 +2825,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['_hedge_fired'] = True
                 bot['dog_filled_at'] = time.time()
                 bot['status'] = 'dog_filled'  # block monitor from re-entering dog_anchor_posted
-                threading.Thread(
-                    target=_execute_phantom_hedge,
-                    args=(bot_id,),
-                    daemon=True
-                ).start()
-                # Defer save_state to background — don't block WS handler while hedge thread needs GIL
+                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                # Defer save_state to background — don't block WS handler
                 threading.Thread(target=save_state, daemon=True).start()
                 break
         elif matched == 'fav':
@@ -2853,14 +2870,14 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if total_fill >= bot['total_dog_qty'] and not bot.get('_hedge_fired'):
                 bot['_hedge_fired'] = True
                 bot['dog_filled_at'] = time.time()
-                threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
+                _hedge_worker_queue.put((_execute_phantom_ladder_hedge, (bot_id,)))
                 _hedge_spawned = True
             elif not bot.get('_sweep_timer_started') and not bot.get('_hedge_fired'):
                 # Partial fill — hedge immediately with whatever is filled, cancel remainder after
                 bot['_sweep_timer_started'] = True
                 bot['first_fill_at'] = time.time()
                 print(f'⚡ WS PHANTOM SWEEP: {bot_id} first partial fill — hedging immediately')
-                threading.Thread(target=_ladder_sweep_then_hedge, args=(bot_id,), daemon=True).start()
+                _hedge_worker_queue.put((_ladder_sweep_then_hedge, (bot_id,)))
                 _hedge_spawned = True
             if _hedge_spawned:
                 # Defer save_state to background — don't block WS handler while hedge thread needs GIL
@@ -3095,14 +3112,7 @@ def _execute_phantom_hedge(bot_id):
         # Use pre-calculated hedge price — already ceiling-capped at creation time
         hedge_price = bot.get('_precalc_hedge_price') or 0
         if hedge_price < 1:
-            # Fallback: recalculate (shouldn't happen)
             hedge_price = _precalc_phantom_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
-        print(f'👻 PHANTOM HEDGE START: {bot_id} | dog={dog_side.upper()}@{dog_price}¢ | precalc hedge={hedge_price}¢ | fav={fav_side.upper()} qty={qty}')
-        bot_log('PHANTOM_WS_HEDGE_START', bot_id, {
-            'dog_side': dog_side, 'dog_price': dog_price,
-            'precalc_hedge': hedge_price, 'fav_side': fav_side, 'qty': qty,
-            'path': 'ws_fast',
-        })
 
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
@@ -3110,14 +3120,12 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # Post fav hedge at pre-calculated price — no computation, straight to API
-        # Record raw hedge speed (fill → just before HTTP send)
+        # Record raw hedge speed RIGHT before API call — nothing between this and HTTP send
         _raw_fill_at = bot.get('dog_filled_at')
         if _raw_fill_at:
             _raw_ms = (time.time() - _raw_fill_at) * 1000
             bot['raw_hedge_ms'] = round(_raw_ms, 1)
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom'})
-            print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
         # Use priority rate limit token so hedge never queues behind monitor calls
         fav_resp, actual_fav_price = create_order_maker(
             ticker=ticker, side=fav_side, action='buy',

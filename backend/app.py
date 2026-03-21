@@ -10529,8 +10529,10 @@ def _handle_apex(bot_id, bot, actions):
                                 })
                                 try:
                                     api_rate_limiter.wait()
+                                    # Use remaining qty (hedge_qty - fills already counted) to avoid over-buying
+                                    _amend_count = max(1, rq - bot.get('_hedge_fill_count', 0))
                                     amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
-                                                              count=rq, **{f'{unfilled_side}_price': new_price})
+                                                              count=_amend_count, **{f'{unfilled_side}_price': new_price})
                                     bot['hedge_price'] = new_price
                                     walked_any = True
                                     # Track order_id change if Kalshi does cancel+replace

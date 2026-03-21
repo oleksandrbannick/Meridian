@@ -1163,9 +1163,26 @@ async function loadMarkets() {
         }
         
         // Backend queries Kalshi by sports series (KXNBAGAME, KXNBASPREAD, etc.)
-        let response = await fetch(url);
-        let data = await response.json();
-        
+        // Retry up to 2 times with 30s timeout per attempt
+        let response, data;
+        for (let _attempt = 0; _attempt < 3; _attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000);
+                response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                data = await response.json();
+                if (!data.error) break;
+            } catch (_retryErr) {
+                if (_attempt < 2) {
+                    grid.innerHTML = `<p style="color: #ffaa00; grid-column: 1 / -1;">Retrying markets load... (attempt ${_attempt + 2}/3)</p>`;
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                throw _retryErr;
+            }
+        }
+
         if (data.error) {
             grid.innerHTML = `<p style="color: #ff4444; grid-column: 1 / -1;">Error: ${data.error}</p>`;
             return;

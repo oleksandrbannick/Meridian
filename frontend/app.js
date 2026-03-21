@@ -11034,7 +11034,10 @@ let watchTarget = null; // position being set up for watching
 async function loadPositions() {
     const el = document.getElementById('positions-list');
     if (!el) return;
-    el.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Loading positions from Kalshi...</p>';
+    // Only show loading spinner on first load — don't flash on subsequent polls
+    if (!el.dataset.loaded) {
+        el.innerHTML = '<p style="color:#8892a6;text-align:center;padding:24px;">Loading positions from Kalshi...</p>';
+    }
 
     try {
         const resp = await fetch(`${API_BASE}/positions/active`);
@@ -11045,6 +11048,7 @@ async function loadPositions() {
         }
 
         const positions = data.positions || [];
+        el.dataset.loaded = '1';
         if (positions.length === 0) {
             el.innerHTML = `<div class="empty-state"><div class="icon">💼</div><div class="title">No open positions</div><div class="desc">You don't have any active positions on Kalshi right now.<br>Place trades from the Markets tab or directly on kalshi.com</div></div>`;
             return;

@@ -6021,7 +6021,9 @@ def _execute_apex_completion(bot_id):
                 save_state()
                 return  # Don't complete — wait for extra hedge to fill
             except Exception as e:
-                print(f'   ❌ Extra hedge failed: {e} — completing with {unhedged} unhedged')
+                print(f'   Extra hedge failed: {e} -- staying active to retry')
+                bot['_extra_hedge_placed'] = False
+                return
 
         total_pnl = bot.get('cumulative_pnl', 0)
         completed_count = bot.get('completed_rungs_count', 0)

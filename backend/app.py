@@ -725,7 +725,9 @@ def get_markets():
                     break
             return series, series_markets
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        # Use fewer workers for large series lists to avoid 429s from Kalshi
+        _n_workers = min(4, len(series_to_fetch)) if len(series_to_fetch) > 6 else min(6, len(series_to_fetch))
+        with ThreadPoolExecutor(max_workers=max(1, _n_workers)) as executor:
             for series, series_markets in executor.map(_fetch_series, series_to_fetch):
                 if series_markets:
                     series_counts[series] = len(series_markets)

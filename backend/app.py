@@ -5967,6 +5967,7 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             'hedge_price': hedge_price, 'total_filled_qty': total_filled_qty,
             'avg_filled_price': avg_filled_price, 'target_hedge': target_hedge,
             'weighted_avg_width': weighted_avg_width,
+            '_fill_at': bot.get('first_fill_at'),  # for raw speed measurement
         }
         # No save_state() here — Phase 1c saves after hedge is placed
 
@@ -5986,14 +5987,8 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
     _total_qty = computed['total_filled_qty']
     _avg_filled = computed['avg_filled_price']
 
-    print(f'📊 WS SWEEP HEDGE: {bot_id} avg_anchor={_avg_filled}¢ width={computed["weighted_avg_width"]:.1f}¢ target={computed["target_hedge"]}¢ placing@{_hedge_price}¢ × {_total_qty}')
-
-    # Record raw hedge speed before API call
-    _raw_fill_at = None
-    with ws_fill_lock:
-        _b = active_bots.get(bot_id)
-        if _b:
-            _raw_fill_at = _b.get('first_fill_at')
+    # Record raw hedge speed RIGHT before API call — nothing between this and HTTP send
+    _raw_fill_at = computed.get('_fill_at')
     if _raw_fill_at:
         _raw_ms = (time.time() - _raw_fill_at) * 1000
         with ws_fill_lock:
@@ -6001,10 +5996,10 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             if _b:
                 _b['raw_hedge_ms'] = round(_raw_ms, 1)
         _record_latency('raw_hedge_apex', _raw_ms, {'bot_id': bot_id, 'type': 'apex_sweep'})
-        print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
 
     hedge_oid = None
     actual_hedge = None
+    _api_start = time.time()
     try:
         hedge_resp, actual_hedge = create_order_maker(
             ticker=_ticker, side=_unfilled_side, action='buy',
@@ -6012,11 +6007,20 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
             skip_rate_limit=True,
         )
         hedge_oid = hedge_resp['order']['order_id']
+        # Round trip = fill → order confirmed on Kalshi
+        _rt_ms = (time.time() - _raw_fill_at) * 1000 if _raw_fill_at else None
+        _api_ms = (time.time() - _api_start) * 1000
+        if _rt_ms is not None:
+            _record_latency('fill_to_hedge_apex', _rt_ms, {'bot_id': bot_id, 'type': 'apex_sweep', 'hedge_price': actual_hedge, 'avg_anchor': _avg_filled})
+        print(f'📊 APEX HEDGE: {bot_id} @{actual_hedge}¢ × {_total_qty} | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms api={round(_api_ms, 1)}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
         bot_log('APEX_SWEEP_HEDGE_PLACED', bot_id, {
             'side': _unfilled_side, 'qty_sent': _total_qty, 'price_sent': _hedge_price,
             'actual_price': actual_hedge, 'order_id': hedge_oid,
             'avg_anchor_price': _avg_filled, 'target_hedge': computed['target_hedge'],
             'avg_width': round(computed['weighted_avg_width'], 1),
+            'raw_ms': round(_raw_ms, 1) if _raw_fill_at else None,
+            'api_ms': round(_api_ms, 1),
+            'round_trip_ms': round(_rt_ms, 1) if _rt_ms else None,
         })
     except Exception as e:
         print(f'❌ WS SWEEP HEDGE FAIL {bot_id}: {e}')

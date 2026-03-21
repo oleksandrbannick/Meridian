@@ -6268,12 +6268,16 @@ def _execute_apex_completion(bot_id):
                     _verified_count += 1
                 except Exception:
                     _verify_errors += 1
-            unhedged = abs(_verified_yes - _verified_no)
-            _heavy_side = 'yes' if _verified_yes > _verified_no else 'no'
-            if _verified_yes != _verified_no:
-                print(f'⚠ APEX ORDER VERIFY: {bot_id} Kalshi fills YES={_verified_yes} NO={_verified_no} → {unhedged} unhedged {_heavy_side}')
+            # Only unhedged when anchor side exceeds hedge side — never the reverse
+            # (reverse means Kalshi settled/closed out, extra hedges already covered it)
+            _anchor_verified = _verified_yes if filled_side == 'yes' else _verified_no
+            _hedge_verified = _verified_no if filled_side == 'yes' else _verified_yes
+            unhedged = max(0, _anchor_verified - _hedge_verified)
+            _heavy_side = filled_side if _anchor_verified > _hedge_verified else unfilled_side
+            if unhedged > 0:
+                print(f'⚠ APEX ORDER VERIFY: {bot_id} Kalshi fills anchor({filled_side.upper()})={_anchor_verified} hedge({unfilled_side.upper()})={_hedge_verified} → {unhedged} unhedged')
             else:
-                print(f'✅ APEX ORDER VERIFY: {bot_id} balanced YES={_verified_yes} NO={_verified_no}')
+                print(f'✅ APEX ORDER VERIFY: {bot_id} balanced anchor={_anchor_verified} hedge={_hedge_verified}')
             bot_log('APEX_ORDER_VERIFY', bot_id, {
                 'verified_yes': _verified_yes, 'verified_no': _verified_no,
                 'unhedged': unhedged, 'heavy_side': _heavy_side if unhedged > 0 else None,
@@ -6288,7 +6292,7 @@ def _execute_apex_completion(bot_id):
                 'error': str(_pv_err)[:200],
                 'local_anchor_qty': anchor_qty, 'local_hedge_qty': hedge_qty,
             }, level='ERROR')
-            unhedged = anchor_qty - hedge_qty
+            unhedged = max(0, anchor_qty - hedge_qty)
         bot_log('APEX_UNHEDGED_CHECK', bot_id, {
             'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
             'filled_side': filled_side, 'unfilled_side': unfilled_side,
@@ -6348,7 +6352,7 @@ def _execute_apex_completion(bot_id):
                             extra_new = max(0, _eh_fills - already_counted)
                             if extra_new > 0:
                                 hedge_qty += extra_new
-                            unhedged = anchor_qty - hedge_qty
+                            unhedged = max(0, anchor_qty - hedge_qty)
                             print(f'✅ APEX EXTRA HEDGE UPDATE: {bot_id} hedge {existing_hedge[:12]} fills={_eh_fills} (Kalshi check failed: {_pe}), unhedged={unhedged}')
                             bot_log('APEX_EXTRA_HEDGE_FALLBACK', bot_id, {
                                 'order_id': existing_hedge, 'fills': _eh_fills,

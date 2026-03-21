@@ -2591,25 +2591,30 @@
                 // Yield to browser first so UI stays responsive
                 await new Promise(r => setTimeout(r, 50));
 
-                // Capture only the VISIBLE viewport, not the full scrollable page
+                // Capture only the VISIBLE viewport — use smaller scale on mobile to prevent freeze
                 const target = document.querySelector('.main-content') || document.body;
+                const isMobile = window.innerWidth < 768;
                 const canvas = await html2canvas(target, {
                     backgroundColor: '#0c1020',
-                    scale: 0.75,  // 0.75x for smaller payload + faster capture
+                    scale: isMobile ? 0.4 : 0.6,
                     logging: false,
                     useCORS: true,
                     allowTaint: true,
-                    width: Math.min(window.innerWidth, 1400),
-                    height: Math.min(window.innerHeight, 900),
+                    width: Math.min(window.innerWidth, 1000),
+                    height: Math.min(window.innerHeight, 700),
                     windowWidth: window.innerWidth,
                     windowHeight: window.innerHeight,
+                    ignoreElements: (el) => {
+                        // Skip heavy elements that cause freeze
+                        return el.id === 'orderbook-sidebar' || el.classList?.contains('market-row-expanded');
+                    },
                 });
 
                 // Restore chat panel
                 if (wasOpen) chatPanel.style.visibility = '';
 
                 // Convert to JPEG base64 (smaller than PNG)
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
                 const base64 = dataUrl.split(',')[1];
 
                 // POST to backend

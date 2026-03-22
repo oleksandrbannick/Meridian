@@ -9304,22 +9304,27 @@ def _handle_phantom(bot_id, bot, actions):
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 return  # no market data, wait
-            # Drift guard: don't repost into a blowout
+            # Smart pricing first — need new_dog_price for hedge fill check
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
             _current_fav_bid = _best_bid(ob, fav_side)
-            _ph_price_lean = abs(current_dog_bid - _current_fav_bid) if _current_fav_bid else 0
-            if _ph_price_lean > 30 or current_dog_bid <= 3:
-                bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
-                    'price_lean': _ph_price_lean, 'reason': 'blowout_drift',
-                })
-                return  # game too lopsided — wait for it to tighten
-
-            # Same smart pricing as initial placement — use stored anchor_depth
             anchor_depth = bot.get('anchor_depth', 5)
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             new_dog_price = max(1, anchor_base - anchor_depth)
+
+            # Hedge fill drift guard: at this bot's target width, would the hedge still fill?
+            _target_width = bot.get('target_width', 3)
+            _hedge_price = 100 - new_dog_price - _target_width
+            _hedge_gap = (_current_fav_bid - _hedge_price) if _current_fav_bid and _hedge_price > 0 else 99
+            # gap <= 0 = instant fill, 1-2 = fast, 3-5 = walk, >5 = unlikely
+            if _hedge_gap > 5 or current_dog_bid <= 3:
+                bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
+                    'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
+                    'new_dog_price': new_dog_price, 'target_width': _target_width,
+                    'hedge_price': _hedge_price, 'hedge_gap': _hedge_gap,
+                    'reason': 'hedge_unfillable' if _hedge_gap > 5 else 'dog_dead',
+                })
+                return  # hedge won't fill at this width — wait for market to improve
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
@@ -9500,16 +9505,23 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 return  # no market data, wait
-            # Drift guard: don't repost into a blowout
+            # Hedge fill drift guard: at this bot's target width, would the hedge still fill?
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
             _current_fav_bid = _best_bid(ob, fav_side)
-            _phl_price_lean = abs(current_dog_bid - _current_fav_bid) if _current_fav_bid else 0
-            if _phl_price_lean > 30 or current_dog_bid <= 3:
+            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
+            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
+            _avg_dog_est = max(1, anchor_base - anchor_depth)  # estimate new avg dog price
+            _target_width = bot.get('target_width', 3)
+            _hedge_price = 100 - _avg_dog_est - _target_width
+            _hedge_gap = (_current_fav_bid - _hedge_price) if _current_fav_bid and _hedge_price > 0 else 99
+            if _hedge_gap > 5 or current_dog_bid <= 3:
                 bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
                     'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
-                    'price_lean': _phl_price_lean, 'reason': 'blowout_drift',
+                    'avg_dog_est': _avg_dog_est, 'target_width': _target_width,
+                    'hedge_price': _hedge_price, 'hedge_gap': _hedge_gap,
+                    'reason': 'hedge_unfillable' if _hedge_gap > 5 else 'dog_dead',
                 })
-                return  # game too lopsided — wait for it to tighten
+                return  # hedge won't fill at this width — wait for market to improve
             # Don't repost if market is dead (bid at 1c = pointless)
             if current_dog_bid <= 1:
                 bot['status'] = 'completed'
@@ -9520,8 +9532,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 _audit('PHANTOM_REPEAT_SKIP', bot_id, {'dog_bid': current_dog_bid})
                 save_state()
                 return
-            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
-            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
+            # spread and anchor_base already computed above for hedge check
 
             # Batch-place all rungs for new cycle — depth floor anchored to rung 0
             repeat_ph_group = _create_order_group()

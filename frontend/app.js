@@ -1033,33 +1033,41 @@ function getRecommendedPresets(tier, signalType, market) {
     // If no market data, just return signal-based range
     if (!market) return signalRange;
 
-    // Check which widths are actually profitable at current prices
-    const profitable = [];
+    const yesBid = getPrice(market, 'yes_bid') || 0;
+    const noBid = getPrice(market, 'no_bid') || 0;
+    if (yesBid <= 0 || noBid <= 0) return signalRange;
+
+    // Score each width by how close the orders post to current bids (= fill likelihood)
+    // Closer to bid = fills faster. Far from bid = sits in queue forever.
+    const scored = [];
     for (const w of ALL_PRESET_WIDTHS) {
         const arb = calculateArbPrices(market, w);
-        const combined = arb.targetYes + arb.targetNo;
-        const profit = 100 - combined;
-        // Must be profitable (positive spread) AND under ceiling
-        if (profit > 0 && combined < 98) {
-            profitable.push(w);
-        }
+        const yesGap = yesBid - arb.targetYes;  // how far below YES bid
+        const noGap = noBid - arb.targetNo;      // how far below NO bid
+        const worstGap = Math.max(yesGap, noGap); // the side that's hardest to fill
+        // Skip widths where either order would be at 1¢ floor (dog crushed)
+        if (arb.targetYes <= 1 || arb.targetNo <= 1) continue;
+        scored.push({ width: w, worstGap, yesGap, noGap });
     }
 
-    if (profitable.length === 0) return signalRange; // fallback
+    if (scored.length === 0) return signalRange;
 
-    // Intersect: widths that are both signal-recommended AND profitable
-    const intersected = signalRange.filter(w => profitable.includes(w));
+    // Fillable = worst gap ≤ 5¢ from bid (reasonable fill distance)
+    const fillable = scored.filter(s => s.worstGap <= 5).map(s => s.width);
 
-    // If intersection is empty (signal range doesn't overlap with profitable),
-    // use the profitable widths closest to the signal range
-    if (intersected.length === 0) {
+    // Intersect fillable with signal range
+    const intersected = signalRange.filter(w => fillable.includes(w));
+
+    if (intersected.length > 0) return intersected;
+
+    // If no overlap, pick fillable widths closest to signal range
+    if (fillable.length > 0) {
         const sigMid = signalRange[Math.floor(signalRange.length / 2)];
-        // Pick 4 profitable widths closest to signal midpoint
-        const sorted = profitable.slice().sort((a, b) => Math.abs(a - sigMid) - Math.abs(b - sigMid));
+        const sorted = fillable.slice().sort((a, b) => Math.abs(a - sigMid) - Math.abs(b - sigMid));
         return sorted.slice(0, 4);
     }
 
-    return intersected;
+    return signalRange;
 }
 
 function isKalshiLive(market) {

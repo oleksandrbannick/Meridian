@@ -555,9 +555,10 @@
                                     <div><strong style="color:#00d4ff;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
                                 </div>
                                 <div style="border-top:1px solid #1e2740;padding-top:6px;font-size:10px;color:#8892a6;">
-                                    <strong style="color:#00d4ff;">Ghost label: YES bid / NO bid</strong> (e.g. <strong style="color:#ccc;">48/52</strong> = YES at 48¢, NO at 52¢)<br>
-                                    This shows where your maker orders post relative to.<br>
-                                    <span style="color:#ff8800;">⚠️</span> = one side has a much wider spread — hedge on the thin side may be slow to fill.
+                                    <strong style="color:#00d4ff;">Ghost label: YES spread / NO spread</strong> (e.g. <strong style="color:#00ff88;">1/1</strong> = 1¢ gap on each side)<br>
+                                    Shows the bid-ask gap on each side. Apex needs both sides tight for fills on both legs.<br>
+                                    <span style="color:#00ff88;">Green</span> = both ≤3¢ (good) · <span style="color:#ffaa00;">Yellow ⚠️</span> = one side 4-5¢ (risky) · No ghost if both &gt;5¢<br>
+                                    Ghost doesn't show at all if both sides are broken (&gt;5¢ gap).
                                 </div>
                             </div>
 

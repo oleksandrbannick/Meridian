@@ -2274,26 +2274,35 @@ function createMarketRow(market, label) {
     // Recommend on any live game with decent liquidity on both sides.
     if (liq.yesBid > 0 && liq.noBid > 0 && !botTypes.apex) {
         const bidSum = liq.yesBid + liq.noBid;
-        const spread = Math.abs(liq.yesBid - liq.noBid);
+        const priceLean = Math.abs(liq.yesBid - liq.noBid);
         const isLiveGame = isKalshiLive(market);
-        if (isLiveGame && bidSum >= 90) {
-            // Live game with real liquidity — recommend with OBI context
-            const liqTip = liq.spreadImbalance >= 3
-                ? ` · ${liq.thinSide.toUpperCase()} thin (${liq[liq.thinSide + 'Spread']}¢) / ${liq.thickSide.toUpperCase()} thick (${liq[liq.thickSide + 'Spread']}¢)`
-                : '';
-            // OBI warning: if one side has much wider spread, hedging that side is risky
-            const obiWarn = Math.abs(liq.obi) > 0.5 ? ` · ⚠️ ${liq.thinSide.toUpperCase()} side thin` : '';
-            const _apexLabel = spread <= 10 ? `${liq.yesBid}/${liq.noBid}` : `${liq.yesBid}/${liq.noBid}`;
-            const _apexWarnLabel = Math.abs(liq.obi) > 0.5 ? ' ⚠️' : '';
-            if (spread <= 10) {
-                recoTypes.push({ type: 'apex', label: `${_apexLabel}${_apexWarnLabel}`, tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility${liqTip}${obiWarn}` });
-            } else if (spread <= 25) {
-                recoTypes.push({ type: 'apex', label: `${_apexLabel}${_apexWarnLabel}`, tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths${liqTip}${obiWarn}` });
-            } else if (spread <= 50) {
-                recoTypes.push({ type: 'apex', label: `${_apexLabel}${_apexWarnLabel}`, tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths${liqTip}${obiWarn}` });
-            }
-        } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && liq.avgSpread <= 5) {
-            recoTypes.push({ type: 'apex', label: `${liq.yesBid}/${liq.noBid}`, tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢, ${liq.avgSpread}¢ spread` });
+        const ySpr = liq.yesSpread;
+        const nSpr = liq.noSpread;
+        const bothTight = ySpr <= 3 && nSpr <= 3;
+        const oneThin = (ySpr > 3 && ySpr <= 5) || (nSpr > 3 && nSpr <= 5);
+        const bothBroken = ySpr > 5 && nSpr > 5;
+        // Label: YES spread / NO spread (what you can't see without opening the book)
+        const _apexSpreadLabel = `${ySpr}/${nSpr}`;
+        const _apexWarn = (!bothTight && !bothBroken) ? ' ⚠️' : '';
+        const _apexLabelColor = bothTight ? '#00ff88' : bothBroken ? '#ff4444' : '#ffaa00';
+        const leanLabel = priceLean <= 10 ? 'coin-flip' : priceLean <= 25 ? 'lean game' : 'strong lean';
+        if (isLiveGame && bidSum >= 90 && !bothBroken) {
+            // Live game — show spread on each side
+            const spreadTip = bothTight ? 'both sides tight — fills on both legs'
+                : `${liq.thinSide.toUpperCase()} side has ${Math.max(ySpr,nSpr)}¢ gap — that leg may be slow to fill`;
+            recoTypes.push({
+                type: 'apex',
+                label: `${_apexSpreadLabel}${_apexWarn}`,
+                labelColor: _apexLabelColor,
+                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · YES spread ${ySpr}¢ / NO spread ${nSpr}¢ · ${spreadTip}`,
+            });
+        } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && bothTight) {
+            recoTypes.push({
+                type: 'apex',
+                label: `${_apexSpreadLabel}`,
+                labelColor: '#00ff88',
+                tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢ · YES spread ${ySpr}¢ / NO spread ${nSpr}¢ — both tight`,
+            });
         }
     }
     // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,

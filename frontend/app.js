@@ -2306,7 +2306,7 @@ function createMarketRow(market, label) {
         const favSpread = liq.favSpread;
         const dogSideLabel = liq.dogSide.toUpperCase();
         const pq = liq.phantomQuality;
-        const obiLabel = liq.obi < -0.3 ? ' · 📉 dog selling' : liq.obi > 0.3 ? ' · ⚠️ dog buying' : '';
+        const obiLabel = liq.obi < -0.3 ? ' · ✅ dog selling' : liq.obi > 0.3 ? ' · ❌ dog buying' : '';
         if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && favSpread <= 5) {
             const liqLabel = favSpread <= 2 ? 'thick' : favSpread <= 3 ? 'good' : 'ok';
             const qualLabel = pq >= 60 ? '🟢' : pq >= 35 ? '🟡' : '🔴';

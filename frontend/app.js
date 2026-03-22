@@ -3294,13 +3294,12 @@ function initAnchorDogPrices() {
         _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
     }
     // Auto-adjust existing rungs to track market (and update offsets when depth is auto)
-    // Depth floor on rung 2: rung[1] sits at anchorDepth, rung[0] is spacing-above
+    // Depth floor on rung 0: rung[0] sits at anchorDepth, deeper rungs stagger below
     if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
-        const depthOffset = _anchorRungs.length > 1 ? _anchorRungSpacing : 0;
         for (let i = 0; i < _anchorRungs.length; i++) {
             const rung = _anchorRungs[i];
-            if (isAutoDepth) rung.offset = anchorDepth - depthOffset + (i * _anchorRungSpacing);
-            const off = rung.offset || (anchorDepth - depthOffset + (i * _anchorRungSpacing));
+            if (isAutoDepth) rung.offset = anchorDepth + (i * _anchorRungSpacing);
+            const off = rung.offset || (anchorDepth + (i * _anchorRungSpacing));
             rung.price = Math.max(1, anchorBase - off);
         }
     }
@@ -3318,7 +3317,7 @@ function addAnchorRung() {
     // Default offset: 2c deeper than the deepest existing rung
     const maxOffset = _anchorRungs.length > 0
         ? Math.max(..._anchorRungs.map(r => r.offset || 5))
-        : 3;  // first rung starts at depth - 2 so second is at depth
+        : 5;  // first rung starts at full anchor_depth
     const newOffset = maxOffset + 2;
     const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
     const newPrice = Math.max(1, anchorBase - newOffset);
@@ -3328,7 +3327,7 @@ function addAnchorRung() {
         const baseQty = _anchorRungs[0].qty;
         _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
     }
-    // Recalculate all rung offsets with depth-floor-on-rung-2 logic
+    // Recalculate all rung offsets with depth-floor-on-rung-0 logic
     initAnchorDogPrices();
 }
 

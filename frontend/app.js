@@ -10961,44 +10961,61 @@ async function loadMiddleHistory() {
                     </div>
                 </div>
                 ${(isScrape || isEnhance) ? (() => {
-                    // Rebalancer trades: show filled leg + sell-back, not the standard two-leg grid
+                    // Rebalancer trades: show BOTH legs side by side (filled + unfilled)
+                    // with the rebalancer sell-back info inside the filled leg's box
                     const fLeg = t.filled_leg || 'a';
-                    const fTeam = fLeg === 'a' ? (t.team_b_name || '') : (t.team_a_name || '');
-                    const fSpread = fLeg === 'a' ? (t.spread_a || '') : (t.spread_b || '');
-                    const fLabel = fTeam ? `${fTeam} +${fSpread}` : `Leg ${fLeg.toUpperCase()}`;
                     const buyPrice = t.fill_price || t.target_price || '?';
                     const sellPrice = t.sl_sell_price || '?';
                     const qty = t.qty || 1;
                     const sellProfit = sellPrice !== '?' && buyPrice !== '?' ? (sellPrice - buyPrice) * qty : null;
+                    // Build both legs with correct labels
+                    const legA = {
+                        label: t.team_b_name ? `${t.team_b_name} +${t.spread_a||''}` : (t.ticker_a || 'Leg A'),
+                        price: fLeg === 'a' ? buyPrice : (t.target_price || '?'),
+                        filled: fLeg === 'a',
+                        qty: qty,
+                    };
+                    const legB = {
+                        label: t.team_a_name ? `${t.team_a_name} +${t.spread_b||''}` : (t.ticker_b || 'Leg B'),
+                        price: fLeg === 'b' ? buyPrice : (t.target_price || '?'),
+                        filled: fLeg === 'b',
+                        qty: qty,
+                    };
+                    const filledLeg = fLeg === 'a' ? legA : legB;
                     return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-                        <div style="background:#0a0e1a;border:2px solid #aa66ff88;border-radius:8px;padding:10px;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                                <span style="color:#aa66ff;font-size:9px;font-weight:800;">NO · BOUGHT</span>
-                                <span style="background:#aa66ff22;color:#aa66ff;font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">FILLED</span>
-                            </div>
-                            <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;">${fLabel}</div>
-                            <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
-                                <span style="color:#fff;font-weight:700;">@ ${buyPrice}¢</span>
-                                <span style="color:#8892a6;">×${qty}</span>
-                            </div>
-                            <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
-                                <div style="flex:1;height:5px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                                    <div style="width:100%;height:100%;background:#aa66ff;border-radius:3px;"></div>
+                        ${[legA, legB].map(leg => {
+                            const isFilled = leg.filled;
+                            const borderCol = isFilled ? '#aa66ff88' : '#333';
+                            const fillPct = isFilled ? 100 : 0;
+                            const fillCol = isFilled ? '#aa66ff' : '#333';
+                            const statusBadge = isFilled ? '<span style="background:#aa66ff22;color:#aa66ff;font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">FILLED</span>'
+                                : '<span style="background:#33333388;color:#555;font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">NOT FILLED</span>';
+                            return `<div style="background:#0a0e1a;border:2px solid ${borderCol};border-radius:8px;padding:10px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                    <span style="color:${isFilled ? '#aa66ff' : '#555'};font-size:9px;font-weight:800;">NO · BOUGHT</span>
+                                    ${statusBadge}
                                 </div>
-                                <span style="color:#aa66ff;font-weight:700;font-size:9px;">${qty}/${qty} ✓</span>
-                            </div>
-                        </div>
-                        <div style="background:#0a0e1a;border:2px solid ${isScrape ? (net >= 0 ? '#00ff8888' : '#ff444488') : '#00ff8888'};border-radius:8px;padding:10px;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                                <span style="color:${isScrape ? '#ff8800' : '#00ff88'};font-size:9px;font-weight:800;">${isScrape ? '🔄 SOLD BACK' : '💰 ENHANCED'}</span>
-                            </div>
-                            <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;">Rebalancer ${isScrape ? 'Exit' : 'Sale'}</div>
-                            <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
-                                <span style="color:#fff;font-weight:700;">@ ${sellPrice}¢</span>
-                                <span style="color:#8892a6;">×${qty}</span>
-                            </div>
-                            ${sellProfit !== null ? `<div style="color:${sellProfit >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;margin-top:6px;">${sellProfit >= 0 ? '+' : ''}${sellProfit}¢ ${isScrape ? (sellProfit >= 0 ? 'recovered' : 'lost') : 'recovered'}</div>` : ''}
-                        </div>
+                                <div style="color:${isFilled ? '#fff' : '#555'};font-size:12px;font-weight:600;margin-bottom:4px;">${leg.label}</div>
+                                <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
+                                    <span style="color:${isFilled ? '#fff' : '#555'};font-weight:700;">@ ${leg.price}¢</span>
+                                    <span style="color:#8892a6;">×${leg.qty}</span>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+                                    <div style="flex:1;height:5px;background:#1a2540;border-radius:3px;overflow:hidden;">
+                                        <div style="width:${fillPct}%;height:100%;background:${fillCol};border-radius:3px;"></div>
+                                    </div>
+                                    <span style="color:${isFilled ? '#aa66ff' : '#555'};font-weight:700;font-size:9px;">${isFilled ? leg.qty : 0}/${leg.qty}${isFilled ? ' ✓' : ''}</span>
+                                </div>
+                                ${isFilled ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;">
+                                    <div style="color:${isScrape ? '#ff8800' : '#00ff88'};font-size:9px;font-weight:800;margin-bottom:4px;">${isScrape ? '🔄 REBALANCER SOLD' : '💰 ENHANCED'}</div>
+                                    <div style="display:flex;gap:6px;align-items:center;font-size:11px;">
+                                        <span style="color:#fff;font-weight:700;">@ ${sellPrice}¢</span>
+                                        <span style="color:#8892a6;">×${qty}</span>
+                                    </div>
+                                    ${sellProfit !== null ? `<div style="color:${sellProfit >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;margin-top:4px;">${sellProfit >= 0 ? '+' : ''}${sellProfit}¢ ${sellProfit >= 0 ? 'recovered' : 'lost'}</div>` : ''}
+                                </div>` : ''}
+                            </div>`;
+                        }).join('')}
                     </div>`;
                 })() : `<!-- Side by side legs -->
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
@@ -11033,8 +11050,11 @@ async function loadMiddleHistory() {
                 </div>`}
                 <!-- Trade details -->
                 <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1e2740;align-items:center;">
-                    ${arbLabel}
-                    ${totalCost > 0 ? `<span style="color:#8892a6;">Cost: ${totalCost}¢ ($${(totalCost * (l1.qty||1) / 100).toFixed(2)})</span>` : ''}
+                    ${(isScrape || isEnhance)
+                        ? `<span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${isScrape ? 'Rebalancer exit' : 'Enhanced'}: ${net >= 0 ? '+' : ''}${net}¢</span>
+                           <span style="color:#8892a6;">Bought @ ${t.fill_price||t.target_price||'?'}¢ · Sold @ ${t.sl_sell_price||'?'}¢</span>`
+                        : `${arbLabel}
+                           ${totalCost > 0 ? `<span style="color:#8892a6;">Cost: ${totalCost}¢ ($${(totalCost * (l1.qty||1) / 100).toFixed(2)})</span>` : ''}`}
                     <span style="color:#8892a6;">×${l1.qty || t.qty || '?'}</span>
                 </div>
                 <div style="display:flex;gap:12px;font-size:10px;flex-wrap:wrap;margin-top:6px;color:#555;">

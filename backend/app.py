@@ -7118,19 +7118,18 @@ def create_ladder_bot():
         fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
 
         # Smart pricing: adjust all rungs relative to live price at order creation time
-        # Depth floor anchors to rung 2 (middle rung) — rung 1 sits spacing-above
+        # Depth floor anchors to rung 0 (first rung) — all rungs sit at or below anchor_depth
         rung_spacing = 2
         if current_dog_bid > 0:
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-            # Rung[1] = anchor_base - anchor_depth, so rung[0] = anchor_base - anchor_depth + spacing
-            depth_offset = rung_spacing if len(rungs_input) > 1 else 0
-            smart_first = max(1, anchor_base - anchor_depth + depth_offset)
+            # Rung[0] = anchor_base - anchor_depth (first rung is the depth floor)
+            smart_first = max(1, anchor_base - anchor_depth)
 
             # Apply per-rung stagger from smart_first
             print(f'👻 PHANTOM SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
                   f'base={"ask" if spread > 2 else "bid"} anchor_depth={anchor_depth} smart_first={smart_first} '
-                  f'(depth floor on rung 2)')
+                  f'(depth floor on rung 0)')
             for idx, r in enumerate(rungs_input):
                 r['price'] = max(1, smart_first - (idx * rung_spacing))
                 print(f'   rung[{idx}] → {r["price"]}¢ (depth={anchor_base - r["price"]}¢)')
@@ -8245,8 +8244,19 @@ def _handle_phantom(bot_id, bot, actions):
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
         timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
 
-        if gap_triggered or timer_triggered:
-            trigger_reason = f'gap={gap}¢≥{gap_thresh}¢' if gap_triggered else f'timer={age_min:.1f}m'
+        # Retreat check: if bid crept TOWARD our dog, depth floor violated → retreat away
+        retreat_triggered = False
+        if dog_filled == 0 and ws_dog_bid > 0 and since_last_repost >= cooldown_s:
+            _anchor_depth = bot.get('anchor_depth', 5)
+            _dog_price = bot.get('dog_price', 0)
+            _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
+            if 0 <= _depth_gap < _anchor_depth:
+                retreat_triggered = True
+
+        if gap_triggered or timer_triggered or retreat_triggered:
+            trigger_reason = (f'retreat depth={_depth_gap}¢<{_anchor_depth}¢' if retreat_triggered
+                              else f'gap={gap}¢≥{gap_thresh}¢' if gap_triggered
+                              else f'timer={age_min:.1f}m')
             try:
                 api_rate_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
@@ -8288,7 +8298,8 @@ def _handle_phantom(bot_id, bot, actions):
                 new_dog_price = max(1, anchor_base - anchor_depth)
 
                 # Don't repost if price hasn't changed meaningfully (within 1c)
-                if abs(new_dog_price - bot['dog_price']) <= 1:
+                # Exception: always repost on retreat to maintain depth floor
+                if abs(new_dog_price - bot['dog_price']) <= 1 and not retreat_triggered:
                     bot['posted_at'] = now  # reset timer so we check again later
                     return
 
@@ -9110,15 +9121,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
 
-            # Batch-place all rungs for new cycle — depth floor anchored to rung 2
+            # Batch-place all rungs for new cycle — depth floor anchored to rung 0
             repeat_ph_group = _create_order_group()
             repeat_specs = []
             repeat_qtys = []
             _rung_spacing = bot.get('rung_spacing', 2)
-            _num_rungs = len(bot.get('rungs', []))
-            _depth_offset = _rung_spacing if _num_rungs > 1 else 0
             for rung in bot.get('rungs', []):
-                rung_price = max(1, anchor_base - anchor_depth + _depth_offset - (len(repeat_specs) * _rung_spacing))
+                rung_price = max(1, anchor_base - anchor_depth - (len(repeat_specs) * _rung_spacing))
                 rung_qty = rung.get('qty', qty)
                 repeat_specs.append({'ticker': ticker, 'side': dog_side, 'count': rung_qty, 'price': rung_price})
                 repeat_qtys.append(rung_qty)
@@ -9259,9 +9268,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         retreat_triggered = False
         if total_fill == 0 and current_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
-            _mid_idx = min(1, len(bot.get('rungs', [])) - 1)
-            _mid_price = bot['rungs'][_mid_idx]['price'] if bot.get('rungs') else 0
-            _depth_gap = current_dog_bid - _mid_price if _mid_price > 0 else 999
+            _first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
+            _depth_gap = current_dog_bid - _first_price if _first_price > 0 else 999
             if 0 <= _depth_gap < _anchor_depth:
                 retreat_triggered = True
 
@@ -9306,15 +9314,14 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     save_state()
                     return
 
-                # Smart pricing — depth floor anchored to rung 2 (middle rung)
+                # Smart pricing — depth floor anchored to rung 0 (first rung)
                 spread = (rp_dog_ask - rp_dog_bid) if rp_dog_ask > 0 else 1
                 anchor_base = rp_dog_ask if spread > 2 else rp_dog_bid
                 _rung_spacing = bot.get('rung_spacing', 2)
-                _depth_offset = _rung_spacing if len(bot.get('rungs', [])) > 1 else 0
-                smart_first = max(1, anchor_base - anchor_depth + _depth_offset)
+                smart_first = max(1, anchor_base - anchor_depth)
 
                 old_first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
-                if abs(smart_first - old_first_price) > 1:
+                if abs(smart_first - old_first_price) > 1 or retreat_triggered:
                     # Cancel old orders via group (1 call) or individual fallback
                     _ph_old_group = bot.get('_order_group_id')
                     if _ph_old_group:

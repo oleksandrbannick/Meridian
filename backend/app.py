@@ -6861,7 +6861,7 @@ def _execute_apex_completion(bot_id):
             bot['_ws_fill_handling'] = False
             bot['_hedge_verified'] = False
             bot['hedge_history'] = []
-            bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
+            # lifetime_pnl already updated above (line 6852) — don't double-add
             bot['cumulative_pnl'] = 0
             bot['completed_rungs_count'] = 0
             bot['hedge_order_id'] = None
@@ -10068,11 +10068,24 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         # Absolute timeout
         if wait_s >= hedge_timeout_s:
-            print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling back')
+            # Check for partial fav fills before selling back
+            _partial_fav = bot.get('fav_fill_qty', 0)
+            if _partial_fav > 0 and _partial_fav < hedge_qty:
+                # Partial hedge filled — record those as completed, sell back only unhedged
+                print(f'⏰ PHANTOM TIMEOUT: {bot_id} partial fav fill {_partial_fav}/{hedge_qty} — completing partial, selling back rest')
+                bot_log('PHANTOM_LADDER_FAV_TIMEOUT_PARTIAL', bot_id, {
+                    'wait_s': round(wait_s, 1), 'fav_filled': _partial_fav,
+                    'hedge_qty': hedge_qty, 'unhedged': hedge_qty - _partial_fav,
+                })
+                # Adjust hedge_qty so sell-back only sells the unhedged portion
+                bot['hedge_qty'] = hedge_qty - _partial_fav
+                bot['_partial_fav_completed'] = _partial_fav
+            else:
+                print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s — selling back')
             bot_log('PHANTOM_LADDER_FAV_TIMEOUT', bot_id, {
                 'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
                 'avg_dog': avg_dog, 'fav_price': bot.get('fav_price', 0),
-                'fav_filled': fav_filled, 'hedge_qty': hedge_qty,
+                'fav_filled': fav_filled, 'hedge_qty': bot.get('hedge_qty', hedge_qty),
             })
             try:
                 api_rate_limiter.wait()

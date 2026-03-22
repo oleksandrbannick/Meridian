@@ -8549,11 +8549,14 @@ def _handle_phantom(bot_id, bot, actions):
                 anchor_base = current_dog_ask if spread > 2 else current_dog_bid
                 new_dog_price = max(1, anchor_base - anchor_depth)
 
-                # Don't repost if price hasn't changed meaningfully (within 1c)
-                # Exception: always repost on retreat to maintain depth floor
-                if abs(new_dog_price - bot['dog_price']) <= 1 and not retreat_triggered:
-                    bot['posted_at'] = now  # reset timer so we check again later
+                # Don't repost if price hasn't changed meaningfully
+                # Retreat also requires ≥2¢ move to avoid jitter (1¢ bid oscillation is noise)
+                _price_delta = abs(new_dog_price - bot['dog_price'])
+                if _price_delta <= 1 and not retreat_triggered:
+                    bot['posted_at'] = now
                     return
+                if retreat_triggered and _price_delta < 2:
+                    return  # retreat jitter filter: don't waste API calls on <2¢ moves
 
                 # Track old order ID before overwriting (in case cancel fails)
                 all_dog_ids = bot.get('_all_dog_order_ids', [])
@@ -9597,7 +9600,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 smart_first = max(1, anchor_base - anchor_depth)
 
                 old_first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
-                if abs(smart_first - old_first_price) > 1 or retreat_triggered:
+                _lad_price_delta = abs(smart_first - old_first_price)
+                if retreat_triggered and _lad_price_delta < 2:
+                    pass  # retreat jitter filter: don't waste API calls on <2¢ moves
+                elif _lad_price_delta > 1 or retreat_triggered:
                     # Cancel old orders via group (1 call) or individual fallback
                     _ph_old_group = bot.get('_order_group_id')
                     if _ph_old_group:

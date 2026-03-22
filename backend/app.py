@@ -2354,12 +2354,39 @@ def _migrate_005_fix_rebalancer_pnl():
     print(f'📊 Migration 005: fixed P&L on {fixed} rebalancer trades')
 
 # Master migration list — add new migrations at the bottom
+def _migrate_006_dedup_rung_trades():
+    """Remove duplicate rung completion trades caused by race condition.
+    _check_apex_rung_completions was called from 3 places, recording the same
+    rung twice before _profit_recorded flag was saved. Dedup by (bot_id, prices, qty, result, exit_via)."""
+    global trade_history
+    from collections import defaultdict
+    before = len(trade_history)
+    by_bot = defaultdict(list)
+    for t in trade_history:
+        by_bot[t.get('bot_id', 'unknown')].append(t)
+    cleaned = []
+    for bot_id, bt in by_bot.items():
+        bt.sort(key=lambda x: x.get('timestamp', 0))
+        seen = set()
+        for t in bt:
+            key = (t.get('yes_price'), t.get('no_price'), t.get('quantity'),
+                   t.get('result'), t.get('exit_via'))
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(t)
+    cleaned.sort(key=lambda t: t.get('timestamp', 0), reverse=True)
+    trade_history = cleaned
+    removed = before - len(trade_history)
+    print(f'📊 Migration 006: removed {removed} duplicate rung trades ({before} → {len(trade_history)})')
+
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
     ('003_reclean_mar12', _migrate_003_reclean_mar12),
     ('004_fix_completed_labels', _migrate_004_fix_completed_labels),
     ('005_fix_rebalancer_pnl', _migrate_005_fix_rebalancer_pnl),
+    ('006_dedup_rung_trades', _migrate_006_dedup_rung_trades),
 ]
 
 def run_migrations():

@@ -1989,17 +1989,17 @@ def _apex_sellback_check(bot_id, bot, avg_anchor, current_fav_bid, qty):
     sellback_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_taker_side_fee_cents(dog_bid, qty)
     sellback_total = (sellback_loss_per * qty) + sellback_fees
 
-    # Only sell back if it saves at least 2¢/contract (avoid churn on marginal differences)
+    # Sell back whenever it's cheaper than completing — no minimum threshold
     saves_per_contract = (complete_total - sellback_total) / qty if qty > 0 else 0
 
     bot_log('APEX_SELLBACK_CHECK', bot_id, {
         'avg_anchor': avg_anchor, 'fav_bid': current_fav_bid, 'dog_bid': dog_bid,
         'complete_loss': complete_total, 'sellback_loss': sellback_total,
         'saves_per_contract': round(saves_per_contract, 1), 'qty': qty,
-        'decision': 'sell_back' if saves_per_contract >= 2 else 'complete',
+        'decision': 'sell_back' if saves_per_contract > 0 else 'complete',
     })
 
-    return saves_per_contract >= 2
+    return saves_per_contract > 0
 
 
 def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):

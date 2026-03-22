@@ -5188,10 +5188,15 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const combined = avgDogPrice + favPrice;
                     const nextWalkAt = bot.fav_last_walk_at || favPostedAt || 0;
                     const sinceWalk = nextWalkAt > 0 ? Date.now()/1000 - nextWalkAt : 0;
-                    const nextWalkIn = Math.max(0, Math.ceil(20 - sinceWalk));
-                    const walkPct = Math.min(100, ((20 - nextWalkIn) / 20) * 100);
+                    const _phWalkInt = bot._walk_interval != null ? bot._walk_interval : 20;
+                    const nextWalkIn = Math.max(0, Math.ceil(_phWalkInt - sinceWalk));
+                    const walkPct = Math.min(100, ((_phWalkInt - nextWalkIn) / _phWalkInt) * 100);
                     const atBid = favPrice >= favBid && favBid > 0;
                     const atCeiling = combined >= 98;
+                    const _phUrgency = bot._game_urgency || 'normal';
+                    const _phUrgBadge = _phUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
+                        : _phUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>'
+                        : '';
                     const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : wc > 0 ? '📈' : '⏳';
                     const statusText = atCeiling ? 'AT CEILING' : atBid ? 'AT BID' : wc > 0 ? 'WALKING' : 'HEDGE POSTED';
                     const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : secsLeft <= 15 ? '#ff4444' : secsLeft <= 30 ? '#ff8800' : '#00aaff';
@@ -5217,7 +5222,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             </span>
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${wc > 0 ? ` · step #${wc}` : ''}</span>
+                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${wc > 0 ? ` · step #${wc} · ${_phWalkInt}s` : ''} ${_phUrgBadge}</span>
                             <span style="color:${secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff'};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(secsLeft/60)}:${String(Math.floor(secsLeft%60)).padStart(2,'0')}</span>
                         </div>
                     </div><div style="display:none;">`;
@@ -5319,8 +5324,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const firstFillAt = bot.first_fill_at || 0;
     const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
     const atCeiling = combined >= 98;
-    const walkInterval = atCeiling ? 3 : 20;
+    const gameUrgency = bot._game_urgency || 'normal';
+    const walkInterval = bot._walk_interval != null ? bot._walk_interval : (atCeiling ? 3 : 20);
     const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(walkInterval - (nowSec - lastWalkAt))) : walkInterval;
+    const urgencyBadge = gameUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
+        : gameUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>'
+        : gameUrgency === 'halftime' ? '<span style="color:#818cf8;font-weight:700;font-size:9px;background:#818cf822;padding:1px 4px;border-radius:3px;">⏸ HALF</span>'
+        : '';
     const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
     const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
     // Ceiling distance
@@ -5538,8 +5548,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     </span>
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                    <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · filled ${fillAgeStr} ago</span>
-                    ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
+                    <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>
+                    ${urgencyBadge} ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
                 </div>
             </div>`;
         } else if (currentHedgePrice > 0 && currentHedgePrice >= unfilledBid) {
@@ -7522,6 +7532,11 @@ const botBuddyMessages = {
         `<strong>👻 Hard ceiling hit.</strong> Fav too expensive — sold back the anchor`,
         `<strong>👻 Safety net caught it.</strong> Ceiling breached, anchor sold. Discipline > hope`,
     ],
+    apex_sellback: [
+        `<strong>△ Apex escape.</strong> Sell-back cheaper than completing — cut the loss`,
+        `<strong>△ Ceiling hit, sold back.</strong> Dog still had value — saved vs completing`,
+        `<strong>△ Smart exit.</strong> Arb went bad but caught it early — discipline over hope`,
+    ],
     // ── Straight bet filled ──
     bet_filled: [
         `<strong>🎯 Limit filled!</strong> Your straight bet just got eaten`,
@@ -7567,7 +7582,7 @@ function updateBotBuddyMsg(state, force = false) {
     const dotColor = state === 'idle' ? '#555' :
                      state === 'stop_loss' || state === 'near_sl' || state === 'losing' ||
                      state === 'apex_loss' || state === 'phantom_loss' || state === 'middle_loss' ||
-                     state === 'bet_loss' || state === 'loss_complete' || state === 'anchor_sellback' ? '#ff4444' :
+                     state === 'bet_loss' || state === 'loss_complete' || state === 'anchor_sellback' || state === 'apex_sellback' ? '#ff4444' :
                      state === 'amending' || state === 'timeout_retry' ? '#ff8800' :
                      state === 'celebrating' || state === 'take_profit' ||
                      state === 'apex_win' || state === 'phantom_win' || state === 'middle_win' || state === 'bet_win' ? '#ffdd00' :
@@ -7914,6 +7929,10 @@ function buddyReactToEvent(action) {
         setBuddyMood('alert');
         updateBotBuddyMsg('anchor_sellback', true);
         lockThen(8000);
+    } else if (action.action === 'apex_sellback') {
+        setBuddyMood('alert');
+        updateBotBuddyMsg('apex_sellback', true);
+        lockThen(8000);
     } else if (action.action === 'middle_complete') {
         const pnl = action.profit_cents ?? 0;
         if (pnl > 0) {
@@ -8153,6 +8172,12 @@ async function monitorBots() {
                         const lossStr = `-$${(loss/100).toFixed(2)}`;
                         showNotification(`🛡️ ${action.action === 'hard_ceiling_sellback' ? 'CEILING BREACH' : 'ANCHOR SELLBACK'}: ${lossStr} — sold back`);
                         sendPushNotification('🛡️ Anchor Sellback', `${lossStr} — ceiling breached`);
+                    } else if (action.action === 'apex_sellback') {
+                        const loss = action.loss_cents ?? 0;
+                        const profit = action.profit_cents ?? 0;
+                        const pnlStr = profit > 0 ? `+$${(profit/100).toFixed(2)}` : `-$${(loss/100).toFixed(2)}`;
+                        showNotification(`🔙 APEX SELLBACK: ${pnlStr} — sold dog back (cheaper than completing)`);
+                        sendPushNotification('🔙 Apex Sellback', `${pnlStr} — escape at ceiling`);
                     }
                 });
             }
@@ -10155,6 +10180,7 @@ async function loadTradeHistoryList() {
                          || t.result === 'anchor_dog_complete';
             const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
             const isAnchorSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
+            const isApexSellback = t.result === 'apex_sellback';
             const isCeilingExit = t.result === 'hard_ceiling_sellback';
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
@@ -10183,8 +10209,8 @@ async function loadTradeHistoryList() {
             const pnlColor = isSettledWin ? '#00e5ff' : (isSettledLoss ? '#ff8800' : (pnl >= 0 ? '#00ff88' : '#ff4444'));
             const icon = isSettledWin ? '🏆' : (isSettledLoss ? '🏁' : (pnl >= 0 ? '✅' : '⛔'));
             const isFlip = t.result?.includes('flip_');
-            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isRebalancerScrape ? 'REBALANCER' : (isAnchorSellback ? (t.result === 'ladder_arb_sellback' ? 'SELLBACK' : 'ANCHOR SELLBACK') : (isCeilingExit ? 'CEILING EXIT' : (isManualExit ? 'MANUAL EXIT' : (pnl < 0 ? 'AMENDED' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED'))))))))));
-            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : ((isAnchorSellback || isCeilingExit) ? '#ffaa0033' : (isTimeoutExit ? (pnl >= 0 ? '#ffaa0022' : '#ff880033') : ((isWin) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'))));
+            const resultLabel = isSettledWin ? 'SETTLED WIN' : (isSettledLoss ? 'SETTLED LOSS' : (isRebalancerScrape ? 'REBALANCER' : (isApexSellback ? 'APEX SELLBACK' : (isAnchorSellback ? (t.result === 'ladder_arb_sellback' ? 'SELLBACK' : 'ANCHOR SELLBACK') : (isCeilingExit ? 'CEILING EXIT' : (isManualExit ? 'MANUAL EXIT' : (pnl < 0 ? 'AMENDED' : (isTimeoutExit ? 'AMENDED' : (isWin ? 'FILLED' : (isFlip ? 'FLIPPED' : (isSL ? 'STOP LOSS' : 'STOPPED')))))))))));
+            const borderColor = isSettledWin ? '#00e5ff33' : (isSettledLoss ? '#ff880033' : ((isApexSellback || isAnchorSellback || isCeilingExit) ? '#ffaa0033' : (isTimeoutExit ? (pnl >= 0 ? '#ffaa0022' : '#ff880033') : ((isWin) ? (pnl >= 0 ? '#00ff8822' : '#ff444422') : '#ff444422'))));
             const settleBadge = isSettled ? `<span style="background:${isSettledWin ? '#00e5ff22' : '#ff880022'};color:${isSettledWin ? '#00e5ff' : '#ff8800'};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚖️ SETTLEMENT</span>` : '';
             
             // Display name

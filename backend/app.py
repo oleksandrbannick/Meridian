@@ -1958,11 +1958,204 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
     """Total Kalshi maker fee for both legs of an arb trade, in cents."""
     return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
 
-def _apex_snap_check(anchor_price, bid_price, qty=1):
+def _apex_snap_check(anchor_price, bid_price, qty=1, snap_ceiling=None):
     """Return True if snapping to bid is profitable. Simple cents check — no fee math.
-    Snap only if combined <= SNAP_CEILING_CENTS (98¢ = 2¢ minimum profit)."""
+    Snap only if combined <= snap_ceiling (default SNAP_CEILING_CENTS)."""
     combined = anchor_price + bid_price
-    return combined <= SNAP_CEILING_CENTS
+    return combined <= (snap_ceiling if snap_ceiling is not None else SNAP_CEILING_CENTS)
+
+
+def _apex_sellback_check(bot_id, bot, avg_anchor, current_fav_bid, qty):
+    """Compare sell-back cost vs completion cost at ceiling. Return True if sell-back is cheaper.
+    Only meaningful when at_ceiling (combined >= 98¢)."""
+    ticker = bot['ticker']
+    filled_side = bot.get('first_fill_side', 'yes')
+    # For Apex: the filled side IS the anchor/dog side
+    dog_side = filled_side
+
+    # Get current dog bid from WS cache (fast, no API call)
+    dog_bid = bot.get(f'live_{dog_side}_bid', 0)
+    if not dog_bid or dog_bid < 3:
+        return False  # dog nearly worthless, just complete the arb
+
+    # Cost to complete: what we'd lose finishing the arb
+    # complete_loss_per = combined - 100 (how much over breakeven)
+    complete_loss_per = max(0, avg_anchor + current_fav_bid - 100)
+    complete_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_side_fee_cents(current_fav_bid, qty)
+    complete_total = (complete_loss_per * qty) + complete_fees
+
+    # Cost to sell back: what we'd lose dumping the dog
+    sellback_loss_per = max(0, avg_anchor - dog_bid)
+    sellback_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_taker_side_fee_cents(dog_bid, qty)
+    sellback_total = (sellback_loss_per * qty) + sellback_fees
+
+    # Only sell back if it saves at least 2¢/contract (avoid churn on marginal differences)
+    saves_per_contract = (complete_total - sellback_total) / qty if qty > 0 else 0
+
+    bot_log('APEX_SELLBACK_CHECK', bot_id, {
+        'avg_anchor': avg_anchor, 'fav_bid': current_fav_bid, 'dog_bid': dog_bid,
+        'complete_loss': complete_total, 'sellback_loss': sellback_total,
+        'saves_per_contract': round(saves_per_contract, 1), 'qty': qty,
+        'decision': 'sell_back' if saves_per_contract >= 2 else 'complete',
+    })
+
+    return saves_per_contract >= 2
+
+
+def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
+    """Execute Apex sell-back: cancel hedge order, sell dog position, record trade."""
+    now = time.time()
+    ticker = bot['ticker']
+    filled_side = bot.get('first_fill_side', 'yes')
+    dog_side = filled_side
+    qty = bot.get('hedge_qty', 1)  # total filled anchor qty
+
+    print(f'🔙 APEX SELLBACK START: {bot_id} avg_anchor={avg_anchor}¢ fav_bid={fav_bid}¢ qty={qty}')
+    bot_log('APEX_SELLBACK_START', bot_id, {
+        'avg_anchor': avg_anchor, 'fav_bid': fav_bid, 'qty': qty,
+        'dog_side': dog_side, 'ticker': ticker,
+    })
+
+    # 1. Cancel the hedge order
+    hedge_oid = bot.get('hedge_order_id')
+    if hedge_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(hedge_oid)
+        except Exception as e:
+            print(f'⚠ APEX SELLBACK: cancel hedge failed: {e}')
+
+    # Also cancel any remaining anchor-side orders (they shouldn't fill after sell-back)
+    group_id = bot.get('_order_group_id')
+    if group_id:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order_group(group_id)
+        except Exception:
+            pass
+
+    # 2. Verify actual fill count on Kalshi
+    actual_qty = qty
+    for rung in bot.get('rungs', []):
+        oid = rung.get(f'{dog_side}_order_id')
+        if oid:
+            try:
+                api_rate_limiter.wait()
+                resp = kalshi_client.get_order(oid)
+                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                filled = _parse_fill_count(ord_data)
+                rung[f'{dog_side}_fill_qty'] = filled
+            except Exception:
+                pass
+
+    # Recalculate actual filled qty from rungs
+    actual_qty = sum(r.get(f'{dog_side}_fill_qty', 0) for r in bot.get('rungs', []))
+    if actual_qty <= 0:
+        print(f'⚠ APEX SELLBACK: no fills found — aborting sell-back')
+        bot_log('APEX_SELLBACK_NO_FILLS', bot_id, {'qty': qty, 'actual_qty': actual_qty})
+        return
+
+    # Check if hedge partially filled — only sell back the unhedged portion
+    hedge_filled = bot.get('_hedge_fill_count', 0)
+    sell_qty = actual_qty - hedge_filled
+    if sell_qty <= 0:
+        print(f'⚠ APEX SELLBACK: hedge already filled {hedge_filled}/{actual_qty} — no sell-back needed')
+        return
+
+    # 3. Execute sell
+    sold_back, sell_info = execute_sell(ticker, dog_side, sell_qty, reason=f'apex_sellback_{bot_id}')
+
+    if not sold_back:
+        print(f'⚠ APEX SELLBACK FAILED: {bot_id} — sell did not fill, will retry')
+        bot['_apex_sellback_attempts'] = bot.get('_apex_sellback_attempts', 0) + 1
+        bot_log('APEX_SELLBACK_FAILED', bot_id, {
+            'qty': sell_qty, 'attempt': bot['_apex_sellback_attempts'],
+            'sell_info': str(sell_info)[:200],
+        }, level='ERROR')
+        _audit('APEX_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': bot['_apex_sellback_attempts']})
+        actions.append({'bot_id': bot_id, 'action': 'apex_sellback_retry'})
+        return
+
+    sell_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or 0
+    already_cleared = (sell_info or {}).get('already_cleared', False)
+
+    if already_cleared and not sell_price:
+        loss_cents = 0
+        sell_price = avg_anchor
+    else:
+        loss_cents = (avg_anchor - sell_price) * sell_qty if sell_price else avg_anchor * sell_qty
+
+    # Fees: maker on original anchor buy + taker on sell
+    buy_fee = _kalshi_side_fee_cents(avg_anchor, sell_qty)
+    sell_fee = _kalshi_taker_side_fee_cents(sell_price, sell_qty) if sell_price else 0
+    total_fees = buy_fee + sell_fee
+    loss_cents += total_fees
+
+    # If hedge partially filled, add those as profit
+    partial_profit = 0
+    if hedge_filled > 0:
+        hedge_price = bot.get('hedge_price', 0)
+        partial_per = 100 - avg_anchor - hedge_price
+        hedge_fee = _kalshi_side_fee_cents(avg_anchor, hedge_filled) + _kalshi_side_fee_cents(hedge_price, hedge_filled)
+        partial_profit = max(0, partial_per * hedge_filled - hedge_fee)
+
+    if loss_cents < 0:
+        profit_cents = abs(loss_cents) + partial_profit
+        loss_cents = 0
+    else:
+        profit_cents = partial_profit
+        loss_cents = max(0, loss_cents - partial_profit)
+
+    # Update session P&L
+    if profit_cents > 0:
+        session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + profit_cents
+    if loss_cents > 0:
+        session_pnl['gross_loss_cents'] += loss_cents
+    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents - loss_cents
+    bot['_trade_recorded'] = True
+
+    _record_trade({
+        'bot_id': bot_id, 'ticker': ticker,
+        'yes_price': avg_anchor if dog_side == 'yes' else fav_bid,
+        'no_price': avg_anchor if dog_side == 'no' else fav_bid,
+        'quantity': sell_qty,
+        'profit_cents': profit_cents,
+        'loss_cents': loss_cents,
+        'fee_cents': total_fees,
+        'result': 'apex_sellback',
+        'exit_via': f'apex_sell_back_{dog_side}',
+        'first_leg': dog_side,
+        'dog_side': dog_side,
+        'dog_price': avg_anchor,
+        'sell_back_price': sell_price,
+        'fav_bid_at_sellback': fav_bid,
+        'hedge_filled': hedge_filled,
+        'timestamp': now,
+        'placed_at': bot.get('created_at', now),
+        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+        'arb_width': bot.get('avg_width', 0) or bot.get('target_width', 0),
+        'game_phase': bot.get('game_phase', 'live'),
+        'game_context': _get_game_context(ticker),
+        'fill_source': 'apex_sellback',
+        'bot_category': 'ladder_arb',
+    }, bot)
+
+    bot_log('APEX_SELLBACK', bot_id, {
+        'avg_anchor': avg_anchor, 'sell_price': sell_price,
+        'loss_cents': loss_cents, 'profit_cents': profit_cents,
+        'fav_bid': fav_bid, 'sell_qty': sell_qty, 'hedge_filled': hedge_filled,
+    })
+    print(f'🔙 APEX SELLBACK: {bot_id} sold {sell_qty}×{dog_side}@{sell_price}¢ (avg_anchor={avg_anchor}¢) '
+          f'loss={loss_cents}¢ profit={profit_cents}¢ hedge_filled={hedge_filled}')
+    _audit('APEX_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'sell_price': sell_price, 'qty': sell_qty})
+    _audit_position_check(bot_id, ticker, dog_side, 'after_apex_sellback')
+
+    # Mark bot as completed (sell-back is final for Apex — no repeat logic)
+    bot['status'] = 'stopped'
+    bot['stopped_at'] = now
+    save_state()
+    actions.append({'bot_id': bot_id, 'action': 'apex_sellback', 'loss_cents': loss_cents, 'profit_cents': profit_cents})
+
 
 # ─── Width-Based Quantity Scaling ────────────────────────────────────────────
 # When deploying multiple widths (ladder-arb), wider spreads are rarer but more
@@ -8050,6 +8243,65 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 HARD_CEILING_CENTS = 98
 SNAP_CEILING_CENTS = 96  # snap to bid only when combined <= 96¢ (2¢ minimum profit after fees)
 
+# ── Game urgency system: adaptive behavior based on game phase ──
+URGENCY_PARAMS = {
+    'normal':    {'walk_interval': 20, 'snap_ceiling': 96, 'sellback_urgency': 'normal'},
+    'late':      {'walk_interval': 8,  'snap_ceiling': 97, 'sellback_urgency': 'high'},
+    'critical':  {'walk_interval': 3,  'snap_ceiling': 97, 'sellback_urgency': 'immediate'},
+    'halftime':  {'walk_interval': 20, 'snap_ceiling': 96, 'sellback_urgency': 'paused'},
+}
+
+def _get_game_urgency(ticker):
+    """Return game urgency level based on live game state.
+    Returns: 'normal', 'late', 'critical', or 'halftime'."""
+    try:
+        if _is_game_ending(ticker):
+            return 'critical'
+        if _is_halftime(ticker):
+            return 'halftime'
+        # Check if we're in a late-game period
+        score_info = _get_game_score_for_ticker(ticker)
+        if not score_info or score_info.get('status') != 'in':
+            return 'normal'
+        series = ticker.split('-')[0].upper() if ticker else ''
+        rule = None
+        for prefix, r in _LATE_GAME_RULES.items():
+            if series.startswith(prefix):
+                if rule is None or len(prefix) > len(rule[0]):
+                    rule = (prefix, r)
+        if not rule:
+            return 'normal'
+        r = rule[1]
+        period = score_info.get('period', 0)
+        clock = score_info.get('clock', '')
+        secs = _parse_clock_seconds(clock)
+        # Final period (Q4/P3/2nd Half) = 'late'
+        if period >= r['block_period']:
+            return 'late'
+        # Second-to-last period with < 5 min left = 'late' (approaching crunch time)
+        if period == r['block_period'] - 1 and secs is not None and secs < 300:
+            return 'late'
+    except Exception:
+        pass
+    return 'normal'
+
+def _calc_walk_interval(combined, urgency, snap_ready, at_ceiling, needs_drop, snap_revert=False):
+    """Adaptive walk interval based on ceiling proximity and game phase.
+    Returns interval in seconds. 0 = instant."""
+    # Instant actions always stay instant
+    if snap_ready or at_ceiling or needs_drop or snap_revert:
+        return 0
+    # Base interval from game urgency
+    base = URGENCY_PARAMS.get(urgency, {}).get('walk_interval', 20)
+    # Tighten based on ceiling proximity
+    if combined >= 96:
+        return min(base, 3)
+    elif combined >= 92:
+        return min(base, 8)
+    elif combined >= 88:
+        return min(base, 15)
+    return base
+
 def _handle_phantom(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""
     now = time.time()
@@ -8699,7 +8951,7 @@ def _handle_phantom(bot_id, bot, actions):
             except Exception:
                 pass  # non-fatal, fall through to normal timeout
 
-        hedge_timeout_s = bot.get('hedge_timeout_s', 600)
+        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
 
@@ -8711,12 +8963,14 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         # ── Fav Walk-Up System ──
-        # Every WALK_INTERVAL_S, bump fav by 1c toward current bid.
+        # Adaptive walk: speed scales with ceiling proximity and game phase.
         # Hard stop: combined cost (dog + fav) >= WALK_CEILING (98c).
         # After hedge_timeout_s total, if still no fill → sell dog back.
-        WALK_INTERVAL_S = 20
+        _phantom_urgency = _get_game_urgency(ticker)
+        _phantom_snap_ceiling = URGENCY_PARAMS.get(_phantom_urgency, {}).get('snap_ceiling', SNAP_CEILING_CENTS)
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
         dog_price = bot['dog_price']
+        bot['_game_urgency'] = _phantom_urgency
 
         # Check absolute timeout — give up after hedge_timeout_s total
         if wait_s >= hedge_timeout_s:
@@ -8800,19 +9054,38 @@ def _handle_phantom(bot_id, bot, actions):
             current_fav_ask = 0
 
         if current_fav_bid <= 0:
-            # No bid — check if we should bail
+            # No fav bid — patience tier logic before bailing
+            # First half of timeout: only bail on confirmed blowout (dog price crashed 50%+)
+            # Second half: bail if no fav bid (existing behavior)
+            _no_bid_count = bot.get('_no_fav_bid_count', 0) + 1
+            bot['_no_fav_bid_count'] = _no_bid_count
+            _dog_bid_now = bot.get(f'live_{bot["dog_side"]}_bid', dog_price)  # current dog bid from WS
+            _dog_crashed = _dog_bid_now < dog_price * 0.5  # dog lost 50%+ value
+            _patience_half = hedge_timeout_s * 0.5
+            _bail_threshold = hedge_timeout_s * 0.75
+            _urgency = _phantom_urgency
+            # In critical game phase, skip patience — bail immediately
+            _force_bail = _urgency == 'critical'
+            _should_bail = _force_bail or (wait_s >= _bail_threshold) or (wait_s >= _patience_half and _dog_crashed and _no_bid_count >= 2)
+            _patience_tier = 'critical_bail' if _force_bail else 'blowout_bail' if (_dog_crashed and _no_bid_count >= 2) else 'timeout_bail' if wait_s >= _bail_threshold else 'waiting'
             bot_log('PHANTOM_NO_FAV_BID_WALK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
-                'bail_threshold': round(hedge_timeout_s * 0.75, 1),
-                'will_bail': wait_s >= hedge_timeout_s * 0.75,
+                'bail_threshold': round(_bail_threshold, 1),
+                'patience_tier': _patience_tier, 'no_bid_count': _no_bid_count,
+                'dog_price': dog_price, 'dog_bid_now': _dog_bid_now,
+                'dog_crashed': _dog_crashed, 'urgency': _urgency,
+                'will_bail': _should_bail,
             })
-            if wait_s >= hedge_timeout_s * 0.75:
+            if _should_bail:
                 try:
                     kalshi_client.cancel_order(fav_order_id)
                 except Exception:
                     pass
                 _phantom_sell_back(bot_id, bot, dog_price, 0, 999, actions)
             return
+
+        # Fav bid is back — reset no-bid counter
+        bot['_no_fav_bid_count'] = 0
 
         # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
         fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
@@ -8830,10 +9103,12 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Determine action priority
         needs_drop = current_fav_price > walk_target
-        snap_ready = (dog_price + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
+        snap_ready = (dog_price + walk_target) <= _phantom_snap_ceiling and walk_target != current_fav_price
 
-        # Interval: instant for drop/snap, 20s for normal walk
-        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
+        # Interval: adaptive based on ceiling proximity + game urgency
+        _ph_combined = dog_price + current_fav_price
+        walk_interval = _calc_walk_interval(_ph_combined, _phantom_urgency, snap_ready, False, needs_drop)
+        bot['_walk_interval'] = walk_interval
         fav_last_walk = bot.get('fav_last_walk_at') or bot.get('fav_posted_at') or now
         since_last_walk = now - fav_last_walk
 
@@ -8886,6 +9161,7 @@ def _handle_phantom(bot_id, bot, actions):
                     'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
                     'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
                     'wait_s': round(wait_s, 1),
+                    'walk_interval': walk_interval, 'urgency': _phantom_urgency,
                 })
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -9420,7 +9696,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         if not bot.get('dog_filled_at'):
             bot['dog_filled_at'] = bot.get('first_fill_at') or now
         dog_filled_at = bot['dog_filled_at']
-        hedge_timeout_s = bot.get('hedge_timeout_s', 600)
+        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         wait_s = now - dog_filled_at
         if wait_s >= hedge_timeout_s:
             avg_dog = bot.get('avg_fill_price', 0)
@@ -9681,7 +9957,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
 
         # ── Fav Walk-Up (same system as anchor_dog) ──
-        hedge_timeout_s = bot.get('hedge_timeout_s', 600)
+        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
         avg_dog = bot.get('avg_fill_price', 0)
@@ -9710,7 +9986,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
 
         # ── Phantom Ladder Walk + Snap System ──
-        WALK_INTERVAL_S = 20
+        _phl_urgency = _get_game_urgency(ticker)
+        _phl_snap_ceiling = URGENCY_PARAMS.get(_phl_urgency, {}).get('snap_ceiling', SNAP_CEILING_CENTS)
+        bot['_game_urgency'] = _phl_urgency
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
         current_fav_price = bot.get('fav_price', 0)
         if current_fav_price <= 0:
@@ -9728,6 +10006,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         if current_fav_bid <= 0:
             return
 
+        # Fav bid is back — reset no-bid counter
+        bot['_no_fav_bid_count'] = 0
+
         # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
         fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
         if fav_spread >= 2 and current_fav_ask > current_fav_bid:
@@ -9744,10 +10025,12 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         # Determine action priority
         needs_drop = current_fav_price > walk_target
-        snap_ready = (avg_dog + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
+        snap_ready = (avg_dog + walk_target) <= _phl_snap_ceiling and walk_target != current_fav_price
 
-        # Interval: instant for drop/snap, 20s for normal walk
-        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
+        # Interval: adaptive based on ceiling proximity + game urgency
+        _phl_combined = avg_dog + current_fav_price
+        walk_interval = _calc_walk_interval(_phl_combined, _phl_urgency, snap_ready, False, needs_drop)
+        bot['_walk_interval'] = walk_interval
         fav_last_walk = bot.get('fav_last_walk_at') or fav_posted_at or now
         since_last_walk = now - fav_last_walk
 
@@ -9795,6 +10078,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
                     'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
                     'wait_s': round(wait_s, 1),
+                    'walk_interval': walk_interval, 'urgency': _phl_urgency,
                 })
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -10513,9 +10797,11 @@ def _handle_apex(bot_id, bot, actions):
         current_price_for_snap = bot.get('hedge_price', 0)
         anchor_for_snap = bot.get(f'avg_{filled_side}_price', 0)
         rq_for_snap = bot.get('hedge_qty', 1)
+        _apex_urgency = _get_game_urgency(ticker)
+        _apex_snap_ceiling = URGENCY_PARAMS.get(_apex_urgency, {}).get('snap_ceiling', SNAP_CEILING_CENTS)
         snap_ready = (unfilled_bid and unfilled_bid > 0 and current_price_for_snap > 0
                       and anchor_for_snap > 0
-                      and _apex_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap))
+                      and _apex_snap_check(anchor_for_snap, unfilled_bid, rq_for_snap, snap_ceiling=_apex_snap_ceiling))
         at_ceiling = (current_price_for_snap > 0 and anchor_for_snap > 0
                       and anchor_for_snap + current_price_for_snap >= HARD_CEILING_CENTS)
         # Target price: where we SHOULD be sitting right now
@@ -10527,8 +10813,11 @@ def _handle_apex(bot_id, bot, actions):
         # Snap revert: we snapped up for profit but conditions no longer met
         was_snapped = bot.get('_pre_snap_price') is not None
         snap_revert = was_snapped and not snap_ready and not at_ceiling
-        # Interval: instant for ceiling, snap, drops, and reverts. 20s for normal walk.
-        walk_interval = 0 if (snap_ready or at_ceiling or needs_drop or snap_revert) else 20
+        # Interval: adaptive based on ceiling proximity + game urgency
+        _apex_combined = anchor_for_snap + current_price_for_snap if (anchor_for_snap and current_price_for_snap) else 0
+        walk_interval = _calc_walk_interval(_apex_combined, _apex_urgency, snap_ready, at_ceiling, needs_drop, snap_revert)
+        bot['_walk_interval'] = walk_interval  # expose to frontend
+        bot['_game_urgency'] = _apex_urgency
         last_walk = bot.get('last_walk_at') or first_fill_at or now
         since_walk = now - last_walk
         if since_walk >= walk_interval:
@@ -10550,6 +10839,14 @@ def _handle_apex(bot_id, bot, actions):
                             combined = anchor_price_for_ceiling + current_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
                             past_ceiling = current_price >= max_hedge
+
+                            # ── PRIORITY 0: Apex sell-back escape at ceiling ──
+                            # If at ceiling AND sell-back is cheaper than completing, escape now
+                            if at_ceiling and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted'):
+                                if _apex_sellback_check(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, rq):
+                                    bot['_apex_sellback_attempted'] = True
+                                    _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
+                                    return
 
                             # ── PRIORITY 1: Drop to bid if price is above bid target ──
                             if current_price > bid_target and bid_target > 0:
@@ -10629,6 +10926,7 @@ def _handle_apex(bot_id, bot, actions):
                                     bot_log('APEX_WALK_SUCCESS', bot_id, {
                                         'walk_type': walk_type, 'old_price': current_price, 'new_price': new_price,
                                         'new_order_id': new_oid_from_amend[:12] if new_oid_from_amend else None,
+                                        'walk_interval': walk_interval, 'urgency': _apex_urgency,
                                     })
                                 except Exception as e:
                                     bot_log('APEX_WALK_ERROR', bot_id, {
@@ -10694,7 +10992,7 @@ def _handle_apex(bot_id, bot, actions):
                             max_hedge = HARD_CEILING_CENTS - rung_anchor
                             past_ceiling = current_price >= max_hedge
                             rung_at_ceiling = rung_anchor + current_price >= HARD_CEILING_CENTS
-                            rung_snap_ready = _apex_snap_check(rung_anchor, unfilled_bid, rq) if unfilled_bid > 0 else False
+                            rung_snap_ready = _apex_snap_check(rung_anchor, unfilled_bid, rq, snap_ceiling=_apex_snap_ceiling) if unfilled_bid > 0 else False
 
                             # Same priority system as consolidated walk
                             if current_price > bid_target and bid_target > 0:

@@ -1984,9 +1984,9 @@ def _apex_sellback_check(bot_id, bot, avg_anchor, current_fav_bid, qty):
     complete_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_side_fee_cents(current_fav_bid, qty)
     complete_total = (complete_loss_per * qty) + complete_fees
 
-    # Cost to sell back: what we'd lose dumping the dog
+    # Cost to sell back: what we'd lose selling the dog as MAKER (post at ask, not cross bid)
     sellback_loss_per = max(0, avg_anchor - dog_bid)
-    sellback_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_taker_side_fee_cents(dog_bid, qty)
+    sellback_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_side_fee_cents(dog_bid, qty)
     sellback_total = (sellback_loss_per * qty) + sellback_fees
 
     # Sell back whenever it's cheaper than completing — no minimum threshold

@@ -3294,11 +3294,13 @@ function initAnchorDogPrices() {
         _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
     }
     // Auto-adjust existing rungs to track market (and update offsets when depth is auto)
+    // Depth floor on rung 2: rung[1] sits at anchorDepth, rung[0] is spacing-above
     if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
+        const depthOffset = _anchorRungs.length > 1 ? _anchorRungSpacing : 0;
         for (let i = 0; i < _anchorRungs.length; i++) {
             const rung = _anchorRungs[i];
-            if (isAutoDepth) rung.offset = anchorDepth + (i * _anchorRungSpacing);
-            const off = rung.offset || (anchorDepth + (i * _anchorRungSpacing));
+            if (isAutoDepth) rung.offset = anchorDepth - depthOffset + (i * _anchorRungSpacing);
+            const off = rung.offset || (anchorDepth - depthOffset + (i * _anchorRungSpacing));
             rung.price = Math.max(1, anchorBase - off);
         }
     }
@@ -3326,8 +3328,8 @@ function addAnchorRung() {
         const baseQty = _anchorRungs[0].qty;
         _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
     }
-    renderAnchorRungs();
-    updateAnchorPreview();
+    // Recalculate all rung offsets with depth-floor-on-rung-2 logic
+    initAnchorDogPrices();
 }
 
 function removeAnchorRung(idx) {

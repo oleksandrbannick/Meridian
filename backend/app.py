@@ -3978,6 +3978,30 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     _audit('LADDER_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'qty': total_fill_qty, 'sold': True})
     _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_sellback')
 
+    # Verify no leftover positions from race condition fills
+    try:
+        api_read_limiter.wait()
+        _pos_resp = kalshi_client.get_positions(ticker=ticker)
+        _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+        _leftover = 0
+        for _p in _positions:
+            if _p.get('ticker') == ticker:
+                _leftover = abs(_parse_position_qty(_p))
+        if _leftover > 0:
+            _sold, _sell_info = execute_sell(ticker, dog_side, _leftover,
+                                             reason=f'phantom_sellback_leftover_{bot_id}')
+            _sell_price = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+            _extra_loss = max(0, avg_price - _sell_price) * _leftover if _sell_price else avg_price * _leftover
+            loss_cents += _extra_loss
+            session_pnl['gross_loss_cents'] += _extra_loss
+            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - _extra_loss
+            print(f'🔙 PHANTOM SELLBACK LEFTOVER: {bot_id} {_leftover} extra contracts sold @{_sell_price}¢ extra_loss={_extra_loss}¢')
+            bot_log('PHANTOM_LADDER_SELLBACK_LEFTOVER', bot_id, {
+                'leftover': _leftover, 'sell_price': _sell_price, 'extra_loss': _extra_loss,
+            })
+    except Exception as _pe:
+        print(f'⚠ PHANTOM SELLBACK LEFTOVER CHECK FAIL: {bot_id}: {_pe}')
+
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,
         'yes_price': avg_price if dog_side == 'yes' else (sell_price or fav_bid),
@@ -11477,6 +11501,23 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     print(f'🔙 PHANTOM SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
     _audit('PHANTOM_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'sell_price': sell_price, 'qty': qty, 'sold': True})
     _audit_position_check(bot_id, ticker, dog_side, 'after_sellback')
+
+    # Verify no leftover positions from race condition fills
+    try:
+        api_read_limiter.wait()
+        _pos_resp = kalshi_client.get_positions(ticker=ticker)
+        _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+        _leftover = 0
+        for _p in _positions:
+            if _p.get('ticker') == ticker:
+                _leftover = abs(_parse_position_qty(_p))
+        if _leftover > 0:
+            _sold, _sell_info = execute_sell(ticker, dog_side, _leftover,
+                                             reason=f'phantom_sellback_leftover_{bot_id}')
+            print(f'🔙 PHANTOM SELLBACK LEFTOVER: {bot_id} {_leftover} extra contracts cleared')
+            bot_log('PHANTOM_SELLBACK_LEFTOVER', bot_id, {'leftover': _leftover})
+    except Exception as _pe:
+        print(f'⚠ PHANTOM SELLBACK LEFTOVER CHECK FAIL: {bot_id}: {_pe}')
 
     # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1

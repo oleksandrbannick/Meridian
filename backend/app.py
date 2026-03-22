@@ -5766,6 +5766,12 @@ def _recompute_apex_fills(bot):
 
 def _record_rung_completion(bot_id, bot, rung):
     """Record profit for a single completed rung. Called when both sides filled on a rung."""
+    # Guard: set _profit_recorded IMMEDIATELY to prevent race condition double-recording
+    # (monitor + WS handler + completion handler can all call _check_apex_rung_completions)
+    if rung.get('_profit_recorded'):
+        return  # already recorded — shouldn't reach here but guard anyway
+    rung['_profit_recorded'] = True  # set BEFORE any work to prevent concurrent re-entry
+
     now = time.time()
     ticker = bot['ticker']
     qty_per = bot.get('quantity', 1)
@@ -5822,7 +5828,6 @@ def _record_rung_completion(bot_id, bot, rung):
     bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
     if not bot.get('_first_rung_completed_at'):
         bot['_first_rung_completed_at'] = now
-    rung['_profit_recorded'] = True
 
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,

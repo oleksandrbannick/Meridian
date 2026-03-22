@@ -10239,7 +10239,7 @@ async function loadTradeHistoryList() {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
         const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
         const data = await resp.json();
-        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback','ladder_arb_sellback'].includes(t.result));
+        let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback'].includes(t.result));
 
         // Group ladder_arb trades by bot_id + run cycle into summary entries
         const grouped = [];
@@ -10304,7 +10304,8 @@ async function loadTradeHistoryList() {
                 no_price: avgNo,
                 placed_at: earliest,
                 timestamp: latest,
-                result: netPnl >= 0 ? 'completed' : 'completed',
+                result: rungTrades.some(r => r.result === 'apex_sellback' || r.result === 'ladder_arb_sellback') ? 'apex_sellback'
+                    : netPnl >= 0 ? 'completed' : 'arb_loss',
                 _rungs_completed: rungsCompleted,
                 _rungs_total: rungsTotal,
                 _width_range: widthRange,
@@ -10332,8 +10333,10 @@ async function loadTradeHistoryList() {
             // ── Ladder Arb Summary Card ──
             if (t._is_larb_summary) {
                 const pnl = t._net_pnl || 0;
+                const isSellback = t.result === 'apex_sellback';
                 const pnlCol = pnl > 0 ? '#00ff88' : pnl < 0 ? '#ff4444' : '#ffaa00';
-                const icon = pnl >= 0 ? '✅' : '⛔';
+                const icon = isSellback ? '🔙' : pnl >= 0 ? '✅' : '⛔';
+                const resultLabel = isSellback ? 'SOLD BACK' : pnl >= 0 ? 'COMPLETED' : 'ARB LOSS';
                 const teamName = formatBotDisplayName(t.ticker || '', t.spread_line || '');
                 const sDt = new Date(t.timestamp * 1000);
                 const sDate = sDt.toLocaleDateString([], {month:'short', day:'numeric'});
@@ -10357,6 +10360,7 @@ async function loadTradeHistoryList() {
                             <span style="font-size:14px;">${icon}</span>
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
                             <span style="background:#00aaff22;color:#00aaff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">△ APEX</span>
+                            <span style="background:${isSellback ? '#ff880022' : pnl >= 0 ? '#00ff8822' : '#ff444422'};color:${isSellback ? '#ff8800' : pnlCol};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${resultLabel}</span>
                             <span style="background:#ffaa0022;color:#ffaa00;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t._rungs_completed}/${t._rungs_total} rungs</span>
                             ${t._run_number ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">Run ${t._run_number}${t._repeat_total ? '/' + t._repeat_total : ''}</span>` : ''}
                             ${t._width_range ? `<span style="color:#555;font-size:9px;">Widths: ${t._width_range}</span>` : ''}

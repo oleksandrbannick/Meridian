@@ -786,7 +786,25 @@ function getMarketLiquidity(market) {
     const thickSide = thinSide === 'yes' ? 'no' : 'yes';
     const spreadImbalance = Math.abs(yesSpread - noSpread);
 
-    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance };
+    // OBI proxy from spread imbalance: negative = dog side has selling pressure (good for phantom)
+    // Range roughly -1 to +1, where negative means the dog side (underdog) book is thinner
+    const dogSide = yesBid < noBid ? 'yes' : 'no';
+    const favSide = dogSide === 'yes' ? 'no' : 'yes';
+    const dogSpread = dogSide === 'yes' ? yesSpread : noSpread;
+    const favSpreadVal = favSide === 'yes' ? yesSpread : noSpread;
+    // OBI: positive = dog side is thicker (buying pressure), negative = dog side thinner (selling pressure)
+    const totalSpread = dogSpread + favSpreadVal;
+    const obi = totalSpread > 0 ? (favSpreadVal - dogSpread) / totalSpread : 0;
+    // Phantom quality: fav thick (low spread) + dog thin (high spread) = good setup
+    // Score 0-100: higher = better phantom opportunity
+    const phantomQuality = Math.round(Math.max(0, Math.min(100,
+        (favSpreadVal <= 2 ? 40 : favSpreadVal <= 3 ? 25 : favSpreadVal <= 5 ? 10 : 0) +
+        (dogSpread >= 4 ? 30 : dogSpread >= 3 ? 20 : dogSpread >= 2 ? 10 : 0) +
+        (vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
+        (obi < -0.3 ? 10 : 0)
+    )));
+
+    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance, dogSide, favSide, dogSpread, favSpread: favSpreadVal, obi, phantomQuality };
 }
 
 // ─── GAME SIGNAL — arb-focused: score stability + liquidity, NOT phase-gated ──
@@ -2259,38 +2277,41 @@ function createMarketRow(market, label) {
         const spread = Math.abs(liq.yesBid - liq.noBid);
         const isLiveGame = isKalshiLive(market);
         if (isLiveGame && bidSum >= 90) {
-            // Live game with real liquidity — recommend with liquidity context
+            // Live game with real liquidity — recommend with OBI context
             const liqTip = liq.spreadImbalance >= 3
                 ? ` · ${liq.thinSide.toUpperCase()} thin (${liq[liq.thinSide + 'Spread']}¢) / ${liq.thickSide.toUpperCase()} thick (${liq[liq.thickSide + 'Spread']}¢)`
                 : '';
+            // OBI warning: if one side has much wider spread, hedging that side is risky
+            const obiWarn = Math.abs(liq.obi) > 0.5 ? ` · ⚠️ ${liq.thinSide.toUpperCase()} side thin` : '';
             if (spread <= 10) {
-                recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility${liqTip}` });
+                recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility${liqTip}${obiWarn}` });
             } else if (spread <= 25) {
-                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths${liqTip}` });
+                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths${liqTip}${obiWarn}` });
             } else if (spread <= 50) {
-                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths${liqTip}` });
+                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths${liqTip}${obiWarn}` });
             }
         } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && liq.avgSpread <= 5) {
-            // Pregame with tight spreads — can post early
             recoTypes.push({ type: 'apex', tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢, ${liq.avgSpread}¢ spread` });
         }
     }
     // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
-    // arb math works, and lowest rung won't hit 1¢ floor
+    // arb math works, lowest rung won't hit 1¢ floor, AND fav has thick liquidity for instant hedge
     if (!botTypes.phantom) {
         const dogPrice = Math.min(liq.yesBid, liq.noBid);
         const favBid = Math.max(liq.yesBid, liq.noBid);
         const hedgeRoom = 98 - dogPrice - (100 - favBid);
-        // Lowest rung check: 3 rungs spaced 2¢ apart, bottom rung must be ≥3¢
-        // (at 2¢ the hedge needs 96¢ fav which never fills)
-        const lowestRung = dogPrice - 4; // 3rd rung ~4¢ below top
-        // Fav side needs thick liquidity (tight spread) for instant hedge fills
-        const favSide = liq.yesBid < liq.noBid ? 'no' : 'yes';
-        const favSpread = favSide === 'yes' ? liq.yesSpread : liq.noSpread;
+        const lowestRung = dogPrice - 4;
+        const favSpread = liq.favSpread;
+        const dogSideLabel = liq.dogSide.toUpperCase();
+        const pq = liq.phantomQuality;
+        const obiLabel = liq.obi < -0.3 ? ' · 📉 dog selling' : liq.obi > 0.3 ? ' · ⚠️ dog buying' : '';
         if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && favSpread <= 5) {
-            const dogSide = liq.yesBid < liq.noBid ? 'YES' : 'NO';
             const liqLabel = favSpread <= 2 ? 'thick' : favSpread <= 3 ? 'good' : 'ok';
-            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSide} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · fav ${liqLabel} (${favSpread}¢ spread)` });
+            const qualLabel = pq >= 60 ? '🟢' : pq >= 35 ? '🟡' : '🔴';
+            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · fav ${liqLabel} (${favSpread}¢)${obiLabel} · ${qualLabel} ${pq}/100` });
+        } else if (dogPrice >= 7 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2 && favSpread > 5 && favSpread <= 8) {
+            // Marginal: fav spread is wide but not terrible — show warning
+            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢ — ⚠️ fav spread ${favSpread}¢ (thin, hedge may not catch)${obiLabel}` });
         }
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];

@@ -7122,49 +7122,137 @@ async function showBotDetail(botId) {
         const nowSec = Date.now() / 1000;
         const ageMin = bot.created_at ? Math.round((nowSec - bot.created_at) / 60) : 0;
         const ageStr = ageMin >= 60 ? `${Math.floor(ageMin/60)}h ${ageMin%60}m` : `${ageMin}m`;
-
-        // ── Overview section ──
-        html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">`;
-        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
-            <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Status</div>
-            <div style="color:${color};font-weight:700;font-size:12px;">${displayStatus}</div></div>`;
-        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
-            <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Age</div>
-            <div style="color:#fff;font-weight:700;font-size:12px;">${ageStr}</div></div>`;
         const qty = bot.quantity || bot.qty || 1;
-        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px;text-align:center;">
-            <div style="color:#8892a6;font-size:9px;text-transform:uppercase;margin-bottom:4px;">Qty</div>
-            <div style="color:#fff;font-weight:700;font-size:12px;">×${qty}</div></div>`;
+
+        // ── Computed fields ──
+        const isApex = cat === 'ladder_arb';
+        const isPhantom = cat === 'anchor_dog' || cat === 'anchor_ladder';
+        const isMeridian = cat === 'middle';
+        const isScout = cat === 'watch';
+        const filledSide = bot.first_fill_side || '';
+        const unfilledSide = filledSide === 'yes' ? 'no' : 'yes';
+        const avgFilled = bot[`avg_${filledSide}_price`] || 0;
+        const hedgePrice = bot.hedge_price || bot.fav_price || 0;
+        const combined = isApex ? (avgFilled + hedgePrice) : isPhantom ? ((bot.dog_price||0) + (bot.fav_price||0)) : ((bot.yes_price||0) + (bot.no_price||0));
+        const profit = combined > 0 ? 100 - combined : 0;
+        const walkCount = bot.walk_count || bot.fav_walk_count || 0;
+        const walkInterval = bot._walk_interval != null ? bot._walk_interval : 20;
+        const urgency = bot._game_urgency || 'normal';
+        const gamePhase = bot.game_phase || '?';
+        const hedgeFills = bot._hedge_fill_count || bot.fav_fill_qty || 0;
+        const hedgeQty = bot.hedge_qty || qty;
+        const yFills = bot.filled_yes_qty || bot.yes_fill_qty || 0;
+        const nFills = bot.filled_no_qty || bot.no_fill_qty || 0;
+        const netPnl = bot.net_pnl_cents || 0;
+        const repeatsDone = bot.repeats_done || 0;
+        const repeatsTotal = bot.repeat_count || 0;
+
+        // ── Overview: 4-column top stats ──
+        html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:12px;">`;
+        const _statBox = (label, value, valColor='#fff') => `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:8px 6px;text-align:center;">
+            <div style="color:#8892a6;font-size:8px;text-transform:uppercase;margin-bottom:3px;">${label}</div>
+            <div style="color:${valColor};font-weight:700;font-size:11px;">${value}</div></div>`;
+        html += _statBox('Status', displayStatus, color);
+        html += _statBox('Age', ageStr);
+        html += _statBox('Qty', `×${qty}`);
+        const combinedColor = combined <= 0 ? '#555' : combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444';
+        html += _statBox('Combined', combined > 0 ? `${combined}¢` : '—', combinedColor);
         html += `</div>`;
+
+        // ── P&L + Fill Progress bar ──
+        const isFilled = isApex ? (yFills > 0 || nFills > 0) : isPhantom ? (bot.dog_fill_qty > 0) : false;
+        if (isFilled || netPnl !== 0) {
+            const profitColor = profit > 3 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
+            const pnlColor = netPnl > 0 ? '#00ff88' : netPnl < 0 ? '#ff4444' : '#8892a6';
+            const fillPct = hedgeQty > 0 ? Math.min(100, Math.round((hedgeFills / hedgeQty) * 100)) : 0;
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">`;
+            html += `<div style="font-size:10px;font-weight:700;color:#8892a6;">POSITION</div>`;
+            if (netPnl !== 0) html += `<div style="font-size:11px;font-weight:700;color:${pnlColor};">${netPnl > 0 ? '+' : ''}${(netPnl/100).toFixed(2)}</div>`;
+            html += `</div>`;
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;margin-bottom:8px;">`;
+            if (isApex) {
+                html += `<div><span style="color:#8892a6;">Anchor:</span> <strong style="color:#ff9900;">${avgFilled}¢ × ${filledSide === 'yes' ? yFills : nFills}</strong></div>`;
+                html += `<div><span style="color:#8892a6;">Hedge:</span> <strong style="color:#00aaff;">${hedgePrice}¢ × ${hedgeFills}/${hedgeQty}</strong></div>`;
+                html += `<div><span style="color:#8892a6;">Profit/c:</span> <strong style="color:${profitColor};">${profit > 0 ? '+' : ''}${profit}¢</strong></div>`;
+            } else if (isPhantom) {
+                html += `<div><span style="color:#8892a6;">Dog (${bot.dog_side||'?'}):</span> <strong style="color:#ff9900;">${bot.dog_price||'?'}¢</strong></div>`;
+                html += `<div><span style="color:#8892a6;">Fav:</span> <strong style="color:#00ff88;">${bot.fav_price||'—'}¢</strong></div>`;
+                html += `<div><span style="color:#8892a6;">Profit/c:</span> <strong style="color:${profitColor};">${profit > 0 ? '+' : ''}${profit}¢</strong></div>`;
+            }
+            html += `</div>`;
+            // Hedge fill progress bar
+            if (hedgeQty > 0 && (isApex || isPhantom)) {
+                html += `<div style="display:flex;align-items:center;gap:8px;">`;
+                html += `<span style="color:#8892a6;font-size:9px;width:70px;">Hedge fill:</span>`;
+                html += `<div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
+                    <div style="width:${fillPct}%;height:100%;background:${fillPct>=100?'#00ff88':fillPct>0?'#ffaa00':'#333'};border-radius:3px;transition:width 0.3s;"></div></div>`;
+                html += `<span style="color:${fillPct>=100?'#00ff88':'#8892a6'};font-size:10px;font-weight:700;width:50px;text-align:right;">${hedgeFills}/${hedgeQty}</span>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+        }
+
+        // ── Walk + Urgency Status (live bots only) ──
+        if (walkCount > 0 || urgency !== 'normal') {
+            const urgColors = {normal:'#8892a6', late:'#ff8800', critical:'#ff4444', halftime:'#818cf8'};
+            const urgLabels = {normal:'NORMAL', late:'LATE GAME', critical:'CRITICAL', halftime:'HALFTIME'};
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">`;
+            html += `<div style="font-size:10px;font-weight:700;color:#8892a6;">WALK STATUS</div>`;
+            html += `<div style="font-size:9px;font-weight:700;color:${urgColors[urgency]||'#8892a6'};background:${urgColors[urgency]||'#8892a6'}22;padding:2px 6px;border-radius:3px;">${urgLabels[urgency]||urgency}</div>`;
+            html += `</div>`;
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;">`;
+            html += `<div><span style="color:#8892a6;">Steps:</span> <strong>${walkCount}</strong></div>`;
+            html += `<div><span style="color:#8892a6;">Interval:</span> <strong>${walkInterval}s</strong></div>`;
+            html += `<div><span style="color:#8892a6;">Phase:</span> <strong>${gamePhase}</strong></div>`;
+            html += `</div>`;
+            if (bot.walk_start_price && hedgePrice) {
+                const walkDist = hedgePrice - bot.walk_start_price;
+                html += `<div style="font-size:10px;margin-top:6px;color:#8892a6;">Walk: ${bot.walk_start_price}¢ → ${hedgePrice}¢ <span style="color:${walkDist > 0 ? '#ffaa00' : '#00ff88'};">(${walkDist > 0 ? '+' : ''}${walkDist}¢)</span></div>`;
+            }
+            html += `</div>`;
+        }
 
         // ── Latency section (Phantom/Apex) ──
         const rawMs = bot.raw_hedge_ms || bot.hedge_latency_ms;
         const fillMs = bot.hedge_fill_latency_ms;
         if (rawMs || fillMs) {
-            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
-            html += `<div style="color:#ffaa00;font-size:10px;font-weight:700;margin-bottom:6px;">⚡ LATENCY</div>`;
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="color:#ffaa00;font-size:10px;font-weight:700;margin-bottom:6px;">LATENCY</div>`;
             html += `<div style="display:flex;gap:20px;font-size:11px;">`;
-            if (rawMs) html += `<div><span style="color:#8892a6;">Hedge posted:</span> <strong style="color:#00ff88;">${rawMs}ms</strong></div>`;
-            if (fillMs) html += `<div><span style="color:#8892a6;">Hedge filled:</span> <strong style="color:#00ff88;">${fillMs}ms</strong></div>`;
+            if (rawMs) html += `<div><span style="color:#8892a6;">Hedge posted:</span> <strong style="color:${rawMs < 50 ? '#00ff88' : rawMs < 200 ? '#ffaa00' : '#ff4444'};">${rawMs}ms</strong></div>`;
+            if (fillMs) html += `<div><span style="color:#8892a6;">Hedge filled:</span> <strong style="color:${fillMs < 500 ? '#00ff88' : fillMs < 2000 ? '#ffaa00' : '#ff4444'};">${fillMs}ms</strong></div>`;
             html += `</div></div>`;
         }
 
         // ── Prices section ──
-        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
         html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">PRICES</div>`;
-        if (cat === 'anchor_dog' || cat === 'anchor_ladder') {
+        if (isPhantom) {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
             html += `<div>Dog (${bot.dog_side||'?'}): <strong style="color:#ff9900;">${bot.dog_price||'?'}¢</strong></div>`;
             html += `<div>Fav: <strong style="color:#00ff88;">${bot.fav_price||'pending'}¢</strong></div>`;
             html += `<div>Width: <strong>${bot.target_width||'?'}¢</strong></div>`;
-            html += `<div>Ceiling: <strong>98¢</strong></div>`;
+            html += `<div>Ceiling: <strong>98¢</strong> <span style="color:#555;">(${98-combined}¢ left)</span></div>`;
+            html += `<div>Anchor depth: <strong>${bot.anchor_depth||'?'}¢</strong></div>`;
+            html += `<div>Timeout: <strong>${bot.hedge_timeout_s||120}s</strong></div>`;
             html += `</div>`;
-        } else if (cat === 'watch') {
+        } else if (isScout) {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
             html += `<div>Entry: <strong style="color:#fff;">${bot.entry_price||'?'}¢</strong></div>`;
             html += `<div>Live bid: <strong style="color:#00ff88;">${bot.live_bid||'?'}¢</strong></div>`;
             html += `<div>SL: <strong style="color:#ff4444;">${(bot.entry_price||50) - (bot.stop_loss_cents||5)}¢</strong></div>`;
             if (bot.take_profit_cents > 0) html += `<div>TP: <strong style="color:#00ff88;">${(bot.entry_price||50) + bot.take_profit_cents}¢</strong></div>`;
+            html += `</div>`;
+        } else if (isApex) {
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
+            html += `<div>Avg anchor (${filledSide||'?'}): <strong style="color:#ff9900;">${avgFilled||'?'}¢</strong></div>`;
+            html += `<div>Hedge (${unfilledSide}): <strong style="color:#00aaff;">${hedgePrice||'?'}¢</strong></div>`;
+            html += `<div>Avg width: <strong>${bot.avg_width||bot.target_width||'?'}¢</strong></div>`;
+            html += `<div>Ceiling: <strong>98¢</strong> <span style="color:#555;">(${98-combined}¢ left)</span></div>`;
+            if (repeatsTotal > 0) html += `<div>Repeats: <strong>${repeatsDone}/${repeatsTotal}</strong></div>`;
+            html += `<div>Consolidated: <strong style="color:${bot._consolidated?'#00ff88':'#ffaa00'};">${bot._consolidated?'Yes':'No'}</strong></div>`;
             html += `</div>`;
         } else {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
@@ -7176,10 +7264,22 @@ async function showBotDetail(botId) {
         }
         html += `</div>`;
 
+        // ── Live Market Data ──
+        const yBid = bot.live_yes_bid, yAsk = bot.live_yes_ask, nBid = bot.live_no_bid, nAsk = bot.live_no_ask;
+        if (yBid || nBid) {
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">LIVE MARKET</div>`;
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px;">`;
+            html += `<div>YES: <span style="color:#00ff88;">${yBid||'?'}¢</span> / <span style="color:#8892a6;">${yAsk||'?'}¢</span> <span style="color:#555;">(${(yAsk&&yBid)?(yAsk-yBid):0}¢ spread)</span></div>`;
+            html += `<div>NO: <span style="color:#ff4444;">${nBid||'?'}¢</span> / <span style="color:#8892a6;">${nAsk||'?'}¢</span> <span style="color:#555;">(${(nAsk&&nBid)?(nAsk-nBid):0}¢ spread)</span></div>`;
+            if (yBid && nBid) html += `<div>Bid sum: <strong>${yBid+nBid}¢</strong></div>`;
+            html += `</div></div>`;
+        }
+
         // ── Rungs section (Apex / Phantom Ladder) ──
         const rungs = bot.rungs || bot.placed_rungs;
         if (rungs && rungs.length > 0) {
-            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
             html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">RUNGS (${rungs.length})</div>`;
             html += `<div style="font-size:10px;">`;
             rungs.forEach((r, i) => {
@@ -7201,40 +7301,56 @@ async function showBotDetail(botId) {
             html += `</div></div>`;
         }
 
-        // ── Order IDs section ──
-        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
-        html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">ORDER IDS</div>`;
+        // ── Order IDs section (collapsed by default) ──
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+        html += `<div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.querySelector('span').textContent=this.nextElementSibling.style.display==='none'?'▸':'▾'" style="color:#8892a6;font-size:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><span>▸</span> ORDER IDS</div>`;
+        html += `<div style="display:none;margin-top:6px;">`;
         html += `<div style="font-size:10px;font-family:monospace;color:#556;word-break:break-all;">`;
         const oidKeys = ['dog_order_id','fav_order_id','yes_order_id','no_order_id','hedge_order_id','order_id'];
         oidKeys.forEach(k => {
             if (bot[k]) html += `<div style="margin-bottom:2px;display:flex;align-items:center;gap:4px;"><span style="color:#8892a6;">${k.replace(/_/g,' ')}:</span> <span style="color:#556;">${bot[k].slice(-12)}</span><button onclick="event.stopPropagation();navigator.clipboard.writeText('${bot[k]}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#3a4560;" title="Copy full ID: ${bot[k]}">📋</button></div>`;
         });
         html += `<div style="margin-top:4px;display:flex;align-items:center;gap:4px;"><span style="color:#8892a6;">bot_id:</span> <span style="color:#556;">${botId.slice(-12)}</span><button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#3a4560;" title="Copy full ID: ${botId}">📋</button></div>`;
-        html += `</div></div>`;
+        html += `</div></div></div>`;
 
-        // ── Activity Log section ──
+        // ── Activity Log section (collapsed by default) ──
         const events = logResp.events || logResp.log || [];
-        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:14px;">`;
-        html += `<div style="color:#ffaa00;font-size:10px;font-weight:700;margin-bottom:6px;">📋 EVENT LOG (${events.length})</div>`;
+        html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+        html += `<div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.querySelector('span').textContent=this.nextElementSibling.style.display==='none'?'▸':'▾'" style="color:#ffaa00;font-size:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><span>▸</span> EVENT LOG (${events.length})</div>`;
+        html += `<div style="display:none;margin-top:6px;">`;
         if (events.length === 0) {
             html += `<div style="color:#555;font-size:10px;">No events found</div>`;
         } else {
-            html += `<div style="max-height:200px;overflow-y:auto;font-size:10px;">`;
-            events.slice(0, 30).forEach(evt => {
+            html += `<div style="max-height:300px;overflow-y:auto;font-size:10px;">`;
+            events.slice(0, 50).forEach(evt => {
                 const ts = evt.timestamp ? new Date(evt.timestamp * 1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'}) : '';
                 const evtName = evt.event || evt.type || '?';
                 const evtColor = evtName.includes('ERROR') || evtName.includes('FAIL') ? '#ff4444' :
-                    evtName.includes('FILL') || evtName.includes('COMPLETE') ? '#00ff88' :
+                    evtName.includes('FILL') || evtName.includes('COMPLETE') || evtName.includes('SELLBACK') ? '#00ff88' :
                     evtName.includes('REPOST') || evtName.includes('WALK') ? '#ffaa00' : '#8892a6';
-                html += `<div style="display:flex;gap:8px;padding:2px 0;border-bottom:1px solid #111;">
-                    <span style="color:#555;min-width:65px;">${ts}</span>
-                    <span style="color:${evtColor};font-weight:600;min-width:120px;">${evtName}</span>
-                    <span style="color:#556;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${JSON.stringify(evt.data||{}).slice(0,100)}</span>
+                const evtData = evt.data || {};
+                // Format key data fields instead of raw JSON
+                const keyFields = [];
+                if (evtData.walk_type) keyFields.push(evtData.walk_type);
+                if (evtData.old_price != null && evtData.new_price != null) keyFields.push(`${evtData.old_price}→${evtData.new_price}¢`);
+                if (evtData.urgency && evtData.urgency !== 'normal') keyFields.push(evtData.urgency);
+                if (evtData.walk_interval != null) keyFields.push(`${evtData.walk_interval}s`);
+                if (evtData.dog_price) keyFields.push(`dog:${evtData.dog_price}¢`);
+                if (evtData.fav_bid) keyFields.push(`fav:${evtData.fav_bid}¢`);
+                if (evtData.combined) keyFields.push(`comb:${evtData.combined}¢`);
+                if (evtData.loss_cents) keyFields.push(`-${evtData.loss_cents}¢`);
+                if (evtData.profit_cents) keyFields.push(`+${evtData.profit_cents}¢`);
+                if (evtData.error) keyFields.push(String(evtData.error).slice(0,60));
+                const dataStr = keyFields.length > 0 ? keyFields.join(' · ') : JSON.stringify(evtData).slice(0,80);
+                html += `<div style="display:flex;gap:6px;padding:2px 0;border-bottom:1px solid #111;">
+                    <span style="color:#555;min-width:60px;flex-shrink:0;">${ts}</span>
+                    <span style="color:${evtColor};font-weight:600;min-width:100px;flex-shrink:0;font-size:9px;">${evtName}</span>
+                    <span style="color:#667;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;">${dataStr}</span>
                 </div>`;
             });
             html += `</div>`;
         }
-        html += `</div>`;
+        html += `</div></div>`;
 
         // ── Ticker link ──
         html += `<div style="text-align:center;font-size:10px;color:#555;">

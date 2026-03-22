@@ -9304,6 +9304,16 @@ def _handle_phantom(bot_id, bot, actions):
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 return  # no market data, wait
+            # Drift guard: don't repost into a blowout
+            fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
+            _current_fav_bid = _best_bid(ob, fav_side)
+            _ph_price_lean = abs(current_dog_bid - _current_fav_bid) if _current_fav_bid else 0
+            if _ph_price_lean > 30 or current_dog_bid <= 3:
+                bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
+                    'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
+                    'price_lean': _ph_price_lean, 'reason': 'blowout_drift',
+                })
+                return  # game too lopsided — wait for it to tighten
 
             # Same smart pricing as initial placement — use stored anchor_depth
             anchor_depth = bot.get('anchor_depth', 5)
@@ -9490,6 +9500,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 return  # no market data, wait
+            # Drift guard: don't repost into a blowout
+            fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
+            _current_fav_bid = _best_bid(ob, fav_side)
+            _phl_price_lean = abs(current_dog_bid - _current_fav_bid) if _current_fav_bid else 0
+            if _phl_price_lean > 30 or current_dog_bid <= 3:
+                bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
+                    'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
+                    'price_lean': _phl_price_lean, 'reason': 'blowout_drift',
+                })
+                return  # game too lopsided — wait for it to tighten
             # Don't repost if market is dead (bid at 1c = pointless)
             if current_dog_bid <= 1:
                 bot['status'] = 'completed'

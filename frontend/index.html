@@ -548,56 +548,53 @@
                             </div>
                         </div>
                         <div>
-                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#00ff8808;border:1px solid #00ff8833;border-radius:6px;">
-                                <span class="legend-icon" data-bot="apex" style="flex-shrink:0;"></span>
-                                <div><strong style="color:#00d4ff;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
+                            <!-- Apex + its scoring -->
+                            <div style="margin-bottom:14px;padding:10px;background:#00d4ff08;border:1px solid #00d4ff33;border-radius:6px;">
+                                <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                                    <span class="legend-icon" data-bot="apex" style="flex-shrink:0;"></span>
+                                    <div><strong style="color:#00d4ff;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
+                                </div>
+                                <div style="border-top:1px solid #1e2740;padding-top:6px;font-size:10px;color:#8892a6;">
+                                    <strong style="color:#00d4ff;">Ghost label: YES bid / NO bid</strong> (e.g. <strong style="color:#ccc;">48/52</strong> = YES at 48¢, NO at 52¢)<br>
+                                    This shows where your maker orders post relative to.<br>
+                                    <span style="color:#ff8800;">⚠️</span> = one side has a much wider spread — hedge on the thin side may be slow to fill.
+                                </div>
                             </div>
-                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#ffaa0008;border:1px solid #ffaa0033;border-radius:6px;">
-                                <span class="legend-icon" data-bot="phantom" style="flex-shrink:0;"></span>
-                                <div><strong style="color:#ffaa00;">Phantom</strong><br><span style="color:#8892a6;font-size:10px;">Underdog anchor — fills on volatility spikes</span></div>
+
+                            <!-- Phantom + its scoring -->
+                            <div style="margin-bottom:14px;padding:10px;background:#ffaa0008;border:1px solid #ffaa0033;border-radius:6px;">
+                                <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                                    <span class="legend-icon" data-bot="phantom" style="flex-shrink:0;"></span>
+                                    <div><strong style="color:#ffaa00;">Phantom</strong><br><span style="color:#8892a6;font-size:10px;">Underdog anchor — fills on volatility spikes</span></div>
+                                </div>
+                                <div style="border-top:1px solid #1e2740;padding-top:6px;font-size:10px;color:#8892a6;">
+                                    <strong style="color:#ffaa00;">Ghost label: Quality score 0–100</strong><br>
+                                    Rates how likely the instant hedge is to catch:<br>
+                                    <div style="margin:4px 0 4px 8px;">
+                                        <span style="color:#00ff88;">Fav spread tight (≤2¢)</span> → up to 40pts<br>
+                                        <span style="color:#ff9900;">Dog spread wide (≥4¢)</span> → up to 30pts<br>
+                                        <span style="color:#00aaff;">High volume (≥100)</span> → up to 20pts<br>
+                                        <span style="color:#cc66ff;">Dog selling pressure</span> → up to 10pts
+                                    </div>
+                                    <span style="color:#00ff88;font-weight:700;">🟢 60+</span> = strong &nbsp;
+                                    <span style="color:#ffaa00;font-weight:700;">🟡 35–59</span> = decent &nbsp;
+                                    <span style="color:#ff4444;font-weight:700;">🔴 &lt;35</span> = weak<br>
+                                    <span style="color:#ff8800;">⚠️</span> alone = marginal (fav spread 5–8¢, hedge may not catch)<br>
+                                    <span style="color:#00ff88;">✅ dog selling</span> = good — price dropping toward your orders<br>
+                                    <span style="color:#ff4444;">❌ dog buying</span> = bad — informed flow pushing price away
+                                </div>
                             </div>
-                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px;background:#aa66ff08;border:1px solid #aa66ff33;border-radius:6px;">
+
+                            <!-- Meridian -->
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px;background:#aa66ff08;border:1px solid #aa66ff33;border-radius:6px;">
                                 <span class="legend-icon" data-bot="meridian" style="flex-shrink:0;"></span>
                                 <div><strong style="color:#cc66ff;">Meridian</strong><br><span style="color:#8892a6;font-size:10px;">Middle bot — NO on both sides of a spread pair</span></div>
                             </div>
-                            <div style="display:flex;align-items:center;gap:10px;padding:8px;background:#00ff8808;border:1px solid #00ff8833;border-radius:6px;">
+
+                            <!-- Scout -->
+                            <div style="display:flex;align-items:center;gap:10px;padding:10px;background:#00ff8808;border:1px solid #00ff8833;border-radius:6px;">
                                 <span class="legend-icon" data-bot="scout" style="flex-shrink:0;"></span>
                                 <div><strong style="color:#00ff88;">Scout</strong><br><span style="color:#8892a6;font-size:10px;">Shows where you have active bets (×2, ×3 if stacked). Never recommended — your call.</span></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Scoring guide -->
-                    <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1e2740;">
-                        <div style="color:#ccc;font-weight:700;font-size:11px;margin-bottom:8px;">How the scores work</div>
-
-                        <div style="border-left:3px solid #00d4ff;padding-left:10px;margin-bottom:10px;">
-                            <strong style="color:#00d4ff;font-size:10px;">Apex label: YES bid / NO bid</strong><br>
-                            <span style="color:#8892a6;font-size:10px;">Shows current bid prices on each side (e.g. <strong style="color:#ccc;">48/52</strong> = YES at 48¢, NO at 52¢). This is where your maker orders will post relative to. A <span style="color:#ff8800;">⚠️</span> means one side has a much wider spread than the other — your hedge on the thin side may be slow to fill.</span>
-                        </div>
-
-                        <div style="border-left:3px solid #ffaa00;padding-left:10px;margin-bottom:10px;">
-                            <strong style="color:#ffaa00;font-size:10px;">Phantom score: Quality 0–100</strong><br>
-                            <span style="color:#8892a6;font-size:10px;">Rates how good the setup is for the instant hedge to catch. Factors in:</span>
-                            <div style="font-size:10px;color:#8892a6;margin-top:4px;margin-left:8px;">
-                                <span style="color:#00ff88;">Fav spread tight (≤2¢)</span> = thick fav book, hedge catches instantly → up to 40pts<br>
-                                <span style="color:#ff9900;">Dog spread wide (≥4¢)</span> = thin dog book, sweeps blow through → up to 30pts<br>
-                                <span style="color:#00aaff;">High volume (≥100)</span> = active market, more sweeps happening → up to 20pts<br>
-                                <span style="color:#cc66ff;">Dog selling pressure</span> = price dropping toward your orders → up to 10pts
-                            </div>
-                            <div style="font-size:10px;margin-top:6px;">
-                                <span style="color:#00ff88;font-weight:700;">🟢 60+</span> = strong setup &nbsp;
-                                <span style="color:#ffaa00;font-weight:700;">🟡 35–59</span> = decent &nbsp;
-                                <span style="color:#ff4444;font-weight:700;">🔴 &lt;35</span> = weak, hedge may not catch
-                            </div>
-                            <div style="font-size:10px;margin-top:4px;color:#8892a6;">
-                                <span style="color:#ff8800;">⚠️</span> alone (no score) = marginal market — fav spread 5–8¢ means the hedge might not fill instantly.
-                            </div>
-                            <div style="font-size:10px;margin-top:4px;color:#8892a6;">
-                                <span style="color:#00ff88;">✅ dog selling</span> = selling pressure on dog side — good, price is dropping toward your orders.
-                            </div>
-                            <div style="font-size:10px;margin-top:4px;color:#8892a6;">
-                                <span style="color:#ff4444;">❌ dog buying</span> = buying pressure on dog — bad, informed flow pushing price away from you.
                             </div>
                         </div>
                     </div>

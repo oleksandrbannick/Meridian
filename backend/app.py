@@ -8900,6 +8900,11 @@ def _handle_phantom(bot_id, bot, actions):
             fee = kalshi_fee_cents(yes_p, no_p, qty)
             net_pnl = pnl_cents - fee
 
+            # Compute hedge speed BEFORE recording trade so it's included
+            dog_fill_at = bot.get('dog_filled_at')
+            if dog_fill_at and not bot.get('hedge_fill_latency_ms'):
+                bot['hedge_fill_latency_ms'] = round((now - dog_fill_at) * 1000, 1)
+
             _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': yes_p, 'no_price': no_p,
@@ -8914,6 +8919,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'dog_price': dog_price,
                 'fav_price': actual_fav_price,
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'hedge_fill_latency_ms': bot.get('hedge_fill_latency_ms'),
                 'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'fill_duration_s': round(now - bot['dog_filled_at']) if bot.get('dog_filled_at') else None,
                 'timestamp': now,
@@ -8933,11 +8939,6 @@ def _handle_phantom(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(net_pnl)
             session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
-            # Track hedge fill-to-fill latency (anchor fill → hedge fill)
-            dog_fill_at = bot.get('dog_filled_at')
-            if dog_fill_at:
-                hedge_fill_latency_ms = round((now - dog_fill_at) * 1000, 1)
-                bot['hedge_fill_latency_ms'] = hedge_fill_latency_ms
             bot_log('ANCHOR_COMPLETE', bot_id, {
                 'dog': dog_price, 'fav': actual_fav_price,
                 'pnl': pnl_cents, 'fee': fee, 'net': net_pnl,
@@ -9953,6 +9954,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 {'price': r['price'], 'qty': r.get('fill_qty', 0)}
                 for r in bot['rungs'] if r.get('fill_qty', 0) > 0
             ]
+            # Compute hedge speed BEFORE recording trade so it's included
+            dog_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
+            if dog_fill_at and not bot.get('hedge_fill_latency_ms'):
+                bot['hedge_fill_latency_ms'] = round((now - dog_fill_at) * 1000, 1)
             _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': yes_p, 'no_price': no_p,
@@ -9968,6 +9973,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'fav_price': actual_fav_price,
                 'avg_dog_price': avg_dog,
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'hedge_fill_latency_ms': bot.get('hedge_fill_latency_ms'),
                 'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'rungs_filled': filled_rung_count,
                 'rungs_total': len(bot['rungs']),
@@ -9989,11 +9995,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(net_pnl)
             session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
-            # Track hedge fill-to-fill latency (anchor fill → hedge fill)
-            dog_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
-            if dog_fill_at:
-                hedge_fill_latency_ms = round((now - dog_fill_at) * 1000, 1)
-                bot['hedge_fill_latency_ms'] = hedge_fill_latency_ms
             print(f'👻 PHANTOM P&L: {bot_id} pnl={net_pnl}¢ (yes={yes_p}¢ no={no_p}¢ qty={hedge_qty} fee={fee}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms session_profit={session_pnl["gross_profit_cents"]}¢ session_loss={session_pnl["gross_loss_cents"]}¢')
             bot_log('PHANTOM_LADDER_COMPLETE', bot_id, {
                 'net_pnl': net_pnl, 'yes_price': yes_p, 'no_price': no_p,
@@ -11115,9 +11116,12 @@ def _handle_apex(bot_id, bot, actions):
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
                             past_ceiling = current_price >= max_hedge
 
-                            # ── PRIORITY 0: Apex sell-back escape at ceiling ──
-                            # If at ceiling AND sell-back is cheaper than completing, escape now
-                            if at_ceiling and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted'):
+                            # ── PRIORITY 0: Apex sell-back escape ──
+                            # Check whenever combined exceeds snap ceiling (not just hard ceiling)
+                            # Between snap ceiling and hard ceiling is a dead zone where the arb
+                            # is no longer profitable — sell-back may be cheaper than completing
+                            _above_snap = combined > _apex_snap_ceiling
+                            if _above_snap and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted'):
                                 if _apex_sellback_check(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, rq):
                                     bot['_apex_sellback_attempted'] = True
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)

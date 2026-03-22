@@ -786,25 +786,30 @@ function getMarketLiquidity(market) {
     const thickSide = thinSide === 'yes' ? 'no' : 'yes';
     const spreadImbalance = Math.abs(yesSpread - noSpread);
 
-    // OBI proxy from spread imbalance: negative = dog side has selling pressure (good for phantom)
-    // Range roughly -1 to +1, where negative means the dog side (underdog) book is thinner
+    // Dog/fav identification (dog = cheaper side, fav = expensive side)
     const dogSide = yesBid < noBid ? 'yes' : 'no';
     const favSide = dogSide === 'yes' ? 'no' : 'yes';
     const dogSpread = dogSide === 'yes' ? yesSpread : noSpread;
     const favSpreadVal = favSide === 'yes' ? yesSpread : noSpread;
-    // OBI: positive = dog side is thicker (buying pressure), negative = dog side thinner (selling pressure)
-    const totalSpread = dogSpread + favSpreadVal;
-    const obi = totalSpread > 0 ? (favSpreadVal - dogSpread) / totalSpread : 0;
-    // Phantom quality: fav thick (low spread) + dog thin (high spread) = good setup
+    // Note: on binary tickers, dogSpread === favSpread always (same order book)
+    // Phantom quality: tight spread (instant hedge) + volume (whale dumps) + good dog price range
     // Score 0-100: higher = better phantom opportunity
+    const spread = Math.min(yesSpread, noSpread);  // they're equal, but min for safety
+    const dogPrice = Math.min(yesBid, noBid);
+    const favBid = Math.max(yesBid, noBid);
+    const hedgeRoom = 98 - dogPrice - (100 - favBid);
     const phantomQuality = Math.round(Math.max(0, Math.min(100,
-        (favSpreadVal <= 2 ? 40 : favSpreadVal <= 3 ? 25 : favSpreadVal <= 5 ? 10 : 0) +
-        (dogSpread >= 4 ? 30 : dogSpread >= 3 ? 20 : dogSpread >= 2 ? 10 : 0) +
-        (vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
-        (obi < -0.3 ? 10 : 0)
+        // Spread tightness (40 pts) — can we hedge instantly?
+        (spread <= 1 ? 40 : spread <= 2 ? 35 : spread <= 3 ? 25 : spread <= 5 ? 10 : 0) +
+        // Volume (25 pts) — deeper book = more whale activity + hedge absorption
+        (vol >= 200 ? 25 : vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
+        // Dog price sweet spot (20 pts) — 10-25¢ ideal
+        (dogPrice >= 10 && dogPrice <= 25 ? 20 : dogPrice >= 7 && dogPrice <= 35 ? 12 : 0) +
+        // Hedge room (15 pts) — more room = more profit per trade
+        (hedgeRoom >= 5 ? 15 : hedgeRoom >= 3 ? 10 : hedgeRoom >= 2 ? 5 : 0)
     )));
 
-    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance, dogSide, favSide, dogSpread, favSpread: favSpreadVal, obi, phantomQuality };
+    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance, dogSide, favSide, dogSpread, favSpread: favSpreadVal, phantomQuality };
 }
 
 // ─── GAME SIGNAL — arb-focused: score stability + liquidity, NOT phase-gated ──
@@ -2311,49 +2316,47 @@ function createMarketRow(market, label) {
         const bothTight = ySpr <= 3 && nSpr <= 3;
         const oneThin = (ySpr > 3 && ySpr <= 5) || (nSpr > 3 && nSpr <= 5);
         const bothBroken = ySpr > 5 && nSpr > 5;
-        // Label: YES spread / NO spread (what you can't see without opening the book)
-        const _apexSpreadLabel = `${ySpr}/${nSpr}`;
+        // Label: spread (YES and NO spreads are always equal on a binary ticker)
+        const _apexSpreadLabel = `${Math.min(ySpr, nSpr)}¢`;
         const _apexWarn = (!bothTight && !bothBroken) ? ' ⚠️' : '';
         const _apexLabelColor = bothTight ? '#00ff88' : bothBroken ? '#ff4444' : '#ffaa00';
         const leanLabel = priceLean <= 10 ? 'coin-flip' : priceLean <= 25 ? 'lean game' : 'strong lean';
         if (isLiveGame && bidSum >= 90 && !bothBroken) {
-            // Live game — show spread on each side
-            const spreadTip = bothTight ? 'both sides tight — fills on both legs'
-                : `${liq.thinSide.toUpperCase()} side has ${Math.max(ySpr,nSpr)}¢ gap — that leg may be slow to fill`;
+            const spreadTip = bothTight ? 'tight spread — fills on both legs'
+                : `spread ${Math.min(ySpr,nSpr)}¢ — may be slow to fill`;
             recoTypes.push({
                 type: 'apex',
                 label: `${_apexSpreadLabel}${_apexWarn}`,
                 labelColor: _apexLabelColor,
-                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · YES spread ${ySpr}¢ / NO spread ${nSpr}¢ · ${spreadTip}`,
+                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${Math.min(ySpr,nSpr)}¢ · ${spreadTip}`,
             });
         } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && bothTight) {
             recoTypes.push({
                 type: 'apex',
                 label: `${_apexSpreadLabel}`,
                 labelColor: '#00ff88',
-                tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢ · YES spread ${ySpr}¢ / NO spread ${nSpr}¢ — both tight`,
+                tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢ · spread ${Math.min(ySpr,nSpr)}¢ — tight`,
             });
         }
     }
     // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
-    // arb math works, lowest rung won't hit 1¢ floor, AND fav has thick liquidity for instant hedge
+    // arb math works, lowest rung won't hit 1¢ floor, AND spread tight enough for instant hedge
     if (!botTypes.phantom) {
         const dogPrice = Math.min(liq.yesBid, liq.noBid);
         const favBid = Math.max(liq.yesBid, liq.noBid);
         const hedgeRoom = 98 - dogPrice - (100 - favBid);
         const lowestRung = dogPrice - 4;
-        const favSpread = liq.favSpread;
+        const spread = liq.avgSpread;  // YES spread = NO spread on binary tickers
         const dogSideLabel = liq.dogSide.toUpperCase();
         const pq = liq.phantomQuality;
-        const obiLabel = liq.obi < -0.3 ? ' · ✅ dog selling' : liq.obi > 0.3 ? ' · ❌ dog buying' : '';
-        if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && favSpread <= 5) {
-            const liqLabel = favSpread <= 2 ? 'thick' : favSpread <= 3 ? 'good' : 'ok';
+        if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && spread <= 5) {
+            const liqLabel = spread <= 2 ? 'thick' : spread <= 3 ? 'good' : 'ok';
             const qualLabel = pq >= 60 ? '🟢' : pq >= 35 ? '🟡' : '🔴';
             const _phLabel = `${qualLabel}${pq}`;
             const _phLabelColor = pq >= 60 ? '#00ff88' : pq >= 35 ? '#ffaa00' : '#ff4444';
-            recoTypes.push({ type: 'phantom', label: _phLabel, labelColor: _phLabelColor, tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · fav ${liqLabel} (${favSpread}¢)${obiLabel} · ${qualLabel} ${pq}/100` });
-        } else if (dogPrice >= 7 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2 && favSpread > 5 && favSpread <= 8) {
-            recoTypes.push({ type: 'phantom', label: '⚠️', labelColor: '#ff8800', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢ — ⚠️ fav spread ${favSpread}¢ (thin, hedge may not catch)${obiLabel}` });
+            recoTypes.push({ type: 'phantom', label: _phLabel, labelColor: _phLabelColor, tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · spread ${spread}¢ (${liqLabel}) · ${qualLabel} ${pq}/100` });
+        } else if (dogPrice >= 7 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2 && spread > 5 && spread <= 8) {
+            recoTypes.push({ type: 'phantom', label: '⚠️', labelColor: '#ff8800', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢ — ⚠️ spread ${spread}¢ (thin, hedge may not catch)` });
         }
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
@@ -4130,41 +4133,23 @@ function openBotModal(market, _side, _price) {
             + `<span style="color:#8892a6;font-size:10px;">${liq.yesBid}+${liq.noBid}=${liq.bidSum}¢ · spread ${liq.avgSpread}¢</span>`
             + `</div>`
             + (signal.description ? `<div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>` : '');
-        // Highlight recommended tier buttons + add ★ to recommended
+        // Highlight recommended tier buttons + add ★ to ALL recommended
+        window._recPresets = recPresets;  // store for _syncPresetStyles
+        _selectedWidths.clear();
+        recPresets.forEach(w => _selectedWidths.add(w));
+        _syncPresetStyles();
+        // Set slider to middle preset for price display
         const midPreset = recPresets[Math.floor(recPresets.length / 2)];
-        document.querySelectorAll('.arb-preset-btn').forEach(btn => {
-            const bw = parseInt(btn.dataset.width);
-            const isRec = recPresets.includes(bw);
-            const label = btn.querySelector('div');
-            if (isRec) {
-                btn.style.boxShadow = `0 0 8px ${sigColor}44`;
-                btn.dataset.recommended = 'true';
-                if (label) {
-                    label.textContent = bw === midPreset ? `${bw}¢ ★` : `${bw}¢`;
-                    label.style.color = bw === midPreset ? '#ffaa33' : sigColor;
-                }
-            } else {
-                btn.style.boxShadow = 'none';
-                btn.dataset.recommended = '';
-                if (label) {
-                    label.textContent = `${bw}¢`;
-                    label.style.color = '#00ff88';
-                }
-            }
-        });
-        applyPreset(midPreset);
+        const widthSlider = document.getElementById('bot-arb-width');
+        if (widthSlider) { widthSlider.value = midPreset; }
+        document.getElementById('width-display').textContent = `${midPreset}¢`;
+        recalcArbPrices();
+        _updateDeployButton();
+        updateAllWidthsPreview();
     } else if (recEl) {
         recEl.style.display = 'none';
-        // Clear all recommendation markers and reset labels
-        document.querySelectorAll('.arb-preset-btn').forEach(btn => {
-            btn.style.boxShadow = 'none';
-            btn.dataset.recommended = '';
-            const label = btn.querySelector('div');
-            if (label) {
-                label.textContent = `${btn.dataset.width}¢`;
-                label.style.color = '#00ff88';
-            }
-        });
+        window._recPresets = [];
+        _syncPresetStyles();
     }
 
     // Underdog warning removed — no longer relevant for dual arb strategy
@@ -4483,19 +4468,28 @@ function applyPreset(width) {
 }
 
 function _syncPresetStyles() {
+    const recPresets = window._recPresets || [];
     document.querySelectorAll('.arb-preset-btn').forEach(btn => {
         const w = parseInt(btn.dataset.width);
         const label = btn.querySelector('div');
-        if (_selectedWidths.has(w)) {
+        const isRec = recPresets.includes(w);
+        const isSelected = _selectedWidths.has(w);
+        if (isSelected) {
             btn.style.border = '2px solid #ffd700';
             btn.style.background = '#ffd70022';
             btn.style.boxShadow = '0 0 8px #ffd70044';
-            if (label) label.style.color = '#ffd700';
+            if (label) {
+                label.textContent = isRec ? `${w}¢ ★` : `${w}¢`;
+                label.style.color = '#ffd700';
+            }
         } else {
-            btn.style.border = '2px solid #1e274066';
+            btn.style.border = isRec ? '2px dashed #ffaa3366' : '2px solid #1e274066';
             btn.style.background = '#0a0e1a';
-            btn.style.boxShadow = 'none';
-            if (label) label.style.color = '#00ff88';
+            btn.style.boxShadow = isRec ? '0 0 6px #ffaa3322' : 'none';
+            if (label) {
+                label.textContent = isRec ? `${w}¢ ★` : `${w}¢`;
+                label.style.color = isRec ? '#ffaa33' : '#00ff88';
+            }
         }
     });
 }

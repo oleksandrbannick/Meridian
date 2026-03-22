@@ -11191,7 +11191,7 @@ def _handle_apex(bot_id, bot, actions):
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
                                     return
 
-                            # ── PRIORITY 1: Drop to bid if price is above bid target ──
+                            # ── PRIORITY 1: Drop toward bid if price is above bid target ──
                             if current_price > bid_target and bid_target > 0:
                                 if at_ceiling:
                                     # At ceiling: follow bid down to exit as cheap as possible
@@ -11202,11 +11202,22 @@ def _handle_apex(bot_id, bot, actions):
                                 elif snap_revert:
                                     # Was snapped but no longer profitable — revert to pre-snap price
                                     revert_price = bot.get('_pre_snap_price', current_price)
-                                    new_price = min(revert_price, bid_target)  # Don't go above bid either
+                                    new_price = min(revert_price, bid_target)
                                     bot['_pre_snap_price'] = None
                                     walk_type = 'snap_revert'
                                     print(f'⚡ APEX SNAP REVERT: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
                                           f'(pre_snap={revert_price}¢ bid={unfilled_bid}¢)')
+                                elif snap_ready:
+                                    # In profitable zone + above bid: RETREAT to bid-2
+                                    # Stay out of the way while bid is falling
+                                    _retreat_target = max(1, unfilled_bid - 2)
+                                    new_price = _retreat_target
+                                    walk_type = 'trailing_retreat'
+                                    # Track the low while retreating
+                                    _snap_low = bot.get('_snap_zone_lowest_bid', 999)
+                                    if unfilled_bid < _snap_low:
+                                        bot['_snap_zone_lowest_bid'] = unfilled_bid
+                                        bot['_snap_zone_entered_at'] = bot.get('_snap_zone_entered_at') or now
                                 else:
                                     # Normal: price drifted above bid, drop instantly
                                     new_price = bid_target

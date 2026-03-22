@@ -1015,29 +1015,51 @@ function getGameSignal(gameId, sport, markets) {
         description: `±${marginLabel} · ${phaseLabel} — Prices bounce both ways, both legs can fill. Best opportunity`, liq };
 }
 
-function getRecommendedPresets(tier, signalType) {
-    // With amend system, all widths complete cleanly.
-    // Tighter = more fills, lower profit per trade
-    // Wider = fewer fills, higher profit per trade
-    // Just recommend a sensible range based on market conditions.
+function getRecommendedPresets(tier, signalType, market) {
+    // Signal-based width range (game state tells us how volatile the market is)
+    let signalRange;
     if (signalType === 'coin_flip') {
-        // Close game — both legs fill fast, tight widths work great
-        return [5, 6, 7, 8];
+        signalRange = [5, 6, 7, 8];
+    } else if (signalType === 'lean') {
+        signalRange = [6, 7, 8, 9];
+    } else if (signalType === 'drifting') {
+        signalRange = [8, 9, 10, 11];
+    } else if (signalType === 'runaway') {
+        signalRange = [10, 11, 12, 13];
+    } else {
+        signalRange = [7, 8, 9, 10];
     }
-    if (signalType === 'lean') {
-        // Small lead — still good fill rate
-        return [6, 7, 8, 9];
+
+    // If no market data, just return signal-based range
+    if (!market) return signalRange;
+
+    // Check which widths are actually profitable at current prices
+    const profitable = [];
+    for (const w of ALL_PRESET_WIDTHS) {
+        const arb = calculateArbPrices(market, w);
+        const combined = arb.targetYes + arb.targetNo;
+        const profit = 100 - combined;
+        // Must be profitable (positive spread) AND under ceiling
+        if (profit > 0 && combined < 98) {
+            profitable.push(w);
+        }
     }
-    if (signalType === 'drifting') {
-        // Lead building — need wider to compensate for slower dog fills
-        return [8, 9, 10, 11];
+
+    if (profitable.length === 0) return signalRange; // fallback
+
+    // Intersect: widths that are both signal-recommended AND profitable
+    const intersected = signalRange.filter(w => profitable.includes(w));
+
+    // If intersection is empty (signal range doesn't overlap with profitable),
+    // use the profitable widths closest to the signal range
+    if (intersected.length === 0) {
+        const sigMid = signalRange[Math.floor(signalRange.length / 2)];
+        // Pick 4 profitable widths closest to signal midpoint
+        const sorted = profitable.slice().sort((a, b) => Math.abs(a - sigMid) - Math.abs(b - sigMid));
+        return sorted.slice(0, 4);
     }
-    if (signalType === 'runaway') {
-        // Blowout — dog side barely fills, go wide or skip
-        return [10, 11, 12, 13];
-    }
-    // Default (early/pregame/late/unknown)
-    return [7, 8, 9, 10];
+
+    return intersected;
 }
 
 function isKalshiLive(market) {
@@ -4066,7 +4088,7 @@ function openBotModal(market, _side, _price) {
     const sigType = signal.type; // anchor, swing, caution, pregame, none
     const recEl = document.getElementById('preset-recommendation');
     if (recEl && liq.yesBid > 0 && liq.noBid > 0) {
-        const recPresets = getRecommendedPresets(liq.tier, sigType);
+        const recPresets = getRecommendedPresets(liq.tier, sigType, market);
         const recLabel = recPresets.join('¢, ') + '¢';
         // Signal-aware recommendation text
         let sigText = '', sigColor = liq.tierColor;

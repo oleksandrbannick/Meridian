@@ -1021,58 +1021,44 @@ function getGameSignal(gameId, sport, markets) {
 }
 
 function getRecommendedPresets(tier, signalType, market) {
-    // Signal-based width range (game state tells us how volatile the market is)
+    // Signal-based width range (fallback when no market data)
     let signalRange;
-    if (signalType === 'coin_flip') {
-        signalRange = [5, 6, 7, 8];
-    } else if (signalType === 'lean') {
-        signalRange = [6, 7, 8, 9];
-    } else if (signalType === 'drifting') {
-        signalRange = [8, 9, 10, 11];
-    } else if (signalType === 'runaway') {
-        signalRange = [10, 11, 12, 13];
-    } else {
-        signalRange = [7, 8, 9, 10];
-    }
+    if (signalType === 'coin_flip') signalRange = [5, 6, 7, 8];
+    else if (signalType === 'lean') signalRange = [6, 7, 8, 9];
+    else if (signalType === 'drifting') signalRange = [8, 9, 10, 11];
+    else if (signalType === 'runaway') signalRange = [10, 11, 12, 13];
+    else signalRange = [7, 8, 9, 10];
 
-    // If no market data, just return signal-based range
     if (!market) return signalRange;
 
     const yesBid = getPrice(market, 'yes_bid') || 0;
     const noBid = getPrice(market, 'no_bid') || 0;
     if (yesBid <= 0 || noBid <= 0) return signalRange;
 
-    // Score each width by how close the orders post to current bids (= fill likelihood)
-    // Closer to bid = fills faster. Far from bid = sits in queue forever.
+    // Score ALL widths by fillability (how close orders post to current bids)
     const scored = [];
     for (const w of ALL_PRESET_WIDTHS) {
         const arb = calculateArbPrices(market, w);
         const yesGap = yesBid - arb.targetYes;  // how far below YES bid
         const noGap = noBid - arb.targetNo;      // how far below NO bid
-        const worstGap = Math.max(yesGap, noGap); // the side that's hardest to fill
-        // Skip widths where either order would be at 1¢ floor (dog crushed)
+        const worstGap = Math.max(yesGap, noGap);
         if (arb.targetYes <= 1 || arb.targetNo <= 1) continue;
-        scored.push({ width: w, worstGap, yesGap, noGap });
+        if (worstGap > 8) continue;  // skip widths too far from any bid
+        scored.push({ width: w, worstGap, inSignal: signalRange.includes(w) });
     }
 
     if (scored.length === 0) return signalRange;
 
-    // Fillable = worst gap ≤ 5¢ from bid (reasonable fill distance)
-    const fillable = scored.filter(s => s.worstGap <= 5).map(s => s.width);
+    // Sort by fillability first, signal-range as tiebreaker
+    scored.sort((a, b) => {
+        if (a.worstGap !== b.worstGap) return a.worstGap - b.worstGap;
+        if (a.inSignal !== b.inSignal) return a.inSignal ? -1 : 1;
+        return a.width - b.width;  // tighter widths first when equal
+    });
 
-    // Intersect fillable with signal range
-    const intersected = signalRange.filter(w => fillable.includes(w));
-
-    if (intersected.length > 0) return intersected;
-
-    // If no overlap, pick fillable widths closest to signal range
-    if (fillable.length > 0) {
-        const sigMid = signalRange[Math.floor(signalRange.length / 2)];
-        const sorted = fillable.slice().sort((a, b) => Math.abs(a - sigMid) - Math.abs(b - sigMid));
-        return sorted.slice(0, 4);
-    }
-
-    return signalRange;
+    // Take up to 6 most fillable widths
+    const best = scored.slice(0, 6).map(s => s.width).sort((a, b) => a - b);
+    return best.length >= 3 ? best : signalRange;
 }
 
 function isKalshiLive(market) {
@@ -1409,15 +1395,21 @@ function displayMarkets(markets) {
         return;
     }
     
-    // Pre-build ticker → active bot type map (O(n) once, not per row)
+    // Pre-build ticker → active bot type map + P&L map (O(n) once, not per row)
     const botMap = {};  // ticker → {phantom: N, apex: N, meridian: N, scout: N}
+    const pnlMap = {};  // ticker → total net P&L in cents (all bots, including completed)
     if (window._lastBotsData) {
         const deadSt = new Set(['completed','stopped','cancelled','drift_cancelled']);
         const catLabel = { anchor_dog: 'phantom', anchor_ladder: 'phantom', ladder_arb: 'apex' };
         for (const bid in window._lastBotsData) {
             const b = window._lastBotsData[bid];
-            if (deadSt.has(b.status)) continue;
+            // P&L aggregation: include ALL bots (active + completed) for this session
             const t = b.ticker || '';
+            if (t) {
+                const pnl = (b.net_pnl_cents || 0) + (b.lifetime_pnl || 0);
+                pnlMap[t] = (pnlMap[t] || 0) + pnl;
+            }
+            if (deadSt.has(b.status)) continue;
             if (!t) continue;
             let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
             if (!label) continue;
@@ -1436,6 +1428,7 @@ function displayMarkets(markets) {
         }
     }
     window._botTypeMap = botMap;
+    window._botPnlMap = pnlMap;
 
     // Middle scanner auto-fetch removed — was firing 12 Kalshi reads on every render,
     // starving bot operations. Use Meridian tab to scan manually.
@@ -2009,6 +2002,22 @@ function displayEventRow(eventData, container) {
     sportBadge.textContent = sport;
     badgeWrap.appendChild(sportBadge);
 
+    // Game-level P&L badge — sum across all bots on this game's markets
+    const gamePnlMap = window._botPnlMap || {};
+    let gamePnl = 0;
+    for (const m of eventData.markets) {
+        gamePnl += gamePnlMap[m.ticker] || 0;
+    }
+    if (gamePnl !== 0) {
+        const pnlBadge = document.createElement('span');
+        const pnlColor = gamePnl > 0 ? '#00ff88' : '#ff4444';
+        const pnlSign = gamePnl > 0 ? '+' : '';
+        pnlBadge.style.cssText = `background:${pnlColor}18;color:${pnlColor};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;`;
+        pnlBadge.textContent = `${pnlSign}${gamePnl}¢`;
+        pnlBadge.title = `Net P&L across all bots on this game: ${pnlSign}$${(gamePnl/100).toFixed(2)}`;
+        badgeWrap.appendChild(pnlBadge);
+    }
+
     const gameDate = parseGameDate(eventData.gameId);
     if (gameDate) {
         const dateBadge = document.createElement('span');
@@ -2321,7 +2330,7 @@ function createMarketRow(market, label) {
         const _apexWarn = (!bothTight && !bothBroken) ? ' ⚠️' : '';
         const _apexLabelColor = bothTight ? '#00ff88' : bothBroken ? '#ff4444' : '#ffaa00';
         const leanLabel = priceLean <= 10 ? 'coin-flip' : priceLean <= 25 ? 'lean game' : 'strong lean';
-        if (isLiveGame && bidSum >= 90 && !bothBroken) {
+        if (isLiveGame && bidSum >= 90 && !bothBroken && priceLean <= 30) {
             const spreadTip = bothTight ? 'tight spread — fills on both legs'
                 : `spread ${Math.min(ySpr,nSpr)}¢ — may be slow to fill`;
             recoTypes.push({
@@ -3433,7 +3442,15 @@ function updateRungQty(idx, val) {
         // If auto-qty and user changed rung 1, rescale all others
         if (_anchorAutoQty && idx === 0) {
             _anchorRungs.forEach((r, i) => { if (i > 0) r.qty = v * (i + 1); });
-            renderAnchorRungs();
+            // Update other rung qty inputs directly (renderAnchorRungs skips when input focused)
+            const container = document.getElementById('anchor-rungs-container');
+            if (container) {
+                const qtyInputs = container.querySelectorAll('input[type="number"]');
+                // qty inputs are at index 1,3,5... (price=0,2,4... qty=1,3,5...)
+                _anchorRungs.forEach((r, i) => {
+                    if (i > 0 && qtyInputs[i * 2 + 1]) qtyInputs[i * 2 + 1].value = r.qty;
+                });
+            }
         }
     }
     updateAnchorPreview();
@@ -3594,6 +3611,33 @@ function updateAnchorPreview() {
         ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge on fill · walk-up to ceiling if slow
     </div>`;
     previewEl.innerHTML = html;
+
+    // Phantom width recommendation pills — show fill likelihood for each width
+    const recoEl = document.getElementById('phantom-width-reco');
+    if (recoEl && _anchorRungs.length > 0 && _anchorFavBid > 0) {
+        const widthOptions = [2, 3, 4, 5, 6, 8, 10];
+        let recoHtml = '';
+        for (const w of widthOptions) {
+            const hedgePrice = 100 - avgPrice - w;
+            if (hedgePrice < 1) continue;
+            const gapFromBid = _anchorFavBid - hedgePrice;
+            let fillZone, color, icon;
+            if (gapFromBid <= 0) {
+                fillZone = 'instant'; color = '#00ff88'; icon = '\u26A1';
+            } else if (gapFromBid <= 2) {
+                fillZone = 'fast'; color = '#4ade80'; icon = '\u{1F7E2}';
+            } else if (gapFromBid <= 5) {
+                fillZone = 'walk'; color = '#ffaa00'; icon = '\u{1F7E1}';
+            } else {
+                fillZone = 'slow'; color = '#ff4444'; icon = '\u{1F534}';
+            }
+            const isActive = w === targetWidth;
+            recoHtml += `<span style="display:inline-block;padding:2px 6px;margin:1px;border:1px solid ${color}${isActive ? '' : '44'};border-radius:4px;font-size:10px;color:${color};cursor:pointer;${isActive ? 'background:' + color + '22;font-weight:800;' : 'opacity:0.8;'}" onclick="document.getElementById('anchor-target-width').value=${w};initAnchorDogPrices()" title="Width ${w}¢: hedge at ${hedgePrice}¢ (fav bid ${_anchorFavBid}¢, ${gapFromBid <= 0 ? 'at bid' : gapFromBid + '¢ below'}) — ${fillZone} fill">${icon}${w}¢</span>`;
+        }
+        recoEl.innerHTML = `<div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;"><span style="color:#6a7488;font-size:9px;margin-right:2px;">HEDGE FILL:</span>${recoHtml}</div>`;
+    } else if (recoEl) {
+        recoEl.innerHTML = '';
+    }
 
     // Update deploy button text
     const btn = document.getElementById('anchor-deploy-btn');

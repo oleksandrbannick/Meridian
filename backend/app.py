@@ -96,7 +96,7 @@ def _audit(event, bot_id, data=None):
 def _audit_position_check(bot_id, ticker, dog_side, context):
     """Check Kalshi position for a ticker and log it to the audit trail."""
     try:
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         pos_resp = kalshi_client.get_positions(ticker=ticker)
         positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
         net_pos = 0
@@ -1366,7 +1366,7 @@ def get_batch_prices():
 
             # 2. Fallback: fetch orderbook (depth=1 for just best level)
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker, depth=1))
                 ob = ob_data.get('orderbook', ob_data)
                 y_levels = ob.get('yes', [])
@@ -2040,7 +2040,7 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
         oid = rung.get(f'{anchor_side}_order_id')
         if oid:
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 resp = kalshi_client.get_order(oid)
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 filled = _parse_fill_count(ord_data)
@@ -2062,7 +2062,7 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
 
     # 3. Get current ask price for maker sell
     try:
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         ob = kalshi_client.get_market_orderbook(ticker)
         anchor_ask = _best_ask(ob, anchor_side)
         anchor_bid = _best_bid(ob, anchor_side)
@@ -3558,7 +3558,7 @@ def _execute_phantom_ladder_hedge(bot_id):
                 else:
                     # Before completing with 0 fills, check Kalshi for actual positions
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         _pos_r = kalshi_client.get_positions(ticker=ticker)
                         _pos_list = _pos_r.get('market_positions', _pos_r.get('positions', []))
                         for _p in _pos_list:
@@ -3679,7 +3679,7 @@ def _execute_phantom_ladder_hedge(bot_id):
                 continue  # already filled or no order
             # Check Kalshi for actual fills before cancelling
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 resp = kalshi_client.get_order(rung['order_id'])
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 actual_fills = _parse_fill_count(ord_data)
@@ -3805,7 +3805,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
                 verified_fill += rung.get('fill_qty', 0)
                 continue
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 resp = kalshi_client.get_order(oid)
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 actual = _parse_fill_count(ord_data)
@@ -3847,7 +3847,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         if attempts >= 3:
             # CHECK: does the position actually exist on Kalshi?
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 _pos_resp = kalshi_client.get_positions(ticker=ticker)
                 _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
                 for _p in _positions:
@@ -4034,7 +4034,7 @@ def _execute_ws_dog_post(bot_id):
         try:
             # Fetch fresh orderbook to verify arb is still viable
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                 ob = ob_data.get('orderbook', ob_data)
                 if dog_side == 'no':
@@ -4679,7 +4679,7 @@ def _extract_spread_line(ticker: str) -> str:
     # Try to get spread number from Kalshi market title
     try:
         if kalshi_client:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             mkt = kalshi_client.get_market(ticker)
             market_data = mkt.get('market', mkt)
             title = market_data.get('title', '')
@@ -4853,7 +4853,7 @@ def _is_game_live(ticker: str) -> bool:
     # ── FALLBACK: Check Kalshi expected_expiration_time ──
     try:
         if kalshi_client:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             mkt_resp = kalshi_client.get_market(ticker)
             mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
             exp_str = mkt.get('expected_expiration_time', '')
@@ -5465,7 +5465,7 @@ def place_straight_order():
             # Check if the order filled immediately (at or above ask)
             initial_fill_qty = 0
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 order_check = kalshi_client.get_order(order_id)
                 order_obj = order_check.get('order', order_check)
                 initial_fill_qty = _parse_fill_count(order_obj) or order_obj.get('amount_filled', 0)
@@ -5582,7 +5582,7 @@ def create_bot():
         live_yes_ask = 99
         live_no_ask = 99
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
             ob = ob_data.get('orderbook', ob_data)
             yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
@@ -5992,7 +5992,7 @@ def _check_apex_rung_completions(bot_id, bot):
         hedge_oid = bot.get('hedge_order_id')
         if hedge_oid and not bot.get('_hedge_verified'):
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 order_resp = kalshi_client.get_order(hedge_oid)
                 order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
                 actual_fills = _parse_fill_count(order_data)
@@ -6547,7 +6547,7 @@ def _execute_apex_completion(bot_id):
         for oid in all_cancel_ids:
             if oid in _hedge_oids_set:
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     _pc_resp = kalshi_client.get_order(oid)
                     _pc_data = _pc_resp.get('order', _pc_resp) if isinstance(_pc_resp, dict) else {}
                     _pc_fills = _parse_fill_count(_pc_data)
@@ -6682,7 +6682,7 @@ def _execute_apex_completion(bot_id):
             if existing_hedge and bot.get('_extra_hedge_placed'):
                 # Verify the extra hedge order still exists on Kalshi
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     _eh_resp = kalshi_client.get_order(existing_hedge)
                     _eh_data = _eh_resp.get('order', _eh_resp) if isinstance(_eh_resp, dict) else {}
                     _eh_status = _eh_data.get('status', '')
@@ -6698,7 +6698,7 @@ def _execute_apex_completion(bot_id):
                         # Extra hedge fills settle against unhedged anchors on Kalshi instantly.
                         # Query Kalshi for ACTUAL remaining position instead of using stale local counts.
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             _pos_resp = kalshi_client.get_positions(ticker=bot.get('ticker', ''))
                             _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
                             _real_qty = 0
@@ -6955,7 +6955,7 @@ def create_ladder_arb_bot():
             return jsonify({'error': f'Bot cap: {active_on_ticker} bots on {ticker} (max {MAX_BOTS_PER_TICKER})'}), 400
 
         # Fetch live orderbook
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
         ob = ob_data.get('orderbook', ob_data)
         yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
@@ -7208,7 +7208,7 @@ def create_anchor_bot():
         # Auto-detect dog side from orderbook if not specified
         # Always fetch live orderbook for smart pricing
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             live_dog_bid = _best_bid(ob, dog_side if dog_side in ('yes', 'no') else 'no')
             live_dog_ask = _best_ask(ob, dog_side if dog_side in ('yes', 'no') else 'no')
@@ -7381,7 +7381,7 @@ def create_ladder_bot():
             return jsonify({'error': f'Bot cap: {active_on_ticker} bots on {ticker} (max {MAX_BOTS_PER_TICKER})'}), 400
 
         # Auto-detect dog side if not provided + fetch live orderbook for smart pricing
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         ob = kalshi_client.get_market_orderbook(ticker)
         if not dog_side:
             yes_bid = _best_bid(ob, 'yes')
@@ -7532,7 +7532,7 @@ def simulate_ladder():
             return jsonify({'error': 'Required: ticker'}), 400
 
         # Get live orderbook
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         ob = kalshi_client.get_market_orderbook(ticker)
 
         # Auto-detect dog side
@@ -7709,7 +7709,7 @@ def create_orders_batch(order_specs, order_group_id=None):
                 if actual_price == spec['price'] and price_key not in order_data:
                     try:
                         oid = order_data['order_id']
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         verify_resp = kalshi_client.get_order(oid)
                         verify_data = verify_resp.get('order', verify_resp) if isinstance(verify_resp, dict) else {}
                         verified_price = verify_data.get(price_key)
@@ -7827,7 +7827,7 @@ def get_actual_fill_price(order_id, side='yes', retries=2):
     """
     for attempt in range(retries + 1):
       try:
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         # Check fills for this order to get actual execution price
         fills_resp = kalshi_client.get_fills()
         fills = fills_resp.get('fills', [])
@@ -7852,7 +7852,7 @@ def get_actual_fill_price(order_id, side='yes', retries=2):
             if total_count > 0:
                 return round(total_cents / total_count)
         # Fallback: check the order status itself
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         order_resp = kalshi_client.get_order(order_id)
         order_data = order_resp.get('order', order_resp) if isinstance(order_resp, dict) else {}
         avg = order_data.get('average_fill_price', order_data.get('avg_fill_price'))
@@ -7876,7 +7876,7 @@ def get_actual_fill_price(order_id, side='yes', retries=2):
 def verify_position_cleared(ticker, side, count):
     """Check if a position has been cleared after a sell order."""
     try:
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         pos_resp = kalshi_client.get_positions(ticker=ticker)
         positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
         for p in positions:
@@ -7917,7 +7917,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             # Guards against manually-cancelled positions and double-execution.
             try:
                 # First: try ticker-filtered query
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 pos_resp = kalshi_client.get_positions(ticker=ticker)
                 positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
                 actual_held = 0
@@ -7933,7 +7933,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
                 # The Kalshi positions `ticker` param may be an event slug filter,
                 # not an exact market ticker, so it can miss GAME market positions.
                 if actual_held == 0:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     all_pos_resp = kalshi_client.get_positions(limit=200)
                     all_positions = all_pos_resp.get('market_positions', all_pos_resp.get('positions', []))
                     for p in all_positions:
@@ -7987,7 +7987,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
                 return False, {'error': str(pos_err), 'position_check_failed': True}
 
             # Fetch the CURRENT bid for this side right before selling
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             mkt_resp = kalshi_client.get_market(ticker)
             mkt = mkt_resp.get('market', mkt_resp)
 
@@ -8045,7 +8045,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
 
             # Check if it filled immediately
             time.sleep(0.5)
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             check = kalshi_client.get_order(order_id)
             order_data = check.get('order', check) if isinstance(check, dict) else {}
             filled = _parse_fill_count(order_data)
@@ -8062,7 +8062,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
 
             # Wait a bit more and check again
             time.sleep(1.5)
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             check2 = kalshi_client.get_order(order_id)
             order_data2 = check2.get('order', check2) if isinstance(check2, dict) else {}
             filled2 = _parse_fill_count(order_data2)
@@ -8117,7 +8117,7 @@ def execute_net_via_amend(order_id, amend_side, amend_price, qty, ticker, reason
     """
     try:
         # 1. Check if order is still resting
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         ord_resp = kalshi_client.get_order(order_id)
         ord_data  = ord_resp.get('order', ord_resp)
         ord_status = ord_data.get('status', '')
@@ -8177,7 +8177,7 @@ def execute_net_via_amend(order_id, amend_side, amend_price, qty, ticker, reason
                                   'actual_fill_price': filled_price,
                                   'sell_price': filled_price, 'method': 'amend', 'verified_cleared': True}
 
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 chk = kalshi_client.get_order(order_id).get('order', {})
                 chk_status = chk.get('status', '')
                 chk_filled = _parse_fill_count(chk)
@@ -8430,7 +8430,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot_log('PHANTOM_NO_DOG_ORDER', bot_id, {'status': status}, level='WARN')
             return
 
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         dog_resp = kalshi_client.get_order(dog_order_id)
         dog_ord = dog_resp.get('order', dog_resp) if isinstance(dog_resp, dict) else {}
         dog_filled = _parse_fill_count(dog_ord)
@@ -8466,7 +8466,7 @@ def _handle_phantom(bot_id, bot, actions):
 
             # Get current fav bid from orderbook
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
                 fav_bid = _best_bid(ob, fav_side)
             except Exception:
@@ -8601,7 +8601,7 @@ def _handle_phantom(bot_id, bot, actions):
                               else f'gap={gap}¢≥{gap_thresh}¢' if gap_triggered
                               else f'timer={age_min:.1f}m')
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
                 current_dog_bid = _best_bid(ob, dog_side)
                 current_dog_ask = _best_ask(ob, dog_side)
@@ -8717,7 +8717,7 @@ def _handle_phantom(bot_id, bot, actions):
         })
         # Settlement check: if market is closed/settled, record result based on outcome
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             mkt_resp = kalshi_client.get_market(ticker)
             mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
             mkt_status = mkt.get('status', '').lower()
@@ -8767,7 +8767,7 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Retry posting the fav
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             fav_bid = _best_bid(ob, fav_side)
         except Exception:
@@ -8857,7 +8857,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot_log('PHANTOM_NO_FAV_ORDER', bot_id, {'status': status}, level='WARN')
             return
 
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         fav_resp = kalshi_client.get_order(fav_order_id)
         fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
         fav_filled = _parse_fill_count(fav_ord)
@@ -9017,7 +9017,7 @@ def _handle_phantom(bot_id, bot, actions):
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
             # Game ending with fav unfilled — check if market settled
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 mkt_resp = kalshi_client.get_market(ticker)
                 mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
                 mkt_status = mkt.get('status', '').lower()
@@ -9077,7 +9077,7 @@ def _handle_phantom(bot_id, bot, actions):
             # Query fav fill count before cancelling — partial fills may exist
             fav_filled = bot.get('fav_fill_qty', 0)
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 fav_order = kalshi_client.get_order(fav_order_id)
                 fav_filled = max(fav_filled, fav_order.get('order', fav_order).get('quantity_filled', 0))
                 bot['fav_fill_qty'] = fav_filled
@@ -9139,7 +9139,7 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Fetch current bid + ask
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             current_fav_bid = _best_bid(ob, fav_side)
             current_fav_ask = _best_ask(ob, fav_side)
@@ -9199,9 +9199,20 @@ def _handle_phantom(bot_id, bot, actions):
         needs_drop = current_fav_price > walk_target
         snap_ready = (dog_price + walk_target) <= _phantom_snap_ceiling and walk_target != current_fav_price
 
+        # Queue position: track fav bid stability
+        _ph_prev_bid = bot.get('_fav_bid_seen', 0)
+        if current_fav_bid != _ph_prev_bid:
+            bot['_fav_bid_stable_since'] = now
+            bot['_fav_bid_seen'] = current_fav_bid
+        _ph_bid_stable_s = now - bot.get('_fav_bid_stable_since', now)
+        _ph_at_bid = current_fav_price > 0 and current_fav_price == walk_target
+        _ph_queue_grace = _ph_at_bid and _ph_bid_stable_s >= 10 and not snap_ready and not needs_drop
+
         # Interval: adaptive based on ceiling proximity + game urgency
         _ph_combined = dog_price + current_fav_price
         walk_interval = _calc_walk_interval(_ph_combined, _phantom_urgency, snap_ready, False, needs_drop)
+        if _ph_queue_grace:
+            walk_interval = max(walk_interval, 30)
         bot['_walk_interval'] = walk_interval
         fav_last_walk = bot.get('fav_last_walk_at') or bot.get('fav_posted_at') or now
         since_last_walk = now - fav_last_walk
@@ -9286,7 +9297,7 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Recalculate smart price from current orderbook (don't reuse stale price)
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
@@ -9377,7 +9388,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
     if now - _last_settle_check >= 30:
       bot['_last_settle_check'] = now
       try:
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         mkt_al = kalshi_client.get_market(ticker)
         mkt_al_data = mkt_al.get('market', mkt_al) if isinstance(mkt_al, dict) else {}
         mkt_al_status = mkt_al_data.get('status', 'active')
@@ -9472,7 +9483,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         qty = bot.get('quantity', 1)
         anchor_depth = bot.get('anchor_depth', 5)
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
@@ -9571,7 +9582,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         current_dog_bid = ws_p.get(f'{dog_side}_bid', 0) or 0
         if current_dog_bid <= 0:
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
                 current_dog_bid = _best_bid(ob, dog_side)
             except Exception:
@@ -9588,7 +9599,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 total_fill += rung.get('fill_qty', 0)
                 continue
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 resp = kalshi_client.get_order(oid)
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 filled = _parse_fill_count(ord_data)
@@ -9649,7 +9660,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                               else f'timer={age_min:.1f}m')
             anchor_depth = bot.get('anchor_depth', 5)
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob = kalshi_client.get_market_orderbook(ticker)
                 rp_dog_bid = _best_bid(ob, dog_side)
                 rp_dog_ask = _best_ask(ob, dog_side)
@@ -9836,7 +9847,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
         hedge_qty = bot.get('hedge_qty', bot.get('total_dog_fill_qty', 1))
 
-        api_rate_limiter.wait()
+        api_read_limiter.wait()
         fav_resp = kalshi_client.get_order(fav_order_id)
         fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
         fav_filled = _parse_fill_count(fav_ord)
@@ -10105,7 +10116,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
 
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             current_fav_bid = _best_bid(ob, fav_side)
             current_fav_ask = _best_ask(ob, fav_side)
@@ -10137,9 +10148,20 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         needs_drop = current_fav_price > walk_target
         snap_ready = (avg_dog + walk_target) <= _phl_snap_ceiling and walk_target != current_fav_price
 
+        # Queue position: track fav bid stability
+        _phl_prev_bid = bot.get('_fav_bid_seen', 0)
+        if current_fav_bid != _phl_prev_bid:
+            bot['_fav_bid_stable_since'] = now
+            bot['_fav_bid_seen'] = current_fav_bid
+        _phl_bid_stable_s = now - bot.get('_fav_bid_stable_since', now)
+        _phl_at_bid = current_fav_price > 0 and current_fav_price == walk_target
+        _phl_queue_grace = _phl_at_bid and _phl_bid_stable_s >= 10 and not snap_ready and not needs_drop
+
         # Interval: adaptive based on ceiling proximity + game urgency
         _phl_combined = avg_dog + current_fav_price
         walk_interval = _calc_walk_interval(_phl_combined, _phl_urgency, snap_ready, False, needs_drop)
+        if _phl_queue_grace:
+            walk_interval = max(walk_interval, 30)
         bot['_walk_interval'] = walk_interval
         fav_last_walk = bot.get('fav_last_walk_at') or fav_posted_at or now
         since_last_walk = now - fav_last_walk
@@ -10242,7 +10264,7 @@ def _handle_apex(bot_id, bot, actions):
     if now - bot.get('_last_settle_check', 0) >= 30:
         bot['_last_settle_check'] = now
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             mkt_la = kalshi_client.get_market(ticker)
             mkt_la_data = mkt_la.get('market', mkt_la) if isinstance(mkt_la, dict) else {}
             mkt_la_status = mkt_la_data.get('status', 'active')
@@ -10296,7 +10318,7 @@ def _handle_apex(bot_id, bot, actions):
         # Check if sell order filled
         if sell_oid:
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 sell_resp = kalshi_client.get_order(sell_oid)
                 sell_ord = sell_resp.get('order', sell_resp) if isinstance(sell_resp, dict) else {}
                 sell_filled = _parse_fill_count(sell_ord)
@@ -10335,7 +10357,7 @@ def _handle_apex(bot_id, bot, actions):
 
         # Walk sell price down toward bid (same adaptive system as hedge walk)
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob = kalshi_client.get_market_orderbook(ticker)
             anchor_bid = _best_bid(ob, anchor_side)
             anchor_ask = _best_ask(ob, anchor_side)
@@ -10449,7 +10471,7 @@ def _handle_apex(bot_id, bot, actions):
             return
         # Fetch fresh orderbook and repost
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
             ob = ob_data.get('orderbook', ob_data)
             yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
@@ -10460,6 +10482,14 @@ def _handle_apex(bot_id, bot, actions):
             fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
             if fresh_yes_bid <= 0 or fresh_no_bid <= 0 or fresh_yes_bid + fresh_no_bid >= 100:
                 return  # No market — wait
+            # Drift guard: don't repost if game has drifted into blowout
+            price_lean = abs(fresh_yes_bid - fresh_no_bid)
+            if price_lean > 30:
+                bot_log('APEX_REPEAT_DRIFT_SKIP', bot_id, {
+                    'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid,
+                    'price_lean': price_lean, 'reason': 'blowout_drift',
+                })
+                return  # Game too lopsided — wait for it to tighten
             use_scaling = bot.get('width_scaling', False)
             valid_specs = []
             for rung in bot.get('rungs', []):
@@ -10554,7 +10584,7 @@ def _handle_apex(bot_id, bot, actions):
                     if not oid:
                         continue
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         resp = kalshi_client.get_order(oid)
                         ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                         filled = _parse_fill_count(ord_data)
@@ -10680,7 +10710,7 @@ def _handle_apex(bot_id, bot, actions):
             # Fetch fresh orderbook
             try:
                 new_group_id = _create_order_group()
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                 ob = ob_data.get('orderbook', ob_data)
                 yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
@@ -10803,7 +10833,7 @@ def _handle_apex(bot_id, bot, actions):
                 else:
                     # WS cache miss — fall back to REST
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                         ob = ob_data.get('orderbook', ob_data)
                         yes_lvl = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
@@ -10911,7 +10941,7 @@ def _handle_apex(bot_id, bot, actions):
                 if not oid:
                     continue
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     resp = kalshi_client.get_order(oid)
                     ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                     filled = _parse_fill_count(ord_data)
@@ -10935,7 +10965,7 @@ def _handle_apex(bot_id, bot, actions):
             _per_order_fills = {}
             for hedge_oid in bot.get('_all_hedge_order_ids', []):
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     resp = kalshi_client.get_order(hedge_oid)
                     ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                     filled = _parse_fill_count(ord_data)
@@ -10965,7 +10995,7 @@ def _handle_apex(bot_id, bot, actions):
             # 3) If hedge orders are 404ing but we have positions, reconcile from portfolio
             if orders_polled_ok == 0 and len(bot.get('_all_hedge_order_ids', [])) > 0:
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     positions = kalshi_client.get_positions(ticker=ticker)
                     pos_list = positions.get('market_positions', positions.get('positions', []))
                     if isinstance(pos_list, list):
@@ -11048,9 +11078,19 @@ def _handle_apex(bot_id, bot, actions):
         # Snap revert: we snapped up for profit but conditions no longer met
         was_snapped = bot.get('_pre_snap_price') is not None
         snap_revert = was_snapped and not snap_ready and not at_ceiling
+        # Queue position: track bid stability to avoid unnecessary walks
+        _prev_bid = bot.get('_last_bid_seen', 0)
+        if unfilled_bid != _prev_bid:
+            bot['_bid_stable_since'] = now
+            bot['_last_bid_seen'] = unfilled_bid
+        _bid_stable_s = now - bot.get('_bid_stable_since', now)
+        _at_bid = current_price_for_snap > 0 and current_price_for_snap == unfilled_bid
+        _queue_grace = _at_bid and _bid_stable_s >= 10 and not snap_ready and not needs_drop and not at_ceiling
         # Interval: adaptive based on ceiling proximity + game urgency
         _apex_combined = anchor_for_snap + current_price_for_snap if (anchor_for_snap and current_price_for_snap) else 0
         walk_interval = _calc_walk_interval(_apex_combined, _apex_urgency, snap_ready, at_ceiling, needs_drop, snap_revert)
+        if _queue_grace:
+            walk_interval = max(walk_interval, 30)  # extend to 30s when at stable bid
         bot['_walk_interval'] = walk_interval  # expose to frontend
         bot['_game_urgency'] = _apex_urgency
         last_walk = bot.get('last_walk_at') or first_fill_at or now
@@ -11197,7 +11237,7 @@ def _handle_apex(bot_id, bot, actions):
                                         # 409 Conflict = order may be filled or market closed
                                         # Re-poll fills to check
                                         try:
-                                            api_rate_limiter.wait()
+                                            api_read_limiter.wait()
                                             resp = kalshi_client.get_order(oid)
                                             ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                                             filled = _parse_fill_count(ord_data)
@@ -11311,7 +11351,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     dog_oid = bot.get('dog_order_id')
     if dog_oid:
         try:
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             resp = kalshi_client.get_order(dog_oid)
             ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
             actual = _parse_fill_count(ord_data)
@@ -11525,7 +11565,7 @@ def _run_monitor():
                 # ── Settlement guard: skip if market is closed/settled ──
                 if bot.get('type') != 'watch':  # arb bots only
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         mkt_check = kalshi_client.get_market(ticker)
                         mkt_data = mkt_check.get('market', mkt_check)
                         mkt_status = mkt_data.get('status', 'active')
@@ -11537,12 +11577,12 @@ def _run_monitor():
                                 yes_f = 0
                                 no_f = 0
                                 if bot.get('yes_order_id'):
-                                    api_rate_limiter.wait()
+                                    api_read_limiter.wait()
                                     yes_resp_s = kalshi_client.get_order(bot['yes_order_id'])
                                     yes_ord_s = yes_resp_s.get('order', yes_resp_s) if isinstance(yes_resp_s, dict) else {}
                                     yes_f = _parse_fill_count(yes_ord_s)
                                 if bot.get('no_order_id'):
-                                    api_rate_limiter.wait()
+                                    api_read_limiter.wait()
                                     no_resp_s = kalshi_client.get_order(bot['no_order_id'])
                                     no_ord_s = no_resp_s.get('order', no_resp_s) if isinstance(no_resp_s, dict) else {}
                                     no_f = _parse_fill_count(no_ord_s)
@@ -11733,7 +11773,7 @@ def _run_monitor():
 
                     # Check fill status of favorite order
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         fav_resp = kalshi_client.get_order(fav_order_id)
                         fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
                         fav_filled = _parse_fill_count(fav_ord)
@@ -11748,7 +11788,7 @@ def _run_monitor():
 
                         # Fetch fresh orderbook to verify arb is still viable
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                             ob = ob_data.get('orderbook', ob_data)
                             if dog_side == 'no':
@@ -11837,7 +11877,7 @@ def _run_monitor():
                                 if ws_price:
                                     cur_fav_bid = ws_price.get(f'{fav_side}_bid', 0)
                                 else:
-                                    api_rate_limiter.wait()
+                                    api_read_limiter.wait()
                                     mkt = kalshi_client.get_market(ticker)
                                     m = mkt.get('market', mkt)
                                     d = m.get(f'{fav_side}_bid_dollars')
@@ -11973,7 +12013,7 @@ def _run_monitor():
                                 bot['live_yes_ask'] = ws_p.get('yes_ask', 0) or (100 - _fp_nb if _fp_nb > 0 else 0)
                                 bot['live_no_ask']  = ws_p.get('no_ask',  0) or (100 - _fp_yb if _fp_yb > 0 else 0)
                             else:
-                                api_rate_limiter.wait()
+                                api_read_limiter.wait()
                                 _m = kalshi_client.get_market(ticker)
                                 _mk = _m.get('market', _m)
                                 def _tc(f):
@@ -12001,7 +12041,7 @@ def _run_monitor():
 
                     # ── Settlement guard for watch bots ──────────────
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         mkt_check_w = kalshi_client.get_market(ticker)
                         mkt_status_w = mkt_check_w.get('market', mkt_check_w).get('status', 'active')
                         if mkt_status_w not in ('active', 'open'):
@@ -12079,7 +12119,7 @@ def _run_monitor():
                     # ── Step 1: Check if the limit order has filled ──
                     if not bot.get('order_filled', False) and bot.get('order_id'):
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             order_check = kalshi_client.get_order(bot['order_id'])
                             order_obj = order_check.get('order', order_check)
                             filled_qty = order_obj.get('amount_filled', 0)
@@ -12092,7 +12132,7 @@ def _run_monitor():
                                 # Sync quantity to actual Kalshi position (user may have
                                 # had fewer contracts than they ordered)
                                 try:
-                                    api_rate_limiter.wait()
+                                    api_read_limiter.wait()
                                     pos_resp = kalshi_client.get_positions(ticker=ticker)
                                     positions = pos_resp.get('market_positions', [])
                                     actual_pos = 0
@@ -12139,7 +12179,7 @@ def _run_monitor():
                         if ws_price_pre:
                             bot['live_bid'] = ws_price_pre.get(f'{watch_side}_bid', 0)
                         else:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             mkt_pre = kalshi_client.get_market(ticker)
                             mkt_pre_data = mkt_pre.get('market', mkt_pre)
                             d_pre = mkt_pre_data.get(f'{watch_side}_bid_dollars')
@@ -12168,7 +12208,7 @@ def _run_monitor():
                         # WS can send stale/incorrect bids (e.g. Clowney 15+ showed 21¢
                         # when real bid was 60¢). One REST call prevents false SL fires.
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             mkt_verify = kalshi_client.get_market(ticker)
                             mkt_v_data = mkt_verify.get('market', mkt_verify)
                             d_verify = mkt_v_data.get(f'{watch_side}_bid_dollars')
@@ -12287,7 +12327,7 @@ def _run_monitor():
                     fresh_yes_bid = 0
                     fresh_no_bid  = 0
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
                         ob = ob_data.get('orderbook', ob_data)
                         y_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
@@ -12497,9 +12537,9 @@ def _run_monitor():
                         bot['status'] = 'fav_posted'
                     continue
 
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 yes_resp = kalshi_client.get_order(bot['yes_order_id'])
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 no_resp  = kalshi_client.get_order(bot['no_order_id'])
 
                 # Kalshi API may return {order: {...}} or the order directly
@@ -12601,7 +12641,7 @@ def _run_monitor():
                     yes_ask = ws_price.get('yes_ask', 0) or (100 - no_bid  if no_bid  > 0 else 0)
                     no_ask  = ws_price.get('no_ask',  0) or (100 - yes_bid if yes_bid > 0 else 0)
                 else:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     market_resp = kalshi_client.get_market(ticker)
                     market = market_resp.get('market', market_resp)
 
@@ -13179,7 +13219,7 @@ def _run_monitor():
                         _both_dead = True
                         for _tk in (_tk_a, _tk_b):
                             if _tk:
-                                api_rate_limiter.wait()
+                                api_read_limiter.wait()
                                 _mk = kalshi_client.get_market(_tk)
                                 _mkd = _mk.get('market', _mk) if isinstance(_mk, dict) else {}
                                 if _mkd.get('status', 'active') in ('active', 'open'):
@@ -13212,7 +13252,7 @@ def _run_monitor():
                     a_fill_price = None
                     if bot.get('order_a_id'):
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             resp_a = kalshi_client.get_order(bot['order_a_id'])
                             ord_a = resp_a.get('order', resp_a) if isinstance(resp_a, dict) else {}
                             a_count = _parse_fill_count(ord_a)
@@ -13227,7 +13267,7 @@ def _run_monitor():
                     b_fill_price = None
                     if bot.get('order_b_id'):
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             resp_b = kalshi_client.get_order(bot['order_b_id'])
                             ord_b = resp_b.get('order', resp_b) if isinstance(resp_b, dict) else {}
                             b_count = _parse_fill_count(ord_b)
@@ -13373,7 +13413,7 @@ def _run_monitor():
                     other_fill_price = None
                     if bot.get(unfilled_order_key):
                         try:
-                            api_rate_limiter.wait()
+                            api_read_limiter.wait()
                             resp_uf = kalshi_client.get_order(bot[unfilled_order_key])
                             ord_uf = resp_uf.get('order', resp_uf) if isinstance(resp_uf, dict) else {}
                             uf_count = _parse_fill_count(ord_uf)
@@ -13408,7 +13448,7 @@ def _run_monitor():
                             if ws_p:
                                 live_bid = ws_p.get('no_bid', 0) or 0
                             if not live_bid and filled_ticker:
-                                api_rate_limiter.wait()
+                                api_read_limiter.wait()
                                 mkt_sl = kalshi_client.get_market(filled_ticker)
                                 mkt_sl_data = mkt_sl.get('market', mkt_sl)
                                 no_bid_d = mkt_sl_data.get('no_bid_dollars')
@@ -13475,7 +13515,7 @@ def _run_monitor():
                                 if ws_uf:
                                     uf_bid_check = ws_uf.get('no_bid', 0) or 0
                                 if uf_bid_check == 0:
-                                    api_rate_limiter.wait()
+                                    api_read_limiter.wait()
                                     mkt_uf = kalshi_client.get_market(unfilled_ticker_val)
                                     mkt_uf_data = mkt_uf.get('market', mkt_uf)
                                     _uf_nb_d = mkt_uf_data.get('no_bid_dollars')
@@ -13527,7 +13567,7 @@ def _run_monitor():
                 result_a = ''
                 result_b = ''
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     mkt_a = kalshi_client.get_market(ticker_a)
                     mkt_a_data = mkt_a.get('market', mkt_a)
                     if mkt_a_data.get('status', '') not in ('active', 'open', ''):
@@ -13536,7 +13576,7 @@ def _run_monitor():
                 except Exception:
                     pass
                 try:
-                    api_rate_limiter.wait()
+                    api_read_limiter.wait()
                     mkt_b = kalshi_client.get_market(ticker_b)
                     mkt_b_data = mkt_b.get('market', mkt_b)
                     if mkt_b_data.get('status', '') not in ('active', 'open', ''):
@@ -13614,7 +13654,7 @@ def _run_monitor():
                 filled_ticker = bot.get(f'ticker_{filled_leg}', '')
                 if not filled_ticker:
                     continue
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 mkt_f = kalshi_client.get_market(filled_ticker)
                 mkt_f_data = mkt_f.get('market', mkt_f)
                 if mkt_f_data.get('status', '') not in ('active', 'open', ''):
@@ -13904,7 +13944,7 @@ def list_bots():
                 _rest_ticker = bot['ticker']
                 if _rest_ticker not in _rest_price_cache or (time.time() - _rest_price_cache[_rest_ticker].get('_ts', 0)) > 10:
                     try:
-                        api_rate_limiter.wait()
+                        api_read_limiter.wait()
                         _ob = kalshi_client.get_market_orderbook(_rest_ticker)
                         _yb = _best_bid(_ob, 'yes')
                         _nb = _best_bid(_ob, 'no')
@@ -13946,7 +13986,7 @@ def list_bots():
                         # REST fallback for middle bot legs
                         if tk not in _rest_price_cache or (time.time() - _rest_price_cache[tk].get('_ts', 0)) > 10:
                             try:
-                                api_rate_limiter.wait()
+                                api_read_limiter.wait()
                                 _ob = kalshi_client.get_market_orderbook(tk)
                                 _nb = _best_bid(_ob, 'no')
                                 _yb = _best_bid(_ob, 'yes')
@@ -15006,7 +15046,7 @@ def cancel_bot(bot_id):
         # positions. If contracts still held, keep bot alive as 'awaiting_settlement'.
         if kalshi_client and warnings and any('FAILED to sell' in w for w in warnings):
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 pos_resp = kalshi_client.get_positions(ticker=ticker)
                 positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
                 held_yes = 0
@@ -16436,7 +16476,7 @@ def get_active_positions():
             abs_qty = abs(qty)
 
             try:
-                api_rate_limiter.wait()
+                api_read_limiter.wait()
                 mkt_resp = kalshi_client.get_market(ticker)
                 mkt = mkt_resp.get('market', mkt_resp)
 
@@ -16657,7 +16697,7 @@ def _run_startup():
                 print('🧹 Startup orphan sweep: no orphaned orders')
 
             # Detect orphaned positions — compare Kalshi qty vs bot-managed qty
-            api_rate_limiter.wait()
+            api_read_limiter.wait()
             pos_resp = kalshi_client.get_positions()
             kalshi_positions = pos_resp.get('market_positions', [])
 

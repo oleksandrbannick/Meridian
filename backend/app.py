@@ -11169,6 +11169,11 @@ def _handle_apex(bot_id, bot, actions):
                         if current_price > 0 and oid:
                             combined = anchor_price_for_ceiling + current_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
+                            # Profitable walk cap: don't walk past snap ceiling in normal/halftime
+                            # Only allow walking into the 96-98 dead zone in late/critical game phases
+                            _profitable_hedge = _apex_snap_ceiling - anchor_price_for_ceiling
+                            if _apex_urgency in ('normal', 'halftime'):
+                                max_hedge = min(max_hedge, _profitable_hedge)
                             past_ceiling = current_price >= max_hedge
 
                             # ── PRIORITY 0: Apex sell-back escape ──

@@ -3281,9 +3281,11 @@ function initAnchorDogPrices() {
     const favSideEl = document.getElementById('anchor-auto-fav-side');
     const favBidEl  = document.getElementById('anchor-auto-fav-bid');
     if (dogSideEl) dogSideEl.textContent = _anchorDogSide.toUpperCase();
-    if (dogBidEl)  dogBidEl.textContent = `bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}${_anchorIsBrokenSpread ? ' (broken)' : ''}`;
+    if (dogBidEl)  dogBidEl.innerHTML = `bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}${_anchorIsBrokenSpread ? ' <span style="color:#ff8800;">(broken)</span>' : ''} <span style="color:#ffaa00;">− ${anchorDepth}¢ depth = ${smartPrice}¢</span>`;
     if (favSideEl) favSideEl.textContent = _anchorFavSide.toUpperCase();
-    if (favBidEl)  favBidEl.textContent = `bid: ${_anchorFavBid}¢`;
+    const _fav_shave_preview = isAutoDepth ? (targetWidth <= 3 ? 0 : Math.max(0, targetWidth - anchorDepth)) : Math.max(0, targetWidth - anchorDepth);
+    const _fav_start = _fav_shave_preview > 0 ? Math.max(1, _anchorFavBid - _fav_shave_preview) : _anchorFavBid;
+    if (favBidEl)  favBidEl.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#00aaff;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
     // Sync displays
     if (widthSlider) {
         const d = document.getElementById('anchor-width-display');
@@ -3435,7 +3437,7 @@ function renderAnchorRungs() {
                         style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoQty && i > 0 ? '#00ff8844' : '#1e2740'};border-radius:4px;color:${_anchorAutoQty && i > 0 ? '#00ff8888' : '#fff'};font-size:13px;font-weight:700;text-align:center;">
                     ${_anchorAutoQty && i > 0 ? `<span style="color:#00ff8866;font-size:8px;">${i+1}x</span>` : ''}
                 </div>
-                <span style="color:#555;font-size:9px;">${offset}¢ below ${baseLabel}</span>
+                <span style="color:#555;font-size:9px;">${baseLabel} ${anchorBase}¢ <span style="color:#ffaa00;">−${offset}¢</span></span>
             </div>
             <button onclick="removeAnchorRung(${i})" style="background:none;border:none;color:#ff444488;cursor:pointer;font-size:14px;padding:2px 4px;" onmouseenter="this.style.color='#ff4444'" onmouseleave="this.style.color='#ff444488'">✕</button>
         </div>`;

@@ -7146,8 +7146,8 @@ async function showBotDetail(botId) {
         const color = colorMap[cat] || '#00d4ff';
         const statusDisplayMap = {
             ladder_arb_posted: 'Both Live', ladder_arb_yes_filled: 'YES Filled',
-            ladder_arb_no_filled: 'NO Filled', completed: 'Completed',
-            stopped: 'Stopped', waiting_repeat: 'Waiting Repeat',
+            ladder_arb_no_filled: 'NO Filled', apex_selling_back: 'Selling Back',
+            completed: 'Completed', stopped: 'Stopped', waiting_repeat: 'Waiting Repeat',
             anchor_posted: 'Anchor Posted', anchor_filled: 'Anchor Filled',
             hedge_posted: 'Hedge Posted', hedge_filled: 'Hedge Filled',
         };

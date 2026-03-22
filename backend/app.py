@@ -2003,17 +2003,18 @@ def _apex_sellback_check(bot_id, bot, avg_anchor, current_fav_bid, qty):
 
 
 def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
-    """Execute Apex sell-back: cancel hedge order, sell dog position, record trade."""
+    """Initiate Apex sell-back: cancel hedge, post maker sell order, enter selling_back state.
+    The monitor loop handles walking the sell price down and recording the trade on fill."""
     now = time.time()
     ticker = bot['ticker']
     filled_side = bot.get('first_fill_side', 'yes')
-    dog_side = filled_side
-    qty = bot.get('hedge_qty', 1)  # total filled anchor qty
+    anchor_side = filled_side
+    qty = bot.get('hedge_qty', 1)
 
-    print(f'🔙 APEX SELLBACK START: {bot_id} avg_anchor={avg_anchor}¢ fav_bid={fav_bid}¢ qty={qty}')
-    bot_log('APEX_SELLBACK_START', bot_id, {
+    print(f'🔙 APEX SELLBACK INIT: {bot_id} avg_anchor={avg_anchor}¢ fav_bid={fav_bid}¢ qty={qty}')
+    bot_log('APEX_SELLBACK_INIT', bot_id, {
         'avg_anchor': avg_anchor, 'fav_bid': fav_bid, 'qty': qty,
-        'dog_side': dog_side, 'ticker': ticker,
+        'anchor_side': anchor_side, 'ticker': ticker,
     })
 
     # 1. Cancel the hedge order
@@ -2025,7 +2026,7 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
         except Exception as e:
             print(f'⚠ APEX SELLBACK: cancel hedge failed: {e}')
 
-    # Also cancel any remaining anchor-side orders (they shouldn't fill after sell-back)
+    # Cancel any remaining orders
     group_id = bot.get('_order_group_id')
     if group_id:
         try:
@@ -2034,64 +2035,125 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
         except Exception:
             pass
 
-    # 2. Verify actual fill count on Kalshi
-    actual_qty = qty
+    # 2. Verify actual fill count
     for rung in bot.get('rungs', []):
-        oid = rung.get(f'{dog_side}_order_id')
+        oid = rung.get(f'{anchor_side}_order_id')
         if oid:
             try:
                 api_rate_limiter.wait()
                 resp = kalshi_client.get_order(oid)
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 filled = _parse_fill_count(ord_data)
-                rung[f'{dog_side}_fill_qty'] = filled
+                rung[f'{anchor_side}_fill_qty'] = filled
             except Exception:
                 pass
 
-    # Recalculate actual filled qty from rungs
-    actual_qty = sum(r.get(f'{dog_side}_fill_qty', 0) for r in bot.get('rungs', []))
+    actual_qty = sum(r.get(f'{anchor_side}_fill_qty', 0) for r in bot.get('rungs', []))
     if actual_qty <= 0:
-        print(f'⚠ APEX SELLBACK: no fills found — aborting sell-back')
+        print(f'⚠ APEX SELLBACK: no fills found — aborting')
         bot_log('APEX_SELLBACK_NO_FILLS', bot_id, {'qty': qty, 'actual_qty': actual_qty})
         return
 
-    # Check if hedge partially filled — only sell back the unhedged portion
     hedge_filled = bot.get('_hedge_fill_count', 0)
     sell_qty = actual_qty - hedge_filled
     if sell_qty <= 0:
         print(f'⚠ APEX SELLBACK: hedge already filled {hedge_filled}/{actual_qty} — no sell-back needed')
         return
 
-    # 3. Execute sell
-    sold_back, sell_info = execute_sell(ticker, dog_side, sell_qty, reason=f'apex_sellback_{bot_id}')
+    # 3. Get current ask price for maker sell
+    try:
+        api_rate_limiter.wait()
+        ob = kalshi_client.get_market_orderbook(ticker)
+        anchor_ask = _best_ask(ob, anchor_side)
+        anchor_bid = _best_bid(ob, anchor_side)
+    except Exception:
+        anchor_ask = 0
+        anchor_bid = 0
 
-    if not sold_back:
-        print(f'⚠ APEX SELLBACK FAILED: {bot_id} — sell did not fill, will retry')
+    # Post sell at ask (maker) — or ask-1 if we want to be first in queue
+    if anchor_ask > 0 and anchor_bid > 0 and anchor_ask - anchor_bid >= 2:
+        # Gapped market: post at ask - 1 (inside the spread, still maker)
+        sell_price = anchor_ask - 1
+    elif anchor_ask > 0:
+        sell_price = anchor_ask
+    elif anchor_bid > 0:
+        # No ask data — post at bid + 1 (above bid = maker)
+        sell_price = anchor_bid + 1
+    else:
+        sell_price = max(1, avg_anchor)  # fallback
+
+    sell_price = max(1, min(sell_price, 99))
+
+    # Place maker sell order
+    try:
+        sell_kwargs = {
+            'ticker': ticker,
+            'side': anchor_side,
+            'action': 'sell',
+            'count': sell_qty,
+        }
+        if anchor_side == 'yes':
+            sell_kwargs['yes_price'] = sell_price
+        else:
+            sell_kwargs['no_price'] = sell_price
+        api_rate_limiter.wait()
+        resp = kalshi_client.create_order(**sell_kwargs)
+        resp_ord = resp.get('order', resp) if isinstance(resp, dict) else {}
+        sell_order_id = resp_ord.get('order_id')
+    except Exception as e:
+        print(f'⚠ APEX SELLBACK: maker sell order failed: {e} — will retry')
         bot['_apex_sellback_attempts'] = bot.get('_apex_sellback_attempts', 0) + 1
-        bot_log('APEX_SELLBACK_FAILED', bot_id, {
-            'qty': sell_qty, 'attempt': bot['_apex_sellback_attempts'],
-            'sell_info': str(sell_info)[:200],
-        }, level='ERROR')
-        _audit('APEX_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': bot['_apex_sellback_attempts']})
+        bot_log('APEX_SELLBACK_POST_FAILED', bot_id, {'error': str(e)[:200], 'sell_price': sell_price})
         actions.append({'bot_id': bot_id, 'action': 'apex_sellback_retry'})
         return
 
-    sell_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or 0
-    already_cleared = (sell_info or {}).get('already_cleared', False)
+    if not sell_order_id:
+        print(f'⚠ APEX SELLBACK: no order_id returned — will retry')
+        bot['_apex_sellback_attempts'] = bot.get('_apex_sellback_attempts', 0) + 1
+        return
 
-    if already_cleared and not sell_price:
-        loss_cents = 0
-        sell_price = avg_anchor
-    else:
-        loss_cents = (avg_anchor - sell_price) * sell_qty if sell_price else avg_anchor * sell_qty
+    # 4. Transition to selling_back state
+    bot['status'] = 'apex_selling_back'
+    bot['_sellback_order_id'] = sell_order_id
+    bot['_sellback_price'] = sell_price
+    bot['_sellback_qty'] = sell_qty
+    bot['_sellback_fill_qty'] = 0
+    bot['_sellback_started_at'] = now
+    bot['_sellback_last_walk_at'] = now
+    bot['_sellback_walk_count'] = 0
+    bot['_sellback_avg_anchor'] = avg_anchor
+    bot['_sellback_fav_bid'] = fav_bid
+    bot['_sellback_hedge_filled'] = hedge_filled
+    save_state()
 
-    # Fees: maker on original anchor buy + taker on sell
+    print(f'🔙 APEX SELLBACK POSTED: {bot_id} {anchor_side} sell @{sell_price}¢ ×{sell_qty} (maker)')
+    bot_log('APEX_SELLBACK_POSTED', bot_id, {
+        'sell_price': sell_price, 'sell_qty': sell_qty, 'order_id': sell_order_id[:12],
+        'anchor_bid': anchor_bid, 'anchor_ask': anchor_ask, 'avg_anchor': avg_anchor,
+    })
+    _audit('APEX_SELLBACK_POSTED', bot_id, {'ticker': ticker, 'anchor_side': anchor_side, 'sell_price': sell_price, 'qty': sell_qty})
+    actions.append({'bot_id': bot_id, 'action': 'apex_sellback_posted', 'sell_price': sell_price})
+
+
+def _apex_sellback_complete(bot_id, bot, sell_price, actions):
+    """Record the completed sell-back trade after the maker sell fills."""
+    now = time.time()
+    ticker = bot['ticker']
+    anchor_side = bot.get('first_fill_side', 'yes')
+    avg_anchor = bot.get('_sellback_avg_anchor', 0)
+    fav_bid = bot.get('_sellback_fav_bid', 0)
+    sell_qty = bot.get('_sellback_qty', 1)
+    hedge_filled = bot.get('_sellback_hedge_filled', 0)
+
+    loss_cents = (avg_anchor - sell_price) * sell_qty if sell_price else avg_anchor * sell_qty
+
+    # Fees: maker on original anchor buy + maker on sell (both maker)
     buy_fee = _kalshi_side_fee_cents(avg_anchor, sell_qty)
-    sell_fee = _kalshi_taker_side_fee_cents(sell_price, sell_qty) if sell_price else 0
+    sell_fee = _kalshi_side_fee_cents(sell_price, sell_qty) if sell_price else 0
     total_fees = buy_fee + sell_fee
     loss_cents += total_fees
 
-    # If hedge partially filled, add those as profit
+    # Partial hedge profit
     partial_profit = 0
     if hedge_filled > 0:
         hedge_price = bot.get('hedge_price', 0)
@@ -2106,7 +2168,6 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
         profit_cents = partial_profit
         loss_cents = max(0, loss_cents - partial_profit)
 
-    # Update session P&L
     if profit_cents > 0:
         session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + profit_cents
     if loss_cents > 0:
@@ -2116,23 +2177,22 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
 
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,
-        'yes_price': avg_anchor if dog_side == 'yes' else fav_bid,
-        'no_price': avg_anchor if dog_side == 'no' else fav_bid,
+        'yes_price': avg_anchor if anchor_side == 'yes' else fav_bid,
+        'no_price': avg_anchor if anchor_side == 'no' else fav_bid,
         'quantity': sell_qty,
         'profit_cents': profit_cents,
         'loss_cents': loss_cents,
         'fee_cents': total_fees,
         'result': 'apex_sellback',
-        'exit_via': f'apex_sell_back_{dog_side}',
-        'first_leg': dog_side,
-        'dog_side': dog_side,
+        'exit_via': f'apex_sell_back_{anchor_side}',
+        'first_leg': anchor_side,
+        'dog_side': anchor_side,
         'dog_price': avg_anchor,
         'sell_back_price': sell_price,
         'fav_bid_at_sellback': fav_bid,
         'hedge_filled': hedge_filled,
         'timestamp': now,
         'placed_at': bot.get('created_at', now),
-        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
         'arb_width': bot.get('avg_width', 0) or bot.get('target_width', 0),
         'game_phase': bot.get('game_phase', 'live'),
         'game_context': _get_game_context(ticker),
@@ -2140,17 +2200,16 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
         'bot_category': 'ladder_arb',
     }, bot)
 
-    bot_log('APEX_SELLBACK', bot_id, {
+    bot_log('APEX_SELLBACK_COMPLETE', bot_id, {
         'avg_anchor': avg_anchor, 'sell_price': sell_price,
         'loss_cents': loss_cents, 'profit_cents': profit_cents,
-        'fav_bid': fav_bid, 'sell_qty': sell_qty, 'hedge_filled': hedge_filled,
+        'sell_qty': sell_qty, 'hedge_filled': hedge_filled,
     })
-    print(f'🔙 APEX SELLBACK: {bot_id} sold {sell_qty}×{dog_side}@{sell_price}¢ (avg_anchor={avg_anchor}¢) '
-          f'loss={loss_cents}¢ profit={profit_cents}¢ hedge_filled={hedge_filled}')
-    _audit('APEX_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'sell_price': sell_price, 'qty': sell_qty})
-    _audit_position_check(bot_id, ticker, dog_side, 'after_apex_sellback')
+    print(f'🔙 APEX SELLBACK FILLED: {bot_id} sold {sell_qty}×{anchor_side}@{sell_price}¢ '
+          f'(avg_anchor={avg_anchor}¢) loss={loss_cents}¢ profit={profit_cents}¢')
+    _audit('APEX_SELLBACK_COMPLETE', bot_id, {'ticker': ticker, 'sell_price': sell_price, 'qty': sell_qty})
+    _audit_position_check(bot_id, ticker, anchor_side, 'after_apex_sellback')
 
-    # Mark bot as completed (sell-back is final for Apex — no repeat logic)
     bot['status'] = 'stopped'
     bot['stopped_at'] = now
     save_state()
@@ -10184,6 +10243,131 @@ def _handle_apex(bot_id, bot, actions):
                 return
         except Exception as e:
             print(f'⚠ ladder_arb settlement check {bot_id}: {e}')
+
+    # ── STATE: apex_selling_back — maker sell order posted, walk price down toward bid ──
+    if status == 'apex_selling_back':
+        sell_oid = bot.get('_sellback_order_id')
+        sell_price = bot.get('_sellback_price', 0)
+        sell_qty = bot.get('_sellback_qty', 1)
+        sell_started = bot.get('_sellback_started_at', now)
+        anchor_side = bot.get('first_fill_side', 'yes')
+        sell_wait_s = now - sell_started
+
+        # Check if sell order filled
+        if sell_oid:
+            try:
+                api_rate_limiter.wait()
+                sell_resp = kalshi_client.get_order(sell_oid)
+                sell_ord = sell_resp.get('order', sell_resp) if isinstance(sell_resp, dict) else {}
+                sell_filled = _parse_fill_count(sell_ord)
+                sell_status = sell_ord.get('status', '')
+                bot['_sellback_fill_qty'] = sell_filled
+                if sell_filled >= sell_qty:
+                    # Fully filled — record completion
+                    actual_sell_price = sell_ord.get(f'{anchor_side}_price', sell_price)
+                    print(f'🔙 APEX SELLBACK FILLED: {bot_id} {sell_filled}/{sell_qty} @{actual_sell_price}¢')
+                    _apex_sellback_complete(bot_id, bot, actual_sell_price, actions)
+                    return
+            except Exception as e:
+                if '404' in str(e):
+                    # Order gone — might have been cancelled or filled
+                    print(f'⚠ APEX SELLBACK: order 404 — checking if position cleared')
+                    bot['_sellback_fill_qty'] = sell_qty  # assume filled
+                    _apex_sellback_complete(bot_id, bot, sell_price, actions)
+                    return
+
+        # Emergency taker exit: if game is ending, cross to bid
+        _sb_urgency = _get_game_urgency(ticker)
+        if _sb_urgency == 'critical' and sell_wait_s >= 30:
+            print(f'🚨 APEX SELLBACK EMERGENCY: {bot_id} game ending — crossing to bid')
+            bot_log('APEX_SELLBACK_EMERGENCY_CROSS', bot_id, {'sell_wait_s': round(sell_wait_s), 'urgency': _sb_urgency})
+            # Cancel maker order, execute taker sell
+            if sell_oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(sell_oid)
+                except Exception:
+                    pass
+            sold, sell_info = execute_sell(ticker, anchor_side, sell_qty, reason=f'apex_sellback_emergency_{bot_id}')
+            emergency_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
+            _apex_sellback_complete(bot_id, bot, emergency_price, actions)
+            return
+
+        # Walk sell price down toward bid (same adaptive system as hedge walk)
+        try:
+            api_rate_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            anchor_bid = _best_bid(ob, anchor_side)
+            anchor_ask = _best_ask(ob, anchor_side)
+        except Exception:
+            anchor_bid = 0
+            anchor_ask = 0
+
+        if anchor_bid > 0 and sell_price > 0:
+            # Walk target: ask-1 if gapped, bid+1 if tight, but never below bid
+            spread = (anchor_ask - anchor_bid) if anchor_ask > 0 else 0
+            if spread >= 2 and anchor_ask > anchor_bid:
+                walk_target = max(anchor_bid, anchor_ask - 1)
+            else:
+                walk_target = max(anchor_bid, anchor_bid + 1) if anchor_bid < sell_price else anchor_bid
+            walk_target = max(1, walk_target)
+
+            # Adaptive walk interval (same as hedge walk)
+            combined = bot.get('_sellback_avg_anchor', 0) + sell_price
+            _sb_walk_interval = _calc_walk_interval(combined, _sb_urgency, False, False, sell_price > walk_target)
+            if _sb_walk_interval == 0:
+                _sb_walk_interval = 5  # minimum 5s for sell-back walks (don't spam)
+            bot['_walk_interval'] = _sb_walk_interval
+            bot['_game_urgency'] = _sb_urgency
+
+            last_walk = bot.get('_sellback_last_walk_at', sell_started)
+            since_walk = now - last_walk
+
+            if since_walk >= _sb_walk_interval and sell_price > walk_target:
+                # Walk down: reduce sell price by 1¢ toward bid
+                new_sell_price = max(walk_target, sell_price - 1)
+                if new_sell_price != sell_price:
+                    try:
+                        amend_kwargs = {f'{anchor_side}_price': new_sell_price}
+                        api_rate_limiter.wait()
+                        kalshi_client.amend_order(sell_oid, ticker=ticker, side=anchor_side,
+                                                 count=sell_qty, **amend_kwargs)
+                        walk_count = bot.get('_sellback_walk_count', 0) + 1
+                        bot['_sellback_price'] = new_sell_price
+                        bot['_sellback_last_walk_at'] = now
+                        bot['_sellback_walk_count'] = walk_count
+                        bot_log('APEX_SELLBACK_WALK', bot_id, {
+                            'old_price': sell_price, 'new_price': new_sell_price,
+                            'bid': anchor_bid, 'ask': anchor_ask,
+                            'walk_count': walk_count, 'urgency': _sb_urgency,
+                            'walk_interval': _sb_walk_interval,
+                        })
+                        print(f'🔙 APEX SELLBACK WALK: {bot_id} {sell_price}→{new_sell_price}¢ '
+                              f'(bid={anchor_bid}¢ step #{walk_count})')
+                    except Exception as e:
+                        if '404' in str(e):
+                            # Order gone during amend — assume filled
+                            _apex_sellback_complete(bot_id, bot, sell_price, actions)
+                            return
+                        print(f'⚠ APEX SELLBACK WALK ERROR: {e}')
+
+            # Timeout: if selling for >5 minutes, cross to bid as taker (last resort)
+            if sell_wait_s >= 300:
+                print(f'⏰ APEX SELLBACK TIMEOUT: {bot_id} waited {sell_wait_s:.0f}s — crossing to bid')
+                bot_log('APEX_SELLBACK_TIMEOUT_CROSS', bot_id, {'sell_wait_s': round(sell_wait_s)})
+                if sell_oid:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(sell_oid)
+                    except Exception:
+                        pass
+                sold, sell_info = execute_sell(ticker, anchor_side, sell_qty, reason=f'apex_sellback_timeout_{bot_id}')
+                timeout_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
+                _apex_sellback_complete(bot_id, bot, timeout_price, actions)
+                return
+
+        save_state()
+        return
 
     # ── STATE: waiting_repeat — repost the ladder arb ──
     if status == 'waiting_repeat':

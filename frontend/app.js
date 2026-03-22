@@ -2283,15 +2283,17 @@ function createMarketRow(market, label) {
                 : '';
             // OBI warning: if one side has much wider spread, hedging that side is risky
             const obiWarn = Math.abs(liq.obi) > 0.5 ? ` · ⚠️ ${liq.thinSide.toUpperCase()} side thin` : '';
+            const _apexLabel = spread <= 10 ? `${liq.yesBid}/${liq.noBid}` : `${liq.yesBid}/${liq.noBid}`;
+            const _apexWarnLabel = Math.abs(liq.obi) > 0.5 ? ' ⚠️' : '';
             if (spread <= 10) {
-                recoTypes.push({ type: 'apex', tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility${liqTip}${obiWarn}` });
+                recoTypes.push({ type: 'apex', label: `${_apexLabel}${_apexWarnLabel}`, tip: `Apex: coin-flip ${liq.yesBid}/${liq.noBid}¢ — prime volatility${liqTip}${obiWarn}` });
             } else if (spread <= 25) {
-                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths${liqTip}${obiWarn}` });
+                recoTypes.push({ type: 'apex', label: `${_apexLabel}${_apexWarnLabel}`, tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — lean game, wider widths${liqTip}${obiWarn}` });
             } else if (spread <= 50) {
-                recoTypes.push({ type: 'apex', tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths${liqTip}${obiWarn}` });
+                recoTypes.push({ type: 'apex', label: `${_apexLabel}${_apexWarnLabel}`, tip: `Apex: ${liq.yesBid}/${liq.noBid}¢ — strong lean, wide widths${liqTip}${obiWarn}` });
             }
         } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && liq.avgSpread <= 5) {
-            recoTypes.push({ type: 'apex', tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢, ${liq.avgSpread}¢ spread` });
+            recoTypes.push({ type: 'apex', label: `${liq.yesBid}/${liq.noBid}`, tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢, ${liq.avgSpread}¢ spread` });
         }
     }
     // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
@@ -2308,10 +2310,11 @@ function createMarketRow(market, label) {
         if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && favSpread <= 5) {
             const liqLabel = favSpread <= 2 ? 'thick' : favSpread <= 3 ? 'good' : 'ok';
             const qualLabel = pq >= 60 ? '🟢' : pq >= 35 ? '🟡' : '🔴';
-            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · fav ${liqLabel} (${favSpread}¢)${obiLabel} · ${qualLabel} ${pq}/100` });
+            const _phLabel = `${qualLabel}${pq}`;
+            const _phLabelColor = pq >= 60 ? '#00ff88' : pq >= 35 ? '#ffaa00' : '#ff4444';
+            recoTypes.push({ type: 'phantom', label: _phLabel, labelColor: _phLabelColor, tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · fav ${liqLabel} (${favSpread}¢)${obiLabel} · ${qualLabel} ${pq}/100` });
         } else if (dogPrice >= 7 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2 && favSpread > 5 && favSpread <= 8) {
-            // Marginal: fav spread is wide but not terrible — show warning
-            recoTypes.push({ type: 'phantom', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢ — ⚠️ fav spread ${favSpread}¢ (thin, hedge may not catch)${obiLabel}` });
+            recoTypes.push({ type: 'phantom', label: '⚠️', labelColor: '#ff8800', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢ — ⚠️ fav spread ${favSpread}¢ (thin, hedge may not catch)${obiLabel}` });
         }
     }
     const middleReco = (window._middleRecoMap || {})[market.ticker];
@@ -2324,8 +2327,12 @@ function createMarketRow(market, label) {
         for (const r of recoTypes) {
             const c = BOT_COLORS[r.type] || '#888';
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
+            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
             pill.innerHTML = botIconImg(r.type, 14, 0.75);
+            // Show compact label next to icon (visible on mobile, no hover needed)
+            if (r.label) {
+                pill.innerHTML += `<span style="font-size:8px;color:${r.labelColor || c};font-weight:700;">${r.label}</span>`;
+            }
             pill.title = r.tip;
             rWrap.appendChild(pill);
         }

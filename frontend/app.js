@@ -5672,16 +5672,18 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
                 : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
                 : 'Exit: sell-back if >96¢ · 5min timeout';
+            const bidGap = bot._bid_gap || (currentHedgePrice - unfilledBid);
+            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ Bid ${bidGap}¢ below hedge — ${gameUrgency === 'critical' ? 'emergency exit at 5¢ gap' : gameUrgency === 'late' ? 'emergency exit at 10¢ gap' : 'watching'}</div>` : '';
             walkInfo = `<div style="background:${capColor}11;border:1px solid ${capColor}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${capColor};margin-top:6px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
                     <span style="font-weight:700;">⏸ <strong>${capLabel} ${capCombined}¢</strong> — ${unfilledSideLabel} hedge paused @ ${currentHedgePrice}¢</span>
                     <span style="color:#888;">anchor ${avgFilled}¢ · step #${walkCount}</span>
-                    ${urgencyBadge}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                     <span>${urgencyNote} · ${exitNote} · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢ · filled ${fillAgeStr} ago</span>
                     <span style="color:${capColor};font-size:8px;font-weight:700;">${exitRule}</span>
                 </div>
+                ${bidGapWarn}
             </div>`;
         } else if (walkCount > 0 && currentHedgePrice > 0) {
             const atBid = currentHedgePrice >= unfilledBid;
@@ -5804,6 +5806,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
                 ${liveScoreHtml}
                 ${cycleInfo}
+                ${(() => {
+                    const gu = bot._game_urgency || '';
+                    const wi = bot._walk_interval || 20;
+                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s · 30s exit</span>';
+                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s · 5min exit</span>`;
+                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALFTIME · paused</span>';
+                    if (isFilled) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● NORMAL · ${wi}s walk</span>`;
+                    return '';
+                })()}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>

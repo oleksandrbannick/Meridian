@@ -11294,6 +11294,25 @@ def _handle_apex(bot_id, bot, actions):
                                 print(f'⚡ APEX FORCE CAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
                                       f'(above profitable cap, combined would be {anchor_price_for_ceiling + new_price}¢)')
 
+                            # ── PRIORITY -0.5: Bid-drift emergency exit ──
+                            # If hedge price is far above the bid, order won't fill — exit before game ends
+                            _bid_gap = current_price - unfilled_bid if unfilled_bid > 0 else 0
+                            bot['_bid_gap'] = _bid_gap
+                            _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 0
+                            if (_bid_drift_threshold > 0 and _bid_gap >= _bid_drift_threshold
+                                    and unfilled_bid > 0 and not bot.get('_trade_recorded')
+                                    and not bot.get('_apex_sellback_attempted')):
+                                print(f'🚨 APEX BID-DRIFT EXIT: {bot_id} hedge@{current_price}¢ bid@{unfilled_bid}¢ '
+                                      f'gap={_bid_gap}¢ threshold={_bid_drift_threshold}¢ urgency={_apex_urgency}')
+                                bot_log('APEX_BID_DRIFT_EXIT', bot_id, {
+                                    'hedge_price': current_price, 'bid': unfilled_bid,
+                                    'gap': _bid_gap, 'threshold': _bid_drift_threshold,
+                                    'urgency': _apex_urgency, 'combined': combined,
+                                })
+                                bot['_apex_sellback_attempted'] = True
+                                _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
+                                return
+
                             # ── PRIORITY 0: Apex sell-back escape ──
                             # Check whenever combined exceeds snap ceiling (not just hard ceiling)
                             # Between snap ceiling and hard ceiling is a dead zone where the arb

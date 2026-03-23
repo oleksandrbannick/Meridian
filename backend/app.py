@@ -8807,13 +8807,29 @@ def _handle_phantom(bot_id, bot, actions):
         timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
 
         # Retreat check: if bid crept TOWARD our dog, depth floor violated → retreat away
+        # BUT: only retreat on SLOW drift, not fast dumps (whale dumps = the opportunity)
         retreat_triggered = False
         if dog_filled == 0 and ws_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
             _dog_price = bot.get('dog_price', 0)
             _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
             if 0 <= _depth_gap < _anchor_depth:
-                retreat_triggered = True
+                # Velocity check: how fast did the bid approach?
+                _prev_bid = bot.get('_prev_ws_bid', ws_dog_bid)
+                _prev_bid_at = bot.get('_prev_ws_bid_at', now)
+                _bid_elapsed = max(now - _prev_bid_at, 0.1)
+                _bid_drop_per_sec = (_prev_bid - ws_dog_bid) / _bid_elapsed  # positive = dropping
+                if _bid_drop_per_sec >= 0.5:
+                    # Bid dropping fast (≥0.5¢/sec) — whale dump, hold position
+                    bot_log('PHANTOM_RETREAT_BLOCKED_DUMP', bot_id, {
+                        'dog_price': _dog_price, 'ws_bid': ws_dog_bid, 'prev_bid': _prev_bid,
+                        'drop_rate': round(_bid_drop_per_sec, 2), 'depth_gap': _depth_gap,
+                    })
+                else:
+                    retreat_triggered = True
+        # Track bid for velocity calculation next cycle
+        bot['_prev_ws_bid'] = ws_dog_bid
+        bot['_prev_ws_bid_at'] = now
 
         if gap_triggered or timer_triggered or retreat_triggered:
             trigger_reason = (f'retreat depth={_depth_gap}¢<{_anchor_depth}¢' if retreat_triggered
@@ -10005,13 +10021,28 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         timer_triggered = age_min >= DOG_REPOST_MINUTES and total_fill == 0
 
         # Retreat check: if bid moved TOWARD our orders, depth floor violated → retreat away
+        # BUT: only retreat on SLOW drift, not fast dumps (whale dumps = the opportunity)
         retreat_triggered = False
         if total_fill == 0 and current_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
             _first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
             _depth_gap = current_dog_bid - _first_price if _first_price > 0 else 999
             if 0 <= _depth_gap < _anchor_depth:
-                retreat_triggered = True
+                # Velocity check: how fast did the bid approach?
+                _prev_bid = bot.get('_prev_ws_bid', current_dog_bid)
+                _prev_bid_at = bot.get('_prev_ws_bid_at', now)
+                _bid_elapsed = max(now - _prev_bid_at, 0.1)
+                _bid_drop_per_sec = (_prev_bid - current_dog_bid) / _bid_elapsed
+                if _bid_drop_per_sec >= 0.5:
+                    bot_log('PHANTOM_LADDER_RETREAT_BLOCKED_DUMP', bot_id, {
+                        'first_rung': _first_price, 'dog_bid': current_dog_bid, 'prev_bid': _prev_bid,
+                        'drop_rate': round(_bid_drop_per_sec, 2), 'depth_gap': _depth_gap,
+                    })
+                else:
+                    retreat_triggered = True
+        # Track bid for velocity calculation next cycle
+        bot['_prev_ws_bid'] = current_dog_bid
+        bot['_prev_ws_bid_at'] = now
 
         if gap_triggered or timer_triggered or retreat_triggered:
             trigger_reason = (f'retreat depth={_depth_gap}¢<{_anchor_depth}¢' if retreat_triggered

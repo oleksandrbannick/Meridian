@@ -17062,11 +17062,8 @@ def _run_startup():
 
             if _orphaned_positions:
                 tickers = ', '.join(_orphaned_positions.keys())
-                msg = f'⚠ {len(_orphaned_positions)} orphaned position(s) on startup: {tickers}'
-                _push_notification('orphan_position', msg, {
-                    'positions': [{**v, 'ticker': k} for k, v in _orphaned_positions.items()]
-                })
-                print(msg)
+                print(f'⚠ {len(_orphaned_positions)} orphaned position(s) on startup: {tickers}')
+                # Don't push notification — orphan popup handles this, and data may be stale
             else:
                 print('✅ No orphaned positions')
         except Exception as e:

@@ -10551,8 +10551,27 @@ def _handle_apex(bot_id, bot, actions):
         # Emergency taker exit: if game is ending, cross to bid
         _sb_urgency = _get_game_urgency(ticker)
         if _sb_urgency == 'critical' and sell_wait_s >= 30:
-            print(f'🚨 APEX SELLBACK EMERGENCY: {bot_id} game ending — crossing to bid')
-            bot_log('APEX_SELLBACK_EMERGENCY_CROSS', bot_id, {'sell_wait_s': round(sell_wait_s), 'urgency': _sb_urgency})
+            # Re-verify fill count before crossing
+            _em_verified = bot.get('_sellback_fill_qty', 0)
+            if sell_oid:
+                try:
+                    api_read_limiter.wait()
+                    _em_resp = kalshi_client.get_order(sell_oid)
+                    _em_ord = _em_resp.get('order', _em_resp) if isinstance(_em_resp, dict) else {}
+                    _em_verified = _parse_fill_count(_em_ord)
+                    bot['_sellback_fill_qty'] = _em_verified
+                    if _em_verified >= sell_qty:
+                        print(f'🔙 APEX SELLBACK: fully filled on re-verify before emergency cross')
+                        _apex_sellback_complete(bot_id, bot, _em_ord.get(f'{anchor_side}_price', sell_price), actions)
+                        return
+                except Exception:
+                    pass
+            _remaining_emergency = max(1, sell_qty - _em_verified)
+            print(f'🚨 APEX SELLBACK EMERGENCY: {bot_id} game ending — crossing {_remaining_emergency}/{sell_qty} to bid')
+            bot_log('APEX_SELLBACK_EMERGENCY_CROSS', bot_id, {
+                'sell_wait_s': round(sell_wait_s), 'urgency': _sb_urgency,
+                'verified_fill': _em_verified, 'remaining': _remaining_emergency,
+            })
             # Cancel maker order, execute taker sell
             if sell_oid:
                 try:
@@ -10560,7 +10579,6 @@ def _handle_apex(bot_id, bot, actions):
                     kalshi_client.cancel_order(sell_oid)
                 except Exception:
                     pass
-            _remaining_emergency = max(1, sell_qty - bot.get('_sellback_fill_qty', 0))
             sold, sell_info = execute_sell(ticker, anchor_side, _remaining_emergency, reason=f'apex_sellback_emergency_{bot_id}')
             emergency_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
             _apex_sellback_complete(bot_id, bot, emergency_price, actions)
@@ -10626,15 +10644,34 @@ def _handle_apex(bot_id, bot, actions):
 
             # Timeout: if selling for >5 minutes, cross to bid as taker (last resort)
             if sell_wait_s >= 300:
-                print(f'⏰ APEX SELLBACK TIMEOUT: {bot_id} waited {sell_wait_s:.0f}s — crossing to bid')
-                bot_log('APEX_SELLBACK_TIMEOUT_CROSS', bot_id, {'sell_wait_s': round(sell_wait_s)})
+                # Re-verify fill count before crossing (don't double-sell partial fills)
+                _verified_fill = bot.get('_sellback_fill_qty', 0)
+                if sell_oid:
+                    try:
+                        api_read_limiter.wait()
+                        _vresp = kalshi_client.get_order(sell_oid)
+                        _vord = _vresp.get('order', _vresp) if isinstance(_vresp, dict) else {}
+                        _verified_fill = _parse_fill_count(_vord)
+                        bot['_sellback_fill_qty'] = _verified_fill
+                        if _verified_fill >= sell_qty:
+                            print(f'🔙 APEX SELLBACK: fully filled on re-verify before timeout cross')
+                            actual_sell_price = _vord.get(f'{anchor_side}_price', sell_price)
+                            _apex_sellback_complete(bot_id, bot, actual_sell_price, actions)
+                            return
+                    except Exception:
+                        pass
+                _remaining_timeout = max(1, sell_qty - _verified_fill)
+                print(f'⏰ APEX SELLBACK TIMEOUT: {bot_id} waited {sell_wait_s:.0f}s — crossing {_remaining_timeout}/{sell_qty} to bid')
+                bot_log('APEX_SELLBACK_TIMEOUT_CROSS', bot_id, {
+                    'sell_wait_s': round(sell_wait_s), 'verified_fill': _verified_fill,
+                    'remaining': _remaining_timeout, 'total_qty': sell_qty,
+                })
                 if sell_oid:
                     try:
                         api_rate_limiter.wait()
                         kalshi_client.cancel_order(sell_oid)
                     except Exception:
                         pass
-                _remaining_timeout = max(1, sell_qty - bot.get('_sellback_fill_qty', 0))
                 sold, sell_info = execute_sell(ticker, anchor_side, _remaining_timeout, reason=f'apex_sellback_timeout_{bot_id}')
                 timeout_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
                 _apex_sellback_complete(bot_id, bot, timeout_price, actions)

@@ -6557,14 +6557,18 @@ async function loadBots() {
                         : `<span style="color:#ff6666;font-size:10px;">⏱ Repost due</span>`;
                 } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
                     if (isHalftime) {
-                        timeoutInfo = `<span style="color:#818cf8;font-size:10px;">⏸ HALFTIME — timer paused</span>`;
+                        timeoutInfo = `<span style="color:#818cf8;font-size:10px;">⏸ HALFTIME</span>`;
+                    } else if (bot._snap_zone_active) {
+                        timeoutInfo = `<span style="color:#00aaff;font-size:10px;">🎯 TRACKING${bot._snap_zone_lowest_ask ? ' ask↓' + bot._snap_zone_lowest_ask + '¢' : ''}</span>`;
+                    } else if (bot._snap_ready) {
+                        timeoutInfo = `<span style="color:#00ff88;font-size:10px;">⚡ SNAP ZONE</span>`;
+                    } else if (bot._max_hedge > 0 && (bot.hedge_price || 0) >= bot._max_hedge) {
+                        timeoutInfo = `<span style="color:#ffaa00;font-size:10px;">⏸ AT CAP ${bot._profitable_cap || ''}¢</span>`;
                     } else {
                         const wc = bot.walk_count || 0;
-                        if (wc > 0) {
-                            timeoutInfo = `<span style="color:#00aaff;font-size:10px;">📈 Walk step #${wc}</span>`;
-                        } else {
-                            timeoutInfo = `<span style="color:#ffaa00;font-size:10px;">⏳ Walk-up pending</span>`;
-                        }
+                        timeoutInfo = wc > 0
+                            ? `<span style="color:#00aaff;font-size:10px;">📈 Walk #${wc} → cap ${bot._profitable_cap || '?'}¢</span>`
+                            : `<span style="color:#ffaa00;font-size:10px;">⏳ Walk pending</span>`;
                     }
                 }
             } else if (phase === 'pregame') {
@@ -6666,23 +6670,10 @@ async function loadBots() {
                     ? `<span style="color:#818cf8;font-weight:700;">⏸ HALFTIME — walk-up paused</span>`
                     : walkCount > 0
                     ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span style="color:#00aaff;font-weight:700;">📈 Walking ${pendingSide}</span>
-                        <span style="color:#666;font-size:9px;">start ${walkStartPrice}¢</span>
-                        <span style="color:#888;">prev ${prevPrice}¢ →</span>
-                        <span style="color:#00ff88;font-weight:700;font-size:12px;">${pendingPrice}¢</span>
-                        <span style="color:#888;">→ next ${nextPrice}¢</span>
+                        <span style="color:#00aaff;font-weight:700;">📈 ${pendingSide} hedge @ ${pendingPrice}¢</span>
                         <span style="color:#555;font-size:9px;">combined ${combined}¢ · step #${walkCount}</span>
-                        <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkStr}">
-                          <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
-                            <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
-                            <circle cx="10" cy="10" r="8" fill="none" stroke="#00aaff" stroke-width="2"
-                              stroke-dasharray="${2*Math.PI*8}" stroke-dashoffset="${2*Math.PI*8*(1-nextWalkPct/100)}"
-                              stroke-linecap="round"/>
-                          </svg>
-                          <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${Math.ceil(nextWalkIn)}</span>
-                        </span>
                       </div>`
-                    : `<span style="color:#ffaa00;font-weight:700;">⏳ Walk-up starting · ${pendingSide} at ${pendingPrice}¢ · next in ${nextWalkStr}</span>`;
+                    : `<span style="color:#ffaa00;font-weight:700;">⏳ ${pendingSide} hedge @ ${pendingPrice}¢</span>`;
                 stopLossInfo = `<div style="background:${gameOver ? '#818cf811' : urgColor+'11'};border:1px solid ${gameOver ? '#818cf833' : urgColor+'33'};border-radius:5px;padding:4px 8px;font-size:10px;color:${gameOver ? '#818cf8' : urgColor};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>✓ <strong>${filledSide}</strong> filled ${fillAgeMin}m ago${isFavFilled ? ' (fav)' : ' (dog)'} @ ${entryFilled}¢</span>
                     <span style="color:#8892a6;">Bid now: <strong style="color:#fff;">${bidDisplay}</strong></span>

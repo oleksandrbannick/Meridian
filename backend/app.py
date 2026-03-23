@@ -6682,6 +6682,9 @@ def _execute_apex_completion(bot_id):
         _snap_avg_width = bot.get('_avg_width', 5)
         _snap_extra_hedge_placed = bot.get('_extra_hedge_placed', False)
         _snap_hedge_oid = bot.get('hedge_order_id')
+        # Snapshot fill counts for Phase 2 logging (before lock released)
+        anchor_qty = bot.get(f'filled_{_snap_filled_side}_qty', 0)
+        hedge_qty = bot.get(f'filled_{_snap_unfilled_side}_qty', 0)
     # ═══ END PHASE 1 — lock released, WS fills can process ═══
 
     _phase3_entered = False

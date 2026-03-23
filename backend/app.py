@@ -11703,12 +11703,17 @@ def _handle_apex(bot_id, bot, actions):
                                 return
 
                             # ── PRIORITY 0: Apex sell-back escape ──
-                            # Check whenever combined exceeds snap ceiling (not just hard ceiling)
-                            # Between snap ceiling and hard ceiling is a dead zone where the arb
-                            # is no longer profitable — sell-back may be cheaper than completing
-                            # In gapped markets: use market combined (ask-based) since that's the real price
+                            # Time-gated by game urgency: early game the hedge WILL fill,
+                            # so wait the full timer before considering sell-back.
+                            # Critical = get out fast, normal = give it time.
+                            _sellback_grace = {'normal': 180, 'halftime': 9999, 'late': 60, 'critical': 10}.get(_apex_urgency, 180)
+                            _fill_at = bot.get('first_fill_at') or now
+                            _hedge_age_s = now - _fill_at
+                            bot['_sellback_grace_s'] = _sellback_grace
+                            bot['_sellback_time_left'] = max(0, _sellback_grace - _hedge_age_s)
                             _above_snap = combined > _apex_snap_ceiling or _market_combined > _apex_snap_ceiling
-                            if _above_snap and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted'):
+                            if (_above_snap and _hedge_age_s >= _sellback_grace
+                                    and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted')):
                                 if _apex_sellback_check(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, rq):
                                     bot['_apex_sellback_attempted'] = True
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)

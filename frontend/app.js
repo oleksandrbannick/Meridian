@@ -6080,6 +6080,19 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                     <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>
                     ${urgencyBadge} ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
+                    ${(() => {
+                        const sbTimeLeft = bot._sellback_time_left;
+                        const sbGrace = bot._sellback_grace_s || 0;
+                        if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
+                            const sbMin = Math.floor(sbTimeLeft / 60);
+                            const sbSec = Math.floor(sbTimeLeft % 60);
+                            const sbCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#818cf8';
+                            return `<span style="color:${sbCol};font-size:8px;font-weight:600;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
+                        } else if (sbGrace >= 9999) {
+                            return '<span style="color:#818cf8;font-size:8px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
+                        }
+                        return '';
+                    })()}
                     <span style="color:#ffaa00;font-size:8px;">${exitRule}</span>
                 </div>
             </div>`;

@@ -10555,9 +10555,14 @@ def _handle_apex(bot_id, bot, actions):
                             _mkt_dead = True
                     except Exception:
                         pass
+                    # Also treat as dead if anchor bid is <= 1¢ (no liquidity, can't sell)
+                    _anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
+                    if not _mkt_dead and _anchor_bid <= 1:
+                        _mkt_dead = True
+                        _mkt_status = 'dead_liquidity'
                     if _mkt_dead:
                         # Market is done — transition to awaiting_settlement, let it settle naturally
-                        print(f'⚠ APEX SELLBACK: order cancelled + market dead — awaiting settlement')
+                        print(f'⚠ APEX SELLBACK: order cancelled + market dead ({_mkt_status}) — awaiting settlement')
                         bot_log('APEX_SELLBACK_AWAITING_SETTLEMENT', bot_id, {
                             'filled': sell_filled, 'remaining': _remaining,
                             'market_status': _mkt_status, 'result': _mkt_result,

@@ -2116,6 +2116,7 @@ def _apex_sell_back(bot_id, bot, avg_anchor, fav_bid, actions):
         return
 
     # 4. Transition to selling_back state
+    bot['_pre_sellback_status'] = bot['status']
     bot['status'] = 'apex_selling_back'
     bot['_sellback_order_id'] = sell_order_id
     bot['_sellback_price'] = sell_price
@@ -2217,17 +2218,25 @@ def _apex_sellback_complete(bot_id, bot, sell_price, actions):
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now <= repeat_total:
+    if repeats_done_now < repeat_total:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['_trade_recorded'] = False
         bot['_apex_sellback_attempted'] = False
         bot['_consolidated'] = False
+        bot['_bot_completed'] = False
+        bot['_ws_fill_handling'] = False
+        bot['_hedge_verified'] = False
         bot['hedge_order_id'] = None
         bot['hedge_price'] = 0
         bot['hedge_qty'] = 0
         bot['_hedge_fill_count'] = 0
         bot['_sellback_order_id'] = None
+        bot['hedge_history'] = []
+        bot['_all_hedge_order_ids'] = []
+        bot['_all_placed_order_ids'] = []
+        bot['cumulative_pnl'] = 0
+        bot['completed_rungs_count'] = 0
         bot['walk_count'] = 0
         bot['first_fill_at'] = None
         bot['first_fill_side'] = None
@@ -2237,6 +2246,10 @@ def _apex_sellback_complete(bot_id, bot, sell_price, actions):
             rung['_profit_recorded'] = False
             rung['yes_fill_qty'] = 0
             rung['no_fill_qty'] = 0
+            rung['yes_filled_at'] = None
+            rung['no_filled_at'] = None
+            rung['yes_order_id'] = None
+            rung['no_order_id'] = None
         print(f'🔄 APEX SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-entering')
         bot_log('APEX_SELLBACK_REPEAT', bot_id, {'cycle': repeats_done_now, 'total': repeat_total})
     else:
@@ -3791,6 +3804,10 @@ def _execute_phantom_ladder_hedge(bot_id):
         if bot:
             bot['status'] = 'ladder_filled_no_fav'
             save_state()
+    finally:
+        bot = active_bots.get(bot_id)
+        if bot:
+            bot['_hedge_thread_active'] = False
 
 
 def _ladder_sweep_then_hedge(bot_id):
@@ -3969,7 +3986,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now <= repeat_total:
+    if repeats_done_now < repeat_total:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
@@ -4016,7 +4033,10 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         _leftover = 0
         for _p in _positions:
             if _p.get('ticker') == ticker:
-                _leftover = abs(_parse_position_qty(_p))
+                _pqty = _parse_position_qty(_p)
+                if (dog_side == 'yes' and _pqty > 0) or (dog_side == 'no' and _pqty < 0):
+                    _leftover = abs(_pqty)
+        _leftover = min(_leftover, total_fill_qty)  # cap at this bot's qty
         if _leftover > 0:
             _sold, _sell_info = execute_sell(ticker, dog_side, _leftover,
                                              reason=f'phantom_sellback_leftover_{bot_id}')
@@ -4225,7 +4245,7 @@ def _execute_ws_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        will_repeat = repeats_done_now <= repeat_total
+        will_repeat = repeats_done_now < repeat_total
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -4841,8 +4861,9 @@ def _record_trade(record: dict, bot: dict = None):
     trade_history.insert(0, record)
     # Crash-safe append — survives server crashes between save_state() calls
     try:
-        with open(TRADES_FILE, 'a') as _tf:
-            _tf.write(json.dumps(record, default=str) + '\n')
+        with _save_lock:
+            with open(TRADES_FILE, 'a') as _tf:
+                _tf.write(json.dumps(record, default=str) + '\n')
     except Exception as _te:
         print(f'⚠ trades.jsonl append failed: {_te}')
 
@@ -6520,7 +6541,10 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
 
 
 def _execute_apex_completion(bot_id):
-    """Handle full completion of a ladder-arb bot — all rungs resolved."""
+    """Handle full completion of a ladder-arb bot — all rungs resolved.
+    Lock strategy: hold ws_fill_lock only for state reads/writes, release for API calls."""
+
+    # ═══ PHASE 1: Guards + Snapshot (LOCKED) ═══
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
         if not bot or bot['status'] in ('stopped', 'completed'):
@@ -6528,6 +6552,9 @@ def _execute_apex_completion(bot_id):
         if bot.get('_bot_completed'):
             bot['status'] = 'completed'
             return
+        if bot.get('_completion_in_progress'):
+            return
+        bot['_completion_in_progress'] = True
 
         now = time.time()
         qty_per = bot.get('quantity', 1)
@@ -6540,6 +6567,7 @@ def _execute_apex_completion(bot_id):
         if bot.get('status') == 'waiting_repeat' or (not bot.get('_consolidated') and not bot.get('first_fill_at')):
             print(f'⏳ APEX COMPLETION SKIP: {bot_id} — waiting for repeat or no fills yet')
             bot['_ws_fill_handling'] = False
+            bot['_completion_in_progress'] = False
             return
 
         # ── Guard: don't complete with 0 rungs if there are filled positions ──
@@ -6552,6 +6580,7 @@ def _execute_apex_completion(bot_id):
                                       'reason': '0_rungs_with_fills',
                                       'filled_rungs': filled_rungs_count})
             _audit('APEX_COMPLETION_ABORTED', bot_id, {'filled_rungs': filled_rungs_count, 'completed_rungs': 0})
+            bot['_completion_in_progress'] = False
             return
 
         # ── Log full state entering completion ──
@@ -6570,7 +6599,7 @@ def _execute_apex_completion(bot_id):
             'cumulative_pnl': bot.get('cumulative_pnl', 0),
         })
 
-        # ── INSTANT KILL: cancel order group first (1 API call kills all anchors) ──
+        # ── Build cancel set + snapshot values needed for API phase ──
         _og = bot.get('_order_group_id')
         _group_cancelled = False
         if _og:
@@ -6631,8 +6660,23 @@ def _execute_apex_completion(bot_id):
                     hedge_only_ids.add(oid)
             all_cancel_ids = hedge_only_ids
 
-        # ── Pre-cancel audit: check fills on hedge orders before killing them ──
+        # Snapshot values needed outside lock
         _hedge_oids_set = set(bot.get('_all_hedge_order_ids', []))
+        _snap_all_oids = list(set(bot.get('_all_placed_order_ids', []) + bot.get('_all_hedge_order_ids', [])))
+        _snap_filled_side = bot.get('first_fill_side', 'yes')
+        _snap_unfilled_side = 'no' if _snap_filled_side == 'yes' else 'yes'
+        _snap_ticker = bot.get('ticker', '')
+        _snap_avg_anchor = bot.get(f'avg_{_snap_filled_side}_price', 0)
+        _snap_avg_width = bot.get('_avg_width', 5)
+        _snap_extra_hedge_placed = bot.get('_extra_hedge_placed', False)
+        _snap_hedge_oid = bot.get('hedge_order_id')
+    # ═══ END PHASE 1 — lock released, WS fills can process ═══
+
+    _phase3_entered = False
+    try:
+        # ═══ PHASE 2: All API calls (UNLOCKED) ═══
+
+        # ── Pre-cancel audit: check fills on hedge orders before killing them ──
         _pre_cancel_fills = {}
         for oid in all_cancel_ids:
             if oid in _hedge_oids_set:
@@ -6701,15 +6745,12 @@ def _execute_apex_completion(bot_id):
         # ── Safety: verify ACTUAL fills on Kalshi for every order this bot placed ──
         # Local fill tracking can be wrong (post_only price adjustment, WS race, etc.)
         # The only source of truth is each order's fill count on Kalshi.
-        _recompute_apex_fills(bot)
-        filled_side = bot.get('first_fill_side', 'yes')
-        unfilled_side = 'no' if filled_side == 'yes' else 'yes'
-        anchor_qty = bot.get(f'filled_{filled_side}_qty', 0)
-        hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
+        filled_side = _snap_filled_side
+        unfilled_side = _snap_unfilled_side
 
         # Query every order this bot ever placed and sum actual fills per side
-        # Include both placed order IDs AND hedge order IDs (extra hedges go in _all_hedge_order_ids)
-        _all_oids = list(set(bot.get('_all_placed_order_ids', []) + bot.get('_all_hedge_order_ids', [])))
+        # Uses snapshot of order IDs from Phase 1
+        _all_oids = _snap_all_oids
         _verified_yes = 0
         _verified_no = 0
         _verified_count = 0
@@ -6757,6 +6798,21 @@ def _execute_apex_completion(bot_id):
                 'local_anchor_qty': anchor_qty, 'local_hedge_qty': hedge_qty,
             }, level='ERROR')
             unhedged = max(0, anchor_qty - hedge_qty)
+        # ═══ PHASE 3: Write results + finalize (RE-ACQUIRE LOCK) ═══
+        ws_fill_lock.acquire()
+        _phase3_entered = True
+        bot = active_bots.get(bot_id)
+        if not bot:
+            return
+
+        # Apply cancel-race results + recompute with fresh state
+        _recompute_apex_fills(bot)
+        anchor_qty = bot.get(f'filled_{filled_side}_qty', 0)
+        hedge_qty = bot.get(f'filled_{unfilled_side}_qty', 0)
+        # Use verified counts if available, else fall back to local
+        if _verified_count > 0:
+            unhedged = max(0, (_verified_yes if filled_side == 'yes' else _verified_no) - (_verified_no if filled_side == 'yes' else _verified_yes))
+
         bot_log('APEX_UNHEDGED_CHECK', bot_id, {
             'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
             'filled_side': filled_side, 'unfilled_side': unfilled_side,
@@ -6934,7 +6990,7 @@ def _execute_apex_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        will_repeat = repeats_done_now <= repeat_total
+        will_repeat = repeats_done_now < repeat_total
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -6982,6 +7038,8 @@ def _execute_apex_completion(bot_id):
               + (f' → repeat {repeats_done_now}/{repeat_total}' if will_repeat else ' → done'))
         _audit('APEX_COMPLETE', bot_id, {'ticker': bot.get('ticker', ''), 'total_pnl': total_pnl, 'completed_rungs': completed_count, 'will_repeat': will_repeat})
 
+        ws_fill_lock.release()
+        _phase3_entered = False
         with _pending_ws_actions_lock:
             _pending_ws_actions.append({'bot_id': bot_id, 'action': 'completed', 'profit_cents': total_pnl})
             if will_repeat:
@@ -6991,6 +7049,15 @@ def _execute_apex_completion(bot_id):
                 })
 
         save_state()
+    finally:
+        if _phase3_entered:
+            try:
+                ws_fill_lock.release()
+            except RuntimeError:
+                pass  # already released
+        bot = active_bots.get(bot_id)
+        if bot:
+            bot['_completion_in_progress'] = False
 
 
 @app.route('/api/bot/ladder-arb', methods=['POST'])
@@ -8394,7 +8461,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
                 repeats_done_now = bot.get('repeats_done', 0) + 1
                 bot['repeats_done'] = repeats_done_now
                 repeat_total = orig_repeat_count
-                if repeats_done_now <= repeat_total:
+                if repeats_done_now < repeat_total:
                     bot['status'] = 'waiting_repeat'
                     bot['waiting_repeat_since'] = time.time()
                     bot['first_fill_at'] = None
@@ -9082,7 +9149,7 @@ def _handle_phantom(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            if repeats_done_now <= repeat_total:
+            if repeats_done_now < repeat_total:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 bot['dog_filled_at'] = None
@@ -10021,10 +10088,12 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             })
             _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
             return
-        bot_log('PHANTOM_LADDER_NO_FAV_RETRY', bot_id, {
-            'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
-        })
-        threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
+        if not bot.get('_hedge_thread_active'):
+            bot_log('PHANTOM_LADDER_NO_FAV_RETRY', bot_id, {
+                'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
+            })
+            bot['_hedge_thread_active'] = True
+            threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()
         return
 
     # ── STATE: fav_hedge_posted — waiting for fav fill ──
@@ -10072,13 +10141,14 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 if verified_total > hedge_qty:
                     # More fills than hedged — amend hedge qty
                     new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot['rungs'] if r.get('fill_qty', 0) > 0) / verified_total) if verified_total > 0 else bot.get('avg_fill_price', 0)
+                    old_avg = bot.get('avg_fill_price', new_avg)
                     bot['avg_fill_price'] = new_avg
                     bot['hedge_qty'] = verified_total
                     hedge_qty = verified_total
                     target_w = bot.get('target_width', 5)
                     amend_p = max(1, 100 - new_avg - target_w)
-                    # Preserve walk offset
-                    old_tgt = max(1, 100 - (bot.get('avg_fill_price', new_avg)) - target_w)
+                    # Preserve walk offset — use old avg BEFORE we updated it
+                    old_tgt = max(1, 100 - old_avg - target_w)
                     w_off = max(0, bot.get('fav_price', amend_p) - old_tgt)
                     amend_p = max(1, amend_p + w_off)
                     try:
@@ -10226,7 +10296,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            if repeats_done_now <= repeat_total:
+            if repeats_done_now < repeat_total:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 bot['dog_filled_at'] = None
@@ -10761,7 +10831,7 @@ def _handle_apex(bot_id, bot, actions):
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
         # Safety: if no repeats left, cancel orphaned orders and complete
-        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) > bot.get('repeat_count', 0):
+        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) >= bot.get('repeat_count', 0):
             for rung in bot.get('rungs', []):
                 for side in ('yes', 'no'):
                     oid = rung.get(f'{side}_order_id')
@@ -11891,7 +11961,12 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         _leftover = 0
         for _p in _positions:
             if _p.get('ticker') == ticker:
-                _leftover = abs(_parse_position_qty(_p))
+                # Only count positions on the dog side this bot was trading
+                _pqty = _parse_position_qty(_p)
+                if (dog_side == 'yes' and _pqty > 0) or (dog_side == 'no' and _pqty < 0):
+                    _leftover = abs(_pqty)
+        # Cap at this bot's qty — never sell more than we could own
+        _leftover = min(_leftover, qty)
         if _leftover > 0:
             _sold, _sell_info = execute_sell(ticker, dog_side, _leftover,
                                              reason=f'phantom_sellback_leftover_{bot_id}')
@@ -11904,7 +11979,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now <= repeat_total:
+    if repeats_done_now < repeat_total:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
@@ -11962,7 +12037,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_yes_filled', 'ladder_arb_no_filled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -12057,7 +12132,8 @@ def _run_monitor():
                                     actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
                                     real_yes = actual_yes if actual_yes else bot['yes_price']
                                     real_no  = actual_no  if actual_no  else bot['no_price']
-                                    profit_cents = (100 - real_yes - real_no) * qty
+                                    _settle_fee = kalshi_fee_cents(real_yes, real_no, qty)
+                                    profit_cents = (100 - real_yes - real_no) * qty - _settle_fee
                                     bot['status'] = 'completed'
                                     bot['completed_at'] = now
                                     orig_repeat_count = bot.get('repeat_count', 0)
@@ -12089,7 +12165,8 @@ def _run_monitor():
                                 bot['repeat_count'] = 0
                                 if mkt_result == 'yes':
                                     # YES won — our YES position pays out 100¢ each
-                                    profit = (100 - bot['yes_price']) * yes_f
+                                    _sfee = _kalshi_side_fee_cents(bot['yes_price'], yes_f)
+                                    profit = (100 - bot['yes_price']) * yes_f - _sfee
                                     bot['status'] = 'completed'
                                     bot['completed_at'] = now
                                     session_pnl['gross_profit_cents'] += profit
@@ -12113,7 +12190,8 @@ def _run_monitor():
                                     # YES lost — we lose the cost
                                     bot['status'] = 'stopped'
                                     bot['stopped_at'] = now
-                                    loss = bot['yes_price'] * yes_f
+                                    _sfee = _kalshi_side_fee_cents(bot['yes_price'], yes_f)
+                                    loss = bot['yes_price'] * yes_f + _sfee
                                     session_pnl['gross_loss_cents'] += loss
                                     session_pnl['stopped_bots'] += 1
                                     _record_trade({
@@ -12143,7 +12221,8 @@ def _run_monitor():
                                 bot['repeat_count'] = 0
                                 if mkt_result == 'no':
                                     # NO won — our NO position pays out 100¢ each
-                                    profit = (100 - bot['no_price']) * no_f
+                                    _sfee = _kalshi_side_fee_cents(bot['no_price'], no_f)
+                                    profit = (100 - bot['no_price']) * no_f - _sfee
                                     bot['status'] = 'completed'
                                     bot['completed_at'] = now
                                     session_pnl['gross_profit_cents'] += profit
@@ -12167,7 +12246,8 @@ def _run_monitor():
                                     # NO lost — we lose the cost
                                     bot['status'] = 'stopped'
                                     bot['stopped_at'] = now
-                                    loss = bot['no_price'] * no_f
+                                    _sfee = _kalshi_side_fee_cents(bot['no_price'], no_f)
+                                    loss = bot['no_price'] * no_f + _sfee
                                     session_pnl['gross_loss_cents'] += loss
                                     session_pnl['stopped_bots'] += 1
                                     _record_trade({
@@ -12579,7 +12659,7 @@ def _run_monitor():
                             api_read_limiter.wait()
                             order_check = kalshi_client.get_order(bot['order_id'])
                             order_obj = order_check.get('order', order_check)
-                            filled_qty = order_obj.get('amount_filled', 0)
+                            filled_qty = _parse_fill_count(order_obj)
                             bot['fill_qty'] = filled_qty
                             order_status = order_obj.get('status', '')
 
@@ -13009,8 +13089,8 @@ def _run_monitor():
                 if yes_filled > 0 or no_filled > 0:
                     print(f'📊 FILL CHECK {bot_id}: YES={yes_filled}/{qty} NO={no_filled}/{qty} | resp_keys={list(yes_resp.keys()) if isinstance(yes_resp, dict) else "?"}')
 
-                bot['yes_fill_qty'] = yes_filled
-                bot['no_fill_qty']  = no_filled
+                bot['yes_fill_qty'] = max(bot.get('yes_fill_qty', 0), yes_filled)
+                bot['no_fill_qty']  = max(bot.get('no_fill_qty', 0), no_filled)
 
                 # ── Both sides fully filled → profit locked at settlement ──
                 if yes_filled >= qty and no_filled >= qty:
@@ -13024,7 +13104,7 @@ def _run_monitor():
                     repeats_done_now = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = repeats_done_now
                     repeat_total = bot.get('repeat_count', 0)
-                    will_repeat = repeats_done_now <= repeat_total
+                    will_repeat = repeats_done_now < repeat_total
 
                     bot['completed_at'] = now
                     bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -14293,7 +14373,7 @@ def create_middle_bot():
             _safe_cancel(order_a_id, f'middle dual leg B exception, cancelling A {ticker_a}')
             return jsonify({'error': f'Leg B failed: {e} — cancelled leg A'}), 500
 
-        bot_id = f"mid_bot_{int(time.time())}"
+        bot_id = f"mid_bot_{int(time.time() * 1000)}"
         active_bots[bot_id] = {
             'id':               bot_id,
             'type':             'middle',

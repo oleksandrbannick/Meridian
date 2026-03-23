@@ -2195,12 +2195,14 @@
         (function() {
             const fab = document.getElementById('claude-chat-fab');
             const saved = JSON.parse(localStorage.getItem('claude_fab_pos') || 'null');
-            if (saved) {
+            if (saved && saved.x >= 0 && saved.x < window.innerWidth - 30 && saved.y >= 0 && saved.y < window.innerHeight - 30) {
                 fab.style.left = saved.x + 'px';
                 fab.style.top = saved.y + 'px';
             } else {
-                fab.style.right = '24px';
+                // Default: bottom-left on mobile
+                fab.style.left = '16px';
                 fab.style.bottom = '80px';
+                localStorage.removeItem('claude_fab_pos');
             }
             let dragging = false, startX, startY, fabX, fabY, moved = false;
             function onStart(e) {
@@ -3033,6 +3035,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774253000"></script>
+    <script src="app.js?v=1774253200"></script>
 </body>
 </html>

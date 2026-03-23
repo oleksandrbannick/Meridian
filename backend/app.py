@@ -11173,11 +11173,12 @@ def _handle_apex(bot_id, bot, actions):
                         if current_price > 0 and oid:
                             combined = anchor_price_for_ceiling + current_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
-                            # Profitable walk cap: don't walk past snap ceiling in normal/halftime
-                            # Only allow walking into the 96-98 dead zone in late/critical game phases
-                            _profitable_hedge = _apex_snap_ceiling - anchor_price_for_ceiling
+                            # Profitable walk cap: stop 2¢ BELOW snap ceiling so hedge
+                            # is already retreated when trailing snap kicks in.
+                            # Combined caps at 94 (not 96) — hedge has room to ride waves.
+                            _profitable_hedge = _apex_snap_ceiling - anchor_price_for_ceiling - 2
                             if _apex_urgency in ('normal', 'halftime'):
-                                max_hedge = min(max_hedge, _profitable_hedge)
+                                max_hedge = min(max_hedge, max(1, _profitable_hedge))
                             past_ceiling = current_price >= max_hedge
 
                             # ── PRIORITY 0: Apex sell-back escape ──
@@ -11208,9 +11209,12 @@ def _handle_apex(bot_id, bot, actions):
                                     print(f'⚡ APEX SNAP REVERT: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
                                           f'(pre_snap={revert_price}¢ bid={unfilled_bid}¢)')
                                 elif snap_ready:
-                                    # In profitable zone + above bid: RETREAT to bid-2
-                                    # Stay out of the way while bid is falling
-                                    _retreat_target = max(1, unfilled_bid - 2)
+                                    # In profitable zone + above bid: RETREAT below the ask
+                                    # The ask is what fills us (sellers coming down), not the bid
+                                    # Gapped market: retreat from ask (further back = safer)
+                                    # Tight market: ask is close to bid, so bid-2 is fine
+                                    _unfilled_ask = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
+                                    _retreat_target = max(1, min(unfilled_bid - 2, _unfilled_ask - 3))
                                     new_price = _retreat_target
                                     walk_type = 'trailing_retreat'
                                     # Track the low while retreating
@@ -11228,7 +11232,9 @@ def _handle_apex(bot_id, bot, actions):
                             # Snap to bid on reversal (bounce) for max profit.
                             elif snap_ready and bid_target > current_price:
                                 _snap_low = bot.get('_snap_zone_lowest_bid', 999)
-                                _retreat_price = max(1, unfilled_bid - 2)  # stay 2¢ below bid
+                                # Retreat from ask (what fills us), fall back to bid-2
+                                _unfilled_ask_p2 = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
+                                _retreat_price = max(1, min(unfilled_bid - 2, _unfilled_ask_p2 - 3))
                                 # Timeout scales with game phase
                                 _snap_timeout = 60 if _apex_urgency == 'normal' else 30 if _apex_urgency == 'late' else 10
                                 if unfilled_bid < _snap_low:

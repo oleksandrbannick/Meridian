@@ -8099,7 +8099,7 @@ function buddyReactToEvent(action) {
         if (pnl > 0) {
             setBuddyMood('celebrating');
             updateBotBuddyMsg('apex_win', true);
-            triggerConfetti();
+            // triggerConfetti(); — removed
         } else {
             setBuddyMood('alert');
             updateBotBuddyMsg('apex_loss', true);
@@ -8157,7 +8157,7 @@ function buddyReactToEvent(action) {
         if (pnl > 0) {
             setBuddyMood('celebrating');
             updateBotBuddyMsg('phantom_win', true);
-            triggerConfetti();
+            // triggerConfetti(); — removed
         } else {
             setBuddyMood('alert');
             updateBotBuddyMsg('phantom_loss', true);
@@ -8176,7 +8176,7 @@ function buddyReactToEvent(action) {
         if (pnl > 0) {
             setBuddyMood('celebrating');
             updateBotBuddyMsg('middle_win', true);
-            triggerConfetti();
+            // triggerConfetti(); — removed
         } else {
             setBuddyMood('alert');
             updateBotBuddyMsg('middle_loss', true);

@@ -5817,19 +5817,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const gapStr = gapToBid > 0 ? `+${gapToBid}¢ to bid` : gapToBid === 0 ? '= bid' : '';
             // System state
             const maxHedge = bot._max_hedge || 0;
-            const profitCap = bot._profitable_cap || 0;
             const snapReady = bot._snap_ready || false;
-            const snapActive = bot._snap_zone_active || false;
-            const snapLowAsk = bot._snap_zone_lowest_ask || 0;
             const spread = unfilledAsk > 0 ? unfilledAsk - unfilledBid : 0;
-            const isGapped = spread > 2;
-            // State label
+            // State label — 3 zones: snap (≤96), walk (97), ceiling (≥98)
             let stateLabel, stateColor;
             if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
-            else if (snapActive && snapReady) { stateLabel = isGapped ? 'TRACKING ASK' : 'TRACKING BID'; stateColor = '#00aaff'; }
-            else if (snapReady) { stateLabel = 'SNAP ZONE'; stateColor = '#00ff88'; }
-            else if (combined >= 98) { stateLabel = 'AT CEILING'; stateColor = '#ff4444'; }
-            else if (maxHedge > 0 && currentHedgePrice >= maxHedge) { stateLabel = 'AT CAP — WAITING'; stateColor = '#ffaa00'; }
+            else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
+            else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
+            else if (combined >= 98) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
             else { stateLabel = 'WALKING'; stateColor = '#00aaff'; }
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
@@ -5845,9 +5840,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
                 </div>
                 <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
-                    <span>cap: <strong style="color:#ffaa00;">${profitCap || '—'}¢</strong></span>
+                    <span>ceiling: <strong style="color:#ff4444;">98¢</strong></span>
                     <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
-                    ${snapActive ? `<span>ask low: <strong style="color:#00aaff;">${snapLowAsk}¢</strong></span>` : ''}
+                    ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
                     ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
                     <span>ask dist: <strong style="color:${gapToAsk <= 2 ? '#ff4444' : '#555'};">${gapToAsk}¢</strong></span>
                 </div>
@@ -5987,53 +5982,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#8892a6;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = ${combined}¢ · ${unfilledSideLabel} bid ${unfilledBid}¢</span>
                 </div>
             </div>`;
-        } else if (bot._max_hedge > 0 && currentHedgePrice >= bot._max_hedge && currentHedgePrice > 0) {
-            // ── AT CAP — hedge at profitable walk cap, not walking further ──
-            // Catches BOTH atCeiling (combined>=98) and sub-ceiling cap (combined=94)
-            const capCombined = bot._profitable_cap || combined;
-            const snapCeil = gameUrgency === 'late' || gameUrgency === 'critical' ? 97 : 96;
-            const marketCombined = bot._market_combined || combined;
-            const distToSnap = snapCeil - marketCombined;  // use market-based combined (ask in gapped markets)
-            const capColor = atCeiling ? '#ff4444' : '#ffaa00';
-            const capLabel = atCeiling ? 'AT CEILING' : 'AT CAP';
-            const urgencyNote = gameUrgency === 'normal' ? 'Cap lifts in late game'
-                : gameUrgency === 'halftime' ? 'Cap lifts after halftime'
-                : gameUrgency === 'late' ? 'Late game — cap at hard ceiling'
-                : gameUrgency === 'critical' ? 'Critical — will cross to exit'
-                : '';
+        } else if (atCeiling && currentHedgePrice > 0) {
+            // ── AT CEILING — combined ≥ 98¢ (breakeven), waiting for fill or sell-back timer ──
             const isGapped = unfilledAsk > 0 && (unfilledAsk - unfilledBid) > 2;
-            const priceRef = isGapped ? 'ask' : 'bid';
-            const exitNote = distToSnap > 0
-                ? `${distToSnap}¢ from sell-back (${priceRef} ${isGapped ? unfilledAsk : unfilledBid}¢ → combined ${marketCombined}¢)`
-                : 'Sell-back check active';
-            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
-                : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
-                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
-                : 'Exit: sell-back if >96¢ · 5min timeout';
             const bidGap = bot._bid_gap || 0;
-            const driftRef = bot._drift_ref || (isGapped ? 'ask' : 'bid');
-            const driftPrice = isGapped ? unfilledAsk : unfilledBid;
-            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ ${driftRef} ${bidGap}¢ from hedge (${driftRef} ${driftPrice}¢) — ${gameUrgency === 'critical' ? 'emergency exit at 5¢ gap' : gameUrgency === 'late' ? 'emergency exit at 10¢ gap' : 'watching'}</div>` : '';
-            // Game phase badge with exit timing
-            const phaseBadge = gameUrgency === 'critical'
-                ? '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL</span>'
-                : gameUrgency === 'late'
-                ? '<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE GAME</span>'
-                : gameUrgency === 'halftime'
-                ? '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALFTIME</span>'
-                : '<span style="background:#33445533;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● NORMAL</span>';
-            // Exit timing explanation per phase
-            const exitTiming = gameUrgency === 'critical'
-                ? '🔴 Sells back NOW if combined >97¢ or bid drifts 5¢+ · crosses to taker in 30s'
-                : gameUrgency === 'late'
-                ? '🟠 Sells back if combined >97¢ or bid drifts 10¢+ · 5min timeout then taker cross'
-                : gameUrgency === 'halftime'
-                ? '🟣 Walking paused until game resumes · no sell-back during halftime'
-                : '🟢 Sells back if combined >96¢ · 5min timeout then taker cross · bid drift exit at 15¢+';
-            walkInfo = `<div style="background:${capColor}11;border:1px solid ${capColor}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${capColor};margin-top:6px;">
+            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ bid ${bidGap}¢ from hedge — ${gameUrgency === 'critical' ? 'drift exit at 5¢' : gameUrgency === 'late' ? 'drift exit at 10¢' : 'watching'}</div>` : '';
+            walkInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                    <span style="font-weight:700;">⏸ <strong>${capLabel} ${capCombined}¢</strong></span>
-                    ${phaseBadge}
+                    <span style="font-weight:700;">⏸ <strong>AT CEILING ${combined}¢</strong></span>
+                    ${urgencyBadge}
                     <span style="color:#888;font-size:9px;">filled ${fillAgeStr} ago · step #${walkCount}</span>
                 </div>
                 <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:3px;">
@@ -6041,9 +5998,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#fff;">${unfilledSideLabel} hedge @ ${currentHedgePrice}¢</span>
                         <span style="color:#8892a6;">anchor ${avgFilled}¢ · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
                     </div>
-                    <div style="color:#8892a6;font-size:9px;margin-top:2px;">${exitNote}</div>
                 </div>
-                <div style="color:#8892a6;font-size:9px;">${exitTiming}</div>
+                <div style="color:#8892a6;font-size:9px;">Breakeven — waiting for fill or sell-back timer</div>
                 ${bidGapWarn}
             </div>`;
         } else if (walkCount > 0 && currentHedgePrice > 0) {
@@ -7057,16 +7013,13 @@ async function loadBots() {
                 } else if ((yFill > 0 && nFill === 0) || (nFill > 0 && yFill === 0)) {
                     if (isHalftime) {
                         timeoutInfo = `<span style="color:#818cf8;font-size:10px;">⏸ HALFTIME</span>`;
-                    } else if (bot._snap_zone_active) {
-                        timeoutInfo = `<span style="color:#00aaff;font-size:10px;">🎯 TRACKING${bot._snap_zone_lowest_ask ? ' ask↓' + bot._snap_zone_lowest_ask + '¢' : ''}</span>`;
                     } else if (bot._snap_ready) {
-                        timeoutInfo = `<span style="color:#00ff88;font-size:10px;">⚡ SNAP ZONE</span>`;
-                    } else if (bot._max_hedge > 0 && (bot.hedge_price || 0) >= bot._max_hedge) {
-                        timeoutInfo = `<span style="color:#ffaa00;font-size:10px;">⏸ AT CAP ${bot._profitable_cap || ''}¢</span>`;
+                        timeoutInfo = `<span style="color:#00ff88;font-size:10px;">⚡ SNAP → BID</span>`;
                     } else {
                         const wc = bot.walk_count || 0;
+                        const cmbnd = (bot.avg_yes_price || bot.avg_no_price || 0) + (bot.hedge_price || 0);
                         timeoutInfo = wc > 0
-                            ? `<span style="color:#00aaff;font-size:10px;">📈 Walk #${wc} → cap ${bot._profitable_cap || '?'}¢</span>`
+                            ? `<span style="color:#00aaff;font-size:10px;">📈 Walk #${wc} · ${cmbnd}¢ combined</span>`
                             : `<span style="color:#ffaa00;font-size:10px;">⏳ Walk pending</span>`;
                     }
                 }

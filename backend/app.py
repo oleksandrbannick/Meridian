@@ -1970,7 +1970,7 @@ def _apex_snap_check(anchor_price, bid_price, qty=1, snap_ceiling=None):
 
 def _apex_sellback_check(bot_id, bot, avg_anchor, current_fav_bid, qty):
     """Compare sell-back cost vs completion cost at ceiling. Return True if sell-back is cheaper.
-    Only meaningful when at_ceiling (combined >= 98¢)."""
+    Accounts for the profit from completing — only sells back when completing is a NET loss."""
     ticker = bot['ticker']
     filled_side = bot.get('first_fill_side', 'yes')
     # For Apex: the filled side IS the anchor/dog side
@@ -1981,23 +1981,40 @@ def _apex_sellback_check(bot_id, bot, avg_anchor, current_fav_bid, qty):
     if not dog_bid or dog_bid < 3:
         return False  # dog nearly worthless, just complete the arb
 
-    # Cost to complete: what we'd lose finishing the arb
-    # complete_loss_per = combined - 100 (how much over breakeven)
-    complete_loss_per = max(0, avg_anchor + current_fav_bid - 100)
+    # Net cost to complete: raw loss + fees MINUS profit from the spread
+    # When combined < 100, the arb is profitable (100 - combined per contract)
+    combined = avg_anchor + current_fav_bid
+    complete_profit_per = max(0, 100 - combined)  # per-contract profit from spread
+    complete_loss_per = max(0, combined - 100)     # per-contract loss if over 100
     complete_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_side_fee_cents(current_fav_bid, qty)
     complete_total = (complete_loss_per * qty) + complete_fees
+    # Net: total cost minus profit earned
+    net_complete_cost = complete_total - (complete_profit_per * qty)
 
     # Cost to sell back: what we'd lose selling the dog as MAKER (post at ask, not cross bid)
     sellback_loss_per = max(0, avg_anchor - dog_bid)
     sellback_fees = _kalshi_side_fee_cents(avg_anchor, qty) + _kalshi_side_fee_cents(dog_bid, qty)
     sellback_total = (sellback_loss_per * qty) + sellback_fees
 
-    # Sell back whenever it's cheaper than completing — no minimum threshold
-    saves_per_contract = (complete_total - sellback_total) / qty if qty > 0 else 0
+    # Only sell back if completing is a NET loss (fees exceed spread profit)
+    # When arb is profitable (combined < 100 - fees), always prefer completing
+    if net_complete_cost <= 0:
+        # Completing is net-profitable — don't sell back
+        bot_log('APEX_SELLBACK_CHECK', bot_id, {
+            'avg_anchor': avg_anchor, 'fav_bid': current_fav_bid, 'dog_bid': dog_bid,
+            'combined': combined, 'complete_profit_per': complete_profit_per,
+            'net_complete_cost': net_complete_cost, 'sellback_loss': sellback_total,
+            'qty': qty, 'decision': 'complete_profitable',
+        })
+        return False
+
+    # Completing is a net loss — sell back if it's cheaper
+    saves_per_contract = (net_complete_cost - sellback_total) / qty if qty > 0 else 0
 
     bot_log('APEX_SELLBACK_CHECK', bot_id, {
         'avg_anchor': avg_anchor, 'fav_bid': current_fav_bid, 'dog_bid': dog_bid,
-        'complete_loss': complete_total, 'sellback_loss': sellback_total,
+        'combined': combined, 'complete_profit_per': complete_profit_per,
+        'net_complete_cost': net_complete_cost, 'sellback_loss': sellback_total,
         'saves_per_contract': round(saves_per_contract, 1), 'qty': qty,
         'decision': 'sell_back' if saves_per_contract > 0 else 'complete',
     })
@@ -16344,6 +16361,7 @@ PNL_LOSS_RESULTS = (
     'anchor_sellback',  # anchor-dog: sold dog back when fav hedge failed
     'ladder_sellback',  # ladder: sold dog rungs back when fav hedge failed/timed out
     'ladder_arb_sellback',  # ladder arb: sold filled leg back
+    'apex_sellback',  # apex: sold anchor back when hedge couldn't fill profitably
     'stop_loss_watch',  # straight bet stop-loss triggered
     'arb_loss',  # anchor-ladder/dog: completed with negative P&L (fees exceeded spread)
     'rebalancer_scrape',  # meridian rebalancer sold a filled leg back

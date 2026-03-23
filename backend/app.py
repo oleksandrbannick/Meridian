@@ -10556,10 +10556,18 @@ def _handle_apex(bot_id, bot, actions):
                     except Exception:
                         pass
                     # Also treat as dead if anchor bid is <= 1¢ (no liquidity, can't sell)
+                    # Check WS price first, fallback to orderbook
                     _anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
+                    if _anchor_bid <= 0:
+                        try:
+                            api_read_limiter.wait()
+                            _ob = kalshi_client.get_market_orderbook(ticker)
+                            _anchor_bid = _best_bid(_ob, anchor_side)
+                        except Exception:
+                            _anchor_bid = 0
                     if not _mkt_dead and _anchor_bid <= 1:
                         _mkt_dead = True
-                        _mkt_status = 'dead_liquidity'
+                        _mkt_status = f'dead_liquidity_bid{_anchor_bid}'
                     if _mkt_dead:
                         # Market is done — transition to awaiting_settlement, let it settle naturally
                         print(f'⚠ APEX SELLBACK: order cancelled + market dead ({_mkt_status}) — awaiting settlement')

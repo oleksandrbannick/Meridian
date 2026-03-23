@@ -5414,7 +5414,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.cumulative_pnl || 0);
 
     // Shared fill-state variables
-    const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes' : status === 'ladder_arb_no_filled' ? 'no' : null;
+    const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes'
+        : status === 'ladder_arb_no_filled' ? 'no'
+        : status === 'apex_selling_back' ? (bot.first_fill_side || 'yes')
+        : null;
     const isFilled = !!filledSideKey;
     const filledSideLabel = filledSideKey === 'yes' ? 'YES' : filledSideKey === 'no' ? 'NO' : '';
     const unfilledSideLabel = filledSideLabel === 'YES' ? 'NO' : 'YES';

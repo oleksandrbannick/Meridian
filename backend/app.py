@@ -9373,7 +9373,12 @@ def _handle_phantom(bot_id, bot, actions):
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
-                return  # no market data, wait
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
+                save_state()
+                return
             # Smart pricing first — need new_dog_price for hedge fill check
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
             _current_fav_bid = _best_bid(ob, fav_side)
@@ -9582,7 +9587,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
-                return  # no market data, wait
+                # No bids at all — market is completely dead, stop the bot
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
+                save_state()
+                return
             # Hedge fill drift guard: at this bot's target width, would the hedge still fill?
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
             _current_fav_bid = _best_bid(ob, fav_side)
@@ -16958,7 +16969,15 @@ def _run_startup():
                 if not t:
                     continue
                 cat = b.get('bot_category', '')
-                if cat in ('anchor_dog', 'anchor_ladder'):
+                if b.get('type') == 'middle':
+                    # Meridian bots manage TWO tickers
+                    for _leg in ('a', 'b'):
+                        _mt = b.get(f'ticker_{_leg}', '')
+                        _ms = b.get(f'side_{_leg}', 'no')
+                        _mq = _safe_int(b.get(f'fill_qty_{_leg}')) or _safe_int(b.get('quantity', 1))
+                        if _mt and _mq > 0:
+                            managed_qty[(_mt, _ms)] = managed_qty.get((_mt, _ms), 0) + _mq
+                elif cat in ('anchor_dog', 'anchor_ladder'):
                     dog_side = b.get('dog_side', '')
                     # Use total_dog_fill_qty (survives repeats) > dog_fill_qty (reset) > quantity (fallback)
                     dog_qty = _safe_int(b.get('total_dog_fill_qty')) or _safe_int(b.get('dog_fill_qty')) or _safe_int(b.get('quantity'))

@@ -11309,6 +11309,13 @@ def _handle_apex(bot_id, bot, actions):
                         )
                         if current_price > 0 and oid:
                             combined = anchor_price_for_ceiling + current_price
+                            # Market-based combined: in gapped markets, ask is the real price
+                            _cur_ask_for_combined = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
+                            _spread_for_combined = _cur_ask_for_combined - unfilled_bid if unfilled_bid > 0 else 1
+                            _market_price = _cur_ask_for_combined if _spread_for_combined > 2 else unfilled_bid
+                            _market_combined = anchor_price_for_ceiling + _market_price
+                            bot['_market_combined'] = _market_combined
+                            bot['_market_price_ref'] = _market_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
                             # Profitable walk cap: stop 2¢ BELOW snap ceiling so hedge
                             # is already retreated when trailing snap kicks in.
@@ -11352,7 +11359,8 @@ def _handle_apex(bot_id, bot, actions):
                             # Check whenever combined exceeds snap ceiling (not just hard ceiling)
                             # Between snap ceiling and hard ceiling is a dead zone where the arb
                             # is no longer profitable — sell-back may be cheaper than completing
-                            _above_snap = combined > _apex_snap_ceiling
+                            # In gapped markets: use market combined (ask-based) since that's the real price
+                            _above_snap = combined > _apex_snap_ceiling or _market_combined > _apex_snap_ceiling
                             if _above_snap and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted'):
                                 if _apex_sellback_check(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, rq):
                                     bot['_apex_sellback_attempted'] = True

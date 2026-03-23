@@ -5657,7 +5657,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             // Catches BOTH atCeiling (combined>=98) and sub-ceiling cap (combined=94)
             const capCombined = bot._profitable_cap || combined;
             const snapCeil = gameUrgency === 'late' || gameUrgency === 'critical' ? 97 : 96;
-            const distToSnap = snapCeil - combined;
+            const marketCombined = bot._market_combined || combined;
+            const distToSnap = snapCeil - marketCombined;  // use market-based combined (ask in gapped markets)
             const capColor = atCeiling ? '#ff4444' : '#ffaa00';
             const capLabel = atCeiling ? 'AT CEILING' : 'AT CAP';
             const urgencyNote = gameUrgency === 'normal' ? 'Cap lifts in late game'
@@ -5665,8 +5666,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 : gameUrgency === 'late' ? 'Late game — cap at hard ceiling'
                 : gameUrgency === 'critical' ? 'Critical — will cross to exit'
                 : '';
+            const isGapped = unfilledAsk > 0 && (unfilledAsk - unfilledBid) > 2;
+            const priceRef = isGapped ? 'ask' : 'bid';
             const exitNote = distToSnap > 0
-                ? `${distToSnap}¢ from sell-back trigger`
+                ? `${distToSnap}¢ from sell-back (${priceRef} ${isGapped ? unfilledAsk : unfilledBid}¢ → combined ${marketCombined}¢)`
                 : 'Sell-back check active';
             const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
                 : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'

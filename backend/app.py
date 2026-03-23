@@ -11135,7 +11135,8 @@ def _handle_apex(bot_id, bot, actions):
         was_snapped = bot.get('_pre_snap_price') is not None
         snap_revert = was_snapped and not snap_ready and not at_ceiling
         # Reset trailing snap tracker when leaving snap zone
-        if not snap_ready and bot.get('_snap_zone_lowest_bid') is not None:
+        if not snap_ready and (bot.get('_snap_zone_lowest_ask') is not None or bot.get('_snap_zone_lowest_bid') is not None):
+            bot['_snap_zone_lowest_ask'] = None
             bot['_snap_zone_lowest_bid'] = None
             bot['_snap_zone_entered_at'] = None
         # Queue position: track bid stability to avoid unnecessary walks
@@ -11192,89 +11193,78 @@ def _handle_apex(bot_id, bot, actions):
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
                                     return
 
-                            # ── PRIORITY 1: Drop toward bid if price is above bid target ──
-                            if current_price > bid_target and bid_target > 0:
+                            # ── Spread-aware retreat + trailing snap system ──
+                            _cur_ask = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
+                            _spread = _cur_ask - unfilled_bid if unfilled_bid > 0 else 1
+                            _is_gapped = _spread > 2
+                            _snap_timeout = 60 if _apex_urgency == 'normal' else 30 if _apex_urgency == 'late' else 10
+
+                            # ── PRIORITY 1: Drop to bid (only when NOT in snap zone) ──
+                            if current_price > bid_target and bid_target > 0 and not snap_ready:
                                 if at_ceiling:
-                                    # At ceiling: follow bid down to exit as cheap as possible
                                     new_price = bid_target
                                     walk_type = 'ceiling_snap_down'
-                                    print(f'⚡ APEX CEILING SNAP-DOWN: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
-                                          f'(anchor={anchor_price_for_ceiling}¢ bid={unfilled_bid}¢)')
                                 elif snap_revert:
-                                    # Was snapped but no longer profitable — revert to pre-snap price
                                     revert_price = bot.get('_pre_snap_price', current_price)
                                     new_price = min(revert_price, bid_target)
                                     bot['_pre_snap_price'] = None
                                     walk_type = 'snap_revert'
-                                    print(f'⚡ APEX SNAP REVERT: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
-                                          f'(pre_snap={revert_price}¢ bid={unfilled_bid}¢)')
-                                elif snap_ready:
-                                    # In profitable zone + above bid: RETREAT below the ask
-                                    # The ask is what fills us (sellers coming down), not the bid
-                                    # Gapped market: retreat from ask (further back = safer)
-                                    # Tight market: ask is close to bid, so bid-2 is fine
-                                    _unfilled_ask = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
-                                    _retreat_target = max(1, min(unfilled_bid - 2, _unfilled_ask - 3))
-                                    new_price = _retreat_target
-                                    walk_type = 'trailing_retreat'
-                                    # Track the low while retreating
-                                    _snap_low = bot.get('_snap_zone_lowest_bid', 999)
-                                    if unfilled_bid < _snap_low:
-                                        bot['_snap_zone_lowest_bid'] = unfilled_bid
-                                        bot['_snap_zone_entered_at'] = bot.get('_snap_zone_entered_at') or now
                                 else:
-                                    # Normal: price drifted above bid, drop instantly
                                     new_price = bid_target
                                     walk_type = 'drop_to_bid'
 
-                            # ── PRIORITY 2: Trailing profit snap to bid ──
-                            # Retreat 2¢ below bid while tracking the wave down.
-                            # Snap to bid on reversal (bounce) for max profit.
-                            elif snap_ready and bid_target > current_price:
-                                _snap_low = bot.get('_snap_zone_lowest_bid', 999)
-                                # Retreat from ask (what fills us), fall back to bid-2
-                                _unfilled_ask_p2 = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
-                                _retreat_price = max(1, min(unfilled_bid - 2, _unfilled_ask_p2 - 3))
-                                # Timeout scales with game phase
-                                _snap_timeout = 60 if _apex_urgency == 'normal' else 30 if _apex_urgency == 'late' else 10
-                                if unfilled_bid < _snap_low:
-                                    # Bid still falling — update low, retreat below bid
-                                    bot['_snap_zone_lowest_bid'] = unfilled_bid
+                            # ── PRIORITY 2: Trailing snap (spread-aware) ──
+                            # Tight market (spread ≤ 2): retreat from bid, snap to bid
+                            # Gapped market (spread > 2): retreat from ask, snap to ask-1 (maker)
+                            elif snap_ready:
+                                _snap_low_ask = bot.get('_snap_zone_lowest_ask', 999)
+
+                                # Retreat target: where to hide
+                                if _is_gapped:
+                                    _retreat_target = max(1, _cur_ask - 2)  # 2¢ below ask
+                                else:
+                                    _retreat_target = max(1, unfilled_bid - 2)  # 2¢ below bid (≈ ask)
+
+                                # Snap target: where to jump on reversal
+                                if _is_gapped:
+                                    _snap_target = max(1, min(_cur_ask - 1, max_hedge))  # ask-1 (maker, right below sellers)
+                                else:
+                                    _snap_target = min(bid_target, max_hedge)  # bid (tight = near ask)
+
+                                # Track lowest ask
+                                if _cur_ask < _snap_low_ask:
+                                    bot['_snap_zone_lowest_ask'] = _cur_ask
                                     bot['_snap_zone_entered_at'] = bot.get('_snap_zone_entered_at') or now
-                                    if current_price > _retreat_price:
-                                        new_price = _retreat_price
-                                        walk_type = 'trailing_retreat'
-                                    else:
-                                        new_price = current_price  # already below bid
-                                        walk_type = None
-                                elif unfilled_bid > _snap_low:
-                                    # Bid bounced from low — reversal detected, SNAP NOW
+
+                                # Ask approaching — need to retreat?
+                                _ask_distance = _cur_ask - current_price
+                                if _ask_distance <= 2 and _retreat_target < current_price:
+                                    new_price = _retreat_target
+                                    walk_type = 'ask_retreat'
+                                # Ask reversed — SNAP
+                                elif _cur_ask > _snap_low_ask and bot.get('_snap_zone_entered_at'):
                                     if not was_snapped:
                                         bot['_pre_snap_price'] = current_price
-                                    new_price = min(bid_target, max_hedge) if not past_ceiling else bid_target
+                                    new_price = _snap_target
                                     walk_type = 'trailing_snap'
                                     print(f'⚡ APEX TRAILING SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
-                                          f'(low={_snap_low}¢ bounced={unfilled_bid}¢ anchor={anchor_price_for_ceiling}¢ combined={anchor_price_for_ceiling + new_price}¢)')
-                                    bot['_snap_zone_lowest_bid'] = None
+                                          f'(ask_low={_snap_low_ask}¢ ask={_cur_ask}¢ bid={unfilled_bid}¢ spread={_spread}¢ combined={anchor_price_for_ceiling + new_price}¢)')
+                                    bot['_snap_zone_lowest_ask'] = None
+                                    bot['_snap_zone_entered_at'] = None
+                                # Timeout
+                                elif bot.get('_snap_zone_entered_at') and (now - bot['_snap_zone_entered_at']) >= _snap_timeout:
+                                    if not was_snapped:
+                                        bot['_pre_snap_price'] = current_price
+                                    new_price = _snap_target
+                                    walk_type = 'timeout_snap'
+                                    print(f'⚡ APEX TIMEOUT SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
+                                          f'(waited {now - bot["_snap_zone_entered_at"]:.0f}s)')
+                                    bot['_snap_zone_lowest_ask'] = None
                                     bot['_snap_zone_entered_at'] = None
                                 else:
-                                    # Bid flat at low — wait for reversal or timeout
-                                    _snap_wait = now - (bot.get('_snap_zone_entered_at') or now)
-                                    if _snap_wait >= _snap_timeout:
-                                        if not was_snapped:
-                                            bot['_pre_snap_price'] = current_price
-                                        new_price = min(bid_target, max_hedge) if not past_ceiling else bid_target
-                                        walk_type = 'timeout_snap'
-                                        print(f'⚡ APEX TIMEOUT SNAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
-                                              f'(waited {_snap_wait:.0f}s at low={_snap_low}¢)')
-                                        bot['_snap_zone_lowest_bid'] = None
-                                        bot['_snap_zone_entered_at'] = None
-                                    elif current_price > _retreat_price:
-                                        new_price = _retreat_price  # stay retreated
-                                        walk_type = 'trailing_retreat'
-                                    else:
-                                        new_price = current_price
-                                        walk_type = None
+                                    # Hedge sits — ask is far away, no action
+                                    new_price = current_price
+                                    walk_type = None
 
                             # ── PRIORITY 3: Ceiling snap UP to bid to exit ──
                             elif at_ceiling and unfilled_bid > current_price:

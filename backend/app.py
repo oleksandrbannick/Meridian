@@ -10328,14 +10328,23 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_complete')
 
             # Verify no leftover positions from missed WS fills
+            _is_cross_market = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
             try:
                 api_read_limiter.wait()
                 _pos_resp = kalshi_client.get_positions(ticker=ticker)
                 _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
-                _leftover = 0
+                _actual_pos = 0
                 for _p in _positions:
                     if _p.get('ticker') == ticker:
-                        _leftover = abs(_parse_position_qty(_p))
+                        _actual_pos = abs(_parse_position_qty(_p))
+                # Cross-market: anchor position is expected (held until settlement).
+                # Only sell contracts ABOVE the hedged qty (true late fills).
+                if _is_cross_market:
+                    _expected = hedge_qty  # anchor contracts that are part of the arb
+                    _leftover = max(0, _actual_pos - _expected)
+                else:
+                    # Same-ticker: YES+NO net to 0, any position is leftover
+                    _leftover = _actual_pos
                 if _leftover > 0:
                     _sold, _sell_info = execute_sell(ticker, dog_side, _leftover,
                                                      reason=f'phantom_extra_{bot_id}')
@@ -10350,7 +10359,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     bot_log('PHANTOM_LADDER_EXTRA_SELLBACK', bot_id, {
                         'leftover': _leftover, 'sell_price': _sell_price,
                         'extra_pnl': _extra_pnl, 'combined_pnl': bot.get('net_pnl_cents', 0),
+                        'cross_market': _is_cross_market, 'expected_anchor': _expected if _is_cross_market else 0,
                     })
+                elif _is_cross_market and _actual_pos == _expected:
+                    print(f'✅ PHANTOM CROSS-MARKET: {bot_id} anchor position {_actual_pos} held for settlement (hedge on {bot.get("hedge_ticker")})')
             except Exception as _pe:
                 print(f'⚠ PHANTOM EXTRA CHECK FAIL: {bot_id}: {_pe}')
                 bot_log('PHANTOM_LADDER_EXTRA_CHECK_FAIL', bot_id, {'error': str(_pe)[:300]}, level='ERROR')
@@ -11591,10 +11603,9 @@ def _handle_apex(bot_id, bot, actions):
                             bot['_market_combined'] = _market_combined
                             bot['_market_price_ref'] = _market_price
                             max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
-                            # Profitable walk cap: stop 2¢ BELOW snap ceiling so hedge
-                            # is already retreated when trailing snap kicks in.
-                            # Combined caps at 94 (not 96) — hedge has room to ride waves.
-                            _profitable_hedge = _apex_snap_ceiling - anchor_price_for_ceiling - 2
+                            # Profitable walk cap: match snap ceiling so trailing snap
+                            # can engage. Combined caps at snap_ceiling (96 normal, 97 late).
+                            _profitable_hedge = _apex_snap_ceiling - anchor_price_for_ceiling
                             if _apex_urgency in ('normal', 'halftime'):
                                 max_hedge = min(max_hedge, max(1, _profitable_hedge))
                             past_ceiling = current_price >= max_hedge
@@ -17177,6 +17188,12 @@ def get_orphaned_positions():
     try:
         managed_tickers = set()
         for b in active_bots.values():
+            # Cross-market bots hold positions on BOTH tickers until settlement,
+            # even after completion. Always include both to avoid false orphans.
+            _ht = b.get('hedge_ticker')
+            if _ht and _ht != b.get('ticker'):
+                managed_tickers.add(_ht)
+                if b.get('ticker'): managed_tickers.add(b['ticker'])
             if b.get('status') in ('completed', 'stopped', 'cancelled'):
                 continue
             if b.get('ticker'): managed_tickers.add(b['ticker'])
@@ -17377,10 +17394,11 @@ def _run_startup():
                         dog_qty = sum(_safe_int(r.get('fill_qty', 0)) for r in b.get('rungs', []))
                     fav_side = b.get('fav_side', '')
                     fav_qty = _safe_int(b.get('fav_fill_qty'))
+                    _hedge_t = b.get('hedge_ticker', t)  # cross-market: hedge on different ticker
                     if dog_qty > 0 and dog_side:
                         managed_qty[(t, dog_side)] = managed_qty.get((t, dog_side), 0) + dog_qty
                     if fav_qty > 0 and fav_side:
-                        managed_qty[(t, fav_side)] = managed_qty.get((t, fav_side), 0) + fav_qty
+                        managed_qty[(_hedge_t, fav_side)] = managed_qty.get((_hedge_t, fav_side), 0) + fav_qty
                 elif cat == 'ladder_arb':
                     yes_qty = _safe_int(b.get('filled_yes_qty'))
                     no_qty = _safe_int(b.get('filled_no_qty'))

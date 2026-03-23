@@ -11610,8 +11610,8 @@ def _handle_apex(bot_id, bot, actions):
                             _is_gapped = _spread > 2
                             _snap_timeout = 60 if _apex_urgency in ('normal', 'halftime') else 30 if _apex_urgency == 'late' else 10
 
-                            # ── PRIORITY 1: Drop to bid (only when NOT in snap zone) ──
-                            if current_price > bid_target and bid_target > 0 and not snap_ready:
+                            # ── PRIORITY 1: Drop to bid (ALWAYS — even in snap zone) ──
+                            if current_price > bid_target and bid_target > 0:
                                 if at_ceiling:
                                     new_price = bid_target
                                     walk_type = 'ceiling_snap_down'
@@ -11620,14 +11620,20 @@ def _handle_apex(bot_id, bot, actions):
                                     new_price = min(revert_price, bid_target)
                                     bot['_pre_snap_price'] = None
                                     walk_type = 'snap_revert'
+                                elif snap_ready:
+                                    # Bid crashed below us while in snap zone — follow it down
+                                    new_price = bid_target
+                                    walk_type = 'snap_zone_bid_drop'
+                                    if bot.get('_pre_snap_price') and bid_target < bot['_pre_snap_price']:
+                                        bot['_pre_snap_price'] = None  # snap absorbed — bid went lower
                                 else:
                                     new_price = bid_target
                                     walk_type = 'drop_to_bid'
 
-                            # ── PRIORITY 2: Trailing snap (spread-aware) ──
+                            # ── PRIORITY 2: Trailing snap (spread-aware, at-bid only) ──
                             # Tight market (spread ≤ 2): stay away from bid, snap to bid
                             # Gapped market (spread > 2): retreat from ask, snap to bid+1
-                            elif snap_ready and (current_price >= bid_target or bid_target <= 0):
+                            elif snap_ready and (current_price <= bid_target or bid_target <= 0):
                                 _snap_low_ask = bot.get('_snap_zone_lowest_ask', 999)
 
                                 # Retreat target: where to hide when ask approaches

@@ -5335,6 +5335,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderCol = borderMap[status] || '#ffaa00';
     const statusLabel = statusMap[status] || status;
     const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
+    const isCrossMarket = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
+    const hedgeTeamCode = isCrossMarket ? (bot.hedge_ticker || '').split('-').pop() : '';
 
     // Live bid/ask from WS
     const liveYesBid = bot.live_yes_bid || 0;
@@ -5343,8 +5345,23 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const liveNoAsk = bot.live_no_ask || 0;
     const dogBid = dogSide === 'yes' ? liveYesBid : liveNoBid;
     const dogAsk = dogSide === 'yes' ? liveYesAsk : liveNoAsk;
-    const favBid = favSide === 'yes' ? liveYesBid : liveNoBid;
-    const favAsk = favSide === 'yes' ? liveYesAsk : liveNoAsk;
+    // Cross-market: fav prices come from hedge ticker's WS cache
+    let favBid, favAsk;
+    if (isCrossMarket) {
+        favBid = bot.live_hedge_yes_bid || bot.live_hedge_no_bid || 0;
+        favAsk = bot.live_hedge_yes_ask || bot.live_hedge_no_ask || 0;
+        // Use the correct side from hedge ticker
+        if (favSide === 'yes') {
+            favBid = bot.live_hedge_yes_bid || 0;
+            favAsk = bot.live_hedge_yes_ask || 0;
+        } else {
+            favBid = bot.live_hedge_no_bid || 0;
+            favAsk = bot.live_hedge_no_ask || 0;
+        }
+    } else {
+        favBid = favSide === 'yes' ? liveYesBid : liveNoBid;
+        favAsk = favSide === 'yes' ? liveYesAsk : liveNoAsk;
+    }
 
     // Live game score
     let liveScoreHtml = '';
@@ -5454,7 +5471,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             </div>
             <!-- FAV SIDE -->
             <div style="background:#060a14;border:1px solid ${favPrice > 0 ? '#00aaff33' : '#1e2740'};border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
-                <div style="color:#00aaff;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>
+                <div style="color:#00aaff;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ ${isCrossMarket ? hedgeTeamCode + ' · ' : ''}FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `${wouldPostAt}¢`}</div>
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#00aaff;">${favBid || '?'}¢</strong> · ask <strong style="color:#00aaff;">${favAsk || '?'}¢</strong></div>
                 <div style="color:#8892a6;font-size:10px;margin-bottom:4px;">${favStatusText}</div>

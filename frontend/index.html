@@ -2397,10 +2397,12 @@
         async function gatherMeridianContext(includeMarkets = true) {
             const ctx = {};
             try {
-                const [balRes, botsRes, posRes] = await Promise.allSettled([
+                const [balRes, botsRes, posRes, histRes, pnlRes] = await Promise.allSettled([
                     fetch(`${API_BASE}/ws/balance`).then(r => r.json()),
                     fetch(`${API_BASE}/bot/list`).then(r => r.json()),
                     fetch(`${API_BASE}/positions/active`).then(r => r.json()),
+                    fetch(`${API_BASE}/bot/history?limit=20`).then(r => r.json()),
+                    fetch(`${API_BASE}/pnl`).then(r => r.json()),
                 ]);
                 if (balRes.status === 'fulfilled') ctx.balance = balRes.value;
                 if (botsRes.status === 'fulfilled') {
@@ -2410,13 +2412,26 @@
                     ctx.active_bots = active.map(id => {
                         const b = bots[id];
                         return { id, ticker: b.ticker, type: b.type, status: b.status,
-                                 yes_price: b.yes_price, no_price: b.no_price, count: b.count,
-                                 pnl: b.pnl, bot_category: b.bot_category };
+                                 yes_price: b.yes_price, no_price: b.no_price,
+                                 quantity: b.quantity || b.count, net_pnl: b.net_pnl_cents,
+                                 hedge_price: b.hedge_price, bot_category: b.bot_category,
+                                 repeat_count: b.repeat_count, repeats_done: b.repeats_done };
                     });
                     ctx.total_bots = ids.length;
-                    ctx.completed_bots = ids.filter(id => bots[id].status === 'complete').length;
+                    ctx.completed_bots = ids.filter(id => ['complete','completed'].includes(bots[id].status)).length;
                 }
                 if (posRes.status === 'fulfilled') ctx.positions = posRes.value;
+                if (histRes.status === 'fulfilled') {
+                    const trades = (histRes.value.trades || []).slice(0, 20);
+                    ctx.recent_trades = trades.map(t => ({
+                        ticker: t.ticker, result: t.result, bot_category: t.bot_category,
+                        profit_cents: t.profit_cents, loss_cents: t.loss_cents,
+                        yes_price: t.yes_price, no_price: t.no_price,
+                        quantity: t.quantity, arb_width: t.arb_width,
+                        timestamp: t.timestamp,
+                    }));
+                }
+                if (pnlRes.status === 'fulfilled') ctx.pnl_summary = pnlRes.value;
             } catch(e) {}
 
             // Screen state — what the user is actually looking at
@@ -3018,6 +3033,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774227600"></script>
+    <script src="app.js?v=1774227800"></script>
 </body>
 </html>

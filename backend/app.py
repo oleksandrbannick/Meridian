@@ -11380,7 +11380,7 @@ def _handle_apex(bot_id, bot, actions):
 
                             # ── PRIORITY 4: Normal walk +1¢ toward bid ──
                             elif bid_target > current_price:
-                                walk_cap = min(bid_target, max_hedge) if not past_ceiling else bid_target
+                                walk_cap = min(bid_target, max_hedge)  # ALWAYS respect the cap
                                 new_price = min(current_price + 1, walk_cap)
                                 walk_type = 'normal_walk'
                                 # Clear pre-snap if we've walked past it (snap already reverted or absorbed)

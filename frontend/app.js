@@ -8336,24 +8336,8 @@ async function monitorBots() {
                 data.actions.forEach(action => {
                     console.log('Bot action:', action);
                     buddyReactToEvent(action);
-                    if (action.action === 'completed') {
-                        const netPnl = action.profit_cents ?? action.pnl_cents ?? 0;
-                        const profitStr = netPnl >= 0 ? `+$${(netPnl/100).toFixed(2)}` : `-$${(Math.abs(netPnl)/100).toFixed(2)}`;
-                        if (netPnl > 0) {
-                            playArbCompleteSound();
-                            sendPushNotification('💰 APEX COMPLETE!', `${profitStr} profit locked — Meridian`);
-                            showNotification(`✅ APEX COMPLETE! ${profitStr} profit locked`);
-                        } else {
-                            playAmendCompleteSound();
-                            sendPushNotification('🔧 FILL LOSS', `${profitStr} — filled at worse price`);
-                            showNotification(`🔧 FILL LOSS: ${profitStr} — both legs filled at worse price`);
-                        }
-                    } else if (action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
-                        const pnlKey = action.profit_cents ?? action.pnl_cents ?? 0;
-                        const profitStr = pnlKey >= 0 ? `+$${(pnlKey/100).toFixed(2)}` : `-$${(Math.abs(pnlKey)/100).toFixed(2)}`;
-                        playAmendCompleteSound();
-                        sendPushNotification('🔧 AMEND EXIT', `${profitStr} — arb completed via amend`);
-                        showNotification(`🔧 AMEND EXIT: ${profitStr} — arb completed via timeout amend`);
+                    if (action.action === 'completed' || action.action === 'timeout_exit_yes' || action.action === 'timeout_exit_no') {
+                        // Silent — no notification, no confetti, no sound
                     } else if (action.action === 'repeat_spawned') {
                         const repeatMsg = action.yes_price != null
                             ? `🔄 REPEAT #${action.repeat_num}/${action.repeat_total}: YES ${action.yes_price}¢ + NO ${action.no_price}¢ → ${action.profit_per}¢ profit`
@@ -8378,18 +8362,9 @@ async function monitorBots() {
                     } else if (action.action === 'take_profit_watch') {
                         showNotification(`🎯 Watch TP hit: ${action.bot_id} | profit: +${(action.profit_cents/100).toFixed(2)}`);
                     } else if (action.action === 'dog_filled_hedging') {
-                        showNotification(`👻 PHANTOM FILLED! Hedging fav on ${action.ticker || action.bot_id}`);
-                        playArbCompleteSound();
-                        sendPushNotification('👻 Phantom Filled!', 'Phantom anchor filled — posting fav hedge');
+                        // Silent
                     } else if (action.action === 'anchor_complete' || action.action === 'ladder_complete') {
-                        const anchorPnl = action.profit_cents ?? 0;
-                        if (anchorPnl > 0) {
-                            playArbCompleteSound();
-                            showNotification(`✅ PHANTOM COMPLETE! +$${(anchorPnl/100).toFixed(2)} profit`);
-                        } else {
-                            playAmendCompleteSound();
-                            showNotification(`🔧 PHANTOM LOSS: -$${(Math.abs(anchorPnl)/100).toFixed(2)}`);
-                        }
+                        // Silent
                     } else if (action.action === 'anchor_sellback' || action.action === 'ladder_sellback' || action.action === 'hard_ceiling_sellback') {
                         const loss = action.loss_cents ?? 0;
                         const lossStr = `-$${(loss/100).toFixed(2)}`;

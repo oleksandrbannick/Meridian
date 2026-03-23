@@ -11251,6 +11251,9 @@ def _handle_apex(bot_id, bot, actions):
             walk_interval = max(walk_interval, 30)  # extend to 30s when at stable bid
         bot['_walk_interval'] = walk_interval  # expose to frontend
         bot['_game_urgency'] = _apex_urgency
+        bot['_snap_ready'] = snap_ready
+        bot['_at_ceiling'] = at_ceiling
+        bot['_snap_zone_active'] = bot.get('_snap_zone_entered_at') is not None
         last_walk = bot.get('last_walk_at') or first_fill_at or now
         since_walk = now - last_walk
         if since_walk >= walk_interval:
@@ -11278,6 +11281,8 @@ def _handle_apex(bot_id, bot, actions):
                             if _apex_urgency in ('normal', 'halftime'):
                                 max_hedge = min(max_hedge, max(1, _profitable_hedge))
                             past_ceiling = current_price >= max_hedge
+                            bot['_max_hedge'] = max_hedge
+                            bot['_profitable_cap'] = anchor_price_for_ceiling + max_hedge
 
                             # ── PRIORITY -1: Force down to profitable cap ──
                             # If hedge is above the profitable cap (from pre-fix state or late fill),

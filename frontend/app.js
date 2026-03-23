@@ -5528,20 +5528,44 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const hedgeCol = hedgeFilled ? hedgeColorSide : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
             const hedgePct = hedgeQty > 0 ? Math.round((activeHedgeFill / hedgeQty) * 100) : 0;
             const gapToBid = unfilledBid - currentHedgePrice;
+            const gapToAsk = unfilledAsk - currentHedgePrice;
             const gapCol = gapToBid === 0 ? '#00ff88' : gapToBid <= 2 ? '#00ff88' : gapToBid <= 5 ? '#ffaa00' : gapToBid <= 10 ? '#ff8800' : '#ff4444';
             const gapStr = gapToBid > 0 ? `+${gapToBid}¢ to bid` : gapToBid === 0 ? '= bid' : '';
+            // System state
+            const maxHedge = bot._max_hedge || 0;
+            const profitCap = bot._profitable_cap || 0;
+            const snapReady = bot._snap_ready || false;
+            const snapActive = bot._snap_zone_active || false;
+            const snapLowAsk = bot._snap_zone_lowest_ask || 0;
+            const spread = unfilledAsk > 0 ? unfilledAsk - unfilledBid : 0;
+            const isGapped = spread > 2;
+            // State label
+            let stateLabel, stateColor;
+            if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
+            else if (snapActive && snapReady) { stateLabel = isGapped ? 'TRACKING ASK' : 'TRACKING BID'; stateColor = '#00aaff'; }
+            else if (snapReady) { stateLabel = 'SNAP ZONE'; stateColor = '#00ff88'; }
+            else if (combined >= 98) { stateLabel = 'AT CEILING'; stateColor = '#ff4444'; }
+            else if (maxHedge > 0 && currentHedgePrice >= maxHedge) { stateLabel = 'AT CAP — WAITING'; stateColor = '#ffaa00'; }
+            else { stateLabel = 'WALKING'; stateColor = '#00aaff'; }
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                     <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
-                    <span style="color:${hedgeColorSide};font-size:11px;font-weight:700;">${hedgeQty} contracts @ ${currentHedgePrice}¢</span>
-                    <span style="color:#555;font-size:9px;">bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
-                    ${gapStr ? `<span style="color:${gapCol};font-size:9px;font-weight:700;">${gapStr}</span>` : ''}
+                    <span style="color:${hedgeColorSide};font-size:11px;font-weight:700;">${hedgeQty}× @ ${currentHedgePrice}¢</span>
+                    <span style="color:#555;font-size:9px;">bid ${unfilledBid}¢ · ask ${unfilledAsk}¢${spread > 1 ? ` · gap ${spread}¢` : ''}</span>
+                    <span style="background:${stateColor}22;color:${stateColor};font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;">${stateLabel}</span>
                 </div>
-                <div style="display:flex;align-items:center;gap:6px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
                     <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
                         <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;transition:width 0.3s;"></div>
                     </div>
-                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty} filled</span>
+                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
+                </div>
+                <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
+                    <span>cap: <strong style="color:#ffaa00;">${profitCap || '—'}¢</strong></span>
+                    <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
+                    ${snapActive ? `<span>ask low: <strong style="color:#00aaff;">${snapLowAsk}¢</strong></span>` : ''}
+                    ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
+                    <span>ask dist: <strong style="color:${gapToAsk <= 2 ? '#ff4444' : '#555'};">${gapToAsk}¢</strong></span>
                 </div>
             </div>`;
         }

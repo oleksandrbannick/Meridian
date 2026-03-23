@@ -4639,7 +4639,7 @@ def _refresh_espn_cache():
                         team_own_score = home_score if is_home else away_score
                         team_opp_score = away_score if is_home else home_score
 
-                        team_info[abbr_upper] = {
+                        new_entry = {
                             'live': is_live,
                             'game_time': game_time,
                             'status': status,
@@ -4652,11 +4652,32 @@ def _refresh_espn_cache():
                             'team_score': team_own_score,   # THIS team's score
                             'opp_score': team_opp_score,    # opponent's score
                             'espn_sport': sport,            # e.g. 'nba','atp','wta' — for cross-sport filtering
+                            'home_team': '',                # populated below
+                            'away_team': '',
                         }
+                        # Populate team abbreviations from competitors
+                        for _ct in comp.get('competitors', []):
+                            _ct_abbr = (_ct.get('team') or {}).get('abbreviation', '')
+                            if _ct.get('homeAway') == 'home':
+                                new_entry['home_team'] = _ct_abbr
+                            else:
+                                new_entry['away_team'] = _ct_abbr
+                        # Don't overwrite a live game with a finished game from another sport
+                        # (e.g., NHL BOS=post shouldn't overwrite NBA BOS=in)
+                        existing = team_info.get(abbr_upper)
+                        if existing and existing.get('status') == 'in' and status != 'in':
+                            # Store under sport-qualified key instead
+                            team_info[f'{sport}:{abbr_upper}'] = new_entry
+                        else:
+                            team_info[abbr_upper] = new_entry
                         # Also store under Kalshi code if different
                         kalshi_code = _ESPN_TO_KALSHI.get(abbr_upper)
                         if kalshi_code:
-                            team_info[kalshi_code] = team_info[abbr_upper]
+                            _existing_k = team_info.get(kalshi_code)
+                            if _existing_k and _existing_k.get('status') == 'in' and status != 'in':
+                                team_info[f'{sport}:{kalshi_code}'] = new_entry
+                            else:
+                                team_info[kalshi_code] = new_entry
         except Exception:
             continue
     _espn_cache = {'data': team_info, 'ts': time.time()}
@@ -5315,12 +5336,24 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     # Find any candidate that has score data AND matches the correct sport
     for code in candidates:
         espn_code = _KALSHI_TO_ESPN.get(code, code)
+        # Try direct key, then sport-qualified key for cross-sport collision cases
         entry = info.get(code) or info.get(espn_code)
         if entry and (entry.get('status') in ('in', 'post')):
             # Cross-sport guard: reject if ESPN entry is from a different sport
             entry_sport = entry.get('espn_sport', '')
             if allowed_espn_sports and entry_sport and entry_sport not in allowed_espn_sports:
-                continue  # e.g. tennis ticker matched NBA "HOU" — skip
+                # Try sport-qualified key as fallback (e.g., 'nba:BOS')
+                for _qs in (allowed_espn_sports or []):
+                    _qentry = info.get(f'{_qs}:{code}') or info.get(f'{_qs}:{espn_code}')
+                    if _qentry and _qentry.get('status') in ('in', 'post'):
+                        entry = _qentry
+                        break
+                else:
+                    continue  # No matching sport entry found
+        if entry and (entry.get('status') in ('in', 'post')):
+            entry_sport = entry.get('espn_sport', '')
+            if allowed_espn_sports and entry_sport and entry_sport not in allowed_espn_sports:
+                continue
             return {
                 'home_score': entry.get('home_score', 0),
                 'away_score': entry.get('away_score', 0),

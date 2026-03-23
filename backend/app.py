@@ -10525,7 +10525,7 @@ def _handle_apex(bot_id, bot, actions):
         anchor_side = bot.get('first_fill_side', 'yes')
         sell_wait_s = now - sell_started
 
-        # Check if sell order filled
+        # Check if sell order filled or cancelled
         if sell_oid:
             try:
                 api_read_limiter.wait()
@@ -10539,6 +10539,38 @@ def _handle_apex(bot_id, bot, actions):
                     actual_sell_price = sell_ord.get(f'{anchor_side}_price', sell_price)
                     print(f'🔙 APEX SELLBACK FILLED: {bot_id} {sell_filled}/{sell_qty} @{actual_sell_price}¢')
                     _apex_sellback_complete(bot_id, bot, actual_sell_price, actions)
+                    return
+                if sell_status in ('canceled', 'cancelled'):
+                    # Order was cancelled (by restart, Kalshi, etc.)
+                    _remaining = max(1, sell_qty - sell_filled)
+                    # Check if market is dead before trying to cross
+                    _mkt_dead = False
+                    try:
+                        api_read_limiter.wait()
+                        _mkt_resp = kalshi_client.get_market(ticker)
+                        _mkt_data = _mkt_resp.get('market', _mkt_resp) if isinstance(_mkt_resp, dict) else {}
+                        _mkt_status = _mkt_data.get('status', 'active')
+                        _mkt_result = _mkt_data.get('result', '')
+                        if _mkt_status not in ('active', 'open') or _mkt_result:
+                            _mkt_dead = True
+                    except Exception:
+                        pass
+                    if _mkt_dead:
+                        print(f'⚠ APEX SELLBACK: order cancelled + market dead — completing with loss')
+                        bot_log('APEX_SELLBACK_MARKET_DEAD', bot_id, {
+                            'filled': sell_filled, 'remaining': _remaining,
+                            'market_status': _mkt_status, 'result': _mkt_result,
+                        })
+                        _apex_sellback_complete(bot_id, bot, 0, actions)
+                        return
+                    # Market still active — cross remaining as taker
+                    print(f'⚠ APEX SELLBACK: order cancelled with {sell_filled}/{sell_qty} filled — crossing {_remaining} as taker')
+                    bot_log('APEX_SELLBACK_ORDER_CANCELLED', bot_id, {
+                        'filled': sell_filled, 'remaining': _remaining, 'sell_price': sell_price,
+                    })
+                    sold, sell_info = execute_sell(ticker, anchor_side, _remaining, reason=f'apex_sellback_cancelled_{bot_id}')
+                    _cross_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
+                    _apex_sellback_complete(bot_id, bot, _cross_price, actions)
                     return
             except Exception as e:
                 if '404' in str(e):

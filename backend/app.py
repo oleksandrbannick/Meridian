@@ -5994,6 +5994,7 @@ def _record_rung_completion(bot_id, bot, rung):
         'type': 'arb',
         'repeat_cycle': bot.get('repeats_done', 0) + 1,
         'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
+        'walk_count': bot.get('walk_count', 0),
     }, bot)
 
     # Calculate hedge latency from rung fill timestamps
@@ -11327,7 +11328,7 @@ def _handle_apex(bot_id, bot, actions):
                             # ── PRIORITY 2: Trailing snap (spread-aware) ──
                             # Tight market (spread ≤ 2): retreat from bid, snap to bid
                             # Gapped market (spread > 2): retreat from ask, snap to ask-1 (maker)
-                            elif snap_ready:
+                            elif snap_ready and (current_price >= bid_target or bid_target <= 0):
                                 _snap_low_ask = bot.get('_snap_zone_lowest_ask', 999)
 
                                 # Retreat target: where to hide
@@ -11380,7 +11381,7 @@ def _handle_apex(bot_id, bot, actions):
                             # ── PRIORITY 3: Ceiling snap UP to bid to exit ──
                             # Only in late/critical — in normal game, sell-back or retreat instead
                             elif at_ceiling and unfilled_bid > current_price and _apex_urgency in ('late', 'critical'):
-                                new_price = bid_target
+                                new_price = min(bid_target, max_hedge) if max_hedge > 0 else bid_target
                                 walk_type = 'ceiling_snap'
 
                             # ── PRIORITY 4: Normal walk +1¢ toward bid ──

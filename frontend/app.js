@@ -5652,23 +5652,57 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#8892a6;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = ${combined}¢ · ${unfilledSideLabel} bid ${unfilledBid}¢</span>
                 </div>
             </div>`;
+        } else if (bot._max_hedge > 0 && currentHedgePrice >= bot._max_hedge && !atCeiling && currentHedgePrice > 0) {
+            // ── AT CAP — hedge at profitable walk cap, not walking further ──
+            const capCombined = bot._profitable_cap || combined;
+            const snapCeil = gameUrgency === 'late' || gameUrgency === 'critical' ? 97 : 96;
+            const distToSnap = snapCeil - combined;
+            const urgencyNote = gameUrgency === 'normal' ? 'Cap lifts in late game'
+                : gameUrgency === 'halftime' ? 'Cap lifts after halftime'
+                : gameUrgency === 'late' ? 'Late game — cap at hard ceiling'
+                : gameUrgency === 'critical' ? 'Critical — will cross to exit'
+                : '';
+            const exitNote = distToSnap > 0
+                ? `${distToSnap}¢ from sell-back trigger`
+                : 'Sell-back check active';
+            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
+                : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
+                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
+                : 'Exit: sell-back if >96¢ · 5min timeout';
+            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
+                    <span style="font-weight:700;">⏸ <strong>AT CAP ${capCombined}¢</strong> — ${unfilledSideLabel} hedge paused</span>
+                    <span style="color:#888;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢</span>
+                    ${urgencyBadge}
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
+                    <span>${urgencyNote} · ${exitNote} · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
+                    <span style="color:#ffaa00;font-size:8px;">${exitRule}</span>
+                </div>
+            </div>`;
         } else if (walkCount > 0 && currentHedgePrice > 0) {
             const atBid = currentHedgePrice >= unfilledBid;
+            const atCap = bot._max_hedge > 0 && currentHedgePrice >= bot._max_hedge;
             const walkStartPrice = bot.walk_start_price || currentHedgePrice;
             const prevPrice = walkCount > 1 ? currentHedgePrice - 1 : walkStartPrice;
-            const nextPrice = atBid ? currentHedgePrice : currentHedgePrice + 1;
+            const nextPrice = atCap ? currentHedgePrice : atBid ? currentHedgePrice : currentHedgePrice + 1;
             const walkPct = Math.min(100, ((walkInterval - nextWalkIn) / walkInterval) * 100);
-            const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '📈';
-            const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atBid ? 'AT BID' : 'WALKING';
-            const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
+            const statusIcon = atCeiling ? '🔴' : atCap ? '⏸' : atBid ? '🎯' : '📈';
+            const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atCap ? 'AT CAP' : atBid ? 'AT BID' : 'WALKING';
+            const statusCol = atCeiling ? '#ff4444' : atCap ? '#ffaa00' : atBid ? '#00ff88' : '#00aaff';
+            // Exit rules line
+            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
+                : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
+                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
+                : 'Exit: sell-back if >96¢ · 5min timeout';
             walkInfo = `<div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
                     <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${unfilledSideLabel} hedge</span>
                     <span style="color:#666;font-size:9px;">start ${walkStartPrice}¢</span>
                     <span style="color:#888;">prev ${prevPrice}¢ →</span>
                     <span style="color:#00ff88;font-weight:700;font-size:12px;">${currentHedgePrice}¢</span>
-                    <span style="color:#888;">→ next ${nextPrice}¢</span>
-                    <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
+                    ${atCap ? '' : `<span style="color:#888;">→ next ${nextPrice}¢</span>`}
+                    ${atCap ? '' : `<span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
                       <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
                         <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
                         <circle cx="10" cy="10" r="8" fill="none" stroke="${statusCol}" stroke-width="2"
@@ -5676,11 +5710,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                           stroke-linecap="round"/>
                       </svg>
                       <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${nextWalkIn}</span>
-                    </span>
+                    </span>`}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                     <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>
                     ${urgencyBadge} ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
+                    <span style="color:#ffaa00;font-size:8px;">${exitRule}</span>
                 </div>
             </div>`;
         } else if (currentHedgePrice > 0 && currentHedgePrice >= unfilledBid) {
@@ -5698,6 +5733,38 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 </div>
             </div>`;
         }
+    } else if (status === 'apex_selling_back') {
+        // ── SELL-BACK STATE — full exit visibility ──
+        const sbPrice = bot._sellback_price || 0;
+        const sbStarted = bot._sellback_started_at || 0;
+        const sbElapsed = sbStarted > 0 ? Math.floor(nowSec - sbStarted) : 0;
+        const sbWalks = bot._sellback_walk_count || 0;
+        const sbUrgency = bot._game_urgency || 'normal';
+        const sbTimeout = sbUrgency === 'critical' ? 30 : 300;  // 30s critical, 5min normal
+        const sbTimeLeft = Math.max(0, sbTimeout - sbElapsed);
+        const sbPct = sbTimeout > 0 ? Math.min(100, (sbElapsed / sbTimeout) * 100) : 0;
+        const sbTimerCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#ffaa00';
+        const sbMinLeft = Math.floor(sbTimeLeft / 60);
+        const sbSecLeft = Math.floor(sbTimeLeft % 60);
+        const sbAnchorSide = bot.first_fill_side === 'yes' ? 'YES' : 'NO';
+        const sbAvgAnchor = bot._sellback_avg_anchor || avgFilled || 0;
+        const sbTimeoutNote = sbUrgency === 'critical' ? 'Emergency cross in'
+            : sbTimeLeft <= 30 ? 'Taker cross in' : 'Timeout cross in';
+        walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                <span style="font-weight:700;">🔙 <strong>SELLING BACK</strong> — ${sbAnchorSide} anchor @ ${sbPrice}¢</span>
+                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:14px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+                ${sbUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
+                    : sbUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>' : ''}
+            </div>
+            <div style="height:4px;background:#1e2740;border-radius:2px;overflow:hidden;margin-bottom:4px;">
+                <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
+                <span>Walking sell price down · step #${sbWalks} · anchor avg ${sbAvgAnchor}¢ · elapsed ${Math.floor(sbElapsed/60)}m${sbElapsed%60}s</span>
+                <span style="color:${sbTimerCol};">${sbTimeoutNote} ${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+            </div>
+        </div>`;
     } else if (status === 'ladder_arb_posted') {
         const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
         const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
@@ -10337,6 +10404,27 @@ async function loadTradeHistoryList() {
                 const sPlacedTime = sPlacedDt ? sPlacedDt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
                 const totalCost = (t.yes_price || 0) + (t.no_price || 0);
                 const rungsInfo = t._rung_trades || [];
+                // Hedge speed: use fill_duration_s from first rung, or hedge_latency_ms
+                const hedgeLat = rungsInfo.reduce((best, r) => {
+                    const lat = r.hedge_latency_ms != null ? r.hedge_latency_ms : null;
+                    return lat != null && (best === null || lat < best) ? lat : best;
+                }, null);
+                const rawHedge = rungsInfo.reduce((best, r) => {
+                    const raw = r.raw_hedge_ms != null ? r.raw_hedge_ms : null;
+                    return raw != null && (best === null || raw < best) ? raw : best;
+                }, null);
+                const fillDur = t.fill_duration_s || rungsInfo.reduce((best, r) => {
+                    return r.fill_duration_s != null ? Math.max(best || 0, r.fill_duration_s) : best;
+                }, null);
+                const totalWalks = rungsInfo.reduce((s, r) => s + (r.walk_count || 0), 0);
+                const hedgeSpeedHtml = (() => {
+                    let parts = [];
+                    if (hedgeLat != null) parts.push(`<span style="color:${hedgeLat < 300 ? '#00ff88' : hedgeLat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(hedgeLat)}ms</span>`);
+                    if (rawHedge != null) parts.push(`<span style="color:${rawHedge < 5 ? '#00ffcc' : rawHedge < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">raw ${rawHedge.toFixed(1)}ms</span>`);
+                    if (fillDur != null) parts.push(`<span style="color:#8892a6;">${fillDur >= 60 ? Math.floor(fillDur/60) + 'm' + (fillDur%60) + 's' : fillDur + 's'} total</span>`);
+                    if (totalWalks > 0) parts.push(`<span style="color:#8892a6;">${totalWalks} walks</span>`);
+                    return parts.join(' · ');
+                })();
                 const rungRows = rungsInfo.map(r => {
                     const rPnl = (r.profit_cents || 0) - (r.loss_cents || 0);
                     const rCol = rPnl > 0 ? '#00ff88' : rPnl < 0 ? '#ff4444' : '#555';
@@ -10372,6 +10460,7 @@ async function loadTradeHistoryList() {
                         <span style="color:#555;">Fees: ${t.fee_cents}¢</span>
                         <span style="color:#555;">Placed: ${sPlacedTime || '—'}</span>
                         <span style="color:#555;">Done: ${sTime} · ${sDate}</span>
+                        ${hedgeSpeedHtml ? `<span>${hedgeSpeedHtml}</span>` : ''}
                     </div>
                     ${rungRows ? `<div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;border-top:1px solid #1e2740;">${rungRows}</div>` : ''}
                     <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #1e274033;">

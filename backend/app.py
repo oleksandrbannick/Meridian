@@ -16803,11 +16803,32 @@ def get_active_positions():
 
 @app.route('/api/orphaned-positions', methods=['GET'])
 def get_orphaned_positions():
-    """Return orphaned positions detected on startup."""
-    return jsonify({
-        'orphaned': [{**v, 'ticker': k} for k, v in _orphaned_positions.items()],
-        'count': len(_orphaned_positions),
-    })
+    """Check for orphaned positions LIVE (not cached startup data)."""
+    try:
+        managed_tickers = set()
+        for b in active_bots.values():
+            if b.get('status') in ('completed', 'stopped', 'cancelled'):
+                continue
+            if b.get('ticker'): managed_tickers.add(b['ticker'])
+            if b.get('ticker_a'): managed_tickers.add(b['ticker_a'])
+            if b.get('ticker_b'): managed_tickers.add(b['ticker_b'])
+        api_read_limiter.wait()
+        pos_resp = kalshi_client.get_positions()
+        positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
+        orphans = []
+        for pos in positions:
+            ticker = pos.get('ticker', '')
+            pos_fp = float(pos.get('position_fp') or 0)
+            if not ticker or pos_fp == 0:
+                continue
+            if ticker not in managed_tickers:
+                side = 'yes' if pos_fp > 0 else 'no'
+                qty = int(abs(pos_fp))
+                exposure = float(pos.get('market_exposure_dollars') or 0)
+                orphans.append({'ticker': ticker, 'side': side, 'orphaned_qty': qty, 'total_qty': qty, 'exposure': exposure})
+        return jsonify({'orphaned': orphans, 'count': len(orphans)})
+    except Exception as e:
+        return jsonify({'orphaned': [], 'count': 0, 'error': str(e)})
 
 
 @app.route('/api/bot/watch', methods=['POST'])

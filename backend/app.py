@@ -1061,6 +1061,9 @@ def diagnose_bots_endpoint():
             for b in active_bots.values():
                 if b.get('status') not in ('completed', 'stopped', 'cancelled'):
                     bot_tickers.add(b.get('ticker', ''))
+                    # Meridian (middle) bots manage two tickers
+                    if b.get('ticker_a'): bot_tickers.add(b['ticker_a'])
+                    if b.get('ticker_b'): bot_tickers.add(b['ticker_b'])
             for pos in positions:
                 ticker = pos.get('ticker', '')
                 qty = pos.get('total_traded', 0) or pos.get('position', 0)
@@ -2210,8 +2213,35 @@ def _apex_sellback_complete(bot_id, bot, sell_price, actions):
     _audit('APEX_SELLBACK_COMPLETE', bot_id, {'ticker': ticker, 'sell_price': sell_price, 'qty': sell_qty})
     _audit_position_check(bot_id, ticker, anchor_side, 'after_apex_sellback')
 
-    bot['status'] = 'stopped'
-    bot['stopped_at'] = now
+    # Repeat support: sell-back counts as a cycle, continue if repeats remain
+    repeats_done_now = bot.get('repeats_done', 0) + 1
+    bot['repeats_done'] = repeats_done_now
+    repeat_total = bot.get('repeat_count', 0)
+    if repeats_done_now <= repeat_total:
+        bot['status'] = 'waiting_repeat'
+        bot['waiting_repeat_since'] = now
+        bot['_trade_recorded'] = False
+        bot['_apex_sellback_attempted'] = False
+        bot['_consolidated'] = False
+        bot['hedge_order_id'] = None
+        bot['hedge_price'] = 0
+        bot['hedge_qty'] = 0
+        bot['_hedge_fill_count'] = 0
+        bot['_sellback_order_id'] = None
+        bot['walk_count'] = 0
+        bot['first_fill_at'] = None
+        bot['first_fill_side'] = None
+        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + (profit_cents - loss_cents)
+        for rung in bot.get('rungs', []):
+            rung['completed'] = False
+            rung['_profit_recorded'] = False
+            rung['yes_fill_qty'] = 0
+            rung['no_fill_qty'] = 0
+        print(f'🔄 APEX SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-entering')
+        bot_log('APEX_SELLBACK_REPEAT', bot_id, {'cycle': repeats_done_now, 'total': repeat_total})
+    else:
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = now
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'apex_sellback', 'loss_cents': loss_cents, 'profit_cents': profit_cents})
 
@@ -6884,8 +6914,9 @@ def _execute_apex_completion(bot_id):
             bot['_bot_completed'] = False
             bot['_ws_fill_handling'] = False
             bot['_hedge_verified'] = False
+            bot['_apex_sellback_attempted'] = False  # reset so next cycle can sell back
             bot['hedge_history'] = []
-            # lifetime_pnl already updated above (line 6852) — don't double-add
+            # lifetime_pnl already updated above — don't double-add
             bot['cumulative_pnl'] = 0
             bot['completed_rungs_count'] = 0
             bot['hedge_order_id'] = None
@@ -9050,6 +9081,7 @@ def _handle_phantom(bot_id, bot, actions):
                 if mkt_status in ('settled', 'finalized', 'closed'):
                     # Cancel unfilled fav order
                     try:
+                        api_rate_limiter.wait()
                         kalshi_client.cancel_order(fav_order_id)
                     except Exception:
                         pass
@@ -9061,6 +9093,19 @@ def _handle_phantom(bot_id, bot, actions):
                         session_pnl['gross_profit_cents'] += profit
                     else:
                         session_pnl['gross_loss_cents'] += abs(profit)
+                    bot['_trade_recorded'] = True
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': dog_price if dog_side == 'yes' else 0,
+                        'no_price': dog_price if dog_side == 'no' else 0,
+                        'quantity': qty,
+                        'profit_cents': profit if profit > 0 else 0,
+                        'loss_cents': abs(profit) if profit < 0 else 0,
+                        'result': 'settled_win' if dog_won else 'settled_loss',
+                        'exit_via': 'phantom_settlement',
+                        'timestamp': now, 'placed_at': bot.get('created_at', now),
+                        'fill_source': 'anchor_dog', 'bot_category': 'anchor_dog',
+                    }, bot)
                     print(f'🏁 PHANTOM GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
@@ -9104,7 +9149,7 @@ def _handle_phantom(bot_id, bot, actions):
             try:
                 api_read_limiter.wait()
                 fav_order = kalshi_client.get_order(fav_order_id)
-                fav_filled = max(fav_filled, fav_order.get('order', fav_order).get('quantity_filled', 0))
+                fav_filled = max(fav_filled, _parse_fill_count(fav_order.get('order', fav_order)))
                 bot['fav_fill_qty'] = fav_filled
             except Exception:
                 pass
@@ -9197,6 +9242,7 @@ def _handle_phantom(bot_id, bot, actions):
             })
             if _should_bail:
                 try:
+                    api_rate_limiter.wait()
                     kalshi_client.cancel_order(fav_order_id)
                 except Exception:
                     pass
@@ -9367,6 +9413,8 @@ def _handle_phantom(bot_id, bot, actions):
             )
             bot['dog_order_id'] = dog_resp['order']['order_id']
             bot['dog_price'] = actual_price
+            # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
+            bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)
             bot['dog_fill_qty'] = 0
             bot['fav_fill_qty'] = 0
             bot['yes_fill_qty'] = 0
@@ -10138,11 +10186,33 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             # Check for partial fav fills before selling back
             _partial_fav = bot.get('fav_fill_qty', 0)
             if _partial_fav > 0 and _partial_fav < hedge_qty:
-                # Partial hedge filled — record those as completed, sell back only unhedged
+                # Partial hedge filled — record profit for completed portion, sell back rest
                 print(f'⏰ PHANTOM TIMEOUT: {bot_id} partial fav fill {_partial_fav}/{hedge_qty} — completing partial, selling back rest')
+                fav_price = bot.get('fav_price', 0)
+                _partial_profit_per = 100 - avg_dog - fav_price
+                _partial_fee = kalshi_fee_cents(
+                    avg_dog if dog_side == 'yes' else fav_price,
+                    avg_dog if dog_side == 'no' else fav_price,
+                    _partial_fav
+                )
+                _partial_net = max(0, _partial_profit_per * _partial_fav - _partial_fee)
+                session_pnl['gross_profit_cents'] += _partial_net
+                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _partial_net
+                _record_trade({
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': avg_dog if dog_side == 'yes' else fav_price,
+                    'no_price': avg_dog if dog_side == 'no' else fav_price,
+                    'quantity': _partial_fav, 'profit_cents': _partial_net, 'loss_cents': 0,
+                    'fee_cents': _partial_fee, 'result': 'partial_arb',
+                    'exit_via': 'ladder_partial_timeout',
+                    'timestamp': now, 'placed_at': bot.get('created_at', now),
+                    'arb_width': bot.get('target_width', 0),
+                    'fill_source': 'anchor_ladder', 'bot_category': 'anchor_ladder',
+                }, bot)
                 bot_log('PHANTOM_LADDER_FAV_TIMEOUT_PARTIAL', bot_id, {
                     'wait_s': round(wait_s, 1), 'fav_filled': _partial_fav,
                     'hedge_qty': hedge_qty, 'unhedged': hedge_qty - _partial_fav,
+                    'partial_net': _partial_net,
                 })
                 # Adjust hedge_qty so sell-back only sells the unhedged portion
                 bot['hedge_qty'] = hedge_qty - _partial_fav
@@ -11135,9 +11205,8 @@ def _handle_apex(bot_id, bot, actions):
         was_snapped = bot.get('_pre_snap_price') is not None
         snap_revert = was_snapped and not snap_ready and not at_ceiling
         # Reset trailing snap tracker when leaving snap zone
-        if not snap_ready and (bot.get('_snap_zone_lowest_ask') is not None or bot.get('_snap_zone_lowest_bid') is not None):
+        if not snap_ready and bot.get('_snap_zone_lowest_ask') is not None:
             bot['_snap_zone_lowest_ask'] = None
-            bot['_snap_zone_lowest_bid'] = None
             bot['_snap_zone_entered_at'] = None
         # Queue position: track bid stability to avoid unnecessary walks
         _prev_bid = bot.get('_last_bid_seen', 0)
@@ -11197,7 +11266,7 @@ def _handle_apex(bot_id, bot, actions):
                             _cur_ask = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
                             _spread = _cur_ask - unfilled_bid if unfilled_bid > 0 else 1
                             _is_gapped = _spread > 2
-                            _snap_timeout = 60 if _apex_urgency == 'normal' else 30 if _apex_urgency == 'late' else 10
+                            _snap_timeout = 60 if _apex_urgency in ('normal', 'halftime') else 30 if _apex_urgency == 'late' else 10
 
                             # ── PRIORITY 1: Drop to bid (only when NOT in snap zone) ──
                             if current_price > bid_target and bid_target > 0 and not snap_ready:

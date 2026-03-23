@@ -10556,12 +10556,15 @@ def _handle_apex(bot_id, bot, actions):
                     except Exception:
                         pass
                     if _mkt_dead:
-                        print(f'⚠ APEX SELLBACK: order cancelled + market dead — completing with loss')
-                        bot_log('APEX_SELLBACK_MARKET_DEAD', bot_id, {
+                        # Market is done — transition to awaiting_settlement, let it settle naturally
+                        print(f'⚠ APEX SELLBACK: order cancelled + market dead — awaiting settlement')
+                        bot_log('APEX_SELLBACK_AWAITING_SETTLEMENT', bot_id, {
                             'filled': sell_filled, 'remaining': _remaining,
                             'market_status': _mkt_status, 'result': _mkt_result,
                         })
-                        _apex_sellback_complete(bot_id, bot, 0, actions)
+                        bot['status'] = 'awaiting_settlement'
+                        bot['_sellback_order_id'] = None
+                        save_state()
                         return
                     # Market still active — cross remaining as taker
                     print(f'⚠ APEX SELLBACK: order cancelled with {sell_filled}/{sell_qty} filled — crossing {_remaining} as taker')

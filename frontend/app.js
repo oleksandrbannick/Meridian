@@ -5417,6 +5417,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes'
         : status === 'ladder_arb_no_filled' ? 'no'
         : status === 'apex_selling_back' ? (bot.first_fill_side || 'yes')
+        : status === 'awaiting_settlement' ? (bot.first_fill_side || 'yes')
         : null;
     const isFilled = !!filledSideKey;
     const filledSideLabel = filledSideKey === 'yes' ? 'YES' : filledSideKey === 'no' ? 'NO' : '';
@@ -5643,7 +5644,17 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
     // Walk info — detailed status bar
     let walkInfo = '';
-    if (status === 'apex_selling_back') {
+    if (status === 'awaiting_settlement') {
+        walkInfo = `<div style="background:#00e5ff11;border:1px solid #00e5ff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00e5ff;margin-top:6px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-weight:700;">⏳ <strong>AWAITING SETTLEMENT</strong></span>
+                <span style="color:#8892a6;">Market closed — waiting for Kalshi to settle</span>
+            </div>
+            <div style="color:#8892a6;font-size:9px;margin-top:3px;">
+                Position held · P&L calculated on settlement result · anchor ${avgFilled}¢ × ${filledQty}
+            </div>
+        </div>`;
+    } else if (status === 'apex_selling_back') {
         // ── SELL-BACK STATE — full exit visibility (must be before isFilled check) ──
         const sbPrice = bot._sellback_price || 0;
         const sbStarted = bot._sellback_started_at || 0;
@@ -7342,7 +7353,7 @@ async function showBotDetail(botId) {
         const color = colorMap[cat] || '#00d4ff';
         const statusDisplayMap = {
             ladder_arb_posted: 'Both Live', ladder_arb_yes_filled: 'YES Filled',
-            ladder_arb_no_filled: 'NO Filled', apex_selling_back: 'Selling Back',
+            ladder_arb_no_filled: 'NO Filled', apex_selling_back: 'Selling Back', awaiting_settlement: '⏳ Settlement',
             completed: 'Completed', stopped: 'Stopped', waiting_repeat: 'Waiting Repeat',
             anchor_posted: 'Anchor Posted', anchor_filled: 'Anchor Filled',
             hedge_posted: 'Hedge Posted', hedge_filled: 'Hedge Filled',

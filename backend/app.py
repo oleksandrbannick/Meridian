@@ -10560,7 +10560,8 @@ def _handle_apex(bot_id, bot, actions):
                     kalshi_client.cancel_order(sell_oid)
                 except Exception:
                     pass
-            sold, sell_info = execute_sell(ticker, anchor_side, sell_qty, reason=f'apex_sellback_emergency_{bot_id}')
+            _remaining_emergency = max(1, sell_qty - bot.get('_sellback_fill_qty', 0))
+            sold, sell_info = execute_sell(ticker, anchor_side, _remaining_emergency, reason=f'apex_sellback_emergency_{bot_id}')
             emergency_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
             _apex_sellback_complete(bot_id, bot, emergency_price, actions)
             return
@@ -10633,7 +10634,8 @@ def _handle_apex(bot_id, bot, actions):
                         kalshi_client.cancel_order(sell_oid)
                     except Exception:
                         pass
-                sold, sell_info = execute_sell(ticker, anchor_side, sell_qty, reason=f'apex_sellback_timeout_{bot_id}')
+                _remaining_timeout = max(1, sell_qty - bot.get('_sellback_fill_qty', 0))
+                sold, sell_info = execute_sell(ticker, anchor_side, _remaining_timeout, reason=f'apex_sellback_timeout_{bot_id}')
                 timeout_price = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price') or sell_price
                 _apex_sellback_complete(bot_id, bot, timeout_price, actions)
                 return

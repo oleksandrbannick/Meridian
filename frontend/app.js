@@ -5643,7 +5643,48 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
     // Walk info — detailed status bar
     let walkInfo = '';
-    if (isFilled) {
+    if (status === 'apex_selling_back') {
+        // ── SELL-BACK STATE — full exit visibility (must be before isFilled check) ──
+        const sbPrice = bot._sellback_price || 0;
+        const sbStarted = bot._sellback_started_at || 0;
+        const sbElapsed = sbStarted > 0 ? Math.floor(nowSec - sbStarted) : 0;
+        const sbWalks = bot._sellback_walk_count || 0;
+        const sbUrgency = bot._game_urgency || 'normal';
+        const sbTimeout = sbUrgency === 'critical' ? 30 : 300;
+        const sbTimeLeft = Math.max(0, sbTimeout - sbElapsed);
+        const sbPct = sbTimeout > 0 ? Math.min(100, (sbElapsed / sbTimeout) * 100) : 0;
+        const sbTimerCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#ffaa00';
+        const sbMinLeft = Math.floor(sbTimeLeft / 60);
+        const sbSecLeft = Math.floor(sbTimeLeft % 60);
+        const sbAnchorSide = bot.first_fill_side === 'yes' ? 'YES' : 'NO';
+        const sbAvgAnchor = bot._sellback_avg_anchor || avgFilled || 0;
+        const sbFillQty = bot._sellback_fill_qty || 0;
+        const sbQty = bot._sellback_qty || bot.hedge_qty || 1;
+        const sbFillPct = sbQty > 0 ? Math.round((sbFillQty / sbQty) * 100) : 0;
+        const sbTimeoutNote = sbUrgency === 'critical' ? 'Emergency cross in'
+            : sbTimeLeft <= 30 ? 'Taker cross in' : 'Timeout cross in';
+        walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                <span style="font-weight:700;">🔙 <strong>SELLING BACK</strong> — ${sbAnchorSide} anchor @ ${sbPrice}¢</span>
+                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:14px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+                ${sbUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
+                    : sbUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>' : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                <div style="flex:1;height:6px;background:#1e2740;border-radius:3px;overflow:hidden;">
+                    <div style="width:${sbFillPct}%;height:100%;background:#ff8800;border-radius:3px;transition:width 0.3s;"></div>
+                </div>
+                <span style="color:#ff8800;font-weight:700;font-size:10px;">${sbFillQty}/${sbQty} sold</span>
+            </div>
+            <div style="height:4px;background:#1e2740;border-radius:2px;overflow:hidden;margin-bottom:4px;">
+                <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
+                <span>Walking sell price down · step #${sbWalks} · anchor avg ${sbAvgAnchor}¢ · elapsed ${Math.floor(sbElapsed/60)}m${sbElapsed%60}s</span>
+                <span style="color:${sbTimerCol};">${sbTimeoutNote} ${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+            </div>
+        </div>`;
+    } else if (isFilled) {
         const isHalftime = ((gameScores && gameKey && (gameScores[gameKey] || {}).status_detail) || '').toLowerCase().includes('half');
         const walkLabel = walkCount > 0 ? `walked +${walkCount}` : '';
         const ceilingStr = ceilingDist <= 3 ? `<span style="color:${ceilingDist <= 0 ? '#ff4444' : '#ff8800'};font-weight:700;">${ceilingDist}¢ to ceiling</span>` : '';
@@ -5766,38 +5807,6 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 </div>
             </div>`;
         }
-    } else if (status === 'apex_selling_back') {
-        // ── SELL-BACK STATE — full exit visibility ──
-        const sbPrice = bot._sellback_price || 0;
-        const sbStarted = bot._sellback_started_at || 0;
-        const sbElapsed = sbStarted > 0 ? Math.floor(nowSec - sbStarted) : 0;
-        const sbWalks = bot._sellback_walk_count || 0;
-        const sbUrgency = bot._game_urgency || 'normal';
-        const sbTimeout = sbUrgency === 'critical' ? 30 : 300;  // 30s critical, 5min normal
-        const sbTimeLeft = Math.max(0, sbTimeout - sbElapsed);
-        const sbPct = sbTimeout > 0 ? Math.min(100, (sbElapsed / sbTimeout) * 100) : 0;
-        const sbTimerCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#ffaa00';
-        const sbMinLeft = Math.floor(sbTimeLeft / 60);
-        const sbSecLeft = Math.floor(sbTimeLeft % 60);
-        const sbAnchorSide = bot.first_fill_side === 'yes' ? 'YES' : 'NO';
-        const sbAvgAnchor = bot._sellback_avg_anchor || avgFilled || 0;
-        const sbTimeoutNote = sbUrgency === 'critical' ? 'Emergency cross in'
-            : sbTimeLeft <= 30 ? 'Taker cross in' : 'Timeout cross in';
-        walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                <span style="font-weight:700;">🔙 <strong>SELLING BACK</strong> — ${sbAnchorSide} anchor @ ${sbPrice}¢</span>
-                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:14px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
-                ${sbUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
-                    : sbUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>' : ''}
-            </div>
-            <div style="height:4px;background:#1e2740;border-radius:2px;overflow:hidden;margin-bottom:4px;">
-                <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                <span>Walking sell price down · step #${sbWalks} · anchor avg ${sbAvgAnchor}¢ · elapsed ${Math.floor(sbElapsed/60)}m${sbElapsed%60}s</span>
-                <span style="color:${sbTimerCol};">${sbTimeoutNote} ${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
-            </div>
-        </div>`;
     } else if (status === 'ladder_arb_posted') {
         const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
         const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';

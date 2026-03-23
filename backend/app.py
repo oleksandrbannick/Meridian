@@ -9751,6 +9751,26 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             except Exception:
                 current_dog_bid = 0
 
+        # Dead market guard: bid at 1¢ = market is settled/dead, cancel all rungs
+        if current_dog_bid > 0 and current_dog_bid <= 1:
+            print(f'🛑 PHANTOM LADDER DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ — cancelling all rungs')
+            bot_log('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+            for rung in bot.get('rungs', []):
+                oid = rung.get('order_id')
+                if oid and rung.get('fill_qty', 0) < rung.get('qty', 1):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(oid)
+                        rung['cancelled'] = True
+                    except Exception:
+                        pass
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot['repeat_count'] = 0
+            _audit('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+            save_state()
+            return
+
         # Poll fill counts (backup for WS misses)
         total_fill = 0
         for rung in bot.get('rungs', []):
@@ -11337,9 +11357,15 @@ def _handle_apex(bot_id, bot, actions):
                                       f'(above profitable cap, combined would be {anchor_price_for_ceiling + new_price}¢)')
 
                             # ── PRIORITY -0.5: Bid-drift emergency exit ──
-                            # If hedge price is far above the bid, order won't fill — exit before game ends
-                            _bid_gap = current_price - unfilled_bid if unfilled_bid > 0 else 0
+                            # If market has moved far from our hedge, order won't fill — exit before game ends
+                            # Gapped markets: measure from ask (that's where sellers are)
+                            # Tight markets: measure from bid
+                            _cur_ask_drift = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
+                            _drift_spread = _cur_ask_drift - unfilled_bid if unfilled_bid > 0 else 1
+                            _drift_is_gapped = _drift_spread > 2
+                            _bid_gap = (current_price - _cur_ask_drift if _drift_is_gapped else current_price - unfilled_bid) if unfilled_bid > 0 else 0
                             bot['_bid_gap'] = _bid_gap
+                            bot['_drift_ref'] = 'ask' if _drift_is_gapped else 'bid'
                             _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 0
                             if (_bid_drift_threshold > 0 and _bid_gap >= _bid_drift_threshold
                                     and unfilled_bid > 0 and not bot.get('_trade_recorded')
@@ -11388,22 +11414,22 @@ def _handle_apex(bot_id, bot, actions):
                                     walk_type = 'drop_to_bid'
 
                             # ── PRIORITY 2: Trailing snap (spread-aware) ──
-                            # Tight market (spread ≤ 2): retreat from bid, snap to bid
-                            # Gapped market (spread > 2): retreat from ask, snap to ask-1 (maker)
+                            # Tight market (spread ≤ 2): stay away from bid, snap to bid
+                            # Gapped market (spread > 2): retreat from ask, snap to bid+1
                             elif snap_ready and (current_price >= bid_target or bid_target <= 0):
                                 _snap_low_ask = bot.get('_snap_zone_lowest_ask', 999)
 
-                                # Retreat target: where to hide
+                                # Retreat target: where to hide when ask approaches
                                 if _is_gapped:
                                     _retreat_target = max(1, _cur_ask - 2)  # 2¢ below ask
                                 else:
-                                    _retreat_target = max(1, unfilled_bid - 2)  # 2¢ below bid (≈ ask)
+                                    _retreat_target = max(1, unfilled_bid - 2)  # 2¢ below bid
 
-                                # Snap target: where to jump on reversal
+                                # Snap target: where to jump on reversal for profit
                                 if _is_gapped:
-                                    _snap_target = max(1, min(_cur_ask - 1, max_hedge))  # ask-1 (maker, right below sellers)
+                                    _snap_target = max(1, min(_cur_ask - 1, max_hedge))  # ask-1 in gapped markets
                                 else:
-                                    _snap_target = min(bid_target, max_hedge)  # bid (tight = near ask)
+                                    _snap_target = min(unfilled_bid, max_hedge)  # bid in tight markets
 
                                 # Track lowest ask
                                 if _cur_ask < _snap_low_ask:

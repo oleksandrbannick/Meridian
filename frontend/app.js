@@ -5675,8 +5675,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
                 : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
                 : 'Exit: sell-back if >96¢ · 5min timeout';
-            const bidGap = bot._bid_gap || (currentHedgePrice - unfilledBid);
-            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ Bid ${bidGap}¢ below hedge — ${gameUrgency === 'critical' ? 'emergency exit at 5¢ gap' : gameUrgency === 'late' ? 'emergency exit at 10¢ gap' : 'watching'}</div>` : '';
+            const bidGap = bot._bid_gap || 0;
+            const driftRef = bot._drift_ref || (isGapped ? 'ask' : 'bid');
+            const driftPrice = isGapped ? unfilledAsk : unfilledBid;
+            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ ${driftRef} ${bidGap}¢ from hedge (${driftRef} ${driftPrice}¢) — ${gameUrgency === 'critical' ? 'emergency exit at 5¢ gap' : gameUrgency === 'late' ? 'emergency exit at 10¢ gap' : 'watching'}</div>` : '';
             // Game phase badge with exit timing
             const phaseBadge = gameUrgency === 'critical'
                 ? '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL</span>'

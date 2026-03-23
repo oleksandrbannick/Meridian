@@ -5677,22 +5677,22 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
                 <span style="font-weight:700;">🔙 <strong>SELLING BACK</strong> — ${sbAnchorSide} anchor @ ${sbPrice}¢</span>
-                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:14px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
                 ${sbUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
                     : sbUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>' : ''}
             </div>
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+            ${sbFillQty > 0 ? `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                 <div style="flex:1;height:6px;background:#1e2740;border-radius:3px;overflow:hidden;">
                     <div style="width:${sbFillPct}%;height:100%;background:#ff8800;border-radius:3px;transition:width 0.3s;"></div>
                 </div>
                 <span style="color:#ff8800;font-weight:700;font-size:10px;">${sbFillQty}/${sbQty} sold</span>
+            </div>` : ''}
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:18px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+                <div style="flex:1;height:4px;background:#1e2740;border-radius:2px;overflow:hidden;">
+                    <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
             </div>
-            <div style="height:4px;background:#1e2740;border-radius:2px;overflow:hidden;margin-bottom:4px;">
-                <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                <span>Walking sell price down · step #${sbWalks} · anchor avg ${sbAvgAnchor}¢ · elapsed ${Math.floor(sbElapsed/60)}m${sbElapsed%60}s</span>
-                <span style="color:${sbTimerCol};">${sbTimeoutNote} ${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+            <div style="color:#8892a6;font-size:9px;">
+                step #${sbWalks} · anchor avg ${sbAvgAnchor}¢ · elapsed ${Math.floor(sbElapsed/60)}m${sbElapsed%60}s · ${sbTimeoutNote}
             </div>
         </div>`;
     } else if (isFilled) {

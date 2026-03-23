@@ -10518,6 +10518,28 @@ def _handle_apex(bot_id, bot, actions):
 
     # ── STATE: apex_selling_back — maker sell order posted, walk price down toward bid ──
     if status == 'apex_selling_back':
+        # ── GUARD: Check if hedge actually filled while we were selling back ──
+        # If all hedges filled, the arb completed — cancel sell-back and complete
+        _hedge_fill_count = bot.get('_hedge_fill_count', 0)
+        _hedge_qty = bot.get('hedge_qty', 1)
+        if _hedge_fill_count >= _hedge_qty:
+            print(f'✅ APEX SELLBACK ABORT: {bot_id} hedge fully filled ({_hedge_fill_count}/{_hedge_qty}) — completing arb instead')
+            bot_log('APEX_SELLBACK_ABORT_HEDGE_FILLED', bot_id, {
+                'hedge_fill_count': _hedge_fill_count, 'hedge_qty': _hedge_qty,
+            })
+            # Cancel the sell-back order
+            _sb_oid = bot.get('_sellback_order_id')
+            if _sb_oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(_sb_oid)
+                except Exception:
+                    pass
+            bot['_sellback_order_id'] = None
+            bot['status'] = bot.get('_pre_sellback_status', 'ladder_arb_yes_filled')
+            threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
+            return
+
         sell_oid = bot.get('_sellback_order_id')
         sell_price = bot.get('_sellback_price', 0)
         sell_qty = bot.get('_sellback_qty', 1)

@@ -11251,6 +11251,15 @@ def _handle_apex(bot_id, bot, actions):
                                 max_hedge = min(max_hedge, max(1, _profitable_hedge))
                             past_ceiling = current_price >= max_hedge
 
+                            # ── PRIORITY -1: Force down to profitable cap ──
+                            # If hedge is above the profitable cap (from pre-fix state or late fill),
+                            # drop it immediately — don't let it sit in the unprofitable zone
+                            if current_price > max_hedge and max_hedge > 0 and _apex_urgency in ('normal', 'halftime'):
+                                new_price = max_hedge
+                                walk_type = 'force_cap_down'
+                                print(f'⚡ APEX FORCE CAP: {bot_id} {unfilled_side.upper()} {current_price}→{new_price}¢ '
+                                      f'(above profitable cap, combined would be {anchor_price_for_ceiling + new_price}¢)')
+
                             # ── PRIORITY 0: Apex sell-back escape ──
                             # Check whenever combined exceeds snap ceiling (not just hard ceiling)
                             # Between snap ceiling and hard ceiling is a dead zone where the arb

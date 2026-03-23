@@ -9394,7 +9394,13 @@ def _handle_phantom(bot_id, bot, actions):
                     'hedge_price': _hedge_price, 'hedge_gap': _hedge_gap,
                     'reason': 'hedge_unfillable' if _hedge_gap > 5 else 'dog_dead',
                 })
-                return  # hedge won't fill at this width — wait for market to improve
+                # Market is dead — stop the bot completely
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — market dead, stopping')
+                save_state()
+                return
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
@@ -9593,7 +9599,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     'hedge_price': _hedge_price, 'hedge_gap': _hedge_gap,
                     'reason': 'hedge_unfillable' if _hedge_gap > 5 else 'dog_dead',
                 })
-                return  # hedge won't fill at this width — wait for market to improve
+                # Market is dead — stop the bot, don't leave it hanging
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0  # cancel remaining repeats
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ hedge_gap={_hedge_gap} — market dead, stopping')
+                save_state()
+                return
             # Don't repost if market is dead (bid at 1c = pointless)
             if current_dog_bid <= 1:
                 bot['status'] = 'completed'
@@ -10615,7 +10627,12 @@ def _handle_apex(bot_id, bot, actions):
                     'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid,
                     'price_lean': price_lean, 'reason': 'blowout_drift',
                 })
-                return  # Game too lopsided — wait for it to tighten
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0
+                print(f'🛑 APEX DRIFT STOP: {bot_id} lean={price_lean} — blowout, stopping')
+                save_state()
+                return
             use_scaling = bot.get('width_scaling', False)
             valid_specs = []
             for rung in bot.get('rungs', []):

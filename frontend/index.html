@@ -1611,7 +1611,7 @@
     <style>
         /* ── Chat Bubble (FAB) ──────────────────────────────────── */
         #claude-chat-fab {
-            position: fixed; bottom: 24px; right: 24px; z-index: 10000;
+            position: fixed; bottom: 24px; left: 24px; right: auto; z-index: 10000;
             width: 60px; height: 60px; border-radius: 50%;
             background: #0c1020;
             border: 2px solid #d97706; cursor: pointer;
@@ -1906,7 +1906,7 @@
                 width: calc(100vw - 16px); height: calc(100vh - 16px);
                 bottom: 8px; right: 8px; border-radius: 16px;
             }
-            #claude-chat-fab { bottom: 16px; right: 16px; width: 52px; height: 52px; }
+            #claude-chat-fab { bottom: 80px; left: 16px; right: auto; width: 52px; height: 52px; }
         }
     </style>
 
@@ -2965,6 +2965,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774220328"></script>
+    <script src="app.js?v=1774225885"></script>
 </body>
 </html>

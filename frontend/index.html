@@ -1488,7 +1488,7 @@
             </div>
             <div id="orphan-alert-list" style="margin-bottom:16px;max-height:300px;overflow-y:auto;"></div>
             <div style="text-align:right;">
-                <button onclick="document.getElementById('orphan-alert-modal').classList.remove('show')" class="btn" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;padding:8px 24px;font-size:13px;font-weight:600;cursor:pointer;border-radius:8px;">OK</button>
+                <button onclick="document.getElementById('orphan-alert-modal').classList.remove('show');sessionStorage.setItem('orphan_alert_dismissed','1')" class="btn" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;padding:8px 24px;font-size:13px;font-weight:600;cursor:pointer;border-radius:8px;">OK</button>
             </div>
         </div>
     </div>
@@ -2965,6 +2965,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774225885"></script>
+    <script src="app.js?v=1774226100"></script>
 </body>
 </html>

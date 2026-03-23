@@ -267,6 +267,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function checkOrphanedPositions() {
     try {
+        // Only show once per session — don't block screen on every refresh
+        if (sessionStorage.getItem('orphan_alert_dismissed')) return;
         const resp = await fetch(`${API_BASE}/orphaned-positions`);
         const data = await resp.json();
         if (data.orphaned && data.orphaned.length > 0) {

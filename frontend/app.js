@@ -3336,6 +3336,7 @@ let _anchorAutoQty = true;   // auto-scale qty: rung 1=1x, rung 2=2x, rung 3=3x 
 let _anchorRungSpacing = 2;   // spacing between rungs in cents (1 or 2)
 let _anchorCrossMarketTicker = null;  // opposing team's ticker when cross-market is on
 let _anchorCrossMarketSide = 'yes';   // which side to buy on both tickers in cross-market mode
+let _anchorCrossMarketSwapped = false; // true when opposing ticker is cheaper (becomes the anchor)
 
 function _isMoneylineMarket(ticker) {
     // Moneyline markets have "GAME" in the series_ticker or ticker (not SPREAD, TOTAL, etc.)
@@ -3439,29 +3440,48 @@ function initAnchorDogPrices() {
     const yesAsk = getPrice(currentArbMarket, 'yes_ask') || 0;
     const noAsk  = getPrice(currentArbMarket, 'no_ask') || 0;
 
+    // Cross-market: look up opposing ticker prices
+    let _oppMkt = null;
+    let _oppBid = 0, _oppAsk = 0;
+    if (isCrossMode && _anchorCrossMarketTicker) {
+        _oppMkt = allMarkets.find(m => m.ticker === _anchorCrossMarketTicker);
+        if (_oppMkt) {
+            _oppBid = _anchorCrossMarketSide === 'yes'
+                ? (getPrice(_oppMkt, 'yes_bid') || 0) : (getPrice(_oppMkt, 'no_bid') || 0);
+            _oppAsk = _anchorCrossMarketSide === 'yes'
+                ? (getPrice(_oppMkt, 'yes_ask') || 0) : (getPrice(_oppMkt, 'no_ask') || 0);
+        }
+    }
+
     if (isCrossMode) {
-        // Cross-market mode: dog_side = fav_side = user-chosen side
+        // Cross-market: both sides use the same chosen side (YES or NO)
         _anchorDogSide = _anchorCrossMarketSide;
         _anchorFavSide = _anchorCrossMarketSide;
-    } else {
-        _anchorDogSide = noBid <= yesBid ? 'no' : 'yes';
-        _anchorFavSide = _anchorDogSide === 'yes' ? 'no' : 'yes';
-    }
-    _anchorDogBid = _anchorDogSide === 'yes' ? yesBid : noBid;
-    if (isCrossMode && _anchorCrossMarketTicker) {
-        // Look up opposing ticker's bid from allMarkets
-        const oppMkt = allMarkets.find(m => m.ticker === _anchorCrossMarketTicker);
-        if (oppMkt) {
-            _anchorFavBid = _anchorFavSide === 'yes'
-                ? (getPrice(oppMkt, 'yes_bid') || 0)
-                : (getPrice(oppMkt, 'no_bid') || 0);
+        // Dog = whichever ticker is CHEAPER on the chosen side (the anchor)
+        const thisBid = _anchorCrossMarketSide === 'yes' ? yesBid : noBid;
+        if (_oppBid > 0 && _oppBid < thisBid) {
+            // Opposing ticker is cheaper — swap: opposing becomes anchor, this becomes hedge
+            _anchorCrossMarketSwapped = true;
+            _anchorDogBid = _oppBid;
+            _anchorFavBid = thisBid;
         } else {
-            _anchorFavBid = 0;
+            _anchorCrossMarketSwapped = false;
+            _anchorDogBid = thisBid;
+            _anchorFavBid = _oppBid;
         }
     } else {
+        _anchorCrossMarketSwapped = false;
+        _anchorDogSide = noBid <= yesBid ? 'no' : 'yes';
+        _anchorFavSide = _anchorDogSide === 'yes' ? 'no' : 'yes';
+        _anchorDogBid = _anchorDogSide === 'yes' ? yesBid : noBid;
         _anchorFavBid = _anchorFavSide === 'yes' ? yesBid : noBid;
     }
-    const dogAsk = _anchorDogSide === 'yes' ? yesAsk : noAsk;
+    const dogAsk = isCrossMode
+        ? (_anchorCrossMarketSwapped ? (_oppAsk || _oppBid + 1) : (_anchorDogSide === 'yes' ? yesAsk : noAsk))
+        : (_anchorDogSide === 'yes' ? yesAsk : noAsk);
+    const favAsk = isCrossMode
+        ? (_anchorCrossMarketSwapped ? (_anchorDogSide === 'yes' ? yesAsk : noAsk) : (_oppAsk || _oppBid + 1))
+        : (_anchorFavSide === 'yes' ? yesAsk : noAsk);
 
     // Store raw prices for preview calculations
     _anchorDogAsk = dogAsk;
@@ -3488,22 +3508,43 @@ function initAnchorDogPrices() {
     const sidesDisplay = document.getElementById('anchor-sides-display');
 
     if (isCrossMode) {
-        // Cross-market: show both tickers with same side
-        const teamA = currentArbMarket.ticker.split('-').pop() || '?';
-        const teamB = _anchorCrossMarketTicker.split('-').pop() || '?';
+        // Cross-market: show both tickers with bid/ask, dog properly identified
+        const rawTeamA = currentArbMarket.ticker.split('-').pop() || '?';
+        const rawTeamB = (_anchorCrossMarketTicker || '').split('-').pop() || '?';
+        // If swapped, opposing ticker is the anchor (dog)
+        const anchorTeam = _anchorCrossMarketSwapped ? rawTeamB : rawTeamA;
+        const hedgeTeam = _anchorCrossMarketSwapped ? rawTeamA : rawTeamB;
         const sideLabel = _anchorCrossMarketSide.toUpperCase();
+        const dogSpread = dogAsk > 0 && _anchorDogBid > 0 ? (dogAsk - _anchorDogBid) : 0;
+        const favSpread = favAsk > 0 && _anchorFavBid > 0 ? (favAsk - _anchorFavBid) : 0;
+        const combined = _anchorDogBid + _anchorFavBid;
+        const arbGap = combined > 0 ? (100 - combined) : 0;
+        const arbColor = arbGap > 0 ? '#64ffda' : arbGap === 0 ? '#ffaa00' : '#ff4444';
         if (sidesDisplay) {
             sidesDisplay.innerHTML = `
-                <div style="background:#060a14;border:1px solid #64ffda44;border-radius:8px;padding:8px;text-align:center;">
-                    <div style="color:#64ffda;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">ANCHOR · ${teamA}</div>
+                <div style="background:#060a14;border:1px solid #64ffda44;border-radius:8px;padding:8px 10px;text-align:center;">
+                    <div style="color:#64ffda;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:4px;">ANCHOR · ${anchorTeam}</div>
                     <div style="color:#64ffda;font-weight:800;font-size:18px;">${sideLabel}</div>
-                    <div style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''} <span style="color:#ffaa00;">− ${anchorDepth}¢ = ${smartPrice}¢</span></div>
+                    <div style="display:flex;justify-content:center;gap:8px;margin-top:4px;">
+                        <div style="font-size:10px;"><span style="color:#5a6484;">bid</span> <span style="color:#ccd6f6;font-weight:600;">${_anchorDogBid}¢</span></div>
+                        <div style="font-size:10px;"><span style="color:#5a6484;">ask</span> <span style="color:#ccd6f6;font-weight:600;">${dogAsk || '—'}¢</span></div>
+                    </div>
+                    <div style="color:#5a6484;font-size:9px;margin-top:2px;">spread: ${dogSpread}¢</div>
+                    <div style="color:#ffaa00;font-size:10px;margin-top:3px;font-weight:600;">anchor @ ${smartPrice}¢ <span style="color:#5a6484;font-weight:400;">(−${anchorDepth})</span></div>
                 </div>
-                <div style="color:#64ffda;font-size:14px;">+</div>
-                <div style="background:#060a14;border:1px solid #f7816644;border-radius:8px;padding:8px;text-align:center;">
-                    <div style="color:#f78166;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">HEDGE · ${teamB}</div>
+                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;">
+                    <div style="color:#64ffda;font-size:14px;font-weight:700;">+</div>
+                    <div style="font-size:10px;color:${arbColor};font-weight:600;">${combined}¢</div>
+                    <div style="font-size:9px;color:${arbColor};">${arbGap > 0 ? '+' + arbGap + '¢ arb' : arbGap === 0 ? 'breakeven' : arbGap + '¢'}</div>
+                </div>
+                <div style="background:#060a14;border:1px solid #f7816644;border-radius:8px;padding:8px 10px;text-align:center;">
+                    <div style="color:#f78166;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:4px;">HEDGE · ${hedgeTeam}</div>
                     <div style="color:#f78166;font-weight:800;font-size:18px;">${sideLabel}</div>
-                    <div id="anchor-auto-fav-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorFavBid}¢</div>
+                    <div style="display:flex;justify-content:center;gap:8px;margin-top:4px;">
+                        <div style="font-size:10px;"><span style="color:#5a6484;">bid</span> <span style="color:#ccd6f6;font-weight:600;">${_anchorFavBid}¢</span></div>
+                        <div style="font-size:10px;"><span style="color:#5a6484;">ask</span> <span style="color:#ccd6f6;font-weight:600;">${favAsk || '—'}¢</span></div>
+                    </div>
+                    <div style="color:#5a6484;font-size:9px;margin-top:2px;">spread: ${favSpread}¢</div>
                 </div>`;
         }
         // Update cross-detail combined cost display
@@ -3922,7 +3963,13 @@ async function deployAnchorBot() {
         // Add cross-market fields if active
         if (isCrossMode && _anchorCrossMarketTicker) {
             body.cross_market = true;
-            body.hedge_ticker = _anchorCrossMarketTicker;
+            if (_anchorCrossMarketSwapped) {
+                // Opposing ticker is cheaper — it becomes the anchor, this market becomes hedge
+                body.ticker = _anchorCrossMarketTicker;
+                body.hedge_ticker = currentArbMarket.ticker;
+            } else {
+                body.hedge_ticker = _anchorCrossMarketTicker;
+            }
         }
 
         const resp = await fetch(`${API_BASE}/${endpoint}`, {

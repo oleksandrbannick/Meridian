@@ -11373,8 +11373,9 @@ def _handle_apex(bot_id, bot, actions):
                                     walk_type = None
 
                             # ── PRIORITY 3: Ceiling snap UP to bid to exit ──
-                            elif at_ceiling and unfilled_bid > current_price:
-                                new_price = bid_target if not past_ceiling else bid_target
+                            # Only in late/critical — in normal game, sell-back or retreat instead
+                            elif at_ceiling and unfilled_bid > current_price and _apex_urgency in ('late', 'critical'):
+                                new_price = bid_target
                                 walk_type = 'ceiling_snap'
 
                             # ── PRIORITY 4: Normal walk +1¢ toward bid ──

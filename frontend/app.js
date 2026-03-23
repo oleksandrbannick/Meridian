@@ -3259,6 +3259,14 @@ function setTradeMode(mode) {
         // Reset depth to auto (0) each time modal opens
         const depthEl = document.getElementById('anchor-depth');
         if (depthEl) depthEl.value = 0;
+        // Reset cross-market toggle
+        _anchorCrossMarketTicker = null;
+        _anchorCrossMarketSide = 'yes';
+        const crossToggle = document.getElementById('anchor-cross-market');
+        if (crossToggle && crossToggle.checked) {
+            crossToggle.checked = false;
+            crossToggle.dispatchEvent(new Event('change'));
+        }
         initAnchorDogPrices();
     } else {
         // arb
@@ -3326,17 +3334,133 @@ let _anchorRungs = [];    // [{price, qty, offset}] — offset = distance below 
 let _anchorAutoPrice = true;  // auto-adjust rung prices to market
 let _anchorAutoQty = true;   // auto-scale qty: rung 1=1x, rung 2=2x, rung 3=3x (default ON)
 let _anchorRungSpacing = 2;   // spacing between rungs in cents (1 or 2)
+let _anchorCrossMarketTicker = null;  // opposing team's ticker when cross-market is on
+let _anchorCrossMarketSide = 'yes';   // which side to buy on both tickers in cross-market mode
+
+function _isMoneylineMarket(ticker) {
+    // Moneyline markets have "GAME" in the series_ticker or ticker (not SPREAD, TOTAL, etc.)
+    if (!ticker) return false;
+    const series = currentArbMarket?.series_ticker || '';
+    if (series && /GAME|MATCH/i.test(series)) return true;
+    return /GAME/i.test(ticker);
+}
+
+function _findOpposingMoneylineTicker(ticker) {
+    // Moneyline tickers: KXNBAGAME-26MAR23PHXLAL-PHX → gameBase = KXNBAGAME-26MAR23PHXLAL
+    // Find another ticker with same gameBase but different team suffix
+    if (!ticker) return null;
+    const parts = ticker.split('-');
+    if (parts.length < 3) return null;
+    const gameBase = parts.slice(0, -1).join('-'); // e.g., "KXNBAGAME-26MAR23PHXLAL"
+
+    // Search allMarkets for a sibling with same game base
+    if (typeof allMarkets !== 'undefined' && allMarkets.length > 0) {
+        for (const m of allMarkets) {
+            if (m.ticker && m.ticker !== ticker && m.ticker.startsWith(gameBase + '-')) {
+                return m.ticker;
+            }
+        }
+    }
+    // Fallback: check event_ticker grouping
+    if (currentArbMarket?.event_ticker) {
+        const eventTicker = currentArbMarket.event_ticker;
+        for (const m of allMarkets) {
+            if (m.ticker && m.ticker !== ticker && m.event_ticker === eventTicker) {
+                return m.ticker;
+            }
+        }
+    }
+    return null;
+}
+
+function setCrossMarketSide(side) {
+    _anchorCrossMarketSide = side;
+    const yesBtn = document.getElementById('cross-side-yes');
+    const noBtn = document.getElementById('cross-side-no');
+    if (side === 'yes') {
+        if (yesBtn) { yesBtn.style.background = '#00ff8822'; yesBtn.style.border = '2px solid #00ff88'; yesBtn.style.color = '#00ff88'; }
+        if (noBtn)  { noBtn.style.background = 'transparent'; noBtn.style.border = '2px solid #ff444444'; noBtn.style.color = '#ff444466'; }
+    } else {
+        if (noBtn)  { noBtn.style.background = '#ff444422'; noBtn.style.border = '2px solid #ff4444'; noBtn.style.color = '#ff4444'; }
+        if (yesBtn) { yesBtn.style.background = 'transparent'; yesBtn.style.border = '2px solid #00ff8844'; yesBtn.style.color = '#00ff8866'; }
+    }
+    // Recalculate preview with new side
+    initAnchorDogPrices();
+}
+
+// Wire up cross-market toggle handler (deferred until DOM ready)
+(function _initCrossMarketToggle() {
+    const el = document.getElementById('anchor-cross-market');
+    if (!el) { setTimeout(_initCrossMarketToggle, 500); return; }
+    if (el._crossHandlerBound) return;
+    el._crossHandlerBound = true;
+    el.addEventListener('change', function() {
+        const isOn = this.checked;
+        const slider = document.getElementById('anchor-cross-slider');
+        const knob = document.getElementById('anchor-cross-knob');
+        const label = document.getElementById('anchor-cross-label');
+        const detail = document.getElementById('anchor-cross-detail');
+        // Toggle visual state
+        if (slider) slider.style.background = isOn ? '#64ffda' : '#333';
+        if (knob) knob.style.transform = isOn ? 'translateX(22px)' : 'translateX(0)';
+        if (label) { label.textContent = isOn ? 'Cross Market' : 'Same Market'; label.style.color = isOn ? '#64ffda' : '#5a6484'; }
+        if (detail) detail.style.display = isOn ? '' : 'none';
+        if (isOn) {
+            const opposingTicker = _findOpposingMoneylineTicker(currentArbMarket?.ticker);
+            if (opposingTicker) {
+                document.getElementById('cross-ticker-a').textContent = currentArbMarket.ticker.split('-').pop();
+                document.getElementById('cross-ticker-b').textContent = opposingTicker.split('-').pop();
+                _anchorCrossMarketTicker = opposingTicker;
+            } else {
+                document.getElementById('cross-ticker-a').textContent = currentArbMarket?.ticker?.split('-').pop() || '?';
+                document.getElementById('cross-ticker-b').textContent = 'not found';
+                _anchorCrossMarketTicker = null;
+            }
+        } else {
+            _anchorCrossMarketTicker = null;
+        }
+        initAnchorDogPrices();
+    });
+})();
 
 function initAnchorDogPrices() {
     if (!currentArbMarket) return;
+
+    // Show/hide cross-market toggle based on moneyline detection
+    const crossRow = document.getElementById('anchor-cross-market-row');
+    if (crossRow) {
+        crossRow.style.display = _isMoneylineMarket(currentArbMarket.ticker) ? '' : 'none';
+    }
+
+    const isCrossMode = !!_anchorCrossMarketTicker && document.getElementById('anchor-cross-market')?.checked;
+
     const yesBid = getPrice(currentArbMarket, 'yes_bid') || 0;
     const noBid  = getPrice(currentArbMarket, 'no_bid') || 0;
     const yesAsk = getPrice(currentArbMarket, 'yes_ask') || 0;
     const noAsk  = getPrice(currentArbMarket, 'no_ask') || 0;
-    _anchorDogSide = noBid <= yesBid ? 'no' : 'yes';
-    _anchorFavSide = _anchorDogSide === 'yes' ? 'no' : 'yes';
+
+    if (isCrossMode) {
+        // Cross-market mode: dog_side = fav_side = user-chosen side
+        _anchorDogSide = _anchorCrossMarketSide;
+        _anchorFavSide = _anchorCrossMarketSide;
+    } else {
+        _anchorDogSide = noBid <= yesBid ? 'no' : 'yes';
+        _anchorFavSide = _anchorDogSide === 'yes' ? 'no' : 'yes';
+    }
     _anchorDogBid = _anchorDogSide === 'yes' ? yesBid : noBid;
-    _anchorFavBid = _anchorFavSide === 'yes' ? yesBid : noBid;
+    if (isCrossMode && _anchorCrossMarketTicker) {
+        // Look up opposing ticker's bid from allMarkets
+        const oppMkt = allMarkets.find(m => m.ticker === _anchorCrossMarketTicker);
+        if (oppMkt) {
+            _anchorFavBid = _anchorFavSide === 'yes'
+                ? (getPrice(oppMkt, 'yes_bid') || 0)
+                : (getPrice(oppMkt, 'no_bid') || 0);
+        } else {
+            _anchorFavBid = 0;
+        }
+    } else {
+        _anchorFavBid = _anchorFavSide === 'yes' ? yesBid : noBid;
+    }
     const dogAsk = _anchorDogSide === 'yes' ? yesAsk : noAsk;
 
     // Store raw prices for preview calculations
@@ -3361,12 +3485,56 @@ function initAnchorDogPrices() {
     const dogBidEl  = document.getElementById('anchor-auto-dog-bid');
     const favSideEl = document.getElementById('anchor-auto-fav-side');
     const favBidEl  = document.getElementById('anchor-auto-fav-bid');
-    if (dogSideEl) dogSideEl.textContent = _anchorDogSide.toUpperCase();
-    if (dogBidEl)  dogBidEl.innerHTML = `bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}${_anchorIsBrokenSpread ? ' <span style="color:#ff8800;">(broken)</span>' : ''} <span style="color:#ffaa00;">− ${anchorDepth}¢ depth = ${smartPrice}¢</span>`;
-    if (favSideEl) favSideEl.textContent = _anchorFavSide.toUpperCase();
-    const _fav_shave_preview = isAutoDepth ? (targetWidth <= 3 ? 0 : Math.max(0, targetWidth - anchorDepth)) : Math.max(0, targetWidth - anchorDepth);
-    const _fav_start = _fav_shave_preview > 0 ? Math.max(1, _anchorFavBid - _fav_shave_preview) : _anchorFavBid;
-    if (favBidEl)  favBidEl.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#00aaff;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
+    const sidesDisplay = document.getElementById('anchor-sides-display');
+
+    if (isCrossMode) {
+        // Cross-market: show both tickers with same side
+        const teamA = currentArbMarket.ticker.split('-').pop() || '?';
+        const teamB = _anchorCrossMarketTicker.split('-').pop() || '?';
+        const sideLabel = _anchorCrossMarketSide.toUpperCase();
+        if (sidesDisplay) {
+            sidesDisplay.innerHTML = `
+                <div style="background:#060a14;border:1px solid #64ffda44;border-radius:8px;padding:8px;text-align:center;">
+                    <div style="color:#64ffda;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">ANCHOR · ${teamA}</div>
+                    <div style="color:#64ffda;font-weight:800;font-size:18px;">${sideLabel}</div>
+                    <div style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''} <span style="color:#ffaa00;">− ${anchorDepth}¢ = ${smartPrice}¢</span></div>
+                </div>
+                <div style="color:#64ffda;font-size:14px;">+</div>
+                <div style="background:#060a14;border:1px solid #f7816644;border-radius:8px;padding:8px;text-align:center;">
+                    <div style="color:#f78166;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">HEDGE · ${teamB}</div>
+                    <div style="color:#f78166;font-weight:800;font-size:18px;">${sideLabel}</div>
+                    <div id="anchor-auto-fav-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorFavBid}¢</div>
+                </div>`;
+        }
+        // Update cross-detail combined cost display
+        const combinedEl = document.getElementById('cross-combined-cost');
+        if (combinedEl && _anchorDogBid > 0 && _anchorFavBid > 0) {
+            const combined = _anchorDogBid + _anchorFavBid;
+            const arbGap = 100 - combined;
+            combinedEl.innerHTML = `Combined: ${combined}¢ <span style="color:${arbGap > 0 ? '#00ff88' : '#ff4444'};">(${arbGap > 0 ? '+' : ''}${arbGap}¢ arb)</span>`;
+        }
+    } else {
+        // Normal same-market mode: restore standard display
+        if (sidesDisplay) {
+            sidesDisplay.innerHTML = `
+                <div style="background:#060a14;border:1px solid #ffaa0044;border-radius:8px;padding:8px;text-align:center;">
+                    <div style="color:#ffaa00;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">PHANTOM (ANCHOR)</div>
+                    <div id="anchor-auto-dog-side" style="color:#ffaa00;font-weight:800;font-size:18px;">${_anchorDogSide.toUpperCase()}</div>
+                    <div id="anchor-auto-dog-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}${_anchorIsBrokenSpread ? ' <span style="color:#ff8800;">(broken)</span>' : ''} <span style="color:#ffaa00;">− ${anchorDepth}¢ depth = ${smartPrice}¢</span></div>
+                </div>
+                <div style="color:#555;font-size:14px;">→</div>
+                <div style="background:#060a14;border:1px solid #00aaff44;border-radius:8px;padding:8px;text-align:center;">
+                    <div style="color:#00aaff;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">FAV (HEDGE)</div>
+                    <div id="anchor-auto-fav-side" style="color:#00aaff;font-weight:800;font-size:18px;">${_anchorFavSide.toUpperCase()}</div>
+                    <div id="anchor-auto-fav-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorFavBid}¢</div>
+                </div>`;
+        }
+        // Update fav bid detail
+        const _fav_shave_preview = isAutoDepth ? (targetWidth <= 3 ? 0 : Math.max(0, targetWidth - anchorDepth)) : Math.max(0, targetWidth - anchorDepth);
+        const _fav_start = _fav_shave_preview > 0 ? Math.max(1, _anchorFavBid - _fav_shave_preview) : _anchorFavBid;
+        const favBidElNew = document.getElementById('anchor-auto-fav-bid');
+        if (favBidElNew) favBidElNew.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#00aaff;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
+    }
     // Sync displays
     if (widthSlider) {
         const d = document.getElementById('anchor-width-display');
@@ -3572,46 +3740,81 @@ function updateAnchorPreview() {
         return;
     }
 
+    const isCrossMode = !!_anchorCrossMarketTicker && document.getElementById('anchor-cross-market')?.checked;
     const totalQty = _anchorRungs.reduce((s, r) => s + r.qty, 0);
     const avgPrice = Math.round(_anchorRungs.reduce((s, r) => s + r.price * r.qty, 0) / totalQty);
-    const favCeiling = 100 - avgPrice - targetWidth;
-    const favInitial = fav_shave > 0 ? Math.max(1, _anchorFavBid - fav_shave) : _anchorFavBid;
     const totalCost = _anchorRungs.reduce((s, r) => s + r.price * r.qty, 0);
-    const isInvalid = favCeiling < 1;
-    // Estimate walk-up room
-    const walkRoom = favCeiling - favInitial;
+    let html;
 
-    let html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;">
-        <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">${_anchorRungs.length > 1 ? 'Avg dog' : 'Dog anchor'}</div>
-            <div style="color:#ffaa00;font-weight:800;font-size:16px;">${avgPrice}¢</div>
-            <div style="color:#555;font-size:9px;">${totalQty}×${_anchorDogSide.toUpperCase()}</div>
-        </div>
-        <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Fav start</div>
-            <div style="color:#00aaff;font-weight:800;font-size:16px;">${isInvalid ? '—' : `${Math.min(favInitial, favCeiling)}¢`}</div>
-            <div style="color:#555;font-size:9px;">${fav_shave > 0 ? `bid-${fav_shave}¢` : 'at bid'}</div>
-        </div>
-        <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Fav ceiling</div>
-            <div style="color:${isInvalid ? '#ff4444' : '#00aaff'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `≤${favCeiling}¢`}</div>
-            <div style="color:#555;font-size:9px;">${walkRoom > 0 ? `${walkRoom}¢ walk room` : 'no room'}</div>
-        </div>
-        <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-            <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Min profit</div>
-            <div style="color:${isInvalid ? '#ff4444' : '#00ff88'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `+${targetWidth * totalQty}¢`}</div>
-            <div style="color:#555;font-size:9px;">$${(totalCost / 100).toFixed(2)} cost</div>
-        </div>
-    </div>`;
+    if (isCrossMode) {
+        // Cross-market preview: show anchor + hedge on different tickers
+        const teamA = currentArbMarket.ticker.split('-').pop() || '?';
+        const teamB = _anchorCrossMarketTicker.split('-').pop() || '?';
+        const sideLabel = _anchorCrossMarketSide.toUpperCase();
+        const hedgeBid = _anchorFavBid;
+        const combined = avgPrice + hedgeBid;
+        const arbGap = 100 - combined;
+        const isInvalid = arbGap < 1;
 
-    // Spread + pricing mode info
-    const spreadC = _anchorDogAsk > 0 ? (_anchorDogAsk - _anchorDogBid) : 0;
-    const spreadLabel = spreadC > 1
-        ? `<span style="color:#ff8800;">Wide spread ${spreadC}¢ — priced off ask</span>`
-        : (spreadC > 0 ? `<span style="color:#00ff88;">Tight spread ${spreadC}¢</span>` : '');
-    html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">
-        ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge on fill · walk-up to ceiling if slow
-    </div>`;
+        html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Anchor · ${teamA}</div>
+                <div style="color:#64ffda;font-weight:800;font-size:16px;">${sideLabel} @ ${avgPrice}¢</div>
+                <div style="color:#555;font-size:9px;">${totalQty} contracts</div>
+            </div>
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Hedge · ${teamB}</div>
+                <div style="color:#f78166;font-weight:800;font-size:16px;">${sideLabel} @ ${hedgeBid}¢</div>
+                <div style="color:#555;font-size:9px;">at bid</div>
+            </div>
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Combined</div>
+                <div style="color:${isInvalid ? '#ff4444' : '#00ff88'};font-weight:800;font-size:16px;">${combined}¢</div>
+                <div style="color:${arbGap > 0 ? '#00ff88' : '#ff4444'};font-size:9px;">${arbGap > 0 ? `${arbGap}¢ arb` : 'no arb'}</div>
+            </div>
+        </div>`;
+        html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">
+            Cross-market · ${teamA} ${sideLabel} + ${teamB} ${sideLabel} · Instant hedge on fill
+        </div>`;
+    } else {
+        // Normal same-market preview
+        const favCeiling = 100 - avgPrice - targetWidth;
+        const favInitial = fav_shave > 0 ? Math.max(1, _anchorFavBid - fav_shave) : _anchorFavBid;
+        const isInvalid = favCeiling < 1;
+        const walkRoom = favCeiling - favInitial;
+
+        html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;">
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">${_anchorRungs.length > 1 ? 'Avg dog' : 'Dog anchor'}</div>
+                <div style="color:#ffaa00;font-weight:800;font-size:16px;">${avgPrice}¢</div>
+                <div style="color:#555;font-size:9px;">${totalQty}×${_anchorDogSide.toUpperCase()}</div>
+            </div>
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Fav start</div>
+                <div style="color:#00aaff;font-weight:800;font-size:16px;">${isInvalid ? '—' : `${Math.min(favInitial, favCeiling)}¢`}</div>
+                <div style="color:#555;font-size:9px;">${fav_shave > 0 ? `bid-${fav_shave}¢` : 'at bid'}</div>
+            </div>
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Fav ceiling</div>
+                <div style="color:${isInvalid ? '#ff4444' : '#00aaff'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `≤${favCeiling}¢`}</div>
+                <div style="color:#555;font-size:9px;">${walkRoom > 0 ? `${walkRoom}¢ walk room` : 'no room'}</div>
+            </div>
+            <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Min profit</div>
+                <div style="color:${isInvalid ? '#ff4444' : '#00ff88'};font-weight:800;font-size:16px;">${isInvalid ? '—' : `+${targetWidth * totalQty}¢`}</div>
+                <div style="color:#555;font-size:9px;">$${(totalCost / 100).toFixed(2)} cost</div>
+            </div>
+        </div>`;
+
+        // Spread + pricing mode info
+        const spreadC = _anchorDogAsk > 0 ? (_anchorDogAsk - _anchorDogBid) : 0;
+        const spreadLabel = spreadC > 1
+            ? `<span style="color:#ff8800;">Wide spread ${spreadC}¢ — priced off ask</span>`
+            : (spreadC > 0 ? `<span style="color:#00ff88;">Tight spread ${spreadC}¢</span>` : '');
+        html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">
+            ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge on fill · walk-up to ceiling if slow
+        </div>`;
+    }
     previewEl.innerHTML = html;
 
     // Phantom width recommendation pills — show fill likelihood for each width
@@ -3644,13 +3847,18 @@ function updateAnchorPreview() {
     // Update deploy button text
     const btn = document.getElementById('anchor-deploy-btn');
     if (btn) {
+        const crossTag = isCrossMode ? ' (Cross)' : '';
         if (_anchorRungs.length > 1) {
-            btn.textContent = `👻 Deploy ${_anchorRungs.length}-Rung Phantom`;
-            btn.style.background = 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
-            btn.style.color = '#fff';
+            btn.textContent = `👻 Deploy ${_anchorRungs.length}-Rung Phantom${crossTag}`;
+            btn.style.background = isCrossMode
+                ? 'linear-gradient(135deg,#64ffda 0%,#00bfa5 100%)'
+                : 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
+            btn.style.color = isCrossMode ? '#000' : '#fff';
         } else {
-            btn.textContent = '👻 Deploy Phantom Bot';
-            btn.style.background = 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
+            btn.textContent = `👻 Deploy Phantom Bot${crossTag}`;
+            btn.style.background = isCrossMode
+                ? 'linear-gradient(135deg,#64ffda 0%,#00bfa5 100%)'
+                : 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
             btn.style.color = '#000';
         }
     }
@@ -3679,12 +3887,14 @@ async function deployAnchorBot() {
     const favCeiling = 100 - avgPrice - targetWidth;
     if (favCeiling < 1) { alert('Fav ceiling too low. Reduce rung prices or target width.'); return; }
 
+    const isCrossMode = !!_anchorCrossMarketTicker && document.getElementById('anchor-cross-market')?.checked;
     const isLadder = _anchorRungs.length > 1;
     const rungDetails = _anchorRungs.map((r, i) => `  Rung ${i + 1}: ${_anchorDogSide.toUpperCase()} @ ${r.price}¢ × ${r.qty}`).join('\n');
     const avgLine = isLadder ? `\nAvg dog price: ${avgPrice}¢` : '';
+    const crossLine = isCrossMode ? `\nCross-market: hedge on ${_anchorCrossMarketTicker}` : '';
 
     const repeatLine = repeatCount > 0 ? `\nRepeat: ${repeatCount}× (${repeatCount + 1} total runs)` : '\nRepeat: single shot';
-    if (!confirm(`${isLadder ? '👻 Deploy Phantom Ladder' : '👻 Deploy Phantom Bot'} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
+    if (!confirm(`${isLadder ? '👻 Deploy Phantom Ladder' : '👻 Deploy Phantom Bot'}${isCrossMode ? ' (Cross-Market)' : ''} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${crossLine}${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
         const endpoint = isLadder ? 'bot/ladder' : 'bot/anchor';
@@ -3709,6 +3919,12 @@ async function deployAnchorBot() {
                 anchor_depth: anchorDepth,
             };
 
+        // Add cross-market fields if active
+        if (isCrossMode && _anchorCrossMarketTicker) {
+            body.cross_market = true;
+            body.hedge_ticker = _anchorCrossMarketTicker;
+        }
+
         const resp = await fetch(`${API_BASE}/${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3717,8 +3933,8 @@ async function deployAnchorBot() {
         const data = await resp.json();
         if (data.success) {
             const msg = isLadder
-                ? `👻 Phantom deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢`
-                : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢`;
+                ? `👻 Phantom deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢${isCrossMode ? ' (cross-market)' : ''}`
+                : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢${isCrossMode ? ' (cross-market)' : ''}`;
             showNotification(msg);
             closeModal();
             loadBots();

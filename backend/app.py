@@ -3463,6 +3463,7 @@ def _execute_phantom_hedge(bot_id):
             return
 
         ticker = bot['ticker']
+        hedge_ticker = bot.get('hedge_ticker', ticker)
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
         qty = bot.get('quantity', 1)
@@ -3487,7 +3488,7 @@ def _execute_phantom_hedge(bot_id):
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom'})
         # SPEED CRITICAL — straight to API, no rate limiter
         fav_resp, actual_fav_price = create_order_maker(
-            ticker=ticker, side=fav_side, action='buy',
+            ticker=hedge_ticker, side=fav_side, action='buy',
             count=qty, price=hedge_price, priority=True,
             skip_rate_limit=True
         )
@@ -3570,6 +3571,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             return
 
         ticker = bot['ticker']
+        hedge_ticker = bot.get('hedge_ticker', ticker)
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
 
@@ -3687,7 +3689,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom_ladder'})
             print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
         fav_resp, actual_fav_price = create_order_maker(
-            ticker=ticker, side=fav_side, action='buy',
+            ticker=hedge_ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price, priority=True,
             skip_rate_limit=True
         )
@@ -3711,7 +3713,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             'combined': avg_price + actual_fav_price, 'hedge_qty': total_fill_qty,
             'path': 'ws_fast',
         })
-        _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
+        _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': hedge_ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
         # Track fill-to-hedge latency
         fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
         if fill_at:
@@ -3785,7 +3787,7 @@ def _execute_phantom_ladder_hedge(bot_id):
                     fav_side = bot.get('fav_side', 'yes')
                     amend_kwargs = {f'{fav_side}_price': amend_price}
                     api_rate_limiter.wait()
-                    kalshi_client.amend_order(fav_oid, ticker=ticker, side=fav_side, count=new_total_fill, **amend_kwargs)
+                    kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side, count=new_total_fill, **amend_kwargs)
                     bot['fav_price'] = amend_price
                     if fav_side == 'yes':
                         bot['yes_price'] = amend_price
@@ -7334,6 +7336,8 @@ def create_anchor_bot():
         hedge_timeout = int(data.get('hedge_timeout_s', 120))
         repeat_count  = int(data.get('repeat_count', 0))
         dog_side      = data.get('dog_side', '').lower()
+        cross_market  = data.get('cross_market', False)
+        hedge_ticker  = data.get('hedge_ticker', '').strip() or ticker
 
         if not ticker or dog_price < 1 or dog_price > 99:
             return jsonify({'error': 'Required: ticker, dog_price (1-99)'}), 400
@@ -7418,7 +7422,10 @@ def create_anchor_bot():
                   f'→ {smart_price}¢ (frontend sent {dog_price}¢)')
             dog_price = smart_price
 
-        fav_side = 'yes' if dog_side == 'no' else 'no'
+        if cross_market and hedge_ticker != ticker:
+            fav_side = dog_side  # same side, different ticker
+        else:
+            fav_side = 'yes' if dog_side == 'no' else 'no'
 
         # Place ONLY the dog order — maker, post_only
         dog_resp, actual_dog_price = create_order_maker(
@@ -7430,6 +7437,8 @@ def create_anchor_bot():
         # Subscribe WS
         if ws_manager.connected:
             ws_manager.add_ticker(ticker)
+            if hedge_ticker != ticker:
+                ws_manager.add_ticker(hedge_ticker)
 
         import uuid as _uuid
         bot_id = f"anchor_{ticker}_{dog_order_id[-8:]}"
@@ -7438,6 +7447,8 @@ def create_anchor_bot():
 
         active_bots[bot_id] = {
             'ticker':              ticker,
+            'hedge_ticker':        hedge_ticker,
+            'cross_market':        bool(cross_market),
             'bot_category':        'anchor_dog',
             'status':              'dog_anchor_posted',
             'dog_side':            dog_side,
@@ -7514,6 +7525,8 @@ def create_ladder_bot():
         bounce_threshold = int(data.get('bounce_threshold', 2))
         repeat_count = int(data.get('repeat_count', 0))
         dog_side = data.get('dog_side', '')
+        cross_market = data.get('cross_market', False)
+        hedge_ticker = data.get('hedge_ticker', '').strip() or ticker
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -7560,7 +7573,10 @@ def create_ladder_bot():
             yes_bid = _best_bid(ob, 'yes')
             no_bid = _best_bid(ob, 'no')
             dog_side = 'no' if no_bid <= yes_bid else 'yes'
-        fav_side = 'no' if dog_side == 'yes' else 'yes'
+        if cross_market and hedge_ticker != ticker:
+            fav_side = dog_side  # same side, different ticker
+        else:
+            fav_side = 'no' if dog_side == 'yes' else 'yes'
 
         current_dog_bid = _best_bid(ob, dog_side)
         current_dog_ask = _best_ask(ob, dog_side)
@@ -7618,12 +7634,16 @@ def create_ladder_bot():
         # Subscribe WS
         if ws_manager:
             ws_manager.add_ticker(ticker)
+            if hedge_ticker != ticker:
+                ws_manager.add_ticker(hedge_ticker)
 
         # Pre-calculate hedge prices + avg fill prices for every fill count
         _precalc_h, _precalc_a = _precalc_phantom_ladder_hedges(placed_rungs, target_width, dog_side)
 
         active_bots[bot_id] = {
             'ticker': ticker,
+            'hedge_ticker': hedge_ticker,
+            'cross_market': bool(cross_market),
             'bot_category': 'anchor_ladder',
             'status': 'ladder_posted',
             'dog_side': dog_side,
@@ -8570,6 +8590,7 @@ def _handle_phantom(bot_id, bot, actions):
     """Handle all states for an anchor-dog bot in the monitor loop."""
     now = time.time()
     ticker = bot['ticker']
+    hedge_ticker = bot.get('hedge_ticker', ticker)
     qty = bot.get('quantity', 1)
     dog_side = bot['dog_side']
     fav_side = bot['fav_side']
@@ -8593,6 +8614,14 @@ def _handle_phantom(bot_id, bot, actions):
             bot['live_no_bid'] = ws_p.get('no_bid', 0)
             bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
             bot['live_no_ask'] = ws_p.get('no_ask', 0)
+        # Cross-market: also cache hedge_ticker prices for fav walk
+        if hedge_ticker != ticker:
+            ws_p_hedge = ws_manager.get_price(hedge_ticker) if ws_manager else None
+            if ws_p_hedge:
+                bot['live_hedge_yes_bid'] = ws_p_hedge.get('yes_bid', 0)
+                bot['live_hedge_no_bid'] = ws_p_hedge.get('no_bid', 0)
+                bot['live_hedge_yes_ask'] = ws_p_hedge.get('yes_ask', 0)
+                bot['live_hedge_no_ask'] = ws_p_hedge.get('no_ask', 0)
     except Exception:
         pass
 
@@ -8637,10 +8666,10 @@ def _handle_phantom(bot_id, bot, actions):
             _audit('DOG_FILLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'dog_price': actual_dog_price, 'qty': qty})
             _audit_position_check(bot_id, ticker, dog_side, 'after_dog_fill')
 
-            # Get current fav bid from orderbook
+            # Get current fav bid from orderbook (hedge_ticker for cross-market)
             try:
                 api_read_limiter.wait()
-                ob = kalshi_client.get_market_orderbook(ticker)
+                ob = kalshi_client.get_market_orderbook(hedge_ticker)
                 fav_bid = _best_bid(ob, fav_side)
             except Exception:
                 fav_bid = 0
@@ -8694,7 +8723,7 @@ def _handle_phantom(bot_id, bot, actions):
             # Post the fav hedge at target-width-capped price (maker)
             try:
                 fav_resp, actual_fav_price = create_order_maker(
-                    ticker=ticker, side=fav_side, action='buy',
+                    ticker=hedge_ticker, side=fav_side, action='buy',
                     count=qty, price=hedge_price
                 )
                 fav_order_id = fav_resp['order']['order_id']
@@ -8938,10 +8967,10 @@ def _handle_phantom(bot_id, bot, actions):
             # Non-fatal — fall through to normal retry
             pass
 
-        # Retry posting the fav
+        # Retry posting the fav (hedge_ticker for cross-market)
         try:
             api_read_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(ticker)
+            ob = kalshi_client.get_market_orderbook(hedge_ticker)
             fav_bid = _best_bid(ob, fav_side)
         except Exception:
             fav_bid = 0
@@ -8983,7 +9012,7 @@ def _handle_phantom(bot_id, bot, actions):
 
         try:
             fav_resp, actual_fav_price = create_order_maker(
-                ticker=ticker, side=fav_side, action='buy',
+                ticker=hedge_ticker, side=fav_side, action='buy',
                 count=qty, price=hedge_price
             )
             fav_order_id = fav_resp['order']['order_id']
@@ -9325,10 +9354,10 @@ def _handle_phantom(bot_id, bot, actions):
         if current_fav_price <= 0:
             return
 
-        # Fetch current bid + ask
+        # Fetch current bid + ask (hedge_ticker for cross-market fav)
         try:
             api_read_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(ticker)
+            ob = kalshi_client.get_market_orderbook(hedge_ticker)
             current_fav_bid = _best_bid(ob, fav_side)
             current_fav_ask = _best_ask(ob, fav_side)
         except Exception:
@@ -9440,7 +9469,7 @@ def _handle_phantom(bot_id, bot, actions):
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
                 kalshi_client.amend_order(
-                    fav_order_id, ticker=ticker, side=fav_side,
+                    fav_order_id, ticker=hedge_ticker, side=fav_side,
                     count=qty, **amend_kwargs
                 )
                 walk_count = bot.get('fav_walk_count', 0) + 1
@@ -9499,7 +9528,12 @@ def _handle_phantom(bot_id, bot, actions):
                 return
             # Smart pricing first — need new_dog_price for hedge fill check
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
-            _current_fav_bid = _best_bid(ob, fav_side)
+            if hedge_ticker != ticker:
+                api_read_limiter.wait()
+                _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
+            else:
+                _fav_ob = ob
+            _current_fav_bid = _best_bid(_fav_ob, fav_side)
             anchor_depth = bot.get('anchor_depth', 5)
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
@@ -9579,6 +9613,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
     """Handle all states for an anchor-ladder bot in the monitor loop."""
     now = time.time()
     ticker = bot['ticker']
+    hedge_ticker = bot.get('hedge_ticker', ticker)
     dog_side = bot['dog_side']
     fav_side = bot['fav_side']
     status = bot['status']
@@ -9591,6 +9626,14 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot['live_no_bid'] = ws_p_lad.get('no_bid', 0)
             bot['live_yes_ask'] = ws_p_lad.get('yes_ask', 0)
             bot['live_no_ask'] = ws_p_lad.get('no_ask', 0)
+        # Cross-market: also cache hedge_ticker prices for fav walk
+        if hedge_ticker != ticker:
+            ws_p_hedge_lad = ws_manager.get_price(hedge_ticker) if ws_manager else None
+            if ws_p_hedge_lad:
+                bot['live_hedge_yes_bid'] = ws_p_hedge_lad.get('yes_bid', 0)
+                bot['live_hedge_no_bid'] = ws_p_hedge_lad.get('no_bid', 0)
+                bot['live_hedge_yes_ask'] = ws_p_hedge_lad.get('yes_ask', 0)
+                bot['live_hedge_no_ask'] = ws_p_hedge_lad.get('no_ask', 0)
     except Exception:
         pass
 
@@ -9714,7 +9757,12 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 return
             # Hedge fill drift guard: at this bot's target width, would the hedge still fill?
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
-            _current_fav_bid = _best_bid(ob, fav_side)
+            if hedge_ticker != ticker:
+                api_read_limiter.wait()
+                _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
+            else:
+                _fav_ob = ob
+            _current_fav_bid = _best_bid(_fav_ob, fav_side)
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             _avg_dog_est = max(1, anchor_base - anchor_depth)  # estimate new avg dog price
@@ -10169,7 +10217,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     try:
                         amend_kw = {f'{fav_side}_price': amend_p}
                         api_rate_limiter.wait()
-                        kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=verified_total, **amend_kw)
+                        kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=verified_total, **amend_kw)
                         bot['fav_price'] = amend_p
                         print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} qty {hedge_qty-verified_total+verified_total}→{verified_total} avg={new_avg}¢ hedge@{amend_p}¢')
                         bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND', bot_id, {
@@ -10412,7 +10460,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         try:
             api_read_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(ticker)
+            ob = kalshi_client.get_market_orderbook(hedge_ticker)
             current_fav_bid = _best_bid(ob, fav_side)
             current_fav_ask = _best_ask(ob, fav_side)
         except Exception:
@@ -10492,7 +10540,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             try:
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(fav_order_id, ticker=ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+                kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
                 walk_count = bot.get('fav_walk_count', 0) + 1
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '

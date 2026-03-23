@@ -2514,6 +2514,18 @@ def load_state():
                     if k in saved:
                         session_pnl[k] = saved[k]
             print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history, {len(_opening_lines)} opening lines, resets={pnl_resets}')
+            # Clear transient runtime flags that should never persist across restarts.
+            # _completion_in_progress is set during the multi-phase apex completion flow
+            # and cleared in a finally block — but if the server restarts mid-completion,
+            # the flag stays True in data.json and permanently blocks re-entry.
+            _transient_cleared = 0
+            for _bid, _bot in active_bots.items():
+                if _bot.get('_completion_in_progress'):
+                    _bot['_completion_in_progress'] = False
+                    _transient_cleared += 1
+                    print(f'🔧 STARTUP FIX: {_bid} cleared stuck _completion_in_progress flag')
+            if _transient_cleared:
+                print(f'🔧 Cleared {_transient_cleared} stuck transient flags on startup')
             # Write a backup on startup so we can always recover
             if trade_history:
                 try:

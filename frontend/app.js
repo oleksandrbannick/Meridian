@@ -5652,11 +5652,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#8892a6;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = ${combined}¢ · ${unfilledSideLabel} bid ${unfilledBid}¢</span>
                 </div>
             </div>`;
-        } else if (bot._max_hedge > 0 && currentHedgePrice >= bot._max_hedge && !atCeiling && currentHedgePrice > 0) {
+        } else if (bot._max_hedge > 0 && currentHedgePrice >= bot._max_hedge && currentHedgePrice > 0) {
             // ── AT CAP — hedge at profitable walk cap, not walking further ──
+            // Catches BOTH atCeiling (combined>=98) and sub-ceiling cap (combined=94)
             const capCombined = bot._profitable_cap || combined;
             const snapCeil = gameUrgency === 'late' || gameUrgency === 'critical' ? 97 : 96;
             const distToSnap = snapCeil - combined;
+            const capColor = atCeiling ? '#ff4444' : '#ffaa00';
+            const capLabel = atCeiling ? 'AT CEILING' : 'AT CAP';
             const urgencyNote = gameUrgency === 'normal' ? 'Cap lifts in late game'
                 : gameUrgency === 'halftime' ? 'Cap lifts after halftime'
                 : gameUrgency === 'late' ? 'Late game — cap at hard ceiling'
@@ -5669,27 +5672,26 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
                 : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
                 : 'Exit: sell-back if >96¢ · 5min timeout';
-            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
+            walkInfo = `<div style="background:${capColor}11;border:1px solid ${capColor}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${capColor};margin-top:6px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
-                    <span style="font-weight:700;">⏸ <strong>AT CAP ${capCombined}¢</strong> — ${unfilledSideLabel} hedge paused</span>
-                    <span style="color:#888;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢</span>
+                    <span style="font-weight:700;">⏸ <strong>${capLabel} ${capCombined}¢</strong> — ${unfilledSideLabel} hedge paused @ ${currentHedgePrice}¢</span>
+                    <span style="color:#888;">anchor ${avgFilled}¢ · step #${walkCount}</span>
                     ${urgencyBadge}
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                    <span>${urgencyNote} · ${exitNote} · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
-                    <span style="color:#ffaa00;font-size:8px;">${exitRule}</span>
+                    <span>${urgencyNote} · ${exitNote} · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢ · filled ${fillAgeStr} ago</span>
+                    <span style="color:${capColor};font-size:8px;font-weight:700;">${exitRule}</span>
                 </div>
             </div>`;
         } else if (walkCount > 0 && currentHedgePrice > 0) {
             const atBid = currentHedgePrice >= unfilledBid;
-            const atCap = bot._max_hedge > 0 && currentHedgePrice >= bot._max_hedge;
             const walkStartPrice = bot.walk_start_price || currentHedgePrice;
             const prevPrice = walkCount > 1 ? currentHedgePrice - 1 : walkStartPrice;
-            const nextPrice = atCap ? currentHedgePrice : atBid ? currentHedgePrice : currentHedgePrice + 1;
+            const nextPrice = atBid ? currentHedgePrice : currentHedgePrice + 1;
             const walkPct = Math.min(100, ((walkInterval - nextWalkIn) / walkInterval) * 100);
-            const statusIcon = atCeiling ? '🔴' : atCap ? '⏸' : atBid ? '🎯' : '📈';
-            const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atCap ? 'AT CAP' : atBid ? 'AT BID' : 'WALKING';
-            const statusCol = atCeiling ? '#ff4444' : atCap ? '#ffaa00' : atBid ? '#00ff88' : '#00aaff';
+            const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '📈';
+            const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atBid ? 'AT BID' : 'WALKING';
+            const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
             // Exit rules line
             const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
                 : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
@@ -5701,8 +5703,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#666;font-size:9px;">start ${walkStartPrice}¢</span>
                     <span style="color:#888;">prev ${prevPrice}¢ →</span>
                     <span style="color:#00ff88;font-weight:700;font-size:12px;">${currentHedgePrice}¢</span>
-                    ${atCap ? '' : `<span style="color:#888;">→ next ${nextPrice}¢</span>`}
-                    ${atCap ? '' : `<span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
+                    <span style="color:#888;">→ next ${nextPrice}¢</span>
+                    <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
                       <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
                         <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
                         <circle cx="10" cy="10" r="8" fill="none" stroke="${statusCol}" stroke-width="2"
@@ -5710,7 +5712,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                           stroke-linecap="round"/>
                       </svg>
                       <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${nextWalkIn}</span>
-                    </span>`}
+                    </span>
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                     <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>

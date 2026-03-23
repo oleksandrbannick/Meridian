@@ -9751,10 +9751,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             except Exception:
                 current_dog_bid = 0
 
-        # Dead market guard: bid at 1¢ = market is settled/dead, cancel all rungs
-        if current_dog_bid > 0 and current_dog_bid <= 1:
-            print(f'🛑 PHANTOM LADDER DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ — cancelling all rungs')
-            bot_log('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+        # Dead market guard: bid at 1¢ OR any rung price at 1¢ = market is dead, cancel all
+        _any_rung_at_floor = any(
+            r.get('price', 99) <= 1 and r.get('fill_qty', 0) < r.get('qty', 1) and not r.get('cancelled')
+            for r in bot.get('rungs', [])
+        )
+        if (current_dog_bid > 0 and current_dog_bid <= 1) or _any_rung_at_floor:
+            _reason = f'rung at 1¢' if _any_rung_at_floor else f'bid at {current_dog_bid}¢'
+            print(f'🛑 PHANTOM LADDER DEAD MARKET: {bot_id} {_reason} — cancelling all rungs')
+            bot_log('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'reason': _reason})
             for rung in bot.get('rungs', []):
                 oid = rung.get('order_id')
                 if oid and rung.get('fill_qty', 0) < rung.get('qty', 1):

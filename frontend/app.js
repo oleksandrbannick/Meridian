@@ -6599,10 +6599,11 @@ async function loadBots() {
         const middleList = document.getElementById('middle-bots-list');
         const dogList    = document.getElementById('dog-bots-list');
 
-        // Split into arb, middle, and dog bots
+        // Split into arb, middle, dog, and awaiting-settlement bots
+        const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
-            return s !== 'completed' && s !== 'stopped';
+            return s !== 'completed' && s !== 'stopped' && s !== 'awaiting_settlement';
         });
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');
@@ -6764,6 +6765,59 @@ async function loadBots() {
                         _renderDogBotCard(bots[botId], botId, dogList, gameScores);
                     }
                 });
+            }
+        }
+
+        // Render awaiting settlement section (visible on all tabs)
+        const awaitList = document.getElementById('awaiting-settlement-list');
+        if (awaitList) {
+            if (awaitingBotIds.length === 0) {
+                awaitList.innerHTML = '';
+                awaitList.style.display = 'none';
+            } else {
+                awaitList.style.display = '';
+                const nowSec = Date.now() / 1000;
+                const _collapsed = awaitList.dataset.collapsed === 'true';
+                let awHtml = `<div onclick="(function(el){el.parentElement.parentElement.dataset.collapsed=el.parentElement.parentElement.dataset.collapsed==='true'?'false':'true';el.parentElement.parentElement.querySelector('.await-body').style.display=el.parentElement.parentElement.dataset.collapsed==='true'?'none':'';el.querySelector('.await-arrow').textContent=el.parentElement.parentElement.dataset.collapsed==='true'?'▸':'▾';})(this)" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0d1117;border-left:3px solid #818cf8;border-radius:6px;cursor:pointer;margin-bottom:6px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span class="await-arrow" style="color:#818cf8;font-size:10px;">${_collapsed ? '▸' : '▾'}</span>
+                        <span style="color:#818cf8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Awaiting Settlement (${awaitingBotIds.length})</span>
+                    </div>
+                    <span style="color:#555;font-size:10px;">held until market settles</span>
+                </div>`;
+                awHtml += `<div class="await-body" style="${_collapsed ? 'display:none;' : ''}display:flex;flex-direction:column;gap:6px;">`;
+                awaitingBotIds.forEach(botId => {
+                    const bot = bots[botId];
+                    const t = bot.ticker || '';
+                    const ht = bot.hedge_ticker || '';
+                    const tShort = t.split('-').pop();
+                    const htShort = ht.split('-').pop();
+                    const pnl = bot.net_pnl_cents != null ? bot.net_pnl_cents : 0;
+                    const pnlColor = pnl >= 0 ? '#00ff88' : '#ff4444';
+                    const waitMin = bot.awaiting_since ? Math.round((nowSec - bot.awaiting_since) / 60) : 0;
+                    const waitStr = waitMin >= 60 ? `${Math.floor(waitMin/60)}h ${waitMin%60}m` : `${waitMin}m`;
+                    const qty = bot.hedge_qty || bot.fav_fill_qty || bot.total_dog_fill_qty || '?';
+                    const dogSide = (bot.dog_side || '').toUpperCase();
+                    const favSide = (bot.fav_side || '').toUpperCase();
+                    const gameParts = t.split('-');
+                    const gameName = gameParts.length >= 2 ? gameParts[1] : t;
+                    const sportIcon = t.includes('ATP') || t.includes('WTA') ? '🎾' : t.includes('NBA') ? '🏀' : t.includes('NHL') ? '🏒' : t.includes('MLB') ? '⚾' : t.includes('NCAA') ? '🏀' : '📊';
+                    awHtml += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
+                        <div style="display:flex;flex-direction:column;gap:3px;">
+                            <div style="font-size:12px;font-weight:700;color:#c8d0e0;">${sportIcon} ${tShort} / ${htShort}</div>
+                            <div style="font-size:10px;color:#556;">${qty}x · ${dogSide} ${tShort} + ${favSide} ${htShort}</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:16px;">
+                            <div style="text-align:right;">
+                                <div style="font-size:13px;font-weight:800;color:${pnlColor};">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
+                                <div style="font-size:9px;color:#556;">waiting ${waitStr}</div>
+                            </div>
+                            <div style="width:8px;height:8px;border-radius:50%;background:#818cf8;box-shadow:0 0 6px #818cf866;"></div>
+                        </div>
+                    </div>`;
+                });
+                awHtml += '</div>';
+                awaitList.innerHTML = awHtml;
             }
         }
 

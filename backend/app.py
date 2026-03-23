@@ -9637,11 +9637,35 @@ def _handle_phantom_ladder(bot_id, bot, actions):
     except Exception:
         pass
 
-    # ── STATE: awaiting_settlement — user cancelled but positions remain ──
+    # ── STATE: awaiting_settlement — cross-market arb complete, holding until settlement ──
     if status == 'awaiting_settlement':
-        # Settlement guard below will handle market close detection
-        # If market is still active, just wait
-        pass
+        # Check positions every 60s — when both clear, mark completed
+        if now - bot.get('_last_settlement_check', 0) < 60:
+            return
+        bot['_last_settlement_check'] = now
+        _hedge_t = bot.get('hedge_ticker', ticker)
+        try:
+            api_read_limiter.wait()
+            _pos1 = kalshi_client.get_positions(ticker=ticker)
+            _p1_list = _pos1.get('market_positions', _pos1.get('positions', []))
+            _pos1_qty = sum(abs(_parse_position_qty(p)) for p in _p1_list if p.get('ticker') == ticker)
+
+            api_read_limiter.wait()
+            _pos2 = kalshi_client.get_positions(ticker=_hedge_t)
+            _p2_list = _pos2.get('market_positions', _pos2.get('positions', []))
+            _pos2_qty = sum(abs(_parse_position_qty(p)) for p in _p2_list if p.get('ticker') == _hedge_t)
+
+            if _pos1_qty == 0 and _pos2_qty == 0:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                print(f'✅ SETTLED: {bot_id} both positions cleared ({ticker} + {_hedge_t})')
+                bot_log('PHANTOM_CROSS_MARKET_SETTLED', bot_id, {
+                    'ticker': ticker, 'hedge_ticker': _hedge_t,
+                })
+                save_state()
+        except Exception as _se:
+            print(f'⚠ awaiting_settlement check {bot_id}: {_se}')
+        return
 
     # ── Settlement guard: if market is closed/settled, stop the bot (check every 30s) ──
     _last_settle_check = bot.get('_last_settle_check', 0)
@@ -10390,9 +10414,19 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 _audit('LADDER_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_ladder_repeat')
             else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done')
+                _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                if _is_cross:
+                    bot['status'] = 'awaiting_settlement'
+                    bot['awaiting_since'] = now
+                    print(f'⏳ PHANTOM AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot["hedge_ticker"]}')
+                    bot_log('PHANTOM_LADDER_AWAITING_SETTLEMENT', bot_id, {
+                        'ticker': ticker, 'hedge_ticker': bot['hedge_ticker'],
+                        'qty': hedge_qty, 'pnl': net_pnl,
+                    })
+                else:
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done')
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'profit_cents': net_pnl})
             return
@@ -12117,7 +12151,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back', 'awaiting_settlement')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):

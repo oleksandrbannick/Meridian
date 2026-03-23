@@ -10520,7 +10520,14 @@ def _handle_apex(bot_id, bot, actions):
     if status == 'apex_selling_back':
         # ── GUARD: Check if hedge actually filled while we were selling back ──
         # If all hedges filled, the arb completed — cancel sell-back and complete
-        _hedge_fill_count = bot.get('_hedge_fill_count', 0)
+        # Check multiple fill sources since _hedge_fill_count may be stale in sell-back state
+        _filled_side = bot.get('first_fill_side', 'yes')
+        _hedge_side = 'no' if _filled_side == 'yes' else 'yes'
+        _hedge_fill_count = max(
+            bot.get('_hedge_fill_count', 0),
+            bot.get(f'filled_{_hedge_side}_qty', 0),
+            sum(r.get(f'{_hedge_side}_fill_qty', 0) for r in bot.get('rungs', []))
+        )
         _hedge_qty = bot.get('hedge_qty', 1)
         if _hedge_fill_count >= _hedge_qty:
             print(f'✅ APEX SELLBACK ABORT: {bot_id} hedge fully filled ({_hedge_fill_count}/{_hedge_qty}) — completing arb instead')
@@ -11485,7 +11492,7 @@ def _handle_apex(bot_id, bot, actions):
                             bot['_bid_gap'] = _bid_gap
                             bot['_drift_ref'] = 'ask' if _drift_is_gapped else 'bid'
                             bot['_drift_dir'] = 'above' if _gap_above > _gap_below else 'below'
-                            _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 0
+                            _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 15
                             if (_bid_drift_threshold > 0 and _bid_gap >= _bid_drift_threshold
                                     and unfilled_bid > 0 and not bot.get('_trade_recorded')
                                     and not bot.get('_apex_sellback_attempted')):

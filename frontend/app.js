@@ -5674,15 +5674,36 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 : 'Exit: sell-back if >96¢ · 5min timeout';
             const bidGap = bot._bid_gap || (currentHedgePrice - unfilledBid);
             const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ Bid ${bidGap}¢ below hedge — ${gameUrgency === 'critical' ? 'emergency exit at 5¢ gap' : gameUrgency === 'late' ? 'emergency exit at 10¢ gap' : 'watching'}</div>` : '';
+            // Game phase badge with exit timing
+            const phaseBadge = gameUrgency === 'critical'
+                ? '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL</span>'
+                : gameUrgency === 'late'
+                ? '<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE GAME</span>'
+                : gameUrgency === 'halftime'
+                ? '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALFTIME</span>'
+                : '<span style="background:#33445533;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● NORMAL</span>';
+            // Exit timing explanation per phase
+            const exitTiming = gameUrgency === 'critical'
+                ? '🔴 Sells back NOW if combined >97¢ or bid drifts 5¢+ · crosses to taker in 30s'
+                : gameUrgency === 'late'
+                ? '🟠 Sells back if combined >97¢ or bid drifts 10¢+ · 5min timeout then taker cross'
+                : gameUrgency === 'halftime'
+                ? '🟣 Walking paused until game resumes · no sell-back during halftime'
+                : '🟢 Sells back if combined >96¢ · 5min timeout then taker cross · bid drift exit at 15¢+';
             walkInfo = `<div style="background:${capColor}11;border:1px solid ${capColor}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${capColor};margin-top:6px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
-                    <span style="font-weight:700;">⏸ <strong>${capLabel} ${capCombined}¢</strong> — ${unfilledSideLabel} hedge paused @ ${currentHedgePrice}¢</span>
-                    <span style="color:#888;">anchor ${avgFilled}¢ · step #${walkCount}</span>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                    <span style="font-weight:700;">⏸ <strong>${capLabel} ${capCombined}¢</strong></span>
+                    ${phaseBadge}
+                    <span style="color:#888;font-size:9px;">filled ${fillAgeStr} ago · step #${walkCount}</span>
                 </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                    <span>${urgencyNote} · ${exitNote} · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢ · filled ${fillAgeStr} ago</span>
-                    <span style="color:${capColor};font-size:8px;font-weight:700;">${exitRule}</span>
+                <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:3px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
+                        <span style="color:#fff;">${unfilledSideLabel} hedge @ ${currentHedgePrice}¢</span>
+                        <span style="color:#8892a6;">anchor ${avgFilled}¢ · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
+                    </div>
+                    <div style="color:#8892a6;font-size:9px;margin-top:2px;">${exitNote}</div>
                 </div>
+                <div style="color:#8892a6;font-size:9px;">${exitTiming}</div>
                 ${bidGapWarn}
             </div>`;
         } else if (walkCount > 0 && currentHedgePrice > 0) {
@@ -5974,38 +5995,61 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
             </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div style="${legStyle(legAInRange, bot.leg_a_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">NO${hasLiveScore ? (legAInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
-                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_b_name||'Opp'} +${bot.spread_a||'?'}</div>
-                <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${bot.team_a_name||'?'} wins by ${bot.spread_a||'?'} · ${bot.ticker_a||'?'}</div>
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:4px;">
-                    <span style="color:#8892a6;">Limit: <strong style="color:#aa66ff;">${targetA || '?'}¢</strong></span>
-                    ${liveNoABid ? `<span style="color:#555;font-size:10px;">Bid <strong style="color:#fff;">${liveNoABid}¢</strong> · Ask <strong style="color:#fff;">${liveNoAAsk}¢</strong></span>` : ''}
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                        <div style="width:${qty > 0 ? Math.round((legAFillQty / qty) * 100) : 0}%;height:100%;background:${bot.leg_a_filled?'#00ff88':(legAFillQty>0?'#ffaa00':'#333')};border-radius:3px;"></div>
+        ${(() => {
+            // Swap legs to match scoreboard order: away team on left, home team on right
+            // Ticker game segment: MINBOS → first code = away (MIN), second = home (BOS)
+            // Leg A shows team_b getting points (left), Leg B shows team_a getting points (right)
+            // If team_a is the away team, we need to swap so team_a's card (Leg B) is on the LEFT
+            const _tParts = (bot.ticker_a || '').split('-');
+            const _gameSeg = _tParts.length >= 2 ? _tParts[1].replace(/^\d{2}[A-Z]{3}\d{2}/, '') : '';
+            const _tACode = _tParts.length >= 3 ? (_tParts[2].match(/^([A-Z]+)/) || [])[1] || '' : '';
+            const _teamAIsAway = _gameSeg && _tACode && _gameSeg.startsWith(_tACode);
+            // If team_a is away, swap: show Leg B (team_a getting pts) on left, Leg A on right
+            const swapped = _teamAIsAway;
+            // Build leg data arrays for clean rendering
+            const L = swapped ? {
+                inRange: legBInRange, filled: bot.leg_b_filled, teamPts: bot.team_a_name||'Opp',
+                spread: bot.spread_b||'?', teamNo: bot.team_b_name||'?', ticker: bot.ticker_b||'?',
+                target: targetB||'?', bid: liveNoBBid, ask: liveNoBAsk,
+                fillQty: legBFillQty, fillPrice: legBFill
+            } : {
+                inRange: legAInRange, filled: bot.leg_a_filled, teamPts: bot.team_b_name||'Opp',
+                spread: bot.spread_a||'?', teamNo: bot.team_a_name||'?', ticker: bot.ticker_a||'?',
+                target: targetA||'?', bid: liveNoABid, ask: liveNoAAsk,
+                fillQty: legAFillQty, fillPrice: legAFill
+            };
+            const R = swapped ? {
+                inRange: legAInRange, filled: bot.leg_a_filled, teamPts: bot.team_b_name||'Opp',
+                spread: bot.spread_a||'?', teamNo: bot.team_a_name||'?', ticker: bot.ticker_a||'?',
+                target: targetA||'?', bid: liveNoABid, ask: liveNoAAsk,
+                fillQty: legAFillQty, fillPrice: legAFill
+            } : {
+                inRange: legBInRange, filled: bot.leg_b_filled, teamPts: bot.team_a_name||'Opp',
+                spread: bot.spread_b||'?', teamNo: bot.team_b_name||'?', ticker: bot.ticker_b||'?',
+                target: targetB||'?', bid: liveNoBBid, ask: liveNoBAsk,
+                fillQty: legBFillQty, fillPrice: legBFill
+            };
+            function renderLeg(d) {
+                const winLabel = hasLiveScore ? (d.inRange ? ' ✓ WINNING' : ' ✗ NOT YET') : '';
+                const winGlow = hasLiveScore && d.inRange ? 'border:2px solid #00ff8888;box-shadow:0 0 12px #00ff8833;' : '';
+                return `<div style="${legStyle(d.inRange, d.filled)}${winGlow}">
+                    <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">NO${winLabel}</div>
+                    <div style="color:#fff;font-size:11px;font-weight:600;">${d.teamPts} +${d.spread}</div>
+                    <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${d.teamNo} wins by ${d.spread} · ${d.ticker}</div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:4px;">
+                        <span style="color:#8892a6;">Limit: <strong style="color:#aa66ff;">${d.target}¢</strong></span>
+                        ${d.bid ? `<span style="color:#555;font-size:10px;">Bid <strong style="color:#fff;">${d.bid}¢</strong> · Ask <strong style="color:#fff;">${d.ask}¢</strong></span>` : ''}
                     </div>
-                    <span style="color:${bot.leg_a_filled?'#00ff88':(legAFillQty>0?'#ffaa00':'#8892a6')};font-weight:700;font-size:10px;">${legAFillQty}/${qty}${bot.leg_a_filled?' ✓':''}</span>
-                </div>
-            </div>
-            <div style="${legStyle(legBInRange, bot.leg_b_filled)}">
-                <div style="color:#aa66ff;font-size:9px;font-weight:700;margin-bottom:4px;">NO${hasLiveScore ? (legBInRange?' ✓ WINNING':' ✗ NOT YET') : ''}</div>
-                <div style="color:#fff;font-size:11px;font-weight:600;">${bot.team_a_name||'Opp'} +${bot.spread_b||'?'}</div>
-                <div style="color:#555;font-size:9px;margin-bottom:4px;">NO: ${bot.team_b_name||'?'} wins by ${bot.spread_b||'?'} · ${bot.ticker_b||'?'}</div>
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:4px;">
-                    <span style="color:#8892a6;">Limit: <strong style="color:#aa66ff;">${targetB || '?'}¢</strong></span>
-                    ${liveNoBBid ? `<span style="color:#555;font-size:10px;">Bid <strong style="color:#fff;">${liveNoBBid}¢</strong> · Ask <strong style="color:#fff;">${liveNoBAsk}¢</strong></span>` : ''}
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                        <div style="width:${qty > 0 ? Math.round((legBFillQty / qty) * 100) : 0}%;height:100%;background:${bot.leg_b_filled?'#00ff88':(legBFillQty>0?'#ffaa00':'#333')};border-radius:3px;"></div>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
+                            <div style="width:${qty > 0 ? Math.round((d.fillQty / qty) * 100) : 0}%;height:100%;background:${d.filled?'#00ff88':(d.fillQty>0?'#ffaa00':'#333')};border-radius:3px;"></div>
+                        </div>
+                        <span style="color:${d.filled?'#00ff88':(d.fillQty>0?'#ffaa00':'#8892a6')};font-weight:700;font-size:10px;">${d.fillQty}/${qty}${d.filled?' ✓':''}</span>
                     </div>
-                    <span style="color:${bot.leg_b_filled?'#00ff88':(legBFillQty>0?'#ffaa00':'#8892a6')};font-weight:700;font-size:10px;">${legBFillQty}/${qty}${bot.leg_b_filled?' ✓':''}</span>
-                </div>
-            </div>
-        </div>
+                </div>`;
+            }
+            return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">${renderLeg(L)}${renderLeg(R)}</div>`;
+        })()}
         <div style="display:flex;gap:16px;font-size:10px;color:#555;padding-top:4px;border-top:1px solid #1e2740;flex-wrap:wrap;">
             ${targetA && targetB ? (() => {
                 const arbWidth = 100 - targetA - targetB;

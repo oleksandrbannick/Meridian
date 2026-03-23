@@ -3324,7 +3324,7 @@ let _anchorFavSide = '';
 let _anchorIsBrokenSpread = false;
 let _anchorRungs = [];    // [{price, qty, offset}] — offset = distance below anchor base
 let _anchorAutoPrice = true;  // auto-adjust rung prices to market
-let _anchorAutoQty = false;   // auto-scale qty: rung 1=1x, rung 2=2x, rung 3=3x
+let _anchorAutoQty = true;   // auto-scale qty: rung 1=1x, rung 2=2x, rung 3=3x (default ON)
 let _anchorRungSpacing = 2;   // spacing between rungs in cents (1 or 2)
 
 function initAnchorDogPrices() {

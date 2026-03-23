@@ -11362,15 +11362,20 @@ def _handle_apex(bot_id, bot, actions):
                                       f'(above profitable cap, combined would be {anchor_price_for_ceiling + new_price}¢)')
 
                             # ── PRIORITY -0.5: Bid-drift emergency exit ──
-                            # If market has moved far from our hedge, order won't fill — exit before game ends
-                            # Gapped markets: measure from ask (that's where sellers are)
-                            # Tight markets: measure from bid
+                            # If market has moved far from our hedge in EITHER direction, order won't fill
+                            # Case 1: our price ABOVE market (we walked too high, bid dropped)
+                            # Case 2: market ABOVE us (bid moved up, we're capped and left behind)
                             _cur_ask_drift = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1
                             _drift_spread = _cur_ask_drift - unfilled_bid if unfilled_bid > 0 else 1
                             _drift_is_gapped = _drift_spread > 2
-                            _bid_gap = (current_price - _cur_ask_drift if _drift_is_gapped else current_price - unfilled_bid) if unfilled_bid > 0 else 0
+                            # Gap above: our price is above market (use ask in gapped, bid in tight)
+                            _gap_above = (current_price - _cur_ask_drift if _drift_is_gapped else current_price - unfilled_bid) if unfilled_bid > 0 else 0
+                            # Gap below: market moved above us (bid is above our price = order unfillable)
+                            _gap_below = unfilled_bid - current_price if unfilled_bid > 0 else 0
+                            _bid_gap = max(_gap_above, _gap_below)  # worst of either direction
                             bot['_bid_gap'] = _bid_gap
                             bot['_drift_ref'] = 'ask' if _drift_is_gapped else 'bid'
+                            bot['_drift_dir'] = 'above' if _gap_above > _gap_below else 'below'
                             _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 0
                             if (_bid_drift_threshold > 0 and _bid_gap >= _bid_drift_threshold
                                     and unfilled_bid > 0 and not bot.get('_trade_recorded')

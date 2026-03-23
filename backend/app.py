@@ -5362,6 +5362,8 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                 'clock': entry.get('clock', ''),
                 'status_detail': entry.get('status_detail', ''),
                 'status': entry.get('status', ''),
+                'home_team': entry.get('home_team', ''),
+                'away_team': entry.get('away_team', ''),
             }
     return {}
 

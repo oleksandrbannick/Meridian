@@ -11492,7 +11492,7 @@ def _handle_apex(bot_id, bot, actions):
                             bot['_bid_gap'] = _bid_gap
                             bot['_drift_ref'] = 'ask' if _drift_is_gapped else 'bid'
                             bot['_drift_dir'] = 'above' if _gap_above > _gap_below else 'below'
-                            _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 15
+                            _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 0
                             if (_bid_drift_threshold > 0 and _bid_gap >= _bid_drift_threshold
                                     and unfilled_bid > 0 and not bot.get('_trade_recorded')
                                     and not bot.get('_apex_sellback_attempted')):

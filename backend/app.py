@@ -3541,11 +3541,20 @@ def _execute_phantom_hedge(bot_id):
         max_hedge = HARD_CEILING_CENTS - dog_price
 
         # Post at fav BID from WS cache — maker order, first in queue with our speed
-        fav_bid = bot.get(f'live_{fav_side}_bid', 0)
-        fav_ask_key = 'live_yes_ask' if fav_side == 'yes' else 'live_no_ask'
-        # Derive ask from opposite bid: yes_ask = 100 - no_bid, no_ask = 100 - yes_bid
-        opp_bid = bot.get(f'live_{"no" if fav_side == "yes" else "yes"}_bid', 0)
-        fav_ask = (100 - opp_bid) if opp_bid > 0 else 0
+        # Cross-market: use hedge_ticker prices, not dog ticker prices
+        _is_cross = hedge_ticker != ticker
+        _price_prefix = 'live_hedge_' if _is_cross else 'live_'
+        fav_bid = bot.get(f'{_price_prefix}{fav_side}_bid', 0)
+        # Also try ws_manager directly for freshest cross-market data
+        if _is_cross and fav_bid <= 0 and ws_manager:
+            _ws_hedge = ws_manager.get_price(hedge_ticker)
+            if _ws_hedge:
+                fav_bid = _ws_hedge.get(f'{fav_side}_bid', 0)
+        fav_ask = bot.get(f'{_price_prefix}{fav_side}_ask', 0)
+        if fav_ask <= 0:
+            # Derive from opposite side
+            opp_bid = bot.get(f'{_price_prefix}{"no" if fav_side == "yes" else "yes"}_bid', 0)
+            fav_ask = (100 - opp_bid) if opp_bid > 0 else 0
         fav_spread = (fav_ask - fav_bid) if fav_ask > 0 and fav_bid > 0 else 0
 
         if fav_bid > 0:
@@ -3756,9 +3765,18 @@ def _execute_phantom_ladder_hedge(bot_id):
 
         # ── Post at fav BID from WS cache — maker, first in queue ──
         _max_hedge = HARD_CEILING_CENTS - (avg_price or bot.get('dog_price', 0))
-        _fav_bid = bot.get(f'live_{fav_side}_bid', 0)
-        _opp_bid = bot.get(f'live_{"no" if fav_side == "yes" else "yes"}_bid', 0)
-        _fav_ask = (100 - _opp_bid) if _opp_bid > 0 else 0
+        _is_cross = hedge_ticker != ticker
+        _ppfx = 'live_hedge_' if _is_cross else 'live_'
+        _fav_bid = bot.get(f'{_ppfx}{fav_side}_bid', 0)
+        # Cross-market: try ws_manager directly for freshest data
+        if _is_cross and _fav_bid <= 0 and ws_manager:
+            _ws_h = ws_manager.get_price(hedge_ticker)
+            if _ws_h:
+                _fav_bid = _ws_h.get(f'{fav_side}_bid', 0)
+        _fav_ask = bot.get(f'{_ppfx}{fav_side}_ask', 0)
+        if _fav_ask <= 0:
+            _opp_bid = bot.get(f'{_ppfx}{"no" if fav_side == "yes" else "yes"}_bid', 0)
+            _fav_ask = (100 - _opp_bid) if _opp_bid > 0 else 0
         _fav_spread = (_fav_ask - _fav_bid) if _fav_ask > 0 and _fav_bid > 0 else 0
         if _fav_bid > 0:
             hedge_price = min(_fav_bid + 1, _fav_ask - 1) if _fav_spread >= 2 and _fav_ask > _fav_bid else _fav_bid

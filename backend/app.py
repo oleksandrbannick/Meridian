@@ -7182,6 +7182,7 @@ def _execute_apex_completion(bot_id):
                     bot['_hedge_verified'] = False
                     bot['_ws_fill_handling'] = False
                     bot['_bot_completed'] = False
+                    bot['_completion_repeat_processed'] = False  # Allow re-completion after extra hedge fills
                     bot['_extra_hedge_placed'] = True
                     bot['status'] = f'ladder_arb_{filled_side}_filled'
                     all_ids = bot.get('_all_hedge_order_ids', [])
@@ -12275,12 +12276,15 @@ def _handle_apex(bot_id, bot, actions):
                                             })
                                             # Canceled with 0 fills = hedge is dead, place new one
                                             if _404_status == 'canceled' and _404_fills == 0 and unfilled_bid > 0:
-                                                _fs = bot.get('first_fill_side', 'yes')
-                                                _total_af = sum(
-                                                    min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
-                                                    for r in bot.get('rungs', [])
-                                                )
-                                                _repost_qty = max(1, _total_af)
+                                                # Use current hedge_qty (correct for extra hedges too)
+                                                # Only fall back to anchor sum if hedge_qty is missing
+                                                _repost_qty = bot.get('hedge_qty', 0)
+                                                if _repost_qty <= 0:
+                                                    _fs = bot.get('first_fill_side', 'yes')
+                                                    _repost_qty = max(1, sum(
+                                                        min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
+                                                        for r in bot.get('rungs', [])
+                                                    ))
                                                 _repost_price = min(unfilled_bid, max_hedge) if max_hedge > 0 else unfilled_bid
                                                 try:
                                                     _rp_resp, _rp_actual = create_order_maker(
@@ -12299,7 +12303,7 @@ def _handle_apex(bot_id, bot, actions):
                                                     print(f'🔄 APEX HEDGE REPOST: {bot_id} new {unfilled_side} {_repost_qty}× @ {_rp_actual}¢ (old was canceled)')
                                                     bot_log('APEX_HEDGE_REPOST_404', bot_id, {
                                                         'new_oid': _rp_oid[:12], 'qty': _repost_qty,
-                                                        'price': _rp_actual, 'total_anchors': _total_af,
+                                                        'price': _rp_actual, 'hedge_qty_source': 'bot.hedge_qty' if bot.get('hedge_qty', 0) > 0 else 'anchor_sum',
                                                     })
                                                     save_state()
                                                     return  # Fresh order — next cycle uses new ID

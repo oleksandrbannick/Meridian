@@ -1157,6 +1157,13 @@
                                    style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
                                    title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
                         </div>
+                        <div>
+                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Ceiling <span id="ceiling-value" style="color:#ffaa00;font-weight:700;">98¢</span></label>
+                            <input type="range" id="bot-ceiling" min="96" max="98" value="98" step="1"
+                                   oninput="document.getElementById('ceiling-value').textContent=this.value+'¢';document.getElementById('ceiling-value').style.color=this.value<=96?'#00ff88':this.value<=97?'#ffaa00':'#ff4444';"
+                                   style="width:100%;accent-color:#ffaa00;"
+                                   title="Max combined price (anchor+hedge). 96¢ = guaranteed profit, 97¢ = thin profit, 98¢ = breakeven">
+                        </div>
                     </div>
                     <div id="bot-game-phase-display" style="display:none;">🔄 Auto</div>
                     <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
@@ -3080,6 +3087,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774281439"></script>
+    <script src="app.js?v=1774281440"></script>
 </body>
 </html>

@@ -6655,7 +6655,8 @@ def _execute_ladder_arb_sweep_and_hedge(bot_id):
         bot['_target_hedge_price'] = target_hedge
         bot['_avg_width'] = weighted_avg_width
 
-        max_safe = HARD_CEILING_CENTS - avg_filled_price
+        _bot_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
+        max_safe = _bot_ceiling - avg_filled_price
         if hedge_price > max_safe:
             hedge_price = max(max_safe, 1)
 
@@ -7354,6 +7355,7 @@ def create_ladder_arb_bot():
         widths = data.get('widths', [])
         quantity = int(data.get('quantity', 1))
         repeat_count = int(data.get('repeat_count', 0))
+        hard_ceiling = min(98, max(96, int(data.get('hard_ceiling', HARD_CEILING_CENTS))))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -7507,6 +7509,7 @@ def create_ladder_arb_bot():
             'posted_at': time.time(),
             'repeat_count': repeat_count,
             'repeats_done': 0,
+            'hard_ceiling': hard_ceiling,
             'arb_width': narrowest_width,
             'live_yes_bid': live_yes_bid,
             'live_no_bid': live_no_bid,
@@ -11995,10 +11998,11 @@ def _handle_apex(bot_id, bot, actions):
                             _market_combined = anchor_price_for_ceiling + _market_price
                             bot['_market_combined'] = _market_combined
                             bot['_market_price_ref'] = _market_price
-                            # Hard ceiling: never exceed 98¢ combined (breakeven)
-                            max_hedge = HARD_CEILING_CENTS - anchor_price_for_ceiling
+                            # Hard ceiling: per-bot configurable (96-98¢)
+                            _bot_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
+                            max_hedge = _bot_ceiling - anchor_price_for_ceiling
                             bot['_max_hedge'] = max_hedge
-                            bot['_profitable_cap'] = anchor_price_for_ceiling + min(max_hedge, HARD_CEILING_CENTS - anchor_price_for_ceiling)
+                            bot['_profitable_cap'] = anchor_price_for_ceiling + min(max_hedge, _bot_ceiling - anchor_price_for_ceiling)
 
                             # ── Bid-drift emergency exit (late/critical only) ──
                             _cur_ask_drift = unfilled_ask if unfilled_ask > 0 else unfilled_bid + 1

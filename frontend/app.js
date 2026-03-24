@@ -5138,6 +5138,7 @@ async function createBot() {
     const no_price        = parseInt(document.getElementById('bot-no-price').value);
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
+    const hard_ceiling    = parseInt(document.getElementById('bot-ceiling')?.value) || 98;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
     if (yes_price + no_price >= 100) {
@@ -5171,6 +5172,7 @@ async function createBot() {
                 quantity,
                 width_scaling: false,
                 repeat_count,
+                hard_ceiling,
             }),
         });
         const data = await resp.json();
@@ -5218,6 +5220,7 @@ async function placeSelectedWidthsBots() {
     if (selectedArr.length === 0) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
+    const hardCeiling = parseInt(document.getElementById('bot-ceiling')?.value) || 98;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
     // ── Fetch fresh orderbook prices before computing widths ───────────────────
@@ -5329,6 +5332,7 @@ async function placeSelectedWidthsBots() {
             quantity: qty,
             width_scaling: useScaling,
             repeat_count: repeatCount,
+            hard_ceiling: hardCeiling,
             game_phase: gamePhase,
         }),
     }).then(r => r.json()).then(data => {
@@ -5770,9 +5774,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const filledAsk = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
     const currentHedgePrice = hedgePrice || 0;
     const combined = avgFilled + currentHedgePrice;
+    const _botCeiling = bot.hard_ceiling || 98;
     const firstFillAt = bot.first_fill_at || 0;
     const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
-    const atCeiling = combined >= 98;
+    const atCeiling = combined >= _botCeiling;
     const gameUrgency = bot._game_urgency || 'normal';
     const walkInterval = bot._walk_interval != null ? bot._walk_interval : (atCeiling ? 3 : 20);
     const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(walkInterval - (nowSec - lastWalkAt))) : walkInterval;
@@ -5882,7 +5887,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
             else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
             else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
-            else if (combined >= 98) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
+            else if (combined >= _botCeiling) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
             else { stateLabel = 'WALKING'; stateColor = '#00aaff'; }
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
@@ -5898,7 +5903,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
                 </div>
                 <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
-                    <span>ceiling: <strong style="color:#ff4444;">98¢</strong></span>
+                    <span>ceiling: <strong style="color:${_botCeiling <= 96 ? '#00ff88' : _botCeiling <= 97 ? '#ffaa00' : '#ff4444'};">${_botCeiling}¢</strong></span>
                     <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
                     ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
                     ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}

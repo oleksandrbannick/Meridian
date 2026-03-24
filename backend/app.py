@@ -10200,7 +10200,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         )
         if (current_dog_bid > 0 and current_dog_bid <= 1) or _any_rung_at_floor:
             _reason = f'rung at 1¢' if _any_rung_at_floor else f'bid at {current_dog_bid}¢'
-            print(f'🛑 PHANTOM LADDER DEAD MARKET: {bot_id} {_reason} — cancelling all rungs')
+            print(f'🛑 PHANTOM LADDER DEAD MARKET: {bot_id} {_reason} — cancelling rungs')
             bot_log('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'reason': _reason})
             for rung in bot.get('rungs', []):
                 oid = rung.get('order_id')
@@ -10211,10 +10211,17 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         rung['cancelled'] = True
                     except Exception:
                         pass
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
-            bot['repeat_count'] = 0
-            _audit('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+            # If repeats remain, go to waiting_repeat (will repost with fresh prices)
+            _repeats_left = bot.get('repeat_count', 0) - bot.get('repeats_done', 0)
+            if _repeats_left > 0:
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = now
+                bot['repeats_done'] = bot.get('repeats_done', 0) + 1
+                print(f'   🔄 Dead market but {_repeats_left} repeats left — will retry with fresh prices')
+            else:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+            _audit('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'repeats_left': _repeats_left})
             save_state()
             return
 

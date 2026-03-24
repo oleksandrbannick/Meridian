@@ -9705,10 +9705,20 @@ def _handle_phantom(bot_id, bot, actions):
             try:
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(
+                _amend_resp = kalshi_client.amend_order(
                     fav_order_id, ticker=hedge_ticker, side=fav_side,
                     count=qty, **amend_kwargs
                 )
+                # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
+                _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                _new_oid = _amend_order.get('order_id', '')
+                if _new_oid and _new_oid != fav_order_id:
+                    bot['fav_order_id'] = _new_oid
+                    if fav_side == 'yes':
+                        bot['yes_order_id'] = _new_oid
+                    else:
+                        bot['no_order_id'] = _new_oid
+                    fav_order_id = _new_oid
                 walk_count = bot.get('fav_walk_count', 0) + 1
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
@@ -10928,7 +10938,17 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             try:
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+                _amend_resp = kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+                # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
+                _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                _new_oid = _amend_order.get('order_id', '')
+                if _new_oid and _new_oid != fav_order_id:
+                    bot['fav_order_id'] = _new_oid
+                    if fav_side == 'yes':
+                        bot['yes_order_id'] = _new_oid
+                    else:
+                        bot['no_order_id'] = _new_oid
+                    fav_order_id = _new_oid
                 walk_count = bot.get('fav_walk_count', 0) + 1
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
@@ -10942,6 +10962,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
                     'wait_s': round(wait_s, 1),
                     'walk_interval': walk_interval, 'urgency': _phl_urgency,
+                    'new_order_id': _new_oid[:12] if _new_oid and _new_oid != fav_order_id else None,
                 })
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count

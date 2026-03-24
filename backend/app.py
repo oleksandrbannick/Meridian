@@ -7207,7 +7207,8 @@ def _execute_apex_completion(bot_id):
             ticker = bot.get('ticker', '')
             avg_anchor = bot.get(f'avg_{filled_side}_price', 0)
             target_hedge = round(100 - avg_anchor - bot.get('_avg_width', 5))
-            max_safe = HARD_CEILING_CENTS - avg_anchor
+            _bc = bot.get('hard_ceiling', HARD_CEILING_CENTS)
+            max_safe = _bc - avg_anchor
             hedge_price = min(max(1, target_hedge), max(1, max_safe))
             print(f'⚠ APEX UNHEDGED ANCHORS: {bot_id} anchor={anchor_qty} hedge={hedge_qty} → placing {unhedged} extra hedge @ {hedge_price}¢')
             bot_log('APEX_EXTRA_HEDGE_PLACING', bot_id, {
@@ -12206,10 +12207,11 @@ def _handle_apex(bot_id, bot, actions):
                             if current_price <= 0:
                                 continue
                             rung_anchor = rung.get(f'{filled_side}_price', avg_filled)
+                            _rung_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
                             combined = rung_anchor + current_price
-                            max_hedge = HARD_CEILING_CENTS - rung_anchor
+                            max_hedge = _rung_ceiling - rung_anchor
                             past_ceiling = current_price >= max_hedge
-                            rung_at_ceiling = rung_anchor + current_price >= HARD_CEILING_CENTS
+                            rung_at_ceiling = rung_anchor + current_price >= _rung_ceiling
                             rung_snap_ready = _apex_snap_check(rung_anchor, unfilled_bid, rq, snap_ceiling=_apex_snap_ceiling) if unfilled_bid > 0 else False
 
                             # Same priority system as consolidated walk

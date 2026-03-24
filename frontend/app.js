@@ -6006,11 +6006,21 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const sbFillPct = sbQty > 0 ? Math.round((sbFillQty / sbQty) * 100) : 0;
         const sbTimeoutNote = sbUrgency === 'critical' ? 'Emergency cross in'
             : sbTimeLeft <= 30 ? 'Taker cross in' : 'Timeout cross in';
+        const sbBid = bot._sellback_bid || 0;
+        const sbAsk = bot._sellback_ask || 0;
+        const sbWalkTarget = bot._sellback_walk_target || sbBid;
+        const sbAtBid = sbPrice > 0 && sbBid > 0 && sbPrice <= sbBid + 1;
         walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                <span style="font-weight:700;">🔙 <strong>SELLING BACK</strong> — ${sbAnchorSide} anchor @ ${sbPrice}¢</span>
-                ${sbUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
-                    : sbUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>' : ''}
+                <span style="font-weight:700;">🔙 <strong>MAKER SELL-BACK</strong></span>
+                ${urgencyBadge}
+                ${sbAtBid ? '<span style="color:#00ff88;font-weight:700;font-size:9px;background:#00ff8818;padding:1px 4px;border-radius:3px;">AT BID</span>' : ''}
+            </div>
+            <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:4px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
+                    <span style="color:#ff8800;font-weight:700;">${sbAnchorSide} sell @ ${sbPrice}¢ × ${sbQty}</span>
+                    <span style="color:#8892a6;">bid ${sbBid}¢ · ask ${sbAsk}¢${sbWalkTarget > 0 ? ` · target ${sbWalkTarget}¢` : ''}</span>
+                </div>
             </div>
             ${sbFillQty > 0 ? `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                 <div style="flex:1;height:6px;background:#1e2740;border-radius:3px;overflow:hidden;">
@@ -6024,7 +6034,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
             </div>
             <div style="color:#8892a6;font-size:9px;">
-                step #${sbWalks} · anchor avg ${sbAvgAnchor}¢ · elapsed ${Math.floor(sbElapsed/60)}m${sbElapsed%60}s · ${sbTimeoutNote}
+                anchor avg ${sbAvgAnchor}¢ · step #${sbWalks} · ${sbTimeoutNote} · taker cross if timeout
             </div>
         </div>`;
     } else if (isFilled) {

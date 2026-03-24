@@ -11051,6 +11051,9 @@ def _handle_apex(bot_id, bot, actions):
                 _sb_walk_interval = 5  # minimum 5s for sell-back walks (don't spam)
             bot['_walk_interval'] = _sb_walk_interval
             bot['_game_urgency'] = _sb_urgency
+            bot['_sellback_bid'] = anchor_bid
+            bot['_sellback_ask'] = anchor_ask
+            bot['_sellback_walk_target'] = walk_target
 
             last_walk = bot.get('_sellback_last_walk_at', sell_started)
             since_walk = now - last_walk

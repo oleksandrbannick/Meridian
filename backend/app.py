@@ -3074,11 +3074,12 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if drop_target <= 0 or drop_target >= fav_price:
             continue
 
-        # Acquire lock — only one drop at a time
+        # Acquire lock — only one amend at a time (prevents race with monitor walk)
         if not _phantom_drop_lock.acquire(blocking=False):
-            return  # another drop in progress
+            return  # another drop or walk in progress
 
         try:
+            # Re-read fav_order_id AFTER acquiring lock (monitor may have updated it)
             fav_oid = bot.get('fav_order_id')
             if not fav_oid:
                 continue
@@ -9999,24 +10000,29 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['fav_last_walk_at'] = now
                 return
 
-            # Amend fav order
+            # Amend fav order (shared lock with WS instant drop to prevent race)
             try:
-                amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
-                api_rate_limiter.wait()
-                _amend_resp = kalshi_client.amend_order(
-                    fav_order_id, ticker=hedge_ticker, side=fav_side,
-                    count=qty, **amend_kwargs
-                )
-                # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
-                _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                _new_oid = _amend_order.get('order_id', '')
-                if _new_oid and _new_oid != fav_order_id:
-                    bot['fav_order_id'] = _new_oid
-                    if fav_side == 'yes':
-                        bot['yes_order_id'] = _new_oid
-                    else:
-                        bot['no_order_id'] = _new_oid
-                    fav_order_id = _new_oid
+                _phantom_drop_lock.acquire()
+                try:
+                    fav_order_id = bot.get('fav_order_id', fav_order_id)
+                    amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
+                    api_rate_limiter.wait()
+                    _amend_resp = kalshi_client.amend_order(
+                        fav_order_id, ticker=hedge_ticker, side=fav_side,
+                        count=qty, **amend_kwargs
+                    )
+                    # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
+                    _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                    _new_oid = _amend_order.get('order_id', '')
+                    if _new_oid and _new_oid != fav_order_id:
+                        bot['fav_order_id'] = _new_oid
+                        if fav_side == 'yes':
+                            bot['yes_order_id'] = _new_oid
+                        else:
+                            bot['no_order_id'] = _new_oid
+                        fav_order_id = _new_oid
+                finally:
+                    _phantom_drop_lock.release()
                 walk_count = bot.get('fav_walk_count', 0) + 1
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
@@ -11264,19 +11270,26 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 return
 
             try:
-                amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
-                api_rate_limiter.wait()
-                _amend_resp = kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
-                # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
-                _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                _new_oid = _amend_order.get('order_id', '')
-                if _new_oid and _new_oid != fav_order_id:
-                    bot['fav_order_id'] = _new_oid
-                    if fav_side == 'yes':
-                        bot['yes_order_id'] = _new_oid
-                    else:
-                        bot['no_order_id'] = _new_oid
-                    fav_order_id = _new_oid
+                # Acquire shared lock — prevents race with WS instant drop on same order
+                _phantom_drop_lock.acquire()
+                try:
+                    # Re-read order ID (instant drop may have updated it)
+                    fav_order_id = bot.get('fav_order_id', fav_order_id)
+                    amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
+                    api_rate_limiter.wait()
+                    _amend_resp = kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+                    # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
+                    _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                    _new_oid = _amend_order.get('order_id', '')
+                    if _new_oid and _new_oid != fav_order_id:
+                        bot['fav_order_id'] = _new_oid
+                        if fav_side == 'yes':
+                            bot['yes_order_id'] = _new_oid
+                        else:
+                            bot['no_order_id'] = _new_oid
+                        fav_order_id = _new_oid
+                finally:
+                    _phantom_drop_lock.release()
                 walk_count = bot.get('fav_walk_count', 0) + 1
                 direction = '↓' if new_fav_price < current_fav_price else '↑'
                 print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '

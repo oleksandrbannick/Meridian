@@ -3739,6 +3739,7 @@ def _execute_phantom_hedge(bot_id):
         print(f'👻 PHANTOM HEDGE: {bot_id} {fav_side.upper()} @{actual_fav_price}¢ | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
         bot_log('PHANTOM_WS_HEDGE_POSTED', bot_id, {
             'fav_side': fav_side, 'fav_price': actual_fav_price,
+            'fav_bid': _fav_bid, 'fav_ask': _fav_ask, 'fav_spread': _fav_spread,
             'fav_order_id': fav_order_id[:12], 'dog_price': dog_price,
             'combined': dog_price + actual_fav_price, 'qty': qty,
             'path': 'ws_fast',
@@ -3919,6 +3920,7 @@ def _execute_phantom_ladder_hedge(bot_id):
         print(f'   ✅ FAV POSTED: {fav_side.upper()} @ {actual_fav_price}¢ | order={fav_order_id[:12]}… | total={avg_price + actual_fav_price}¢ + fees')
         bot_log('PHANTOM_LADDER_WS_HEDGE_POSTED', bot_id, {
             'fav_side': fav_side, 'fav_price': actual_fav_price,
+            'fav_bid': _fav_bid, 'fav_ask': _fav_ask, 'fav_spread': _fav_spread,
             'fav_order_id': fav_order_id[:12], 'avg_dog': avg_price,
             'combined': avg_price + actual_fav_price, 'hedge_qty': total_fill_qty,
             'path': 'ws_fast',

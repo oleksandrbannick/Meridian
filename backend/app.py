@@ -6541,6 +6541,10 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
                         _all_h = bot.get('_all_hedge_order_ids', [])
                         _all_h.append(_extra_oid)
                         bot['_all_hedge_order_ids'] = _all_h
+                        # Track in master list so completion cleanup catches it
+                        _all_p = bot.get('_all_placed_order_ids', [])
+                        _all_p.append(_extra_oid)
+                        bot['_all_placed_order_ids'] = _all_p
                     print(f'📈 LATE ANCHOR EXTRA: {bot_id} +{_extra_qty} @ {amend_price}¢ oid={_extra_oid[:12]}')
                     bot_log('APEX_LATE_ANCHOR_EXTRA_HEDGE', bot_id, {
                         'extra_qty': _extra_qty, 'price': amend_price,

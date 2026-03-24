@@ -11755,9 +11755,11 @@ async function loadDogHistory() {
                         ${isSellback
                             ? `<div style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:700;font-size:12px;">${t.sell_back_price > 0 ? dogSide.toUpperCase() + ' sold @ ' + t.sell_back_price + '¢' : 'Sell failed — full loss'}</div>
                                <div style="color:${net > 0 ? '#00ff88' : '#ff6644'};font-size:10px;">Dog cost: ${dogPrice}¢ · ${net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢'}</div>
-                               <div style="color:#8892a6;font-size:9px;margin-top:2px;">Fav ${favSide.toUpperCase()} was ${favPrice}¢</div>`
+                               <div style="color:#8892a6;font-size:9px;margin-top:2px;">Fav ${favSide.toUpperCase()} was ${favPrice}¢</div>
+                               ${t.raw_hedge_ms != null || t.hedge_latency_ms != null ? `<div style="margin-top:2px;font-size:9px;">${t.raw_hedge_ms != null ? `<span style="color:${t.raw_hedge_ms < 5 ? '#00ffcc' : t.raw_hedge_ms < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡ raw ${t.raw_hedge_ms.toFixed(1)}ms</span>` : ''}${t.hedge_latency_ms != null ? ` <span style="color:#8892a6;">rt ${Math.round(t.hedge_latency_ms)}ms</span>` : ''}</div>` : ''}`
                             : `<div style="color:${favCol};font-weight:700;font-size:12px;">${favSide.toUpperCase()} @ ${favPrice}¢</div>
-                               <div style="color:#00ff88;font-size:10px;">Total: ${typeof dogPrice === 'number' && typeof favPrice === 'number' ? dogPrice + favPrice : '?'}¢ · Profit: +${t.profit_cents||0}¢</div>`
+                               <div style="color:#00ff88;font-size:10px;">Total: ${typeof dogPrice === 'number' && typeof favPrice === 'number' ? dogPrice + favPrice : '?'}¢ · Profit: +${t.profit_cents||0}¢</div>
+                               ${t.raw_hedge_ms != null || t.hedge_latency_ms != null ? `<div style="margin-top:3px;font-size:10px;">${t.raw_hedge_ms != null ? `<span style="color:${t.raw_hedge_ms < 5 ? '#00ffcc' : t.raw_hedge_ms < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡ raw ${t.raw_hedge_ms.toFixed(1)}ms</span>` : ''}${t.hedge_latency_ms != null ? ` <span style="color:${t.hedge_latency_ms < 100 ? '#00ff88' : t.hedge_latency_ms < 300 ? '#ffaa00' : '#ff4444'};font-weight:700;">rt ${Math.round(t.hedge_latency_ms)}ms</span>` : ''}</div>` : ''}`
                         }
                     </div>
                 </div>

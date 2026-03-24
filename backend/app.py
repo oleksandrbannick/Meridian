@@ -3943,20 +3943,26 @@ def _execute_phantom_ladder_hedge(bot_id):
                         bot['yes_price'] = amend_price
                     else:
                         bot['no_price'] = amend_price
-                    # Place supplemental order for extra contracts
+                    # Stragglers: sell back extra contracts — hedge window is gone
                     if _extra_needed > 0:
+                        dog_side = bot.get('dog_side', 'yes')
+                        print(f'   🔙 STRAGGLER SELLBACK: {bot_id} {_extra_needed} late fills — selling back (hedge window closed)')
+                        bot_log('PHANTOM_LADDER_STRAGGLER_SELLBACK', bot_id, {
+                            'extra_qty': _extra_needed, 'dog_side': dog_side,
+                            'old_hedge_qty': _old_hedge_qty, 'total_fills': new_total_fill,
+                        })
                         try:
-                            _sup_kwargs = {f'{fav_side}_price': amend_price}
-                            api_rate_limiter.wait()
-                            _sup_resp = kalshi_client.create_order(hedge_ticker, fav_side, 'buy', _extra_needed, post_only=True, **_sup_kwargs)
-                            _sup_oid = _sup_resp.get('order', {}).get('order_id', '')
-                            bot['hedge_qty'] = new_total_fill
-                            print(f'   📈 LATE FILL EXTRA: {bot_id} +{_extra_needed} @ {amend_price}¢ oid={_sup_oid[:12]}')
-                            bot_log('PHANTOM_LADDER_LATE_FILL_EXTRA', bot_id, {
-                                'extra_qty': _extra_needed, 'price': amend_price, 'order_id': _sup_oid[:12],
+                            _sold, _sell_info = execute_sell(bot.get('ticker',''), dog_side, _extra_needed,
+                                                            reason=f'phantom_straggler_{bot_id}')
+                            _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+                            _strag_loss = max(0, new_avg - _sell_p) * _extra_needed if _sell_p else new_avg * _extra_needed
+                            session_pnl['gross_loss_cents'] += _strag_loss
+                            print(f'   🔙 STRAGGLER SOLD: {bot_id} {_extra_needed}× @ {_sell_p}¢ loss={_strag_loss}¢')
+                            bot_log('PHANTOM_LADDER_STRAGGLER_SOLD', bot_id, {
+                                'qty': _extra_needed, 'sell_price': _sell_p, 'loss': _strag_loss,
                             })
                         except Exception as _se:
-                            print(f'   ⚠ LATE FILL EXTRA FAIL: {bot_id}: {_se}')
+                            print(f'   ⚠ STRAGGLER SELLBACK FAIL: {bot_id}: {_se}')
                     print(f'   📈 LATE FILL AMEND: {bot_id} qty={new_total_fill} avg={new_avg}¢ hedge@{amend_price}¢ (walk+{walk_offset}¢)')
                     bot_log('PHANTOM_LADDER_LATE_FILL_AMEND', bot_id, {
                         'new_total_fill': new_total_fill, 'new_avg': new_avg,
@@ -10544,38 +10550,40 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     except Exception:
                         verified_total += rung.get('fill_qty', 0)
                 if verified_total > hedge_qty:
-                    # More fills than hedged — amend hedge qty
+                    # More fills than hedged — amend price, sell back stragglers
+                    _mon_extra = verified_total - hedge_qty
                     new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot['rungs'] if r.get('fill_qty', 0) > 0) / verified_total) if verified_total > 0 else bot.get('avg_fill_price', 0)
                     old_avg = bot.get('avg_fill_price', new_avg)
                     bot['avg_fill_price'] = new_avg
-                    bot['hedge_qty'] = verified_total
-                    hedge_qty = verified_total
                     target_w = bot.get('target_width', 5)
                     amend_p = max(1, 100 - new_avg - target_w)
-                    # Preserve walk offset — use old avg BEFORE we updated it
                     old_tgt = max(1, 100 - old_avg - target_w)
                     w_off = max(0, bot.get('fav_price', amend_p) - old_tgt)
                     amend_p = max(1, amend_p + w_off)
-                    _mon_extra = verified_total - (hedge_qty if hedge_qty < verified_total else 0)
-                    _mon_old_qty = hedge_qty
                     try:
                         # Amend price only (Kalshi can't increase count)
                         amend_kw = {f'{fav_side}_price': amend_p}
                         api_rate_limiter.wait()
-                        kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=_mon_old_qty, **amend_kw)
+                        kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kw)
                         bot['fav_price'] = amend_p
-                        # Place supplemental for extra
+                        # Sell back stragglers — hedge window is closed
                         if _mon_extra > 0:
+                            dog_side = bot.get('dog_side', 'yes')
+                            print(f'🔙 PHANTOM MONITOR STRAGGLER: {bot_id} {_mon_extra} late fills — selling back')
+                            bot_log('PHANTOM_MONITOR_STRAGGLER_SELLBACK', bot_id, {
+                                'extra_qty': _mon_extra, 'dog_side': dog_side,
+                                'hedge_qty': hedge_qty, 'verified_total': verified_total,
+                            })
                             try:
-                                _ms_kw = {f'{fav_side}_price': amend_p}
-                                api_rate_limiter.wait()
-                                _ms_resp = kalshi_client.create_order(hedge_ticker, fav_side, 'buy', _mon_extra, post_only=True, **_ms_kw)
-                                _ms_oid = _ms_resp.get('order', {}).get('order_id', '')
-                                bot['hedge_qty'] = verified_total
-                                print(f'📈 PHANTOM MONITOR EXTRA: {bot_id} +{_mon_extra} @ {amend_p}¢ oid={_ms_oid[:12]}')
+                                _sold, _sell_info = execute_sell(bot.get('ticker',''), dog_side, _mon_extra,
+                                                                reason=f'phantom_monitor_straggler_{bot_id}')
+                                _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+                                _strag_loss = max(0, new_avg - _sell_p) * _mon_extra if _sell_p else new_avg * _mon_extra
+                                session_pnl['gross_loss_cents'] += _strag_loss
+                                print(f'🔙 PHANTOM MONITOR STRAGGLER SOLD: {bot_id} {_mon_extra}× @ {_sell_p}¢ loss={_strag_loss}¢')
                             except Exception as _mse:
-                                print(f'⚠ PHANTOM MONITOR EXTRA FAIL: {bot_id}: {_mse}')
-                        print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} qty {_mon_old_qty}→{verified_total} avg={new_avg}¢ hedge@{amend_p}¢')
+                                print(f'⚠ PHANTOM MONITOR STRAGGLER FAIL: {bot_id}: {_mse}')
+                        print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} hedge_qty={hedge_qty} verified={verified_total} avg={new_avg}¢ hedge@{amend_p}¢ stragglers={_mon_extra}')
                         bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND', bot_id, {
                             'verified_total': verified_total, 'new_avg': new_avg,
                             'amend_price': amend_p, 'walk_offset': w_off,

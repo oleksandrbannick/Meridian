@@ -3329,6 +3329,30 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 'filled_no_qty': bot.get('filled_no_qty', 0),
                 '_hedge_verified': bot.get('_hedge_verified', False),
             })
+            # First hedge fill → cancel all remaining anchor orders to freeze anchor qty
+            # This prevents more anchors from filling while hedge is executing
+            if _old_hfc == 0 and not bot.get('_anchors_cancelled_on_hedge_fill'):
+                bot['_anchors_cancelled_on_hedge_fill'] = True
+                _anchor_side = bot.get('first_fill_side', 'yes')
+                _cancel_oids = []
+                for _r in bot.get('rungs', []):
+                    _aoid = _r.get(f'{_anchor_side}_order_id')
+                    if _aoid and _r.get(f'{_anchor_side}_fill_qty', 0) < _r.get('quantity', 1):
+                        _cancel_oids.append(_aoid)
+                        _r[f'{_anchor_side}_order_id'] = None
+                if _cancel_oids:
+                    def _cancel_anchors_on_hedge(_oids, _bid):
+                        for _oid in _oids:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(_oid)
+                            except Exception:
+                                pass
+                        print(f'🛑 APEX ANCHORS CANCELLED: {_bid} cancelled {len(_oids)} anchor orders on first hedge fill')
+                        bot_log('APEX_ANCHORS_CANCELLED_ON_HEDGE_FILL', _bid, {
+                            'cancelled_count': len(_oids),
+                        })
+                    threading.Thread(target=_cancel_anchors_on_hedge, args=(_cancel_oids, bot_id), daemon=True).start()
 
         matched_rung = None
         matched_side = None

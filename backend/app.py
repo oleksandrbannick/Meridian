@@ -3930,16 +3930,33 @@ def _execute_phantom_ladder_hedge(bot_id):
             amend_price = max(1, new_hedge_target + walk_offset)
             fav_oid = bot.get('fav_order_id')
             if fav_oid:
+                _old_hedge_qty = bot.get('hedge_qty', 0) or hedge_qty
+                _extra_needed = new_total_fill - _old_hedge_qty
                 try:
                     fav_side = bot.get('fav_side', 'yes')
+                    # Amend price only (Kalshi can't increase count via amend)
                     amend_kwargs = {f'{fav_side}_price': amend_price}
                     api_rate_limiter.wait()
-                    kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side, count=new_total_fill, **amend_kwargs)
+                    kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side, count=_old_hedge_qty, **amend_kwargs)
                     bot['fav_price'] = amend_price
                     if fav_side == 'yes':
                         bot['yes_price'] = amend_price
                     else:
                         bot['no_price'] = amend_price
+                    # Place supplemental order for extra contracts
+                    if _extra_needed > 0:
+                        try:
+                            _sup_kwargs = {f'{fav_side}_price': amend_price}
+                            api_rate_limiter.wait()
+                            _sup_resp = kalshi_client.create_order(hedge_ticker, fav_side, 'buy', _extra_needed, post_only=True, **_sup_kwargs)
+                            _sup_oid = _sup_resp.get('order', {}).get('order_id', '')
+                            bot['hedge_qty'] = new_total_fill
+                            print(f'   📈 LATE FILL EXTRA: {bot_id} +{_extra_needed} @ {amend_price}¢ oid={_sup_oid[:12]}')
+                            bot_log('PHANTOM_LADDER_LATE_FILL_EXTRA', bot_id, {
+                                'extra_qty': _extra_needed, 'price': amend_price, 'order_id': _sup_oid[:12],
+                            })
+                        except Exception as _se:
+                            print(f'   ⚠ LATE FILL EXTRA FAIL: {bot_id}: {_se}')
                     print(f'   📈 LATE FILL AMEND: {bot_id} qty={new_total_fill} avg={new_avg}¢ hedge@{amend_price}¢ (walk+{walk_offset}¢)')
                     bot_log('PHANTOM_LADDER_LATE_FILL_AMEND', bot_id, {
                         'new_total_fill': new_total_fill, 'new_avg': new_avg,
@@ -10539,12 +10556,26 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     old_tgt = max(1, 100 - old_avg - target_w)
                     w_off = max(0, bot.get('fav_price', amend_p) - old_tgt)
                     amend_p = max(1, amend_p + w_off)
+                    _mon_extra = verified_total - (hedge_qty if hedge_qty < verified_total else 0)
+                    _mon_old_qty = hedge_qty
                     try:
+                        # Amend price only (Kalshi can't increase count)
                         amend_kw = {f'{fav_side}_price': amend_p}
                         api_rate_limiter.wait()
-                        kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=verified_total, **amend_kw)
+                        kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=_mon_old_qty, **amend_kw)
                         bot['fav_price'] = amend_p
-                        print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} qty {hedge_qty-verified_total+verified_total}→{verified_total} avg={new_avg}¢ hedge@{amend_p}¢')
+                        # Place supplemental for extra
+                        if _mon_extra > 0:
+                            try:
+                                _ms_kw = {f'{fav_side}_price': amend_p}
+                                api_rate_limiter.wait()
+                                _ms_resp = kalshi_client.create_order(hedge_ticker, fav_side, 'buy', _mon_extra, post_only=True, **_ms_kw)
+                                _ms_oid = _ms_resp.get('order', {}).get('order_id', '')
+                                bot['hedge_qty'] = verified_total
+                                print(f'📈 PHANTOM MONITOR EXTRA: {bot_id} +{_mon_extra} @ {amend_p}¢ oid={_ms_oid[:12]}')
+                            except Exception as _mse:
+                                print(f'⚠ PHANTOM MONITOR EXTRA FAIL: {bot_id}: {_mse}')
+                        print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} qty {_mon_old_qty}→{verified_total} avg={new_avg}¢ hedge@{amend_p}¢')
                         bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND', bot_id, {
                             'verified_total': verified_total, 'new_avg': new_avg,
                             'amend_price': amend_p, 'walk_offset': w_off,

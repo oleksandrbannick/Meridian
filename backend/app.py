@@ -12203,7 +12203,26 @@ def _handle_apex(bot_id, bot, actions):
                                             bot['last_walk_at'] = now
                                             save_state()
                                         except Exception as _ce:
-                                            print(f'⚠ APEX LOSS-EXIT amend failed: {_ce}')
+                                            print(f'⚠ APEX LOSS-EXIT amend failed: {_ce} — placing new order')
+                                            # Amend failed (404 = order dead) — place fresh order at cross target
+                                            try:
+                                                _cr_resp, _cr_actual = create_order_maker(
+                                                    ticker=bot.get('ticker', ''), side=unfilled_side, action='buy',
+                                                    count=rq, price=_cross_target, priority=True,
+                                                )
+                                                _cr_oid = _cr_resp['order']['order_id']
+                                                bot['hedge_order_id'] = _cr_oid
+                                                bot['hedge_price'] = _cr_actual
+                                                _all = bot.get('_all_hedge_order_ids', [])
+                                                _all.append(_cr_oid)
+                                                bot['_all_hedge_order_ids'] = _all
+                                                bot['walk_count'] = bot.get('walk_count', 0) + 1
+                                                bot['last_walk_at'] = now
+                                                print(f'   ✅ LOSS-EXIT new order: {unfilled_side} {rq}× @{_cr_actual}¢ | {_cr_oid[:12]}')
+                                                save_state()
+                                            except Exception as _cr_err:
+                                                print(f'   ⚠ LOSS-EXIT new order failed: {_cr_err}')
+                                                bot['_apex_sellback_attempted'] = True  # stop retrying
                                         return
 
                             # ══════════════════════════════════════════════

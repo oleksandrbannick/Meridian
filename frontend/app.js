@@ -811,7 +811,21 @@ function getMarketLiquidity(market) {
         (hedgeRoom >= 5 ? 15 : hedgeRoom >= 3 ? 10 : hedgeRoom >= 2 ? 5 : 0)
     )));
 
-    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance, dogSide, favSide, dogSpread, favSpread: favSpreadVal, phantomQuality };
+    // Apex quality: tight spread (both legs fill) + balanced prices (oscillation) + live game + volume
+    // Score 0-100: higher = better apex opportunity
+    const balance = Math.max(yesBid, noBid) > 0 ? Math.min(yesBid, noBid) / Math.max(yesBid, noBid) : 0;
+    const apexQuality = Math.round(Math.max(0, Math.min(100,
+        // Spread tightness (35 pts) — both sides need tight for dual fills
+        (spread <= 1 ? 35 : spread <= 2 ? 30 : spread <= 3 ? 20 : spread <= 5 ? 8 : 0) +
+        // Balance (30 pts) — coin-flip = price oscillates through both orders
+        (balance >= 0.9 ? 30 : balance >= 0.7 ? 22 : balance >= 0.5 ? 12 : 0) +
+        // Live game (20 pts) — volatility drives fills
+        (isKalshiLive(market) ? 20 : 5) +
+        // Volume (15 pts) — active market = more sweeps through your levels
+        (vol >= 200 ? 15 : vol >= 100 ? 12 : vol >= 50 ? 8 : vol >= 20 ? 4 : 0)
+    )));
+
+    return { tier, tierLabel, tierColor, avgSpread, arbEdge, vol, oi, yesBid, noBid, yesAsk, noAsk, bidSum, yesSpread, noSpread, thinSide, thickSide, spreadImbalance, dogSide, favSide, dogSpread, favSpread: favSpreadVal, phantomQuality, apexQuality, balance };
 }
 
 // ─── GAME SIGNAL — arb-focused: score stability + liquidity, NOT phase-gated ──
@@ -2268,7 +2282,7 @@ function createMarketRow(market, label) {
     
     // Market label — trust the caller's label (they compute the right one)
     const labelDiv = document.createElement('div');
-    labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6;';
+    labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6; overflow: hidden;';
 
     // If this prop has a live stat, show it as a badge next to the label
     if (market._liveStat) {
@@ -2309,13 +2323,16 @@ function createMarketRow(market, label) {
 
     const liq = getMarketLiquidity(market);
 
-    // ── Active bot type icons ──
+    // ── Active bot type icons + recommendations on own line ──
     const botTypes = (window._botTypeMap || {})[market.ticker] || {};
     const phDetails = (window._phantomDetailMap || {})[market.ticker] || [];
     const activeBotTypes = Object.keys(botTypes);
+    // Shared icon row: active bots + recommendations share one flex-wrap line
+    const iconRow = document.createElement('div');
+    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-top:2px;';
+    let hasIcons = false;
     if (activeBotTypes.length > 0) {
-        const wrap = document.createElement('span');
-        wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
+        hasIcons = true;
         const botOrder = ['apex','phantom','meridian','scout'];
         for (const bt of botOrder.filter(b => activeBotTypes.includes(b))) {
             if (bt === 'phantom' && phDetails.length > 0) {
@@ -2327,7 +2344,7 @@ function createMarketRow(market, label) {
                     pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
                     pill.innerHTML = `${botIconImg('phantom', 14)}`;
                     pill.title = 'Phantom active';
-                    wrap.appendChild(pill);
+                    iconRow.appendChild(pill);
                 }
                 for (const ph of crossMkt) {
                     const sideChar = ph.side === 'yes' ? 'Y' : ph.side === 'no' ? 'N' : '?';
@@ -2336,7 +2353,7 @@ function createMarketRow(market, label) {
                     pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:#00ddff15;border:1px solid #00ddff55;border-radius:4px;font-size:9px;font-weight:800;`;
                     pill.innerHTML = `${botIconImg('phantom', 14)}<span style="color:#00ddff;">✕</span><span style="color:${sideCol};font-weight:900;">${sideChar}</span>`;
                     pill.title = `Cross-market Phantom ${ph.side.toUpperCase()}${ph.isHedgeSide ? ' [hedge side]' : ''}`;
-                    wrap.appendChild(pill);
+                    iconRow.appendChild(pill);
                 }
             } else {
                 const c = BOT_COLORS[bt] || '#818cf8';
@@ -2345,46 +2362,34 @@ function createMarketRow(market, label) {
                 pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
                 pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
                 pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
-                wrap.appendChild(pill);
+                iconRow.appendChild(pill);
             }
         }
-        labelDiv.appendChild(wrap);
     }
 
     // ── Bot recommendation icons (dimmed) ──
     const recoTypes = [];
-    // Apex: both sides need bids. The strategy is posting maker orders and letting
-    // volatility fill them — NOT waiting for instant arb (bids under 100¢ is rare and irrelevant).
-    // Recommend on any live game with decent liquidity on both sides.
+    // Apex: quality score 0-100 — spread tightness + balance + live + volume
     if (liq.yesBid > 0 && liq.noBid > 0 && !botTypes.apex) {
         const bidSum = liq.yesBid + liq.noBid;
         const priceLean = Math.abs(liq.yesBid - liq.noBid);
         const isLiveGame = isKalshiLive(market);
         const ySpr = liq.yesSpread;
         const nSpr = liq.noSpread;
-        const bothTight = ySpr <= 3 && nSpr <= 3;
-        const oneThin = (ySpr > 3 && ySpr <= 5) || (nSpr > 3 && nSpr <= 5);
         const bothBroken = ySpr > 5 && nSpr > 5;
-        // Label: spread (YES and NO spreads are always equal on a binary ticker)
-        const _apexSpreadLabel = `${Math.min(ySpr, nSpr)}¢`;
-        const _apexWarn = (!bothTight && !bothBroken) ? ' ⚠️' : '';
-        const _apexLabelColor = bothTight ? '#00ff88' : bothBroken ? '#ff4444' : '#ffaa00';
+        const aq = liq.apexQuality;
+        const spreadVal = Math.min(ySpr, nSpr);
         const leanLabel = priceLean <= 10 ? 'coin-flip' : priceLean <= 25 ? 'lean game' : 'strong lean';
-        if (isLiveGame && bidSum >= 90 && !bothBroken && priceLean <= 30) {
-            const spreadTip = bothTight ? 'tight spread — fills on both legs'
-                : `spread ${Math.min(ySpr,nSpr)}¢ — may be slow to fill`;
+        const balPct = Math.round((liq.balance || 0) * 100);
+        // Show recommendation if score >= 25 AND not both broken AND reasonable lean
+        if (aq >= 25 && !bothBroken && priceLean <= 40 && bidSum >= 80) {
+            const qualLabel = aq >= 60 ? '🟢' : aq >= 35 ? '🟡' : '🔴';
+            const _aqLabelColor = aq >= 60 ? '#00ff88' : aq >= 35 ? '#ffaa00' : '#ff4444';
             recoTypes.push({
                 type: 'apex',
-                label: `${_apexSpreadLabel}${_apexWarn}`,
-                labelColor: _apexLabelColor,
-                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${Math.min(ySpr,nSpr)}¢ · ${spreadTip}`,
-            });
-        } else if (!isLiveGame && bidSum >= 90 && bidSum <= 103 && bothTight) {
-            recoTypes.push({
-                type: 'apex',
-                label: `${_apexSpreadLabel}`,
-                labelColor: '#00ff88',
-                tip: `Apex: pregame ${liq.yesBid}/${liq.noBid}¢ · spread ${Math.min(ySpr,nSpr)}¢ — tight`,
+                label: `${qualLabel}${aq}`,
+                labelColor: _aqLabelColor,
+                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${spreadVal}¢ · balance ${balPct}% · vol ${liq.vol} · ${qualLabel} ${aq}/100`,
             });
         }
     }
@@ -2413,22 +2418,20 @@ function createMarketRow(market, label) {
         recoTypes.push({ type: 'meridian', tip: `Meridian: ${middleReco.tip}` });
     }
     if (recoTypes.length > 0) {
-        const rWrap = document.createElement('span');
-        rWrap.style.cssText = 'margin-left:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
+        hasIcons = true;
         for (const r of recoTypes) {
             const c = BOT_COLORS[r.type] || '#888';
             const pill = document.createElement('span');
             pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
             pill.innerHTML = botIconImg(r.type, 14, 0.75);
-            // Show compact label next to icon (visible on mobile, no hover needed)
             if (r.label) {
                 pill.innerHTML += `<span style="font-size:8px;color:${r.labelColor || c};font-weight:700;">${r.label}</span>`;
             }
             pill.title = r.tip;
-            rWrap.appendChild(pill);
+            iconRow.appendChild(pill);
         }
-        labelDiv.appendChild(rWrap);
     }
+    if (hasIcons) labelDiv.appendChild(iconRow);
     
     // Read all prices first for cross-referencing
     const yesBid = getPrice(market, 'yes_bid');
@@ -11800,6 +11803,7 @@ async function loadDogHistory() {
                         <svg width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 3px #ffaa0044);"><path d="M12 2C8 2 5 5 5 9c0 2 .8 3.5 2 4.5V16c0 1 .5 2 1.5 2.5L10 22h4l1.5-3.5C16.5 18 17 17 17 16v-2.5c1.2-1 2-2.5 2-4.5 0-4-3-7-7-7z" fill="#ffaa0022" stroke="#ffaa00" stroke-width="1.5"/><circle cx="9.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><circle cx="14.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/></svg>
                         <span style="font-size:14px;">${icon}</span>
                         <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
+                        ${t.cross_market ? '<span style="background:#00ddff18;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;border:1px solid #00ddff44;">✕ CROSS</span>' : '<span style="background:#8892a612;color:#8892a6;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;">SAME MKT</span>'}
                         ${phaseBadge}
                         ${widthBadge}
                     </div>
@@ -11816,7 +11820,7 @@ async function loadDogHistory() {
                         ${rungsHtml}
                     </div>
                     <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${isSellback ? '#ff444422' : favCol+'22'};">
-                        <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">${isSellback ? '🔙 SOLD BACK' : '⭐ FAV HEDGE'}</div>
+                        <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">${isSellback ? '🔙 SOLD BACK' : '⭐ FAV HEDGE'}${t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
                         ${isSellback
                             ? `<div style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:700;font-size:12px;">${t.sell_back_price > 0 ? dogSide.toUpperCase() + ' sold @ ' + t.sell_back_price + '¢' : 'Sell failed — full loss'}</div>
                                <div style="color:${net > 0 ? '#00ff88' : '#ff6644'};font-size:10px;">Dog cost: ${dogPrice}¢ · ${net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢'}</div>

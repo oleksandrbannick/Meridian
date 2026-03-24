@@ -555,10 +555,18 @@
                                     <div><strong style="color:#00d4ff;">Apex</strong><br><span style="color:#8892a6;font-size:10px;">YES+NO spread arb — both sides at once</span></div>
                                 </div>
                                 <div style="border-top:1px solid #1e2740;padding-top:6px;font-size:10px;color:#8892a6;">
-                                    <strong style="color:#00d4ff;">Ghost label: YES spread / NO spread</strong> (e.g. <strong style="color:#00ff88;">1/1</strong> = 1¢ gap on each side)<br>
-                                    Shows the bid-ask gap on each side. Apex needs both sides tight for fills on both legs.<br>
-                                    <span style="color:#00ff88;">Green</span> = both ≤3¢ (good) · <span style="color:#ffaa00;">Yellow ⚠️</span> = one side 4-5¢ (risky) · No ghost if both &gt;5¢<br>
-                                    Ghost doesn't show at all if both sides are broken (&gt;5¢ gap).
+                                    <strong style="color:#00d4ff;">Ghost label: Quality score 0–100</strong><br>
+                                    Rates how good the market is for Apex — both legs need to fill for profit:<br>
+                                    <div style="margin:4px 0 4px 8px;">
+                                        <span style="color:#00ff88;">Spread tightness (≤2¢)</span> → up to 35pts — tight spread = both legs fill fast<br>
+                                        <span style="color:#ff9900;">Balance (coin-flip)</span> → up to 30pts — even odds = price oscillates through both your YES and NO orders<br>
+                                        <span style="color:#00aaff;">Live game</span> → up to 20pts — live volatility drives fills, pregame is slow<br>
+                                        <span style="color:#cc66ff;">Volume (≥100 trades)</span> → up to 15pts — active market = more sweeps through your price levels
+                                    </div>
+                                    <span style="color:#00ff88;font-weight:700;">🟢 60+</span> = strong &nbsp;
+                                    <span style="color:#ffaa00;font-weight:700;">🟡 35–59</span> = decent &nbsp;
+                                    <span style="color:#ff4444;font-weight:700;">🔴 &lt;35</span> = weak<br>
+                                    No ghost if score &lt;25 or both sides have &gt;5¢ spread.
                                 </div>
                             </div>
 
@@ -572,10 +580,10 @@
                                     <strong style="color:#ffaa00;">Ghost label: Quality score 0–100</strong><br>
                                     Rates how likely the instant hedge is to catch:<br>
                                     <div style="margin:4px 0 4px 8px;">
-                                        <span style="color:#00ff88;">Fav spread tight (≤2¢)</span> → up to 40pts<br>
-                                        <span style="color:#ff9900;">Dog spread wide (≥4¢)</span> → up to 30pts<br>
-                                        <span style="color:#00aaff;">High volume (≥100)</span> → up to 20pts<br>
-                                        <span style="color:#cc66ff;">Dog selling pressure</span> → up to 10pts
+                                        <span style="color:#00ff88;">Spread tightness (≤2¢)</span> → up to 40pts — tight = instant hedge fills<br>
+                                        <span style="color:#ff9900;">Volume (≥100 trades)</span> → up to 25pts — more whale activity + hedge absorption<br>
+                                        <span style="color:#00aaff;">Dog price sweet spot (10–25¢)</span> → up to 20pts — ideal anchor range<br>
+                                        <span style="color:#cc66ff;">Hedge room (≥5¢)</span> → up to 15pts — more room = more profit per trade
                                     </div>
                                     <span style="color:#00ff88;font-weight:700;">🟢 60+</span> = strong &nbsp;
                                     <span style="color:#ffaa00;font-weight:700;">🟡 35–59</span> = decent &nbsp;
@@ -3072,6 +3080,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774281433"></script>
+    <script src="app.js?v=1774281434"></script>
 </body>
 </html>

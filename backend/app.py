@@ -4133,6 +4133,8 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         'game_context': _get_game_context(ticker),
         'fill_source': 'ladder_sellback',
         'bot_category': 'anchor_ladder',
+        'cross_market': bot.get('cross_market', False),
+        'hedge_ticker': bot.get('hedge_ticker', ''),
     }, bot)
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'ladder_sellback', 'loss_cents': loss_cents})
@@ -9211,6 +9213,8 @@ def _handle_phantom(bot_id, bot, actions):
                 'game_context': _get_game_context(ticker),
                 'fill_source': 'anchor_dog',
                 'bot_category': 'anchor_dog',
+                'cross_market': bot.get('cross_market', False),
+                'hedge_ticker': bot.get('hedge_ticker', ''),
             }, bot)
 
             # Only update session P&L and mark recorded AFTER successful trade record
@@ -10426,6 +10430,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'game_context': _get_game_context(ticker),
                 'fill_source': 'anchor_ladder',
                 'bot_category': 'anchor_ladder',
+                'cross_market': bot.get('cross_market', False),
+                'hedge_ticker': bot.get('hedge_ticker', ''),
             }, bot)
 
             # Only update session P&L and mark recorded AFTER successful trade record
@@ -12089,6 +12095,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'game_context': _get_game_context(ticker),
         'fill_source': 'anchor_sellback',
         'bot_category': 'anchor_dog',
+        'cross_market': bot.get('cross_market', False),
+        'hedge_ticker': bot.get('hedge_ticker', ''),
     }, bot)
     bot_log('ANCHOR_SELLBACK', bot_id, {
         'dog_price': dog_price, 'sell_price': sell_price,

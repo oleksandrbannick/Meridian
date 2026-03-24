@@ -5652,9 +5652,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const lp = bot._last_pnl;
                 const lpCol = lp > 0 ? '#00ff88' : lp < 0 ? '#ff4444' : '#ffaa00';
                 const ltPnl = bot.lifetime_pnl || 0;
+                const ltCol = ltPnl > 0 ? '#00ff88' : ltPnl < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:#060a14;border:1px solid ${lpCol}44;border-radius:6px;font-size:12px;">
                     <span style="color:${lpCol};font-weight:800;">✅ ${lp >= 0 ? '+' : ''}${lp}¢</span>
-                    <span style="color:#555;font-size:9px;">Lifetime: ${ltPnl >= 0 ? '+' : ''}${ltPnl}¢</span>
+                    <span style="color:${ltCol};font-weight:700;font-size:11px;">Total: ${ltPnl >= 0 ? '+' : ''}${ltPnl}¢ ($${(ltPnl/100).toFixed(2)})</span>
+                </div>`;
+            }
+            // Show lifetime P&L if bot has completed at least 1 run
+            const _lt = bot.lifetime_pnl;
+            if (_lt != null && _lt !== 0) {
+                const _ltc = _lt > 0 ? '#00ff88' : _lt < 0 ? '#ff4444' : '#ffaa00';
+                return `<div style="margin-top:6px;padding:4px 10px;font-size:11px;">
+                    <span style="color:${_ltc};font-weight:700;">Total: ${_lt >= 0 ? '+' : ''}${_lt}¢ ($${(_lt/100).toFixed(2)})</span>
                 </div>`;
             }
             return '';

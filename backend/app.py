@@ -9449,6 +9449,9 @@ def _handle_phantom(bot_id, bot, actions):
             else:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
+                bot['_just_completed'] = True
+                bot['_last_pnl'] = net_pnl
+                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'anchor_complete', 'profit_cents': net_pnl})
             return
@@ -10790,7 +10793,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 else:
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
-                    print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done')
+                    bot['_just_completed'] = True
+                    bot['_last_pnl'] = net_pnl
+                    bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
+                    print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done pnl={net_pnl}¢')
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'profit_cents': net_pnl})
             return

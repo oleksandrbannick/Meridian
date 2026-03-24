@@ -12489,13 +12489,22 @@ def _handle_apex(bot_id, bot, actions):
                                             'unfilled_bid': unfilled_bid, 'anchor': anchor_price_for_ceiling,
                                             'combined_at_cross': anchor_price_for_ceiling + _cross_target,
                                         })
+                                        _late_anchor_amend_lock.acquire()
                                         try:
+                                            hedge_oid = bot.get('hedge_order_id', hedge_oid)  # re-read after lock
                                             api_rate_limiter.wait()
                                             _amend_ticker = bot.get('ticker', '')
                                             _amend_side = unfilled_side
                                             _amend_count = rq
                                             _amend_kwargs = {'yes_price': _cross_target} if _amend_side == 'yes' else {'no_price': _cross_target}
-                                            kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
+                                            _cross_resp = kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
+                                            _cross_ao = _cross_resp.get('order', _cross_resp) if isinstance(_cross_resp, dict) else {}
+                                            _cross_new_oid = _cross_ao.get('order_id', '')
+                                            if _cross_new_oid and _cross_new_oid != hedge_oid:
+                                                bot['hedge_order_id'] = _cross_new_oid
+                                                _all = bot.get('_all_hedge_order_ids', [])
+                                                _all.append(_cross_new_oid)
+                                                bot['_all_hedge_order_ids'] = _all
                                             bot['hedge_price'] = _cross_target
                                             if unfilled_side == 'yes':
                                                 bot['yes_price'] = _cross_target
@@ -12525,6 +12534,8 @@ def _handle_apex(bot_id, bot, actions):
                                             except Exception as _cr_err:
                                                 print(f'   ⚠ LOSS-EXIT new order failed: {_cr_err}')
                                                 bot['_apex_sellback_attempted'] = True  # stop retrying
+                                        finally:
+                                            _late_anchor_amend_lock.release()
                                         return
 
                             # ══════════════════════════════════════════════
@@ -12570,14 +12581,14 @@ def _handle_apex(bot_id, bot, actions):
                                     'walk_count': bot.get('walk_count', 0),
                                     'since_walk_s': round(since_walk, 1),
                                 })
+                                _late_anchor_amend_lock.acquire()
                                 try:
+                                    oid = bot.get('hedge_order_id', oid)  # re-read after lock
                                     api_rate_limiter.wait()
                                     # Use remaining qty (hedge_qty - fills already counted) to avoid over-buying
                                     _amend_count = max(1, rq - bot.get('_hedge_fill_count', 0))
                                     amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
                                                               count=_amend_count, **{f'{unfilled_side}_price': new_price})
-                                    bot['hedge_price'] = new_price
-                                    walked_any = True
                                     # Track order_id change if Kalshi does cancel+replace
                                     new_oid_from_amend = (amend_resp.get('order', {}).get('order_id') if isinstance(amend_resp, dict) else None)
                                     if new_oid_from_amend and new_oid_from_amend != oid:
@@ -12588,6 +12599,8 @@ def _handle_apex(bot_id, bot, actions):
                                         if bot.get('rungs'):
                                             bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid_from_amend
                                         print(f'🔄 APEX WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
+                                    bot['hedge_price'] = new_price
+                                    walked_any = True
                                     bot_log('APEX_WALK_SUCCESS', bot_id, {
                                         'walk_type': walk_type, 'old_price': current_price, 'new_price': new_price,
                                         'new_order_id': new_oid_from_amend[:12] if new_oid_from_amend else None,
@@ -12687,6 +12700,8 @@ def _handle_apex(bot_id, bot, actions):
                                         print(f'⚠ APEX WALK {bot_id} 409 conflict — order may be filled, forcing settlement check')
                                     else:
                                         print(f'❌ APEX WALK {bot_id} hedge: {e}')
+                                finally:
+                                    _late_anchor_amend_lock.release()
                     else:
                         # Non-consolidated: walk individual rung orders (same bidirectional logic)
                         for rung in bot.get('rungs', []):

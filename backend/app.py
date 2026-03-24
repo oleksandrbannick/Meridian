@@ -5622,7 +5622,10 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     if not candidates:
         t1, t2 = _parse_ticker_teams(ticker)
         candidates = [c for c in [t1, t2] if c]
-    # Find any candidate that has score data AND matches the correct sport
+    # Find best candidate: ALWAYS prefer 'in' (live) over 'post' (finished).
+    # A finished match from a different player with a colliding abbreviation
+    # must NEVER override a live match or cause false 'critical' urgency.
+    best_entry = None
     for code in candidates:
         espn_code = _KALSHI_TO_ESPN.get(code, code)
         # Try direct key, then sport-qualified key for cross-sport collision cases
@@ -5643,17 +5646,34 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
             entry_sport = entry.get('espn_sport', '')
             if allowed_espn_sports and entry_sport and entry_sport not in allowed_espn_sports:
                 continue
-            return {
-                'home_score': entry.get('home_score', 0),
-                'away_score': entry.get('away_score', 0),
-                'score_diff': entry.get('score_diff', 0),
-                'period': entry.get('period', 0),
-                'clock': entry.get('clock', ''),
-                'status_detail': entry.get('status_detail', ''),
-                'status': entry.get('status', ''),
-                'home_team': entry.get('home_team', ''),
-                'away_team': entry.get('away_team', ''),
-            }
+            # Prefer live matches — a 'post' match might be a different player with same abbr
+            if entry.get('status') == 'in':
+                best_entry = entry
+                break  # Live match found — use it immediately
+            elif best_entry is None:
+                best_entry = entry  # First post match — keep as fallback, keep looking for live
+    # Safety: for 'post' matches, verify BOTH teams from the ESPN entry appear in the ticker
+    # to prevent single-abbreviation collisions (e.g. tennis "CAD" matching wrong finished match)
+    if best_entry and best_entry.get('status') == 'post':
+        _home = best_entry.get('home_team', '').upper()
+        _away = best_entry.get('away_team', '').upper()
+        _cand_set = set(c.upper() for c in candidates)
+        _both_match = (_home in _cand_set or any(_home in c for c in _cand_set)) and \
+                      (_away in _cand_set or any(_away in c for c in _cand_set))
+        if not _both_match:
+            best_entry = None  # Single-team collision with a finished match — ignore
+    if best_entry:
+        return {
+            'home_score': best_entry.get('home_score', 0),
+            'away_score': best_entry.get('away_score', 0),
+            'score_diff': best_entry.get('score_diff', 0),
+            'period': best_entry.get('period', 0),
+            'clock': best_entry.get('clock', ''),
+            'status_detail': best_entry.get('status_detail', ''),
+            'status': best_entry.get('status', ''),
+            'home_team': best_entry.get('home_team', ''),
+            'away_team': best_entry.get('away_team', ''),
+        }
     return {}
 
 

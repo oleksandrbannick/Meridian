@@ -7138,17 +7138,21 @@ async function loadBots() {
             const groupBots = gameGroups[gameKey];
             const sampleBot = bots[groupBots[0]];
             const groupMatchup = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
-            const groupIsLive = groupBots.some(id => bots[id].game_phase === 'live');
-            const groupPhase = groupIsLive ? '🔴 LIVE' : '⏳ PRE';
+            // Live detection: use game_scores from backend OR Kalshi-native live detection
+            const groupGameScore = gameScores[gameKey] || {};
+            const groupIsLive = groupGameScore.status === 'in' || groupBots.some(id => {
+                const b = bots[id];
+                return b.game_phase === 'live' || (b.live_yes_bid > 0 && b.live_no_bid > 0);
+            });
+            const groupPhase = groupIsLive ? '🔴 LIVE' : (groupGameScore.status === 'post' ? '✅ FINAL' : '⏳ PRE');
             const groupProfitTotal = groupBots.reduce((sum, id) => {
                 const b = bots[id];
                 if (b.type === 'watch') {
-                    // Watch bots: potential = (100 - entry) * qty
                     return sum + ((100 - (b.entry_price || 50)) * (b.quantity || 1));
                 }
-                // Ladder arb / Phantom: estimate live P&L from anchor + hedge prices
+                // Use lifetime_pnl or net_pnl_cents for accumulated P&L across all runs
                 if (b.bot_category === 'ladder_arb' || b.bot_category === 'anchor_dog' || b.bot_category === 'anchor_ladder') {
-                    let estPnl = b.cumulative_pnl || 0;  // completed runs
+                    let estPnl = b.lifetime_pnl ?? b.net_pnl_cents ?? b.cumulative_pnl ?? 0;
                     // Add estimated P&L for current active run
                     const anchorPrice = b.avg_fill_price || b.dog_price || 0;
                     const favSide = b.first_fill_side === 'yes' ? 'no' : 'yes';

@@ -12274,6 +12274,13 @@ def _handle_apex(bot_id, bot, actions):
                                                 'hedge_status': _404_status, 'hedge_fills': _404_fills,
                                                 'hedge_qty': bot.get('hedge_qty', 0),
                                             })
+                                            # Executed + fully filled = trigger completion (handles unhedged anchors)
+                                            if _404_status == 'executed' and _404_fills >= bot.get('hedge_qty', 0) and bot.get('hedge_qty', 0) > 0:
+                                                print(f'✅ APEX HEDGE DONE (404 verify): {bot_id} fills={_404_fills} qty={bot.get("hedge_qty")} — triggering completion')
+                                                if not bot.get('_completion_in_progress'):
+                                                    bot['_completion_in_progress'] = True
+                                                    threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
+                                                return
                                             # Canceled with 0 fills = hedge is dead, place new one
                                             if _404_status == 'canceled' and _404_fills == 0 and unfilled_bid > 0:
                                                 # Use current hedge_qty (correct for extra hedges too)

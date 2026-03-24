@@ -6935,10 +6935,12 @@ async function loadBots() {
             }
         }
 
-        // Render awaiting settlement section (visible on all tabs)
+        // Render awaiting settlement section (PHANTOM tab only — these are cross-market phantom positions)
         const awaitList = document.getElementById('awaiting-settlement-list');
+        const _activeTab = document.querySelector('.bot-tab-active')?.dataset?.tab || '';
+        const _showAwait = _activeTab === 'phantom' || _activeTab === '';
         if (awaitList) {
-            if (awaitingBotIds.length === 0) {
+            if (awaitingBotIds.length === 0 || !_showAwait) {
                 awaitList.innerHTML = '';
                 awaitList.style.display = 'none';
             } else {

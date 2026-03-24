@@ -2299,8 +2299,8 @@ function categorizeMarkets(markets) {
 function createMarketRow(market, label) {
     const row = document.createElement('div');
     const isProp = market.market_type === 'prop';
-    const cols = isProp ? '1fr 80px 80px auto' : '120px 1fr 1fr auto';
-    row.style.cssText = `display: grid; grid-template-columns: ${cols}; gap: 10px; align-items: center; padding: 8px; background: #0f1419; border-radius: 6px;`;
+    const cols = isProp ? '1fr 80px 80px auto' : 'minmax(100px, 1.5fr) 1fr 1fr auto';
+    row.style.cssText = `display: grid; grid-template-columns: ${cols}; gap: 8px; align-items: center; padding: 8px; background: #0f1419; border-radius: 6px;`;
     
     // Market label — trust the caller's label (they compute the right one)
     const labelDiv = document.createElement('div');
@@ -2351,7 +2351,7 @@ function createMarketRow(market, label) {
     const activeBotTypes = Object.keys(botTypes);
     // Shared icon row: active bots + recommendations share one flex-wrap line
     const iconRow = document.createElement('div');
-    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-top:2px;';
+    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-top:2px;max-width:100%;overflow:hidden;';
     let hasIcons = false;
     if (activeBotTypes.length > 0) {
         hasIcons = true;

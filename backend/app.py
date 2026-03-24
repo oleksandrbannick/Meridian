@@ -3742,7 +3742,7 @@ def _execute_phantom_hedge(bot_id):
         print(f'👻 PHANTOM HEDGE: {bot_id} {fav_side.upper()} @{actual_fav_price}¢ | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
         bot_log('PHANTOM_WS_HEDGE_POSTED', bot_id, {
             'fav_side': fav_side, 'fav_price': actual_fav_price,
-            'fav_bid': _fav_bid, 'fav_ask': _fav_ask, 'fav_spread': _fav_spread,
+            'fav_bid': fav_bid, 'fav_ask': fav_ask, 'fav_spread': fav_spread,
             'fav_order_id': fav_order_id[:12], 'dog_price': dog_price,
             'combined': dog_price + actual_fav_price, 'qty': qty,
             'path': 'ws_fast',
@@ -4026,7 +4026,6 @@ def _execute_phantom_ladder_hedge(bot_id):
                     try:
                         fav_oid = bot.get('fav_order_id')  # Re-read after lock (may have changed)
                         if not fav_oid:
-                            _phantom_drop_lock.release()
                             save_state()
                             return
                         api_rate_limiter.wait()
@@ -6644,8 +6643,11 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             # Cap at hard ceiling to prevent combined from exceeding user-set limit
             _amend_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
             _amend_max_hedge = _amend_ceiling - round(new_avg_price)
-            if _amend_max_hedge > 0:
+            if _amend_max_hedge >= 1:
                 amend_price = min(amend_price, _amend_max_hedge)
+            else:
+                # Anchor already at/above ceiling — can't hedge profitably
+                amend_price = max(1, _amend_max_hedge)
             ticker = bot['ticker']
 
             # Subtract already-completed hedge generations from total
@@ -7316,6 +7318,14 @@ def _execute_apex_completion(bot_id):
             target_hedge = round(100 - avg_anchor - bot.get('_avg_width', 5))
             _bc = bot.get('hard_ceiling', HARD_CEILING_CENTS)
             max_safe = _bc - avg_anchor
+            if max_safe < 2:
+                # Anchor already at/above ceiling — extra hedge would complete at a loss
+                print(f'⚠ APEX EXTRA HEDGE SKIP: {bot_id} max_safe={max_safe}¢ (anchor={avg_anchor}¢ ceiling={_bc}¢) — unprofitable')
+                bot_log('APEX_EXTRA_HEDGE_SKIP', bot_id, {
+                    'avg_anchor': avg_anchor, 'max_safe': max_safe, 'ceiling': _bc,
+                    'unhedged': unhedged, 'reason': 'ceiling_exceeded',
+                })
+                unhedged = 0  # Skip extra hedge, fall through to completion
             hedge_price = min(max(1, target_hedge), max(1, max_safe))
             # Re-check unhedged — GONE/404 paths above may have zeroed it
             if unhedged <= 0:
@@ -9957,7 +9967,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'bail_threshold': round(_bail_threshold, 1),
                 'patience_tier': _patience_tier, 'no_bid_count': _no_bid_count,
                 'dog_price': dog_price, 'dog_bid_now': _dog_bid_now,
-                'dog_crashed': _dog_crashed, 'urgency': _urgency,
+                'dog_crashed': _dog_crashed,
                 'will_bail': _should_bail,
             })
             if _should_bail:
@@ -12467,7 +12477,8 @@ def _handle_apex(bot_id, bot, actions):
                                     # Re-evaluated EVERY cycle: if bid moves and selling becomes cheaper, we'll sell next cycle
                                     bot['_sellback_decision'] = 'crossing_to_bid'
                                     _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
-                                    _cross_target = min(_cross_target, walk_cap) if walk_cap > 0 else _cross_target
+                                    _cross_cap = max(1, max_hedge)
+                                    _cross_target = min(_cross_target, _cross_cap) if _cross_cap > 0 else _cross_target
                                     if unfilled_bid > 0 and (_cross_target > current_price or current_price <= 0):
                                         print(f'💀 APEX LOSS-EXIT: {bot_id} crossing to {_cross_target}¢ (bid={unfilled_bid}) — cheaper than sell-back')
                                         bot_log('APEX_LOSS_EXIT_CROSS', bot_id, {

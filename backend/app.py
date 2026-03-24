@@ -3340,25 +3340,46 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if _old_hfc == 0 and not bot.get('_anchors_cancelled_on_hedge_fill'):
                 bot['_anchors_cancelled_on_hedge_fill'] = True
                 _anchor_side = bot.get('first_fill_side', 'yes')
-                _cancel_oids = []
-                for _r in bot.get('rungs', []):
-                    _aoid = _r.get(f'{_anchor_side}_order_id')
-                    if _aoid and _r.get(f'{_anchor_side}_fill_qty', 0) < _r.get('quantity', 1):
-                        _cancel_oids.append(_aoid)
-                        _r[f'{_anchor_side}_order_id'] = None
-                if _cancel_oids:
-                    def _cancel_anchors_on_hedge(_oids, _bid):
-                        for _oid in _oids:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(_oid)
-                            except Exception:
-                                pass
-                        print(f'🛑 APEX ANCHORS CANCELLED: {_bid} cancelled {len(_oids)} anchor orders on first hedge fill')
-                        bot_log('APEX_ANCHORS_CANCELLED_ON_HEDGE_FILL', _bid, {
-                            'cancelled_count': len(_oids),
-                        })
-                    threading.Thread(target=_cancel_anchors_on_hedge, args=(_cancel_oids, bot_id), daemon=True).start()
+                # FAST PATH: batch cancel via order group (1 API call instead of N)
+                _apex_og_id = bot.get('_order_group_id')
+                if _apex_og_id:
+                    def _batch_cancel_apex_anchors(_og, _bid):
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order_group(_og)
+                            print(f'🛑 APEX BATCH CANCEL: {_bid} order group {_og[:12]} cancelled on first hedge fill')
+                            bot_log('APEX_ANCHORS_BATCH_CANCELLED', _bid, {'order_group_id': _og[:12]})
+                        except Exception as _e:
+                            print(f'⚠ APEX BATCH CANCEL FAIL: {_bid} {_e} — falling back to individual')
+                            # Fallback: individual cancels
+                            for _r in bot.get('rungs', []):
+                                _aoid = _r.get(f'{_anchor_side}_order_id')
+                                if _aoid:
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(_aoid)
+                                    except Exception:
+                                        pass
+                    threading.Thread(target=_batch_cancel_apex_anchors, args=(_apex_og_id, bot_id), daemon=True).start()
+                else:
+                    # No order group — individual cancels (legacy path)
+                    _cancel_oids = []
+                    for _r in bot.get('rungs', []):
+                        _aoid = _r.get(f'{_anchor_side}_order_id')
+                        if _aoid and _r.get(f'{_anchor_side}_fill_qty', 0) < _r.get('quantity', 1):
+                            _cancel_oids.append(_aoid)
+                            _r[f'{_anchor_side}_order_id'] = None
+                    if _cancel_oids:
+                        def _cancel_anchors_on_hedge(_oids, _bid):
+                            for _oid in _oids:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(_oid)
+                                except Exception:
+                                    pass
+                            print(f'🛑 APEX ANCHORS CANCELLED: {_bid} cancelled {len(_oids)} anchor orders on first hedge fill')
+                            bot_log('APEX_ANCHORS_CANCELLED_ON_HEDGE_FILL', _bid, {'cancelled_count': len(_oids)})
+                        threading.Thread(target=_cancel_anchors_on_hedge, args=(_cancel_oids, bot_id), daemon=True).start()
 
         matched_rung = None
         matched_side = None
@@ -3807,88 +3828,63 @@ def _execute_phantom_ladder_hedge(bot_id):
         })
         _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': hedge_ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
         # ── THEN cancel unfilled rung orders (lower priority) ──
-        # Verify each rung on Kalshi before cancelling — fills may have arrived
-        # that WS hasn't processed yet. If a rung actually filled, amend the hedge.
+        # FAST PATH: Use order group cancel to nuke all remaining orders in ONE call
+        _og_id = bot.get('_order_group_id')
+        if _og_id:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order_group(_og_id)
+                print(f'   ✅ BATCH CANCEL: {bot_id} order group {_og_id[:12]} cancelled in one call')
+                bot_log('PHANTOM_LADDER_BATCH_CANCEL', bot_id, {'order_group_id': _og_id[:12]})
+            except Exception as _bg_err:
+                print(f'   ⚠ BATCH CANCEL FAIL: {bot_id} group {_og_id[:12]}: {_bg_err} — falling back to individual')
+                bot_log('PHANTOM_LADDER_BATCH_CANCEL_FAIL', bot_id, {'error': str(_bg_err)[:200]})
+
+        # Verify each rung on Kalshi to find late fills that snuck through
         cancelled_rungs = 0
         late_fill_qty = 0
         for rung in bot.get('rungs', []):
             if rung.get('fill_qty', 0) >= rung['qty'] or not rung.get('order_id'):
                 continue  # already filled or no order
-            # Check Kalshi for actual fills before cancelling
+            # Check Kalshi for actual fills (may have filled before batch cancel reached them)
             try:
                 api_read_limiter.wait()
                 resp = kalshi_client.get_order(rung['order_id'])
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 actual_fills = _parse_fill_count(ord_data)
+                _ord_status = ord_data.get('status', '')
                 if actual_fills > 0:
-                    # Rung actually filled on Kalshi — DON'T cancel
+                    # Rung filled (race fill) — track it for hedge amendment
                     rung['fill_qty'] = actual_fills
                     if actual_fills >= rung['qty'] and not rung.get('filled_at'):
                         rung['filled_at'] = time.time()
                     late_fill_qty += actual_fills
-                    print(f'   ⚡ RUNG VERIFIED FILLED: {bot_id} rung @{rung.get("price")}¢ has {actual_fills} fills — keeping')
+                    print(f'   ⚡ RUNG RACE FILL: {bot_id} rung @{rung.get("price")}¢ has {actual_fills} fills — amending hedge')
                     bot_log('PHANTOM_LADDER_LATE_FILL_DETECTED', bot_id, {
                         'rung_price': rung.get('price'), 'actual_fills': actual_fills,
                         'rung_qty': rung['qty'], 'order_id': rung['order_id'][:12],
                     })
-                    continue
-            except Exception as ve:
-                print(f'   ⚠ RUNG VERIFY FAIL: {bot_id} rung @{rung.get("price")}¢: {ve}')
-                bot_log('PHANTOM_LADDER_RUNG_VERIFY_FAIL', bot_id, {
-                    'rung_price': rung.get('price'), 'error': str(ve)[:300],
-                    'order_id': rung.get('order_id', '')[:12] if rung.get('order_id') else 'none',
-                }, level='ERROR')
-            # Confirmed unfilled — safe to cancel
-            if _cancel_with_retry(rung['order_id']):
-                rung['cancelled'] = True
-                cancelled_rungs += 1
-            else:
-                # First cancel failed — wait and retry once more
-                time.sleep(0.3)
-                if _cancel_with_retry(rung['order_id'], max_retries=3):
+                elif _ord_status in ('canceled', 'cancelled'):
                     rung['cancelled'] = True
                     cancelled_rungs += 1
-                    print(f'   ✅ RUNG CANCEL RECOVERED: {bot_id} rung @{rung.get("price")}¢ (2nd attempt)')
                 else:
-                    # Still failed — check Kalshi status to decide next step
-                    _orphan_filled = False
+                    # Not cancelled, not filled — individual cancel as fallback
                     try:
-                        api_read_limiter.wait()
-                        _oc_resp = kalshi_client.get_order(rung['order_id'])
-                        _oc_data = _oc_resp.get('order', _oc_resp) if isinstance(_oc_resp, dict) else {}
-                        _oc_fills = _parse_fill_count(_oc_data)
-                        _oc_status = _oc_data.get('status', '')
-                        if _oc_status in ('canceled', 'cancelled'):
-                            rung['cancelled'] = True
-                            cancelled_rungs += 1
-                            print(f'   ✅ RUNG ALREADY CANCELLED: {bot_id} rung @{rung.get("price")}¢')
-                        elif _oc_fills > 0:
-                            rung['fill_qty'] = _oc_fills
-                            if _oc_fills >= rung['qty'] and not rung.get('filled_at'):
-                                rung['filled_at'] = time.time()
-                            late_fill_qty += _oc_fills
-                            _orphan_filled = True
-                            print(f'   ⚡ RUNG CANCEL→FILL: {bot_id} rung @{rung.get("price")}¢ filled {_oc_fills} during cancel')
-                        else:
-                            # Not cancelled, not filled — force one last cancel
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(rung['order_id'])
-                                rung['cancelled'] = True
-                                cancelled_rungs += 1
-                                print(f'   ✅ RUNG FORCE CANCEL: {bot_id} rung @{rung.get("price")}¢')
-                            except Exception:
-                                print(f'⚠ RUNG ORPHAN: {bot_id} rung @{rung.get("price")}¢ — order {rung["order_id"][:12]} stuck on Kalshi')
-                                bot_log('PHANTOM_LADDER_RUNG_ORPHAN', bot_id, {
-                                    'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
-                                    'kalshi_status': _oc_status, 'fills': _oc_fills,
-                                }, level='ERROR')
-                    except Exception as _oc_err:
-                        print(f'⚠ RUNG CANCEL FAIL: {bot_id} rung {rung.get("price")}¢ — {_oc_err}')
-                        bot_log('PHANTOM_LADDER_RUNG_CANCEL_FAIL', bot_id, {
+                        _cancel_with_retry(rung['order_id'])
+                        rung['cancelled'] = True
+                        cancelled_rungs += 1
+                    except Exception as _fc_err:
+                        print(f'⚠ RUNG ORPHAN: {bot_id} rung @{rung.get("price")}¢ — stuck on Kalshi: {_fc_err}')
+                        bot_log('PHANTOM_LADDER_RUNG_ORPHAN', bot_id, {
                             'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
-                            'error': str(_oc_err)[:200],
+                            'error': str(_fc_err)[:200],
                         }, level='ERROR')
+            except Exception as _oc_err:
+                print(f'⚠ RUNG VERIFY FAIL: {bot_id} rung {rung.get("price")}¢ — {_oc_err}')
+                bot_log('PHANTOM_LADDER_RUNG_VERIFY_FAIL', bot_id, {
+                    'rung_price': rung.get('price'), 'order_id': rung.get('order_id', '')[:12],
+                    'error': str(_oc_err)[:200],
+                }, level='ERROR')
         # Cancel any stashed old order IDs from previous reposts
         _prev_oids = bot.get('_prev_rung_order_ids', [])
         if _prev_oids:

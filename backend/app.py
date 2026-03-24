@@ -2941,8 +2941,9 @@ class KalshiWSManager:
                 except Exception as flip_err:
                     print(f'⚠ WS real-time flip check error: {flip_err}')
                 # ── Real-time phantom drop: if hedge is above bid, drop instantly ──
+                # Run in background thread — MUST NOT block WS handler (kills hedge latency)
                 try:
-                    _ws_phantom_instant_drop(ticker, yb, nb, ya, na)
+                    threading.Thread(target=_ws_phantom_instant_drop, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
             return
@@ -3083,9 +3084,18 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 continue
             amend_kwargs = {f'{fav_side}_price': drop_target}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
+            _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
                                       count=bot.get('hedge_qty', bot.get('quantity', 1)),
                                       **amend_kwargs)
+            # Capture new order ID if Kalshi reassigned (amend = cancel+repost internally)
+            _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_order.get('order_id', '')
+            if _new_oid and _new_oid != fav_oid:
+                bot['fav_order_id'] = _new_oid
+                if fav_side == 'yes':
+                    bot['yes_order_id'] = _new_oid
+                else:
+                    bot['no_order_id'] = _new_oid
             bot['fav_price'] = drop_target
             if fav_side == 'yes':
                 bot['yes_price'] = drop_target
@@ -4203,10 +4213,39 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     })
 
     if already_cleared and not sell_price:
-        # Position was already gone (sold/settled elsewhere) — record 0 loss, not full loss
-        print(f'🔙 PHANTOM SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
+        # Position was already gone — but re-verify after 2s to catch late fills
+        # (amend race: fav order fills 1 contract during cancel+repost, settles late)
+        time.sleep(2)
+        _recheck_qty = 0
+        try:
+            api_read_limiter.wait()
+            _recheck_resp = kalshi_client.get_positions(ticker=ticker)
+            for _p in _recheck_resp.get('market_positions', _recheck_resp.get('positions', [])):
+                if _p.get('ticker') == ticker:
+                    _net = _parse_position_qty(_p)
+                    _recheck_qty = abs(_net)
+                    break
+        except Exception:
+            pass
+        if _recheck_qty > 0:
+            print(f'⚠ PHANTOM SELLBACK LATE FILL: {bot_id} | re-check found {_recheck_qty} contracts after 2s — selling')
+            bot_log('PHANTOM_LADDER_SELLBACK_LATE_FILL', bot_id, {
+                'recheck_qty': _recheck_qty, 'ticker': ticker,
+            })
+            # Sell the late-fill contracts
+            try:
+                _late_sell_ok, _late_info = _execute_sell(
+                    ticker, dog_side, _recheck_qty, bot_id, reason='late_fill_cleanup')
+                if _late_sell_ok:
+                    _late_price = (_late_info or {}).get('actual_fill_price', 0)
+                    print(f'   ✅ Late fill sold: {_recheck_qty}x @{_late_price}¢')
+            except Exception as _ls_err:
+                print(f'   ⚠ Late fill sell failed: {_ls_err}')
+        else:
+            print(f'🔙 PHANTOM SELLBACK: {bot_id} | position confirmed cleared after re-check')
         bot_log('PHANTOM_LADDER_SELLBACK_ALREADY_CLEARED', bot_id, {
             'avg_price': avg_price, 'total_fill_qty': total_fill_qty,
+            'recheck_qty': _recheck_qty,
         })
         loss_cents = 0
         sell_price = avg_price  # assume break-even since we don't know actual price

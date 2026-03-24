@@ -3801,19 +3801,25 @@ def _execute_phantom_ladder_hedge(bot_id):
         # else: keep precalc/computed hedge_price as fallback
 
         # ── HEDGE FIRST — record raw speed then fire ──
+        # Only record on FIRST attempt — retries from ladder_filled_no_fav would inflate the metric
         _raw_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
-        if _raw_fill_at:
+        _is_retry = bot.get('raw_hedge_ms') is not None
+        if _raw_fill_at and not _is_retry:
             _raw_ms = (time.time() - _raw_fill_at) * 1000
             bot['raw_hedge_ms'] = round(_raw_ms, 1)
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom_ladder'})
             print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
+        elif _is_retry:
+            _raw_ms = (time.time() - _raw_fill_at) * 1000 if _raw_fill_at else None
+            print(f'   🔄 Hedge RETRY (original raw={bot["raw_hedge_ms"]}ms, elapsed={round(_raw_ms, 1) if _raw_ms else "?"}ms)')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=hedge_ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price, priority=True,
             skip_rate_limit=True
         )
         # Round trip measurement (fill → order confirmed on Kalshi)
-        if _raw_fill_at:
+        # Only record on first attempt — retries measure from stale dog_filled_at
+        if _raw_fill_at and not _is_retry:
             _rt_ms = (time.time() - _raw_fill_at) * 1000
             bot['hedge_latency_ms'] = round(_rt_ms, 1)
             _record_latency('fill_to_hedge_phantom', _rt_ms, {'bot_id': bot_id, 'type': 'phantom_ladder', 'fav_price': actual_fav_price})

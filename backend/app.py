@@ -10219,13 +10219,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         rung['cancelled'] = True
                     except Exception:
                         pass
-            # If repeats remain, go to waiting_repeat (will repost with fresh prices)
+            # If repeats remain, go to waiting_repeat — repeat handler checks conditions before posting
             _repeats_left = bot.get('repeat_count', 0) - bot.get('repeats_done', 0)
             if _repeats_left > 0:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
-                bot['repeats_done'] = bot.get('repeats_done', 0) + 1
-                print(f'   🔄 Dead market but {_repeats_left} repeats left — will retry with fresh prices')
+                # DON'T increment repeats_done — this wasn't a real run, just a bad pricing cycle
+                print(f'   ⏳ Dead market but {_repeats_left} repeats left — waiting for conditions to improve')
             else:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
@@ -10289,6 +10289,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and total_fill == 0
         timer_triggered = age_min >= DOG_REPOST_MINUTES and total_fill == 0
+
+        # Above-market check: if bid dropped BELOW first rung, rungs are taker-priced → repost down
+        _first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
+        if total_fill == 0 and current_dog_bid > 0 and _first_price > 0 and _first_price >= current_dog_bid and since_last_repost >= cooldown_s:
+            gap_triggered = True
+            gap_thresh = 0  # force repost
+            print(f'⚠ PHANTOM ABOVE MARKET: {bot_id} first_rung={_first_price}¢ >= bid={current_dog_bid}¢ — forcing repost down')
+            bot_log('PHANTOM_LADDER_ABOVE_MARKET', bot_id, {
+                'first_rung': _first_price, 'dog_bid': current_dog_bid, 'dog_ask': current_dog_ask,
+            })
 
         # Retreat check: if bid moved TOWARD our orders, depth floor violated → retreat away
         # BUT: only retreat on SLOW drift, not fast dumps (whale dumps = the opportunity)

@@ -3852,6 +3852,17 @@ def _execute_phantom_ladder_hedge(bot_id):
                             'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
                             'error': str(_oc_err)[:200],
                         }, level='ERROR')
+        # Cancel any stashed old order IDs from previous reposts
+        _prev_oids = bot.get('_prev_rung_order_ids', [])
+        if _prev_oids:
+            _prev_cancelled = 0
+            for _poid in _prev_oids:
+                if _cancel_with_retry(_poid):
+                    _prev_cancelled += 1
+            if _prev_cancelled:
+                print(f'   🧹 Cancelled {_prev_cancelled}/{len(_prev_oids)} stale repost orders')
+            bot['_prev_rung_order_ids'] = []
+
         if cancelled_rungs:
             print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
         # If late fills found, amend hedge with updated qty + price
@@ -10218,9 +10229,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     new_ph_group = _create_order_group()
                     repost_specs = []
                     repost_indices = []
+                    # Track old order IDs before overwriting — if group cancel failed, these are orphans
+                    _old_rung_oids = []
                     for idx, rung in enumerate(bot.get('rungs', [])):
                         if rung.get('fill_qty', 0) >= rung['qty']:
                             continue  # filled, don't touch
+                        if rung.get('order_id'):
+                            _old_rung_oids.append(rung['order_id'])
                         new_price = max(1, smart_first - (idx * _rung_spacing))
                         repost_specs.append({'ticker': ticker, 'side': dog_side, 'count': rung['qty'], 'price': new_price})
                         repost_indices.append(idx)
@@ -10235,6 +10250,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                             resp, actual_price = repost_results[j]
                             rung['order_id'] = resp['order']['order_id']
                             rung['price'] = actual_price
+                    # Stash old order IDs so completion/sellback can clean them up
+                    _prev_oids = bot.get('_prev_rung_order_ids', [])
+                    _prev_oids.extend(_old_rung_oids)
+                    bot['_prev_rung_order_ids'] = _prev_oids
 
                     bot['_order_group_id'] = new_ph_group
                     bot['posted_at'] = now

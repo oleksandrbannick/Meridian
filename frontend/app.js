@@ -3101,19 +3101,15 @@ function displayOrderbookLadder(orderbook) {
     document.getElementById('orderbook-ladder').innerHTML = ladderHtml;
 
     // ── Compute depth scores and update quality badges ──
-    // Asymmetric windows: dog side needs wider (your anchor posts deep), fav side tighter (hedge near bid)
-    const _obDogSide = bestYesBid < bestNoBid ? 'yes' : 'no';
-    const DOG_DEPTH_WINDOW = 15;  // Dog: 15¢ window (anchor posts deep in the book)
-    const FAV_DEPTH_WINDOW = 8;   // Fav: 8¢ window (hedge fills near top of book)
-    const yesWindow = _obDogSide === 'yes' ? DOG_DEPTH_WINDOW : FAV_DEPTH_WINDOW;
-    const noWindow = _obDogSide === 'no' ? DOG_DEPTH_WINDOW : FAV_DEPTH_WINDOW;
+    // Same 10¢ window for both sides so numbers are directly comparable
+    const DEPTH_WINDOW = 10;
     const yesDepth = yesOrders.reduce((s, o) => {
         const { price, qty } = parseOrderLevel(o);
-        return (bestYesBid && price >= bestYesBid - yesWindow) ? s + qty : s;
+        return (bestYesBid && price >= bestYesBid - DEPTH_WINDOW) ? s + qty : s;
     }, 0);
     const noDepth = noOrders.reduce((s, o) => {
         const { price, qty } = parseOrderLevel(o);
-        return (bestNoBid && price >= bestNoBid - noWindow) ? s + qty : s;
+        return (bestNoBid && price >= bestNoBid - DEPTH_WINDOW) ? s + qty : s;
     }, 0);
     const minDepth = Math.min(yesDepth, noDepth);
 
@@ -3122,19 +3118,16 @@ function displayOrderbookLadder(orderbook) {
     const favSideOb = dogSideOb === 'yes' ? 'no' : 'yes';
     const dogDepth = dogSideOb === 'yes' ? yesDepth : noDepth;
     const favDepth = dogSideOb === 'yes' ? noDepth : yesDepth;
-    // Phantom: thick fav = GOOD (hedge fills easy), thin dog = GOOD (less competition)
-    const phantomDepthGood = favDepth > dogDepth;
-    const phantomDepthLabel = phantomDepthGood
-        ? (favDepth >= 500 ? 'GREAT' : favDepth >= 200 ? 'GOOD' : 'OK')
-        : (dogDepth >= 500 ? 'CROWDED' : dogDepth >= 200 ? 'WATCH' : 'OK');
-    const phantomDepthCol = phantomDepthGood ? '#00ff88' : '#ffaa00';
+    // Phantom wants: thick fav (easy hedge) + thin dog (less competition)
+    const favThick = favDepth >= 200;
+    const dogThin = dogDepth < 200;
+    const phantomLabel = favThick ? 'HEDGE READY' : favDepth >= 50 ? 'OK' : 'THIN HEDGE';
+    const phantomCol = favThick ? '#00ff88' : favDepth >= 50 ? '#ffaa00' : '#ff4444';
 
     // Depth score component (0-35 pts, replaces spread tightness when real depth available)
     const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
-    const depthLabel = minDepth >= 500 ? 'DEEP' : minDepth >= 200 ? 'THICK' : minDepth >= 100 ? 'GOOD' : minDepth >= 50 ? 'OK' : 'THIN';
-    const depthCol = minDepth >= 200 ? '#00ff88' : minDepth >= 50 ? '#ffaa00' : '#ff4444';
 
-    // Store for ghost score updates (keep yesDepth3/noDepth3 keys for backward compat)
+    // Store for ghost score updates
     const ticker = ob._ticker || '';
     if (ticker || (orderbook.ticker)) {
         const tk = ticker || orderbook.ticker;
@@ -3142,26 +3135,35 @@ function displayOrderbookLadder(orderbook) {
         window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, ts: Date.now() };
     }
 
-    // Show depth summary above the orderbook — phantom-aware labeling
-    const dogLabel = dogSideOb.toUpperCase();
-    const favLabel = favSideOb.toUpperCase();
-    const dogDepthCol = dogDepth >= 500 ? '#ff4444' : dogDepth >= 200 ? '#ffaa00' : '#00ff88';
-    const favDepthCol = favDepth >= 500 ? '#00ff88' : favDepth >= 200 ? '#00ff88' : favDepth >= 50 ? '#ffaa00' : '#ff4444';
+    // Show depth summary — YES on left, NO on right (matching orderbook layout)
+    // Each side labeled with its phantom role (DOG or FAV)
+    const yesRole = dogSideOb === 'yes' ? 'DOG' : 'FAV';
+    const noRole = dogSideOb === 'no' ? 'DOG' : 'FAV';
+    const yesRoleCol = yesRole === 'FAV' ? (yesDepth >= 200 ? '#00ff88' : yesDepth >= 50 ? '#ffaa00' : '#ff4444')
+                                          : (yesDepth < 200 ? '#00ff88' : yesDepth < 500 ? '#ffaa00' : '#ff4444');
+    const noRoleCol = noRole === 'FAV' ? (noDepth >= 200 ? '#00ff88' : noDepth >= 50 ? '#ffaa00' : '#ff4444')
+                                        : (noDepth < 200 ? '#00ff88' : noDepth < 500 ? '#ffaa00' : '#ff4444');
+    const yesNote = yesRole === 'FAV'
+        ? (yesDepth >= 200 ? 'thick — easy hedge' : yesDepth >= 50 ? 'ok' : 'thin — risky')
+        : (yesDepth < 200 ? 'thin — easy fill' : yesDepth < 500 ? 'moderate' : 'crowded');
+    const noNote = noRole === 'FAV'
+        ? (noDepth >= 200 ? 'thick — easy hedge' : noDepth >= 50 ? 'ok' : 'thin — risky')
+        : (noDepth < 200 ? 'thin — easy fill' : noDepth < 500 ? 'moderate' : 'crowded');
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH (fav ${FAV_DEPTH_WINDOW}¢ · dog ${DOG_DEPTH_WINDOW}¢)</span>
-            <span style="color:${phantomDepthCol};font-weight:800;font-size:12px;">👻 ${phantomDepthLabel}</span>
+            <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>
+            <span style="color:${phantomCol};font-weight:800;font-size:12px;">👻 ${phantomLabel}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div style="text-align:center;background:${favDepthCol}08;border-radius:6px;padding:6px;">
-                <div style="color:${favDepthCol};font-weight:800;font-size:18px;">${favDepth.toLocaleString()}</div>
-                <div style="color:#8892a6;font-size:9px;">${favLabel} · FAV hedge liquidity</div>
-                <div style="color:${favDepthCol};font-size:8px;font-weight:700;">${favDepth >= 200 ? 'THICK — easy hedge' : favDepth >= 50 ? 'OK' : 'THIN — risky hedge'}</div>
+            <div style="text-align:center;background:${yesRoleCol}08;border:1px solid ${yesRoleCol}22;border-radius:6px;padding:6px;">
+                <div style="color:#00ff88;font-size:9px;font-weight:700;margin-bottom:2px;">YES · ${yesRole}</div>
+                <div style="color:${yesRoleCol};font-weight:800;font-size:18px;">${yesDepth.toLocaleString()}</div>
+                <div style="color:${yesRoleCol};font-size:8px;font-weight:600;">${yesNote}</div>
             </div>
-            <div style="text-align:center;background:${dogDepthCol}08;border-radius:6px;padding:6px;">
-                <div style="color:${dogDepthCol};font-weight:800;font-size:18px;">${dogDepth.toLocaleString()}</div>
-                <div style="color:#8892a6;font-size:9px;">${dogLabel} · DOG competition</div>
-                <div style="color:${dogDepthCol};font-size:8px;font-weight:700;">${dogDepth >= 500 ? 'CROWDED — hard fill' : dogDepth >= 200 ? 'MODERATE' : 'THIN — easy fill'}</div>
+            <div style="text-align:center;background:${noRoleCol}08;border:1px solid ${noRoleCol}22;border-radius:6px;padding:6px;">
+                <div style="color:#ff4444;font-size:9px;font-weight:700;margin-bottom:2px;">NO · ${noRole}</div>
+                <div style="color:${noRoleCol};font-weight:800;font-size:18px;">${noDepth.toLocaleString()}</div>
+                <div style="color:${noRoleCol};font-size:8px;font-weight:600;">${noNote}</div>
             </div>
         </div>
     </div>`;

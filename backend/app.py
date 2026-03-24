@@ -3864,8 +3864,11 @@ def _execute_phantom_ladder_hedge(bot_id):
         _fav_spread = (_fav_ask - _fav_bid) if _fav_ask > 0 and _fav_bid > 0 else 0
 
         if _fav_bid > 0:
-            hedge_price = min(_fav_bid + 1, _fav_ask - 1) if _fav_spread >= 2 and _fav_ask > _fav_bid else _fav_bid
-            hedge_price = min(hedge_price, _max_hedge)
+            # Bid+1 only if spread >= 2 AND bid+1 < ask (never cross the ask)
+            if _fav_spread >= 2 and _fav_bid + 1 < _fav_ask:
+                hedge_price = _fav_bid + 1
+            else:
+                hedge_price = _fav_bid
         else:
             # No WS bid — fall back to precalc hedge price
             precalc_hedges = bot.get('_precalc_hedge_prices', {})

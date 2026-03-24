@@ -11764,6 +11764,31 @@ def _handle_apex(bot_id, bot, actions):
                                     bot['_apex_sellback_attempted'] = True
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
                                     return
+                                else:
+                                    # Complete is cheaper than selling back — cross to bid to actually fill
+                                    # (ceiling only applies to profitable walks, not loss-exit)
+                                    _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
+                                    if _cross_target > current_price and unfilled_bid > 0:
+                                        print(f'💀 APEX LOSS-EXIT: {bot_id} crossing to {_cross_target}¢ (bid={unfilled_bid}) — cheaper than sell-back')
+                                        bot_log('APEX_LOSS_EXIT_CROSS', bot_id, {
+                                            'old_price': current_price, 'cross_target': _cross_target,
+                                            'unfilled_bid': unfilled_bid, 'anchor': anchor_price_for_ceiling,
+                                            'combined_at_cross': anchor_price_for_ceiling + _cross_target,
+                                        })
+                                        try:
+                                            api_rate_limiter.wait()
+                                            kalshi_client.amend_order(hedge_oid, price=_cross_target)
+                                            bot['hedge_price'] = _cross_target
+                                            if unfilled_side == 'yes':
+                                                bot['yes_price'] = _cross_target
+                                            else:
+                                                bot['no_price'] = _cross_target
+                                            bot['walk_count'] = bot.get('walk_count', 0) + 1
+                                            bot['last_walk_at'] = now
+                                            save_state()
+                                        except Exception as _ce:
+                                            print(f'⚠ APEX LOSS-EXIT amend failed: {_ce}')
+                                        return
 
                             # ══════════════════════════════════════════════
                             # 3-ZONE WALK SYSTEM

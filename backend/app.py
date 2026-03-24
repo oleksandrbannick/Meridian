@@ -2537,10 +2537,16 @@ def load_state():
             # the flag stays True in data.json and permanently blocks re-entry.
             _transient_cleared = 0
             for _bid, _bot in active_bots.items():
-                if _bot.get('_completion_in_progress'):
-                    _bot['_completion_in_progress'] = False
+                # Clear ALL transient thread flags — threads are dead after restart
+                _any_cleared = False
+                for _flag in ('_completion_in_progress', '_ws_fill_handling', '_bot_completed',
+                              '_completion_repeat_processed', '_sweep_thread_running'):
+                    if _bot.get(_flag):
+                        _bot[_flag] = False
+                        _any_cleared = True
+                if _any_cleared:
                     _transient_cleared += 1
-                    print(f'🔧 STARTUP FIX: {_bid} cleared stuck _completion_in_progress flag')
+                    print(f'🔧 STARTUP FIX: {_bid[:40]} cleared stuck thread flags')
             if _transient_cleared:
                 print(f'🔧 Cleared {_transient_cleared} stuck transient flags on startup')
             # Write a backup on startup so we can always recover
@@ -12277,9 +12283,13 @@ def _handle_apex(bot_id, bot, actions):
                                             # Executed + fully filled = trigger completion (handles unhedged anchors)
                                             if _404_status == 'executed' and _404_fills >= bot.get('hedge_qty', 0) and bot.get('hedge_qty', 0) > 0:
                                                 print(f'✅ APEX HEDGE DONE (404 verify): {bot_id} fills={_404_fills} qty={bot.get("hedge_qty")} — triggering completion')
-                                                if not bot.get('_completion_in_progress'):
-                                                    bot['_completion_in_progress'] = True
-                                                    threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
+                                                # Force-clear stale flags — previous completion thread may be dead
+                                                bot['_completion_in_progress'] = False
+                                                bot['_completion_repeat_processed'] = False
+                                                bot['_ws_fill_handling'] = False
+                                                bot['_bot_completed'] = False
+                                                bot['_completion_in_progress'] = True
+                                                threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
                                                 return
                                             # Canceled with 0 fills = hedge is dead, place new one
                                             if _404_status == 'canceled' and _404_fills == 0 and unfilled_bid > 0:

@@ -803,14 +803,22 @@ function getMarketLiquidity(market) {
     const hedgeRoom = 98 - dogPrice - (100 - favBid);
     const _phObCache = (window._obDepthCache || {})[market.ticker];
     const _phHasDepth = _phObCache && (Date.now() - _phObCache.ts) < 300000;
-    // Fav side = the side with higher bid (where hedge posts)
+    // Fav side = thick (hedge absorbs), Dog side = thin (whale dumps fill you)
     const _favDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3) : 0;
-    const _phSpreadOrDepthPts = _phHasDepth
+    const _dogDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3) : 0;
+    // Fav depth (40 pts) — thick fav = hedge catches
+    const _phFavPts = _phHasDepth
         ? (_favDepth >= 500 ? 40 : _favDepth >= 200 ? 35 : _favDepth >= 100 ? 25 : _favDepth >= 50 ? 15 : 0)
         : (spread <= 1 ? 40 : spread <= 2 ? 35 : spread <= 3 ? 25 : spread <= 5 ? 10 : 0);
+    // Dog thinness penalty (up to -20 pts) — thick dog = hard to fill, BAD
+    const _phDogPenalty = _phHasDepth
+        ? (_dogDepth >= 5000 ? -20 : _dogDepth >= 2000 ? -15 : _dogDepth >= 500 ? -10 : _dogDepth >= 200 ? -5 : 0)
+        : 0;
     const phantomQuality = Math.round(Math.max(0, Math.min(100,
         // Fav depth/spread (40 pts) — can hedge fill instantly?
-        _phSpreadOrDepthPts +
+        _phFavPts +
+        // Dog thinness penalty — thick dog is bad (whale can't move price to fill you)
+        _phDogPenalty +
         // Volume (25 pts) — deeper book = more whale activity + hedge absorption
         (vol >= 200 ? 25 : vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
         // Dog price sweet spot (20 pts) — 10-25¢ ideal
@@ -5569,7 +5577,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 })()}
                 ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
                 ${repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
-                ${_botCeiling < 98 ? `<span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
@@ -6240,7 +6247,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>`;
     }
 
-    // Repeat info
+    // Repeat + ceiling info
     const repeatCount = bot.repeat_count || 0;
     const repeatsDone = bot.repeats_done || 0;
     let cycleInfo = '';
@@ -6248,6 +6255,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const totalRuns = repeatCount + 1;
         const currentCycle = repeatsDone + 1;
         cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
+    }
+    if (_botCeiling < 98) {
+        cycleInfo += ` <span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>`;
     }
 
     const item = document.createElement('div');

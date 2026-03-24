@@ -2351,7 +2351,7 @@ function createMarketRow(market, label) {
     const activeBotTypes = Object.keys(botTypes);
     // Shared icon row: active bots + recommendations share one flex-wrap line
     const iconRow = document.createElement('div');
-    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-top:2px;max-width:100%;overflow:hidden;';
+    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;max-width:100%;overflow:hidden;';
     let hasIcons = false;
     if (activeBotTypes.length > 0) {
         hasIcons = true;
@@ -2363,16 +2363,16 @@ function createMarketRow(market, label) {
                 if (sameMkt.length > 0) {
                     const c = BOT_COLORS['phantom'] || '#ffaa00';
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-                    pill.innerHTML = `${botIconImg('phantom', 14)}`;
-                    pill.title = 'Phantom active';
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+                    pill.innerHTML = `${botIconImg('phantom', 14)} <span style="font-size:8px;">=</span>`;
+                    pill.title = 'Phantom active (same market)';
                     iconRow.appendChild(pill);
                 }
                 for (const ph of crossMkt) {
                     const sideChar = ph.side === 'yes' ? 'Y' : ph.side === 'no' ? 'N' : '?';
                     const sideCol = ph.side === 'yes' ? '#00ff88' : '#ff4444';
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:#00ddff15;border:1px solid #00ddff55;border-radius:4px;font-size:9px;font-weight:800;`;
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:#00ddff15;border:1px solid #00ddff55;border-radius:4px;font-size:9px;font-weight:800;`;
                     pill.innerHTML = `${botIconImg('phantom', 14)}<span style="color:#00ddff;">✕</span><span style="color:${sideCol};font-weight:900;">${sideChar}</span>`;
                     pill.title = `Cross-market Phantom ${ph.side.toUpperCase()}${ph.isHedgeSide ? ' [hedge side]' : ''}`;
                     iconRow.appendChild(pill);
@@ -2381,7 +2381,7 @@ function createMarketRow(market, label) {
                 const c = BOT_COLORS[bt] || '#818cf8';
                 const n = botTypes[bt];
                 const pill = document.createElement('span');
-                pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+                pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
                 pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
                 pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
                 iconRow.appendChild(pill);
@@ -2444,7 +2444,7 @@ function createMarketRow(market, label) {
         for (const r of recoTypes) {
             const c = BOT_COLORS[r.type] || '#888';
             const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:1px 4px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
+            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
             pill.innerHTML = botIconImg(r.type, 14, 0.75);
             if (r.label) {
                 pill.innerHTML += `<span style="font-size:8px;color:${r.labelColor || c};font-weight:700;">${r.label}</span>`;

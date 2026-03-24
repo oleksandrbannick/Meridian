@@ -7201,13 +7201,19 @@ def _execute_apex_completion(bot_id):
                     save_state()
                     return  # Don't complete — wait for extra hedge to fill
                 except Exception as e:
-                    print(f'   Extra hedge failed: {e} -- staying active to retry')
+                    _err_str = str(e)
+                    print(f'   Extra hedge failed: {e}')
                     bot_log('APEX_EXTRA_HEDGE_FAIL', bot_id, {
                         'side': unfilled_side, 'qty': unhedged, 'price': hedge_price,
-                        'error': str(e),
+                        'error': _err_str[:200],
                     }, level='ERROR')
                     bot['_extra_hedge_placed'] = False
-                    return
+                    # 400 = bad request (market closed, invalid order) — don't retry, accept loss
+                    if '400' in _err_str:
+                        print(f'   400 error — accepting {unhedged} unhedged, completing')
+                        # Fall through to completion below
+                    else:
+                        return
 
         total_pnl = bot.get('cumulative_pnl', 0)
         completed_count = bot.get('completed_rungs_count', 0)

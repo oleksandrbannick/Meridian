@@ -6418,69 +6418,37 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             if not hedge_oid:
                 return
 
-            hedge_qty = bot.get('hedge_qty', 0)
+            old_hedge_qty = bot.get('hedge_qty', 0)
             current_hedge_price = bot.get('hedge_price', 0)
             walk_offset = max(0, current_hedge_price - old_target)
             amend_price = max(1, new_target + walk_offset)
-
-            # Skip amend if price didn't change
-            if amend_price == current_hedge_price:
-                return
-
             ticker = bot['ticker']
 
+            # Skip if nothing changed
+            if amend_price == current_hedge_price and total_qty == old_hedge_qty:
+                return
+
         # API call OUTSIDE ws_fill_lock but INSIDE _late_anchor_amend_lock
-        # 1. Amend PRICE on existing hedge (Kalshi can't increase qty via amend)
-        # 2. If extra qty needed, place ONE supplemental order
-        _extra_qty = max(0, total_qty - hedge_qty)
+        # Single amend: update BOTH price AND qty on the existing hedge order
         try:
-            # Amend price on existing hedge
             amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
             api_rate_limiter.wait()
             kalshi_client.amend_order(
                 hedge_oid, ticker=ticker,
-                side=unfilled_side, count=hedge_qty,
+                side=unfilled_side, count=total_qty,
                 **amend_kwargs
             )
 
             with ws_fill_lock:
                 bot['hedge_price'] = amend_price
+                bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
 
-            # Place supplemental order for extra contracts (serialized — no races)
-            if _extra_qty > 0:
-                try:
-                    api_rate_limiter.wait()
-                    _extra_resp, _extra_actual = create_order_maker(
-                        ticker=ticker, side=unfilled_side, action='buy',
-                        count=_extra_qty, price=amend_price
-                    )
-                    _extra_oid = _extra_resp['order']['order_id']
-                    with ws_fill_lock:
-                        bot['hedge_qty'] = hedge_qty + _extra_qty
-                        _all_h = bot.get('_all_hedge_order_ids', [])
-                        _all_h.append(_extra_oid)
-                        bot['_all_hedge_order_ids'] = _all_h
-                        _all_p = bot.get('_all_placed_order_ids', [])
-                        _all_p.append(_extra_oid)
-                        bot['_all_placed_order_ids'] = _all_p
-                    print(f'📈 LATE ANCHOR: {bot_id} price→{amend_price}¢ + {_extra_qty} extra @ {_extra_actual}¢ (total hedge={hedge_qty + _extra_qty})')
-                    bot_log('APEX_LATE_ANCHOR_EXTRA', bot_id, {
-                        'extra_qty': _extra_qty, 'price': _extra_actual,
-                        'order_id': _extra_oid[:12], 'new_hedge_qty': hedge_qty + _extra_qty,
-                    })
-                except Exception as _extra_err:
-                    print(f'⚠ LATE ANCHOR EXTRA FAIL: {bot_id}: {_extra_err}')
-                    bot_log('APEX_LATE_ANCHOR_EXTRA_FAIL', bot_id, {
-                        'extra_qty': _extra_qty, 'error': str(_extra_err)[:200],
-                    }, level='ERROR')
-            else:
-                print(f'📈 LATE ANCHOR: {bot_id} price {current_hedge_price}→{amend_price}¢ (anchors={total_qty} hedge_qty={hedge_qty})')
-
+            print(f'📈 LATE ANCHOR: {bot_id} hedge {old_hedge_qty}→{total_qty}× @ {amend_price}¢ (was {current_hedge_price}¢)')
             bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
-                'total_anchor_qty': total_qty, 'hedge_qty': bot.get('hedge_qty', hedge_qty),
+                'old_hedge_qty': old_hedge_qty, 'new_hedge_qty': total_qty,
                 'old_price': current_hedge_price, 'amend_price': amend_price,
-                'extra_qty': _extra_qty, 'avg_width': round(new_avg_width, 1),
-                'new_target': new_target, 'walk_offset': walk_offset, 'rung_idx': rung_idx,
+                'avg_width': round(new_avg_width, 1), 'new_target': new_target,
+                'walk_offset': walk_offset, 'rung_idx': rung_idx,
             })
 
         except Exception as e:

@@ -5779,7 +5779,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const urgencyBadge = gameUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
         : gameUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>'
         : gameUrgency === 'halftime' ? '<span style="color:#818cf8;font-weight:700;font-size:9px;background:#818cf822;padding:1px 4px;border-radius:3px;">⏸ HALF</span>'
-        : '';
+        : '<span style="color:#8892a6;font-weight:600;font-size:9px;background:#8892a612;padding:1px 4px;border-radius:3px;">NORMAL</span>';
     const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
     const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
     // Ceiling distance
@@ -5902,7 +5902,6 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
                     ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
                     ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
-                    <span>ask dist: <strong style="color:${gapToAsk <= 2 ? '#ff4444' : '#555'};">${gapToAsk}¢</strong></span>
                 </div>
             </div>`;
         }

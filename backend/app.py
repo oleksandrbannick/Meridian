@@ -4359,7 +4359,7 @@ def _execute_ws_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        will_repeat = repeats_done_now < repeat_total
+        will_repeat = repeats_done_now <= repeat_total
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -7112,11 +7112,11 @@ def _execute_apex_completion(bot_id):
         if _first_fill:
             bot['hedge_fill_latency_ms'] = round((now - _first_fill) * 1000, 1)
 
-        # Repeat logic
+        # Repeat logic — repeat_count = number of ADDITIONAL runs after the first
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        will_repeat = repeats_done_now < repeat_total
+        will_repeat = repeats_done_now <= repeat_total
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -12250,7 +12250,7 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
-                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)]  # keep if repeats pending
+                      and not b.get('repeat_count', 0) >= b.get('repeats_done', 0)]  # keep if repeats pending
         if _purge_ids:
             for _pid in _purge_ids:
                 del active_bots[_pid]
@@ -13356,7 +13356,7 @@ def _run_monitor():
                     repeats_done_now = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = repeats_done_now
                     repeat_total = bot.get('repeat_count', 0)
-                    will_repeat = repeats_done_now < repeat_total
+                    will_repeat = repeats_done_now <= repeat_total
 
                     bot['completed_at'] = now
                     bot['status'] = 'waiting_repeat' if will_repeat else 'completed'

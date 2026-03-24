@@ -5420,6 +5420,12 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const hedgeQty = bot.hedge_qty || (isLadder ? (bot.total_dog_fill_qty || qty) : qty);
     const favFilled = favFillQty >= hedgeQty;
     const avgDogPrice = isLadder && bot.avg_fill_price > 0 ? bot.avg_fill_price : dogPrice;
+    const repeatCount = bot.repeat_count || 0;
+    const repeatsDone = bot.repeats_done || 0;
+    const dogFilledAt = bot.dog_filled_at || bot.first_fill_at || 0;
+    const fillAgeS = dogFilledAt > 0 ? Math.floor(nowSec - dogFilledAt) : 0;
+    const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
+    const walkCount = bot.fav_walk_count || 0;
 
     // Dog fill bar
     const dogFillPct = qty > 0 ? Math.round((dogFillQty / qty) * 100) : 0;
@@ -5486,6 +5492,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
+                ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
+                ${(() => {
+                    const gu = bot._game_urgency || '';
+                    const wi = bot._walk_interval || 20;
+                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s</span>';
+                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s</span>`;
+                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALF</span>';
+                    if (dogFilled && favPrice > 0) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● ${wi}s walk</span>`;
+                    return '';
+                })()}
+                ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
+                ${repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
@@ -6145,12 +6163,22 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${(() => {
                     const gu = bot._game_urgency || '';
                     const wi = bot._walk_interval || 20;
-                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s · 30s exit</span>';
-                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s · 5min exit</span>`;
-                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALFTIME · paused</span>';
-                    if (isFilled) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● NORMAL · ${wi}s walk</span>`;
+                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s</span>';
+                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s</span>`;
+                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALF</span>';
+                    if (isFilled) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● ${wi}s walk</span>`;
                     return '';
                 })()}
+                ${isFilled ? (() => {
+                    const sbGrace = bot._sellback_grace_s || 0;
+                    const sbLeft = bot._sellback_time_left != null ? bot._sellback_time_left : sbGrace;
+                    if (sbGrace <= 0 || sbGrace >= 9999) return '';
+                    const sbMin = Math.floor(sbLeft / 60);
+                    const sbSec = Math.floor(sbLeft % 60);
+                    const sbPct = sbGrace > 0 ? Math.round(((sbGrace - sbLeft) / sbGrace) * 100) : 0;
+                    const sbCol = sbLeft <= 30 ? '#ff4444' : sbLeft <= 60 ? '#ff8800' : '#00aaff';
+                    return `<span style="background:${sbCol}22;color:${sbCol};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;font-family:monospace;">⏱ ${sbMin}:${String(sbSec).padStart(2,'0')}</span>`;
+                })() : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>

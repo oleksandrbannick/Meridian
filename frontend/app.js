@@ -7435,7 +7435,7 @@ async function loadBots() {
                             return `
                             <div>
                                 <div style="display:flex;justify-content:space-between;color:#8892a6;margin-bottom:3px;">
-                                    <span>👻 ANCHOR ${dogSide.toUpperCase()} @ <strong style="color:${dogColor};">${dogPrice}¢</strong></span>
+                                    <span>👻${bot.cross_market ? '<span style="color:#00ddff;font-size:8px;font-weight:800;margin:0 3px;">✕</span>' : ''} ANCHOR ${dogSide.toUpperCase()} @ <strong style="color:${dogColor};">${dogPrice}¢</strong></span>
                                     <span style="color:${dogFill >= qty ? dogColor : '#8892a6'};font-weight:${dogFill >= qty ? '700' : '400'};">${dogFill >= qty ? `${dogFill}/${qty} ✓` : `${dogFill}/${qty}`}</span>
                                 </div>
                                 <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${dogFill >= qty ? `box-shadow:0 0 8px ${dogColor}44;` : ''}">
@@ -7444,7 +7444,7 @@ async function loadBots() {
                             </div>
                             <div style="opacity:${isFavWaiting ? '0.4' : '1'};transition:opacity .5s;">
                                 <div style="display:flex;justify-content:space-between;color:${isFavWaiting ? '#555' : '#8892a6'};margin-bottom:3px;">
-                                    <span>🔒 FAV ${favSide.toUpperCase()} @ <strong style="color:${isFavWaiting ? favColor + '44' : favColor};">${favPrice}¢</strong></span>
+                                    <span>🔒 FAV ${favSide.toUpperCase()} @ <strong style="color:${isFavWaiting ? favColor + '44' : favColor};">${favPrice}¢</strong>${bot.cross_market && bot.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(bot.hedge_ticker||'').split('-').pop()}</span>` : ''}</span>
                                     <span style="color:${favFill >= qty ? favColor : (isFavWaiting ? '#555' : '#8892a6')};font-weight:${favFill >= qty ? '700' : '400'};">${isFavWaiting ? 'PENDING' : (favFill >= qty ? `${favFill}/${qty} ✓` : `${favFill}/${qty}`)}</span>
                                 </div>
                                 <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;${favFill >= qty ? `box-shadow:0 0 8px ${favColor}44;` : ''}">
@@ -7492,12 +7492,12 @@ async function loadBots() {
 
                             return `
                             <div>
-                                <div style="color:#ff6600;font-weight:700;font-size:10px;margin-bottom:4px;">👻 PHANTOM · ${dogSide.toUpperCase()}</div>
+                                <div style="color:#ff6600;font-weight:700;font-size:10px;margin-bottom:4px;">👻 PHANTOM${bot.cross_market ? ' <span style="background:linear-gradient(135deg,#ff006620,#00aaff20);color:#00ddff;border:1px solid #00aaff44;border-radius:3px;padding:0 4px;font-size:8px;font-weight:800;letter-spacing:.05em;">✕ CROSS</span>' : ''} · ${dogSide.toUpperCase()}</div>
                                 ${rungsHtml}
                             </div>
                             <div style="opacity:${isFavWaiting ? '0.4' : '1'};transition:opacity .5s;">
                                 <div style="display:flex;justify-content:space-between;color:${isFavWaiting ? '#555' : '#8892a6'};margin-bottom:3px;">
-                                    <span>🔒 FAV ${favSide.toUpperCase()} @ <strong style="color:${isFavWaiting ? favColor + '44' : favColor};">${favPrice}¢</strong></span>
+                                    <span>🔒 FAV ${favSide.toUpperCase()} @ <strong style="color:${isFavWaiting ? favColor + '44' : favColor};">${favPrice}¢</strong>${bot.cross_market && bot.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(bot.hedge_ticker||'').split('-').pop()}</span>` : ''}</span>
                                     <span>${isFavWaiting ? 'PENDING' : (favFill >= hedgeQty ? `${favFill}/${hedgeQty} ✓` : `${favFill}/${hedgeQty}`)}</span>
                                 </div>
                                 <div style="height:6px;background:#1e2740;border-radius:3px;overflow:hidden;">

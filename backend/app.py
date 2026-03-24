@@ -7387,15 +7387,29 @@ def create_anchor_bot():
         if not ticker or dog_price < 1 or dog_price > 99:
             return jsonify({'error': 'Required: ticker, dog_price (1-99)'}), 400
 
-        # One Phantom per ticker
-        existing_phantom = next(
-            (bid for bid, b in active_bots.items()
-             if b.get('ticker') == ticker and b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
-             and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')),
-            None
-        )
-        if existing_phantom:
-            return jsonify({'error': f'Already have an active Phantom bot on this line: {existing_phantom[:30]}'}), 400
+        # Phantom duplicate check:
+        # Same-market: one per ticker+side (YES and NO can coexist)
+        # Cross-market: one per ticker+hedge_ticker+side (YES+YES and NO+NO are separate arbs)
+        for bid, b in active_bots.items():
+            if b.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+                continue
+            if b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
+                continue
+            b_cross = b.get('cross_market', False)
+            b_ticker = b.get('ticker', '')
+            b_hedge = b.get('hedge_ticker', b_ticker)
+            b_side = b.get('dog_side', '')
+            if cross_market:
+                # Block exact same cross-market arb (same ticker+hedge+side)
+                if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
+                    return jsonify({'error': f'Cross-market Phantom ({dog_side.upper()}) already active: {bid[:30]}'}), 400
+                # Block reverse with same side
+                if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
+                    return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
+            else:
+                # Same-market: block same ticker+side
+                if not b_cross and b_ticker == ticker and b_side == dog_side:
+                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on this line: {bid[:30]}'}), 400
 
         if target_width < 1:
             return jsonify({'error': 'target_width must be >= 1'}), 400
@@ -7418,14 +7432,6 @@ def create_anchor_bot():
         )
         if active_on_ticker >= MAX_BOTS_PER_TICKER:
             return jsonify({'error': f'Bot cap: {active_on_ticker} bots on {ticker} (max {MAX_BOTS_PER_TICKER})'}), 400
-
-        # Block duplicate dog bots on same ticker+side
-        for b in active_bots.values():
-            if (b.get('ticker') == ticker
-                and b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
-                and b.get('status') not in ('completed', 'stopped', 'cancelled')
-                and b.get('dog_side', '') == dog_side):
-                return jsonify({'error': f'A dog bot is already active on {ticker} ({dog_side} side). Cancel it first.'}), 400
 
         # Auto-detect dog side from orderbook if not specified
         # Always fetch live orderbook for smart pricing
@@ -7576,15 +7582,24 @@ def create_ladder_bot():
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
 
-        # One Phantom per ticker — prevent duplicate bots on same line
-        existing_phantom = next(
-            (bid for bid, b in active_bots.items()
-             if b.get('ticker') == ticker and b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
-             and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')),
-            None
-        )
-        if existing_phantom:
-            return jsonify({'error': f'Already have an active Phantom bot on this line: {existing_phantom[:30]}'}), 400
+        # Phantom duplicate check (same logic as single phantom)
+        for bid, b in active_bots.items():
+            if b.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+                continue
+            if b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
+                continue
+            b_cross = b.get('cross_market', False)
+            b_ticker = b.get('ticker', '')
+            b_hedge = b.get('hedge_ticker', b_ticker)
+            b_side = b.get('dog_side', '')
+            if cross_market:
+                if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
+                    return jsonify({'error': f'Cross-market Phantom ({dog_side.upper()}) already active: {bid[:30]}'}), 400
+                if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
+                    return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
+            else:
+                if not b_cross and b_ticker == ticker and b_side == dog_side:
+                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on this line: {bid[:30]}'}), 400
 
         if not rungs_input or len(rungs_input) < 1 or len(rungs_input) > 3:
             return jsonify({'error': 'Need 1-3 rungs'}), 400

@@ -8827,9 +8827,58 @@ URGENCY_PARAMS = {
     'halftime':  {'walk_interval': 20, 'snap_ceiling': 96, 'sellback_urgency': 'paused'},
 }
 
+# ── Price velocity fallback: urgency from bid drops when no score data ──
+_price_velocity_history = {}  # ticker -> deque([(timestamp, yes_bid, no_bid)])
+_PRICE_VELOCITY_MAXLEN = 120  # ~2 min of snapshots
+
+def _record_price_for_velocity(ticker, yes_bid, no_bid):
+    """Record a price snapshot for velocity-based urgency detection.
+    Called from monitor loop when WS prices are available."""
+    if not ticker or (not yes_bid and not no_bid):
+        return
+    if ticker not in _price_velocity_history:
+        _price_velocity_history[ticker] = deque(maxlen=_PRICE_VELOCITY_MAXLEN)
+    _price_velocity_history[ticker].append((time.time(), yes_bid or 0, no_bid or 0))
+
+def _get_price_velocity_urgency(ticker):
+    """Fallback urgency based on price velocity.
+    ONLY called when _get_game_score_for_ticker() returns None (no score data).
+    Checks if either side's bid has dropped significantly in the last 2 minutes."""
+    history = _price_velocity_history.get(ticker)
+    if not history or len(history) < 3:
+        return 'normal'
+
+    now = time.time()
+    latest_yes = history[-1][1]
+    latest_no = history[-1][2]
+
+    # Find peak bid for each side in the last 2 minutes
+    peak_yes = latest_yes
+    peak_no = latest_no
+    for ts, yb, nb in history:
+        if now - ts <= 120:
+            peak_yes = max(peak_yes, yb)
+            peak_no = max(peak_no, nb)
+
+    # Biggest drop on either side
+    yes_drop = peak_yes - latest_yes
+    no_drop = peak_no - latest_no
+    max_drop = max(yes_drop, no_drop)
+
+    if max_drop >= 25:
+        dropping_side = 'YES' if yes_drop >= no_drop else 'NO'
+        print(f'🚨 PRICE VELOCITY CRITICAL: {ticker} {dropping_side} dropped {max_drop}¢ in 2min (peak {max(peak_yes, peak_no)}→{min(latest_yes, latest_no)})')
+        return 'critical'   # 25+ cent crash in 2 min
+    elif max_drop >= 15:
+        dropping_side = 'YES' if yes_drop >= no_drop else 'NO'
+        print(f'⚠ PRICE VELOCITY LATE: {ticker} {dropping_side} dropped {max_drop}¢ in 2min (peak {max(peak_yes, peak_no)}→{min(latest_yes, latest_no)})')
+        return 'late'        # 15+ cent drop in 2 min
+    return 'normal'
+
 def _get_game_urgency(ticker):
     """Return game urgency level based on live game state.
-    Returns: 'normal', 'late', 'critical', or 'halftime'."""
+    Returns: 'normal', 'late', 'critical', or 'halftime'.
+    Falls back to price velocity when no score data exists."""
     try:
         if _is_game_ending(ticker):
             return 'critical'
@@ -8837,7 +8886,12 @@ def _get_game_urgency(ticker):
             return 'halftime'
         # Check if we're in a late-game period
         score_info = _get_game_score_for_ticker(ticker)
-        if not score_info or score_info.get('status') != 'in':
+
+        # No score data at all — fall back to price velocity
+        if not score_info:
+            return _get_price_velocity_urgency(ticker)
+
+        if score_info.get('status') != 'in':
             return 'normal'
         series = ticker.split('-')[0].upper() if ticker else ''
         rule = None
@@ -8846,7 +8900,9 @@ def _get_game_urgency(ticker):
                 if rule is None or len(prefix) > len(rule[0]):
                     rule = (prefix, r)
         if not rule:
-            return 'normal'
+            # Sport has score data but no late-game rules (e.g. tennis with ESPN)
+            # Fall back to price velocity
+            return _get_price_velocity_urgency(ticker)
         r = rule[1]
         period = score_info.get('period', 0)
         clock = score_info.get('clock', '')
@@ -8906,6 +8962,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['live_no_bid'] = ws_p.get('no_bid', 0)
             bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
             bot['live_no_ask'] = ws_p.get('no_ask', 0)
+            _record_price_for_velocity(ticker, ws_p.get('yes_bid', 0), ws_p.get('no_bid', 0))
         # Cross-market: also cache hedge_ticker prices for fav walk
         if hedge_ticker != ticker:
             ws_p_hedge = ws_manager.get_price(hedge_ticker) if ws_manager else None
@@ -9978,6 +10035,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot['live_no_bid'] = ws_p_lad.get('no_bid', 0)
             bot['live_yes_ask'] = ws_p_lad.get('yes_ask', 0)
             bot['live_no_ask'] = ws_p_lad.get('no_ask', 0)
+            _record_price_for_velocity(ticker, ws_p_lad.get('yes_bid', 0), ws_p_lad.get('no_bid', 0))
         # Cross-market: also cache hedge_ticker prices for fav walk
         if hedge_ticker != ticker:
             ws_p_hedge_lad = ws_manager.get_price(hedge_ticker) if ws_manager else None
@@ -11121,6 +11179,7 @@ def _handle_apex(bot_id, bot, actions):
             bot['live_no_bid'] = ws_p.get('no_bid', 0)
             bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
             bot['live_no_ask'] = ws_p.get('no_ask', 0)
+            _record_price_for_velocity(ticker, ws_p.get('yes_bid', 0), ws_p.get('no_bid', 0))
     except Exception:
         pass
 

@@ -9064,9 +9064,13 @@ def _get_game_urgency(ticker):
                 if rule is None or len(prefix) > len(rule[0]):
                     rule = (prefix, r)
         if not rule:
-            # Sport has score data but no late-game rules (e.g. tennis with ESPN)
-            # Fall back to price velocity
-            return _get_price_velocity_urgency(ticker)
+            # Sport has ESPN data but no late-game rules (MLB, MLS, etc.)
+            # If game is live ('in'), trust ESPN — don't use price velocity
+            # (normal bid swings get misread as 'critical' and trigger early sell-back)
+            if score_info.get('status') == 'in':
+                return 'normal'
+            # Game is 'post' — it ended, but _is_game_ending already checked this
+            return 'normal'
         r = rule[1]
         period = score_info.get('period', 0)
 

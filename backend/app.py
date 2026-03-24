@@ -3529,7 +3529,8 @@ def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
 
 
 def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
-    """Pre-calculate hedge prices AND avg fill prices for every fill count (1, 2, 3 rungs).
+    """Pre-calculate hedge prices AND avg fill prices for EVERY possible fill count.
+    Handles partial rung fills (important at high contract counts).
     Assumes top-down fill order (highest price fills first).
     Returns (hedge_dict, avg_dict) — both keyed by cumulative fill qty."""
     sorted_rungs = sorted(rungs, key=lambda r: r['price'], reverse=True)
@@ -3539,11 +3540,16 @@ def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
     cum_price_x_qty = 0
     for r in sorted_rungs:
         rq = r.get('qty', 1)
+        price = r['price']
+        # Precalc for every partial fill within this rung
+        for partial in range(1, rq + 1):
+            qty_at = cum_qty + partial
+            cost_at = cum_price_x_qty + price * partial
+            avg = round(cost_at / qty_at)
+            hedges[qty_at] = _precalc_phantom_hedge(avg, target_width, dog_side, qty_at)
+            avgs[qty_at] = avg
         cum_qty += rq
-        cum_price_x_qty += r['price'] * rq
-        avg = round(cum_price_x_qty / cum_qty)
-        hedges[cum_qty] = _precalc_phantom_hedge(avg, target_width, dog_side, cum_qty)
-        avgs[cum_qty] = avg
+        cum_price_x_qty += price * rq
     return hedges, avgs
 
 

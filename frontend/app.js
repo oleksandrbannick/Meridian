@@ -6758,6 +6758,22 @@ async function loadBots() {
         const data = await response.json();
         const bots = data.bots || {};
         window._lastBotsData = bots;  // used by emergencyExitGame
+
+        // Track when bots first transition to completed/stopped so we can show them for 3s
+        if (!window._botCompletedAt) window._botCompletedAt = {};
+        const now = Date.now();
+        for (const id of Object.keys(bots)) {
+            const s = bots[id].status;
+            if ((s === 'completed' || s === 'stopped') && !window._botCompletedAt[id]) {
+                window._botCompletedAt[id] = now;
+            }
+        }
+        // Clean up old entries
+        for (const id of Object.keys(window._botCompletedAt)) {
+            if (!bots[id] || now - window._botCompletedAt[id] > 10000) {
+                delete window._botCompletedAt[id];
+            }
+        }
         const gameScores = data.game_scores || {};
         const botIds = Object.keys(bots);
 
@@ -6772,7 +6788,13 @@ async function loadBots() {
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
-            return s !== 'completed' && s !== 'stopped' && s !== 'awaiting_settlement';
+            if (s === 'awaiting_settlement') return false;
+            // Keep completed/stopped bots visible for 3 seconds
+            if (s === 'completed' || s === 'stopped') {
+                const finishedAt = (window._botCompletedAt || {})[id];
+                return finishedAt && (now - finishedAt < 3000);
+            }
+            return true;
         });
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');
@@ -7057,9 +7079,25 @@ async function loadBots() {
                     // Watch bots: potential = (100 - entry) * qty
                     return sum + ((100 - (b.entry_price || 50)) * (b.quantity || 1));
                 }
-                // Ladder arb: use actual cumulative P&L (fee-adjusted) if available
-                if (b.bot_category === 'ladder_arb' && b.cumulative_pnl != null) {
-                    return sum + b.cumulative_pnl;
+                // Ladder arb / Phantom: estimate live P&L from anchor + hedge prices
+                if (b.bot_category === 'ladder_arb' || b.bot_category === 'anchor_dog' || b.bot_category === 'anchor_ladder') {
+                    let estPnl = b.cumulative_pnl || 0;  // completed runs
+                    // Add estimated P&L for current active run
+                    const anchorPrice = b.avg_fill_price || b.dog_price || 0;
+                    const favSide = b.first_fill_side === 'yes' ? 'no' : 'yes';
+                    const favBid = b[`live_${favSide}_bid`] || 0;
+                    const favPrice = b.fav_price || b.hedge_price || favBid;
+                    const dogFilled = (b.total_dog_fill_qty || b.dog_fill_qty || b[`filled_${b.first_fill_side || 'yes'}_qty`] || 0) > 0;
+                    if (anchorPrice > 0 && dogFilled) {
+                        const curFav = favPrice > 0 ? favPrice : favBid;
+                        if (curFav > 0) {
+                            const q = b.hedge_qty || b.quantity || 1;
+                            const spread = 100 - anchorPrice - curFav;
+                            const fee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(anchorPrice, curFav, q) : 0;
+                            estPnl += spread * q - fee;
+                        }
+                    }
+                    return sum + estPnl;
                 }
                 const rawProfit = (b.profit_per ?? (100 - (b.yes_price || 0) - (b.no_price || 0))) * (b.quantity || 1);
                 // Subtract estimated maker fees

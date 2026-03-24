@@ -17414,8 +17414,11 @@ def get_active_positions():
                     dog_fills = sum(_si(r.get('fill_qty', 0)) for r in b.get('rungs', []))
                 fav_side = b.get('fav_side', '')
                 fav_qty = _si(b.get('fav_fill_qty'))
-                # Kalshi settles matching fills instantly - use NET only
-                if dog_side and fav_side and dog_side != fav_side:
+                # Cross-market: fav position is on hedge_ticker, not ticker
+                _fav_ticker = b.get('hedge_ticker', t) or t
+                _is_same_market = _fav_ticker == t
+                # Same-market: Kalshi settles matching fills instantly - use NET only
+                if _is_same_market and dog_side and fav_side and dog_side != fav_side:
                     net_dog = max(0, dog_fills - fav_qty)
                     net_fav = max(0, fav_qty - dog_fills)
                     if net_dog > 0:
@@ -17423,10 +17426,11 @@ def get_active_positions():
                     if net_fav > 0:
                         _add(t, fav_side, 'phantom', net_fav)
                 else:
+                    # Cross-market: dog on ticker, fav on hedge_ticker (separate positions)
                     if dog_fills > 0:
                         _add(t, dog_side, 'phantom', dog_fills)
                     if fav_qty > 0:
-                        _add(t, fav_side, 'phantom', fav_qty)
+                        _add(_fav_ticker, fav_side, 'phantom', fav_qty)
             elif cat == 'ladder_arb':
                 # Kalshi instantly settles matching YES+NO - only NET imbalance is real
                 _apex_yes = _si(b.get('filled_yes_qty'))

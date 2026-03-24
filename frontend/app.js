@@ -5594,7 +5594,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
                             <div style="width:${dogFillPct}%;height:100%;background:${dogFillCol};border-radius:3px;"></div>
                         </div>
-                        <span style="color:${dogFillCol};font-size:10px;font-weight:700;">${dogFillQty}/${qty}</span>
+                        <span style="color:${dogFillCol};font-size:10px;font-weight:700;">${Math.min(dogFillQty, qty)}/${qty}</span>
                     </div>
                 `}
             </div>

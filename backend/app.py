@@ -3387,69 +3387,13 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         # Check if ALL rungs have both sides filled (reliable per-rung tracking)
         _all_rungs_filled = (total_yes >= total_expected_per_side and total_no >= total_expected_per_side)
 
-        # Check if hedge is fully done — require API verification to prevent phantom fill completion
-        # Also verify hedge covers ALL anchor fills (late anchors may still be amending)
-        _filled_side_chk = bot.get('first_fill_side', 'yes')
-        _total_anchor_fills = sum(
-            min(r.get(f'{_filled_side_chk}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
-            for r in bot.get('rungs', [])
-        )
+        # Check if hedge is fully done — require API verification
         _hedge_fully_filled = (bot.get('_consolidated')
                                and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
                                and bot.get('hedge_qty', 0) > 0)
-        _hedge_fully_done = (_hedge_fully_filled
-                             and bot.get('_hedge_verified')
-                             and bot.get('hedge_qty', 0) >= _total_anchor_fills)
-
-        # Hedge fully filled but unhedged anchors remain → place new hedge generation
-        _unhedged_qty = _total_anchor_fills - bot.get('hedge_qty', 0)
-        if (_hedge_fully_filled and _unhedged_qty > 0
-                and not bot.get('_extra_hedge_placed') and not bot.get('_ws_fill_handling')):
-            _unfilled_side = 'no' if bot.get('first_fill_side') == 'yes' else 'yes'
-            _new_avg_anchor = round(sum(
-                r.get(f'{bot["first_fill_side"]}_price', 0) * min(r.get(f'{bot["first_fill_side"]}_fill_qty', 0), r.get('quantity', 1))
-                for r in bot.get('rungs', []) if r.get(f'{bot["first_fill_side"]}_fill_qty', 0) > 0
-            ) / _total_anchor_fills) if _total_anchor_fills > 0 else 0
-            _avg_width = bot.get('_avg_width', 5)
-            _new_hedge_price = max(1, 100 - _new_avg_anchor - _avg_width)
-            # Cap at ceiling
-            _new_hedge_price = min(_new_hedge_price, HARD_CEILING_CENTS - _new_avg_anchor)
-            bot['_extra_hedge_placed'] = True
-            bot_log('APEX_NEW_HEDGE_GEN', bot_id, {
-                'unhedged_qty': _unhedged_qty, 'new_hedge_price': _new_hedge_price,
-                'new_avg_anchor': _new_avg_anchor, 'old_hedge_qty': bot.get('hedge_qty', 0),
-                'total_anchor_fills': _total_anchor_fills,
-            })
-            print(f'🔄 APEX NEW HEDGE GEN: {bot_id} {_unhedged_qty} unhedged — placing {_unfilled_side} hedge @ {_new_hedge_price}¢')
-            def _place_extra_hedge(_bid, _bot, _qty, _price, _side):
-                try:
-                    _tk = _bot.get('ticker', '')
-                    _kwargs = {'yes_price': _price} if _side == 'yes' else {'no_price': _price}
-                    api_rate_limiter.wait()
-                    resp = kalshi_client.create_order(_tk, _side, 'buy', _qty, post_only=True, **_kwargs)
-                    _new_oid = resp.get('order', {}).get('order_id', '')
-                    with ws_fill_lock:
-                        _bot['hedge_order_id'] = _new_oid
-                        _bot['hedge_price'] = _price
-                        _bot['hedge_qty'] = _bot.get('hedge_qty', 0) + _qty
-                        _bot['_hedge_fill_count'] = _bot.get('_hedge_fill_count', 0)  # keep existing
-                        _all_hedge = _bot.get('_all_hedge_order_ids', [])
-                        _all_hedge.append(_new_oid)
-                        _bot['_all_hedge_order_ids'] = _all_hedge
-                        _bot['_hedge_verified'] = False
-                        _bot['_extra_hedge_placed'] = True
-                        _bot['walk_count'] = 0
-                        _bot['last_walk_at'] = time.time()
-                    print(f'✅ APEX EXTRA HEDGE: {_bid} placed {_side} {_qty}× @ {_price}¢ oid={_new_oid[:12]}')
-                    bot_log('APEX_EXTRA_HEDGE_PLACED', _bid, {
-                        'side': _side, 'qty': _qty, 'price': _price, 'order_id': _new_oid[:12],
-                    })
-                    save_state()
-                except Exception as _eh:
-                    print(f'⚠ APEX EXTRA HEDGE FAIL: {_bid}: {_eh}')
-                    bot_log('APEX_EXTRA_HEDGE_FAIL', _bid, {'error': str(_eh)[:200]}, level='ERROR')
-                    _bot['_extra_hedge_placed'] = False  # allow retry
-            threading.Thread(target=_place_extra_hedge, args=(bot_id, bot, _unhedged_qty, _new_hedge_price, _unfilled_side), daemon=True).start()
+        _hedge_fully_done = (_hedge_fully_filled and bot.get('_hedge_verified'))
+        # Note: completion handler (Phase 3) detects unhedged anchors and handles them.
+        # No extra hedge generation here — that caused orphans.
 
         if _all_rungs_filled or _hedge_fully_done:
             # Both sides fully filled OR hedge fully done — complete!
@@ -6418,10 +6362,11 @@ def _cancel_with_retry(oid, max_retries=2):
 
 
 def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
-    """Late Fill Protocol — recalc weighted avg, amend hedge, preserve walk timer.
+    """Late Fill Protocol — recalc weighted avg, amend hedge PRICE only, preserve walk timer.
 
-    Serialized via _late_anchor_amend_lock to prevent race where multiple WS fill
-    threads read stale hedge_qty/hedge_price and overwrite each other's walk_offset.
+    Serialized via _late_anchor_amend_lock to prevent race conditions.
+    Only amends PRICE (to account for new weighted avg). Does NOT change qty.
+    Completion handler detects anchor_qty > hedge_qty and handles the difference.
     """
     # Phase 1: quick pre-check inside ws_fill_lock (fast, no API calls)
     with ws_fill_lock:
@@ -6439,7 +6384,6 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             return
 
     # Phase 2: serialized amend — only one thread amends at a time
-    # When the next thread enters, it sees hedge_qty/hedge_price from the previous amend
     with _late_anchor_amend_lock:
         # Re-read everything inside ws_fill_lock to get FRESH state
         with ws_fill_lock:
@@ -6464,140 +6408,73 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             new_avg_width = total_width_x_qty / total_qty
             new_target = round(100 - new_avg_price - new_avg_width)
 
-            old_hedge_qty = bot.get('hedge_qty', 0)
-
-            # Race condition guard: if another thread already set hedge_qty higher, skip
-            if total_qty <= old_hedge_qty:
-                bot_log('APEX_LATE_ANCHOR_SKIP', bot_id, {
-                    'reason': 'hedge_qty_already_higher',
-                    'total_qty': total_qty, 'old_hedge_qty': old_hedge_qty,
-                    'rung_idx': rung_idx, 'fill_count': fill_count,
-                })
-                return
-
             bot[f'avg_{filled_side}_price'] = round(new_avg_price, 1)
             old_target = bot.get('_target_hedge_price', new_target)
             bot['_target_hedge_price'] = new_target
+            bot['_avg_width'] = new_avg_width
 
-            # 2. Price = new target + walk offset (preserve walk progress, adjust for new avg width)
+            # 2. Price = new target + walk offset (preserve walk progress)
             hedge_oid = bot.get('hedge_order_id')
             if not hedge_oid:
                 return
 
+            hedge_qty = bot.get('hedge_qty', 0)
             current_hedge_price = bot.get('hedge_price', 0)
             walk_offset = max(0, current_hedge_price - old_target)
             amend_price = max(1, new_target + walk_offset)
+
+            # Skip amend if price didn't change
+            if amend_price == current_hedge_price:
+                return
+
             ticker = bot['ticker']
 
         # API call OUTSIDE ws_fill_lock but INSIDE _late_anchor_amend_lock
-        # This serializes amends so the next thread sees our updated hedge_qty/hedge_price
-        # DO NOT reset walk timer — walk_start_time / step count preserved
-        #
-        # IMPORTANT: Kalshi amend can only DECREASE count, never increase.
-        # If we need more contracts than the current order, place a supplemental order.
-        _need_extra = total_qty > old_hedge_qty
+        # Only amend PRICE — qty stays the same (Kalshi can't increase qty anyway)
+        # Completion handler will detect unhedged anchors and handle them
         try:
             amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
             api_rate_limiter.wait()
-            amend_resp = kalshi_client.amend_order(
+            kalshi_client.amend_order(
                 hedge_oid, ticker=ticker,
-                side=unfilled_side, count=old_hedge_qty,  # keep existing count (can't increase)
+                side=unfilled_side, count=hedge_qty,
                 **amend_kwargs
             )
-            # Verify Kalshi actually accepted the count change
-            _resp_order = amend_resp.get('order', amend_resp) if isinstance(amend_resp, dict) else {}
-            _resp_count = _resp_order.get('count', _resp_order.get('count_fp', '')) if _resp_order else None
-            _resp_status = _resp_order.get('status', '')
-            _verified_count = total_qty  # assume success unless response says otherwise
 
-            # Write results back inside ws_fill_lock
             with ws_fill_lock:
-                pre_max_hedge_qty = bot.get('hedge_qty', 0)
-                if amend_price != bot.get('hedge_price'):
-                    bot['hedge_price'] = amend_price
-            print(f'📈 LATE ANCHOR: {bot_id} amend price→{amend_price}¢'
-                  f' resp_status={_resp_status} resp_count={_resp_count}'
-                  f'{" +EXTRA needed" if _need_extra else ""}')
+                bot['hedge_price'] = amend_price
+            print(f'📈 LATE ANCHOR: {bot_id} price {current_hedge_price}→{amend_price}¢ (anchors={total_qty} hedge_qty={hedge_qty})')
             bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
-                'old_hedge_qty': old_hedge_qty, 'total_qty_needed': total_qty,
-                'amend_price': amend_price, 'hedge_order_id': hedge_oid,
+                'total_anchor_qty': total_qty, 'hedge_qty': hedge_qty,
+                'old_price': current_hedge_price, 'amend_price': amend_price,
                 'avg_width': round(new_avg_width, 1), 'new_target': new_target,
                 'walk_offset': walk_offset, 'rung_idx': rung_idx,
-                '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
-                'need_extra': _need_extra, 'extra_qty': total_qty - old_hedge_qty if _need_extra else 0,
-                'resp_status': _resp_status, 'resp_count': str(_resp_count),
             })
-
-            # Place supplemental order for the extra contracts (can't increase via amend)
-            if _need_extra:
-                _extra_qty = total_qty - old_hedge_qty
-                try:
-                    _extra_kwargs = {'yes_price': max(1, amend_price)} if unfilled_side == 'yes' else {'no_price': max(1, amend_price)}
-                    api_rate_limiter.wait()
-                    _extra_resp = kalshi_client.create_order(ticker, unfilled_side, 'buy', _extra_qty, post_only=True, **_extra_kwargs)
-                    _extra_oid = _extra_resp.get('order', {}).get('order_id', '')
-                    with ws_fill_lock:
-                        bot['hedge_qty'] = old_hedge_qty + _extra_qty
-                        _all_h = bot.get('_all_hedge_order_ids', [])
-                        _all_h.append(_extra_oid)
-                        bot['_all_hedge_order_ids'] = _all_h
-                        # Track in master list so completion cleanup catches it
-                        _all_p = bot.get('_all_placed_order_ids', [])
-                        _all_p.append(_extra_oid)
-                        bot['_all_placed_order_ids'] = _all_p
-                    print(f'📈 LATE ANCHOR EXTRA: {bot_id} +{_extra_qty} @ {amend_price}¢ oid={_extra_oid[:12]}')
-                    bot_log('APEX_LATE_ANCHOR_EXTRA_HEDGE', bot_id, {
-                        'extra_qty': _extra_qty, 'price': amend_price,
-                        'order_id': _extra_oid[:12], 'new_hedge_qty': bot.get('hedge_qty'),
-                    })
-                except Exception as _extra_err:
-                    print(f'⚠ LATE ANCHOR EXTRA FAIL: {bot_id}: {_extra_err}')
-                    bot_log('APEX_LATE_ANCHOR_EXTRA_FAIL', bot_id, {
-                        'extra_qty': _extra_qty, 'error': str(_extra_err)[:200],
-                    }, level='ERROR')
-            else:
-                with ws_fill_lock:
-                    bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
-
-            # If Kalshi says the order is already executed, the amend was too late
-            if _resp_status == 'executed':
-                _actual_fills = _parse_fill_count(_resp_order)
-                print(f'⚠ LATE ANCHOR AMEND: order already executed with {_actual_fills} fills (wanted {total_qty})')
-                with ws_fill_lock:
-                    bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _actual_fills)
-                    bot['_hedge_verified'] = True
-                bot_log('APEX_LATE_ANCHOR_AMEND_ALREADY_EXECUTED', bot_id, {
-                    'actual_fills': _actual_fills, 'wanted_qty': total_qty,
-                    'hedge_order_id': hedge_oid,
-                }, level='WARN')
 
         except Exception as e:
             err_str = str(e)
             print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {err_str}')
             bot_log('APEX_LATE_ANCHOR_AMEND_FAIL', bot_id, {
-                'old_hedge_qty': old_hedge_qty, 'total_qty_attempted': total_qty,
+                'total_anchor_qty': total_qty, 'hedge_qty': hedge_qty,
                 'amend_price': amend_price, 'hedge_order_id': hedge_oid,
                 'error': err_str[:300], 'rung_idx': rung_idx,
             }, level='ERROR')
-            # DON'T blindly update hedge_qty on failure — verify order state first
-            try:
-                api_read_limiter.wait()
-                _verify_resp = kalshi_client.get_order(hedge_oid)
-                _verify_data = _verify_resp.get('order', _verify_resp) if isinstance(_verify_resp, dict) else {}
-                _verify_fills = _parse_fill_count(_verify_data)
-                _verify_status = _verify_data.get('status', '')
-                _verify_count_raw = _verify_data.get('count', _verify_data.get('count_fp', ''))
-                print(f'   AMEND FAIL VERIFY: status={_verify_status} fills={_verify_fills} count={_verify_count_raw}')
-                bot_log('APEX_LATE_ANCHOR_AMEND_FAIL_VERIFY', bot_id, {
-                    'status': _verify_status, 'fills': _verify_fills, 'count': str(_verify_count_raw),
-                })
-                with ws_fill_lock:
-                    if _verify_fills > 0:
-                        bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _verify_fills)
-                    if _verify_status == 'executed':
-                        bot['_hedge_verified'] = True
-            except Exception:
-                pass
+            # If 404, hedge order is gone — check if it filled
+            if '404' in err_str:
+                try:
+                    api_read_limiter.wait()
+                    _verify_resp = kalshi_client.get_order(hedge_oid)
+                    _verify_data = _verify_resp.get('order', _verify_resp) if isinstance(_verify_resp, dict) else {}
+                    _verify_fills = _parse_fill_count(_verify_data)
+                    _verify_status = _verify_data.get('status', '')
+                    print(f'   AMEND FAIL VERIFY: status={_verify_status} fills={_verify_fills}')
+                    with ws_fill_lock:
+                        if _verify_fills > 0:
+                            bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _verify_fills)
+                        if _verify_status == 'executed':
+                            bot['_hedge_verified'] = True
+                except Exception:
+                    pass
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):
@@ -9078,30 +8955,15 @@ def _handle_phantom(bot_id, bot, actions):
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
         timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
 
-        # Retreat check: if bid crept TOWARD our dog, depth floor violated → retreat away
-        # BUT: only retreat on SLOW drift, not fast dumps (whale dumps = the opportunity)
+        # Retreat check: if bid crept within 2¢ of dog order, retreat to restore depth
         retreat_triggered = False
         if dog_filled == 0 and ws_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
             _dog_price = bot.get('dog_price', 0)
             _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
-            if 0 <= _depth_gap < _anchor_depth:
-                # Velocity check: how fast did the bid approach?
-                _prev_bid = bot.get('_prev_ws_bid', ws_dog_bid)
-                _prev_bid_at = bot.get('_prev_ws_bid_at', now)
-                _bid_elapsed = max(now - _prev_bid_at, 0.1)
-                _bid_drop_per_sec = (_prev_bid - ws_dog_bid) / _bid_elapsed  # positive = dropping
-                if _bid_drop_per_sec >= 0.5:
-                    # Bid dropping fast (≥0.5¢/sec) — whale dump, hold position
-                    bot_log('PHANTOM_RETREAT_BLOCKED_DUMP', bot_id, {
-                        'dog_price': _dog_price, 'ws_bid': ws_dog_bid, 'prev_bid': _prev_bid,
-                        'drop_rate': round(_bid_drop_per_sec, 2), 'depth_gap': _depth_gap,
-                    })
-                else:
-                    retreat_triggered = True
-        # Track bid for velocity calculation next cycle
-        bot['_prev_ws_bid'] = ws_dog_bid
-        bot['_prev_ws_bid_at'] = now
+            _retreat_threshold = 2  # retreat if bid crept 2¢+ toward our order
+            if 0 <= _depth_gap and _depth_gap <= (_anchor_depth - _retreat_threshold):
+                retreat_triggered = True
 
         if gap_triggered or timer_triggered or retreat_triggered:
             trigger_reason = (f'retreat depth={_depth_gap}¢<{_anchor_depth}¢' if retreat_triggered
@@ -9807,13 +9669,47 @@ def _handle_phantom(bot_id, bot, actions):
                                 'old_price': current_fav_price, 'new_price': new_fav_price,
                                 'walk_count': walk_count, 'combined': combined})
             except Exception as e:
+                err_str = str(e)
                 print(f'❌ PHANTOM {bot_id}: fav {walk_type} amend failed: {e}')
                 bot_log('PHANTOM_WALK_ERROR', bot_id, {
-                    'walk_type': walk_type, 'error': str(e)[:300],
+                    'walk_type': walk_type, 'error': err_str[:300],
                     'old_price': current_fav_price, 'target_price': new_fav_price,
                     'fav_order_id': fav_order_id[:12],
                 }, level='ERROR')
                 bot['fav_last_walk_at'] = now
+                # 404 = order no longer exists on Kalshi — check if it was filled
+                if '404' in err_str:
+                    try:
+                        api_read_limiter.wait()
+                        _fav_resp = kalshi_client.get_order(fav_order_id)
+                        _fav_data = _fav_resp.get('order', _fav_resp) if isinstance(_fav_resp, dict) else {}
+                        _fav_fills = _parse_fill_count(_fav_data)
+                        _fav_status = _fav_data.get('status', '')
+                        print(f'   🔍 PHANTOM FAV ORDER CHECK: {bot_id} status={_fav_status} fills={_fav_fills}/{qty}')
+                        bot_log('PHANTOM_FAV_404_CHECK', bot_id, {
+                            'fav_order_id': fav_order_id[:12], 'kalshi_status': _fav_status,
+                            'kalshi_fills': _fav_fills, 'expected_qty': qty,
+                        })
+                        if _fav_fills >= qty:
+                            # Fav was fully filled! Complete the bot.
+                            print(f'   ✅ PHANTOM FAV FILLED (404 recovery): {bot_id} {_fav_fills}/{qty} fills')
+                            bot[f'{fav_side}_fill_qty'] = _fav_fills
+                            # Let the next monitor cycle handle completion
+                        elif _fav_fills > 0:
+                            # Partial fill — sell back unfilled portion
+                            print(f'   ⚠ PHANTOM FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{qty}')
+                            bot[f'{fav_side}_fill_qty'] = _fav_fills
+                        else:
+                            # Order gone with 0 fills — sell back the dog
+                            print(f'   🔙 PHANTOM FAV GONE (404 recovery): {bot_id} — triggering sellback')
+                            bot['fav_order_id'] = None
+                            bot['status'] = 'dog_filled'
+                    except Exception as _check_err:
+                        if '404' in str(_check_err):
+                            # Order completely gone from Kalshi — sell back
+                            print(f'   🔙 PHANTOM FAV GONE 404 (recovery): {bot_id} — triggering sellback')
+                            bot['fav_order_id'] = None
+                            bot['status'] = 'dog_filled'
         return
 
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──
@@ -10982,13 +10878,47 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     bot['no_price'] = new_fav_price
                 save_state()
             except Exception as e:
+                err_str = str(e)
                 print(f'❌ PHANTOM {bot_id}: fav {walk_type} failed: {e}')
                 bot_log('PHANTOM_LADDER_WALK_ERROR', bot_id, {
-                    'walk_type': walk_type, 'error': str(e)[:300],
+                    'walk_type': walk_type, 'error': err_str[:300],
                     'old_price': current_fav_price, 'target_price': new_fav_price,
                     'fav_order_id': fav_order_id[:12],
                 }, level='ERROR')
                 bot['fav_last_walk_at'] = now
+                # 404 = fav order no longer exists on Kalshi — check if it was filled
+                if '404' in err_str:
+                    try:
+                        api_read_limiter.wait()
+                        _fav_resp = kalshi_client.get_order(fav_order_id)
+                        _fav_data = _fav_resp.get('order', _fav_resp) if isinstance(_fav_resp, dict) else {}
+                        _fav_fills = _parse_fill_count(_fav_data)
+                        _fav_status = _fav_data.get('status', '')
+                        print(f'   🔍 PHANTOM LADDER FAV ORDER CHECK: {bot_id} status={_fav_status} fills={_fav_fills}/{hedge_qty}')
+                        bot_log('PHANTOM_LADDER_FAV_404_CHECK', bot_id, {
+                            'fav_order_id': fav_order_id[:12], 'kalshi_status': _fav_status,
+                            'kalshi_fills': _fav_fills, 'expected_qty': hedge_qty,
+                        })
+                        if _fav_fills >= hedge_qty:
+                            # Fav fully filled — complete
+                            print(f'   ✅ PHANTOM LADDER FAV FILLED (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
+                            bot[f'{fav_side}_fill_qty'] = _fav_fills
+                            bot['fav_fill_qty'] = _fav_fills
+                        elif _fav_fills > 0:
+                            # Partial fill
+                            print(f'   ⚠ PHANTOM LADDER FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
+                            bot[f'{fav_side}_fill_qty'] = _fav_fills
+                            bot['fav_fill_qty'] = _fav_fills
+                        else:
+                            # Order gone with 0 fills — sell back
+                            print(f'   🔙 PHANTOM LADDER FAV GONE (404 recovery): {bot_id} — triggering sellback')
+                            bot['fav_order_id'] = None
+                            bot['status'] = 'ladder_filled_no_fav'
+                    except Exception as _check_err:
+                        if '404' in str(_check_err):
+                            print(f'   🔙 PHANTOM LADDER FAV GONE 404 (recovery): {bot_id} — triggering sellback')
+                            bot['fav_order_id'] = None
+                            bot['status'] = 'ladder_filled_no_fav'
         return
 
 
@@ -12145,35 +12075,24 @@ def _handle_apex(bot_id, bot, actions):
                                         'old_price': current_price, 'target_price': new_price,
                                     })
                                     if '404' in str(e):
-                                        # Order gone — check total anchor fills vs hedge fills
-                                        _fs = bot.get('first_fill_side', 'yes')
-                                        _total_af = sum(
-                                            min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
-                                            for r in bot.get('rungs', [])
-                                        )
-                                        remaining_qty = _total_af - bot.get('_hedge_fill_count', 0)
-                                        if remaining_qty > 0:
-                                            try:
-                                                new_resp, actual_price = create_order_maker(
-                                                    ticker=ticker, side=unfilled_side, action='buy',
-                                                    count=remaining_qty, price=new_price
-                                                )
-                                                new_oid = new_resp['order']['order_id']
-                                                bot['hedge_order_id'] = new_oid
-                                                bot['hedge_price'] = actual_price
-                                                bot['hedge_qty'] = remaining_qty + bot.get('_hedge_fill_count', 0)
-                                                all_ids = bot.get('_all_hedge_order_ids', [])
-                                                all_ids.append(new_oid)
-                                                bot['_all_hedge_order_ids'] = all_ids
-                                                bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid
-                                                walked_any = True
-                                                print(f'🔄 APEX WALK {bot_id}: old order 404, new order @{actual_price}¢ × {remaining_qty}')
-                                                bot_log('APEX_WALK_404_REPLACE', bot_id, {
-                                                    'new_order_id': new_oid[:12], 'actual_price': actual_price,
-                                                    'remaining_qty': remaining_qty,
-                                                })
-                                            except Exception as re_err:
-                                                print(f'❌ APEX WALK {bot_id} re-place failed: {re_err}')
+                                        # Order gone — verify fills on Kalshi, let completion handle the rest
+                                        try:
+                                            api_read_limiter.wait()
+                                            _404_resp = kalshi_client.get_order(oid)
+                                            _404_data = _404_resp.get('order', _404_resp) if isinstance(_404_resp, dict) else {}
+                                            _404_fills = _parse_fill_count(_404_data)
+                                            _404_status = _404_data.get('status', '')
+                                            if _404_fills > bot.get('_hedge_fill_count', 0):
+                                                bot['_hedge_fill_count'] = _404_fills
+                                            if _404_status == 'executed':
+                                                bot['_hedge_verified'] = True
+                                            print(f'🔍 APEX WALK 404: {bot_id} hedge status={_404_status} fills={_404_fills} — completion will handle')
+                                            bot_log('APEX_WALK_404_VERIFY', bot_id, {
+                                                'hedge_status': _404_status, 'hedge_fills': _404_fills,
+                                                'hedge_qty': bot.get('hedge_qty', 0),
+                                            })
+                                        except Exception:
+                                            pass
                                     elif '409' in str(e):
                                         # 409 Conflict = order may be filled or market closed
                                         # Re-poll fills to check

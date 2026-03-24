@@ -3747,16 +3747,16 @@ def _execute_phantom_hedge(bot_id):
             'fav_order_id': fav_order_id, 'dog_price': dog_price, 'qty': qty,
         })
         # Async: verify actual dog fill price (non-blocking, after hedge is already placed)
-        try:
-            verified_price = get_actual_fill_price(bot.get('dog_order_id'), dog_side)
-            if verified_price and verified_price != dog_price:
-                bot['dog_price'] = verified_price
-                print(f'   📋 Dog fill price verified: {dog_price}¢ → {verified_price}¢')
-                bot_log('PHANTOM_DOG_PRICE_VERIFIED', bot_id, {'old': dog_price, 'verified': verified_price})
-        except Exception:
-            pass  # Non-critical — dog_price estimate is fine
-
-        save_state()
+        def _verify_dog_price():
+            try:
+                vp = get_actual_fill_price(bot.get('dog_order_id'), dog_side)
+                if vp and vp != dog_price:
+                    bot['dog_price'] = vp
+                    print(f'   📋 Dog fill price verified: {dog_price}¢ → {vp}¢')
+                    save_state()
+            except Exception:
+                pass
+        threading.Thread(target=_verify_dog_price, daemon=True).start()
     except Exception as e:
         print(f'❌ WS PHANTOM HEDGE {bot_id}: {e}')
         import traceback
@@ -3923,79 +3923,76 @@ def _execute_phantom_ladder_hedge(bot_id):
             'path': 'ws_fast',
         })
         _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': hedge_ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
-        # ── THEN cancel unfilled rung orders (lower priority) ──
-        # FAST PATH: Use order group cancel to nuke all remaining orders in ONE call
-        _og_id = bot.get('_order_group_id')
-        if _og_id:
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order_group(_og_id)
-                print(f'   ✅ BATCH CANCEL: {bot_id} order group {_og_id[:12]} cancelled in one call')
-                bot_log('PHANTOM_LADDER_BATCH_CANCEL', bot_id, {'order_group_id': _og_id[:12]})
-            except Exception as _bg_err:
-                print(f'   ⚠ BATCH CANCEL FAIL: {bot_id} group {_og_id[:12]}: {_bg_err} — falling back to individual')
-                bot_log('PHANTOM_LADDER_BATCH_CANCEL_FAIL', bot_id, {'error': str(_bg_err)[:200]})
+        # ── THEN cancel unfilled rungs + verify late fills (background — don't block hedge worker) ──
+        def _cancel_and_verify_rungs(_bid, _bot):
+            # FAST PATH: Use order group cancel to nuke all remaining orders in ONE call
+            _og_id = _bot.get('_order_group_id')
+            if _og_id:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order_group(_og_id)
+                    print(f'   ✅ BATCH CANCEL: {_bid} order group {_og_id[:12]} cancelled in one call')
+                    bot_log('PHANTOM_LADDER_BATCH_CANCEL', _bid, {'order_group_id': _og_id[:12]})
+                except Exception as _bg_err:
+                    print(f'   ⚠ BATCH CANCEL FAIL: {_bid} group {_og_id[:12]}: {_bg_err} — falling back to individual')
+                    bot_log('PHANTOM_LADDER_BATCH_CANCEL_FAIL', _bid, {'error': str(_bg_err)[:200]})
 
-        # Verify each rung on Kalshi to find late fills that snuck through
-        cancelled_rungs = 0
-        late_fill_qty = 0
-        for rung in bot.get('rungs', []):
-            if rung.get('fill_qty', 0) >= rung['qty'] or not rung.get('order_id'):
-                continue  # already filled or no order
-            # Check Kalshi for actual fills (may have filled before batch cancel reached them)
-            try:
-                api_read_limiter.wait()
-                resp = kalshi_client.get_order(rung['order_id'])
-                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                actual_fills = _parse_fill_count(ord_data)
-                _ord_status = ord_data.get('status', '')
-                if actual_fills > 0:
-                    # Rung filled (race fill) — track it for hedge amendment
-                    rung['fill_qty'] = actual_fills
-                    if actual_fills >= rung['qty'] and not rung.get('filled_at'):
-                        rung['filled_at'] = time.time()
-                    late_fill_qty += actual_fills
-                    print(f'   ⚡ RUNG RACE FILL: {bot_id} rung @{rung.get("price")}¢ has {actual_fills} fills — amending hedge')
-                    bot_log('PHANTOM_LADDER_LATE_FILL_DETECTED', bot_id, {
-                        'rung_price': rung.get('price'), 'actual_fills': actual_fills,
-                        'rung_qty': rung['qty'], 'order_id': rung['order_id'][:12],
-                    })
-                elif _ord_status in ('canceled', 'cancelled'):
-                    rung['cancelled'] = True
-                    cancelled_rungs += 1
-                else:
-                    # Not cancelled, not filled — individual cancel as fallback
-                    try:
-                        _cancel_with_retry(rung['order_id'])
+            # Verify each rung on Kalshi to find late fills that snuck through
+            cancelled_rungs = 0
+            late_fill_qty = 0
+            for rung in _bot.get('rungs', []):
+                if rung.get('fill_qty', 0) >= rung['qty'] or not rung.get('order_id'):
+                    continue  # already filled or no order
+                try:
+                    api_read_limiter.wait()
+                    resp = kalshi_client.get_order(rung['order_id'])
+                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                    actual_fills = _parse_fill_count(ord_data)
+                    _ord_status = ord_data.get('status', '')
+                    if actual_fills > 0:
+                        rung['fill_qty'] = actual_fills
+                        if actual_fills >= rung['qty'] and not rung.get('filled_at'):
+                            rung['filled_at'] = time.time()
+                        late_fill_qty += actual_fills
+                        print(f'   ⚡ RUNG RACE FILL: {_bid} rung @{rung.get("price")}¢ has {actual_fills} fills — amending hedge')
+                        bot_log('PHANTOM_LADDER_LATE_FILL_DETECTED', _bid, {
+                            'rung_price': rung.get('price'), 'actual_fills': actual_fills,
+                            'rung_qty': rung['qty'], 'order_id': rung['order_id'][:12],
+                        })
+                    elif _ord_status in ('canceled', 'cancelled'):
                         rung['cancelled'] = True
                         cancelled_rungs += 1
-                    except Exception as _fc_err:
-                        print(f'⚠ RUNG ORPHAN: {bot_id} rung @{rung.get("price")}¢ — stuck on Kalshi: {_fc_err}')
-                        bot_log('PHANTOM_LADDER_RUNG_ORPHAN', bot_id, {
-                            'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
-                            'error': str(_fc_err)[:200],
-                        }, level='ERROR')
-            except Exception as _oc_err:
-                print(f'⚠ RUNG VERIFY FAIL: {bot_id} rung {rung.get("price")}¢ — {_oc_err}')
-                bot_log('PHANTOM_LADDER_RUNG_VERIFY_FAIL', bot_id, {
-                    'rung_price': rung.get('price'), 'order_id': rung.get('order_id', '')[:12],
-                    'error': str(_oc_err)[:200],
-                }, level='ERROR')
-        # Cancel any stashed old order IDs from previous reposts
-        _prev_oids = bot.get('_prev_rung_order_ids', [])
-        if _prev_oids:
-            _prev_cancelled = 0
-            for _poid in _prev_oids:
-                if _cancel_with_retry(_poid):
-                    _prev_cancelled += 1
-            if _prev_cancelled:
-                print(f'   🧹 Cancelled {_prev_cancelled}/{len(_prev_oids)} stale repost orders')
-            bot['_prev_rung_order_ids'] = []
+                    else:
+                        try:
+                            _cancel_with_retry(rung['order_id'])
+                            rung['cancelled'] = True
+                            cancelled_rungs += 1
+                        except Exception as _fc_err:
+                            print(f'⚠ RUNG ORPHAN: {_bid} rung @{rung.get("price")}¢ — stuck on Kalshi: {_fc_err}')
+                            bot_log('PHANTOM_LADDER_RUNG_ORPHAN', _bid, {
+                                'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
+                                'error': str(_fc_err)[:200],
+                            }, level='ERROR')
+                except Exception as _oc_err:
+                    print(f'⚠ RUNG VERIFY FAIL: {_bid} rung {rung.get("price")}¢ — {_oc_err}')
+            # Cancel stashed old order IDs from previous reposts
+            _prev_oids = _bot.get('_prev_rung_order_ids', [])
+            if _prev_oids:
+                _prev_cancelled = 0
+                for _poid in _prev_oids:
+                    if _cancel_with_retry(_poid):
+                        _prev_cancelled += 1
+                if _prev_cancelled:
+                    print(f'   🧹 Cancelled {_prev_cancelled}/{len(_prev_oids)} stale repost orders')
+                _bot['_prev_rung_order_ids'] = []
 
-        if cancelled_rungs:
-            print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
-        # If late fills found, amend hedge with updated qty + price
-        if late_fill_qty > 0:
+            if cancelled_rungs:
+                print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
+            # If late fills found, amend hedge with updated qty + price
+            if late_fill_qty <= 0:
+                save_state()
+                return
+            late_fill_qty_total = late_fill_qty
             new_total_fill = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
             new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / new_total_fill) if new_total_fill > 0 else avg_price
             bot['avg_fill_price'] = new_avg
@@ -4052,11 +4049,13 @@ def _execute_phantom_ladder_hedge(bot_id):
                     })
                 except Exception as ae:
                     print(f'   ⚠ LATE FILL AMEND FAIL: {bot_id}: {ae}')
-                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND_FAIL', bot_id, {
+                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND_FAIL', _bid, {
                         'error': str(ae)[:300], 'new_total_fill': new_total_fill,
                         'amend_price': amend_price,
                     }, level='ERROR')
+            save_state()
 
+        threading.Thread(target=_cancel_and_verify_rungs, args=(bot_id, bot), daemon=True).start()
         save_state()
     except Exception as e:
         print(f'❌ PHANTOM HEDGE {bot_id}: {e}')

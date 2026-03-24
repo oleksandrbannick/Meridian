@@ -6935,12 +6935,12 @@ async function loadBots() {
             }
         }
 
-        // Render awaiting settlement section (PHANTOM tab only — these are cross-market phantom positions)
+        // Render awaiting settlement section (phantom cross-market bots only)
         const awaitList = document.getElementById('awaiting-settlement-list');
-        const _activeTab = document.querySelector('.bot-tab-active')?.dataset?.tab || '';
-        const _showAwait = _activeTab === 'phantom' || _activeTab === '';
+        // Only show phantom awaiting bots, not apex
+        const phantomAwaitIds = awaitingBotIds.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         if (awaitList) {
-            if (awaitingBotIds.length === 0 || !_showAwait) {
+            if (phantomAwaitIds.length === 0) {
                 awaitList.innerHTML = '';
                 awaitList.style.display = 'none';
             } else {
@@ -6950,12 +6950,12 @@ async function loadBots() {
                 let awHtml = `<div onclick="(function(el){el.parentElement.parentElement.dataset.collapsed=el.parentElement.parentElement.dataset.collapsed==='true'?'false':'true';el.parentElement.parentElement.querySelector('.await-body').style.display=el.parentElement.parentElement.dataset.collapsed==='true'?'none':'';el.querySelector('.await-arrow').textContent=el.parentElement.parentElement.dataset.collapsed==='true'?'▸':'▾';})(this)" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0d1117;border-left:3px solid #818cf8;border-radius:6px;cursor:pointer;margin-bottom:6px;">
                     <div style="display:flex;align-items:center;gap:8px;">
                         <span class="await-arrow" style="color:#818cf8;font-size:10px;">${_collapsed ? '▸' : '▾'}</span>
-                        <span style="color:#818cf8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Awaiting Settlement (${awaitingBotIds.length})</span>
+                        <span style="color:#818cf8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Awaiting Settlement (${phantomAwaitIds.length})</span>
                     </div>
                     <span style="color:#555;font-size:10px;">held until market settles</span>
                 </div>`;
                 awHtml += `<div class="await-body" style="${_collapsed ? 'display:none;' : ''}display:flex;flex-direction:column;gap:6px;">`;
-                awaitingBotIds.forEach(botId => {
+                phantomAwaitIds.forEach(botId => {
                     const bot = bots[botId];
                     const t = bot.ticker || '';
                     const ht = bot.hedge_ticker || '';

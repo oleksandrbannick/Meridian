@@ -4390,25 +4390,53 @@ session_pnl = {
 # ─── LATENCY TRACKER ──────────────────────────────────────────────────────────
 from collections import deque
 
-_latency_log = {
-    'order_place':    deque(maxlen=200),   # ms per create_order call
-    'orderbook':      deque(maxlen=200),   # ms per get_market_orderbook call
-    'fill_to_hedge_phantom': deque(maxlen=50), # ms from phantom fill to hedge posted (full round trip)
-    'fill_to_hedge_apex':    deque(maxlen=50), # ms from apex fill to hedge posted (full round trip)
-    'raw_hedge_phantom':     deque(maxlen=50), # ms from phantom fill to HTTP send (before API round trip)
-    'raw_hedge_apex':        deque(maxlen=50), # ms from apex fill to HTTP send (before API round trip)
-    'api_generic':    deque(maxlen=200),   # ms for other API calls
-    'api_ping':       deque(maxlen=200),   # ms per live ping (get_balance)
+_LATENCY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'latency_stats.json')
+_LATENCY_MAXLENS = {
+    'order_place': 200, 'orderbook': 200, 'api_generic': 200, 'api_ping': 200,
+    'fill_to_hedge_phantom': 50, 'fill_to_hedge_apex': 50,
+    'raw_hedge_phantom': 50, 'raw_hedge_apex': 50,
 }
+def _init_latency_log():
+    log = {k: deque(maxlen=v) for k, v in _LATENCY_MAXLENS.items()}
+    try:
+        if os.path.exists(_LATENCY_FILE):
+            with open(_LATENCY_FILE) as f:
+                saved = json.load(f)
+            for k, entries in saved.items():
+                if k in log:
+                    for e in entries[-_LATENCY_MAXLENS.get(k, 50):]:
+                        log[k].append(e)
+            print(f'📊 Loaded latency stats from disk ({sum(len(v) for v in log.values())} entries)')
+    except Exception as e:
+        print(f'⚠ Failed to load latency stats: {e}')
+    return log
+
+_latency_log = _init_latency_log()
 _latency_lock = threading.Lock()
+_latency_save_counter = 0
+
+def _save_latency_log():
+    """Persist latency stats to disk."""
+    try:
+        with _latency_lock:
+            data = {k: list(v) for k, v in _latency_log.items()}
+        with open(_LATENCY_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception:
+        pass
 
 def _record_latency(category, ms, meta=None):
-    """Record a latency measurement."""
+    """Record a latency measurement and periodically persist to disk."""
+    global _latency_save_counter
     with _latency_lock:
         entry = {'ms': round(ms, 1), 'ts': time.time()}
         if meta:
             entry.update(meta)
         _latency_log[category].append(entry)
+        _latency_save_counter += 1
+    # Save every 10 recordings (not every time — avoid disk thrash)
+    if _latency_save_counter % 10 == 0:
+        threading.Thread(target=_save_latency_log, daemon=True).start()
 
 def _latency_stats(category):
     """Get min/avg/max/p95/count for a latency category."""

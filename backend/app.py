@@ -12029,18 +12029,28 @@ def _handle_apex(bot_id, bot, actions):
 
         # Record any newly completed rungs + check if bot fully done
         all_resolved = _check_apex_rung_completions(bot_id, bot)
-        if all_resolved and bot.get('completed_rungs_count', 0) > 0:
+        # Also trigger completion when hedge is fully filled even if it doesn't cover all anchors
+        # The completion handler will detect unhedged anchors and place extra hedges
+        _hfc = bot.get('_hedge_fill_count', 0)
+        _hq = bot.get('hedge_qty', 0)
+        _hedge_done_trigger = (bot.get('_consolidated') and _hfc >= _hq and _hq > 0
+                               and bot.get('_hedge_verified')
+                               and not bot.get('_completion_in_progress'))
+        if (all_resolved and bot.get('completed_rungs_count', 0) > 0) or _hedge_done_trigger:
+            _trigger = 'monitor_filled_all_resolved' if all_resolved else 'hedge_fully_filled'
             bot_log('APEX_MONITOR_COMPLETION_TRIGGER', bot_id, {
-                'trigger': 'monitor_filled_all_resolved',
+                'trigger': _trigger,
                 'completed_rungs_count': bot.get('completed_rungs_count', 0),
-                'hedge_qty': bot.get('hedge_qty', 0),
-                '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                'hedge_qty': _hq,
+                '_hedge_fill_count': _hfc,
                 'filled_yes_qty': bot.get('filled_yes_qty', 0),
                 'filled_no_qty': bot.get('filled_no_qty', 0),
                 '_consolidated': bot.get('_consolidated', False),
                 'hedge_order_id': bot.get('hedge_order_id'),
                 '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
             })
+            bot['_completion_in_progress'] = True
+            bot['_completion_repeat_processed'] = False
             threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
             return
 

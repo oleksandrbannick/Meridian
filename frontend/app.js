@@ -5436,7 +5436,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const favFillCol = favFilled ? '#00ff88' : favFillQty > 0 ? '#ffaa00' : '#333';
 
     // Fav status text
-    const walkCount = bot.fav_walk_count || 0;
     const favShave = bot.fav_shave || 0;
     let favStatusText = '';
     // Fav posts at fav_bid - fav_shave, capped at 100 - dog - width

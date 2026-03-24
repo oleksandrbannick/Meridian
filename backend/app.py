@@ -6466,6 +6466,11 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             current_hedge_price = bot.get('hedge_price', 0)
             walk_offset = max(0, current_hedge_price - old_target)
             amend_price = max(1, new_target + walk_offset)
+            # Cap at hard ceiling to prevent combined from exceeding user-set limit
+            _amend_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
+            _amend_max_hedge = _amend_ceiling - new_avg
+            if _amend_max_hedge > 0:
+                amend_price = min(amend_price, _amend_max_hedge)
             ticker = bot['ticker']
 
             # Skip if nothing changed
@@ -12247,6 +12252,7 @@ def _handle_apex(bot_id, bot, actions):
                                     # (ceiling only applies to profitable walks, not loss-exit)
                                     bot['_sellback_decision'] = 'crossing_to_bid'
                                     _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
+                                    _cross_target = min(_cross_target, walk_cap) if walk_cap > 0 else _cross_target
                                     if unfilled_bid > 0 and (_cross_target > current_price or current_price <= 0):
                                         print(f'💀 APEX LOSS-EXIT: {bot_id} crossing to {_cross_target}¢ (bid={unfilled_bid}) — cheaper than sell-back')
                                         bot_log('APEX_LOSS_EXIT_CROSS', bot_id, {
@@ -12304,7 +12310,7 @@ def _handle_apex(bot_id, bot, actions):
 
                             # ── DROP: price above bid → follow bid down (always instant) ──
                             if current_price > bid_target and bid_target > 0:
-                                new_price = bid_target
+                                new_price = min(bid_target, walk_cap) if walk_cap > 0 else bid_target
                                 walk_type = 'drop_to_bid'
 
                             # ── SNAP: combined ≤ snap ceiling → snap to bid instantly ──
@@ -12405,8 +12411,9 @@ def _handle_apex(bot_id, bot, actions):
                                                     threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
                                                     return
                                                 _repost_qty = _remaining
-                                                # Repost at where the order WAS (or bid) — never drop mid-fill
+                                                # Repost at where the order WAS (or bid) — capped at hard_ceiling
                                                 _repost_price = max(current_price, unfilled_bid) if current_price > 0 else unfilled_bid
+                                                _repost_price = min(_repost_price, walk_cap) if walk_cap > 0 else _repost_price
                                                 try:
                                                     _rp_resp, _rp_actual = create_order_maker(
                                                         ticker=ticker, side=unfilled_side, action='buy',
@@ -12482,10 +12489,10 @@ def _handle_apex(bot_id, bot, actions):
                                 new_price = bid_target
                                 rung_walk_type = 'ceiling_snap'
                             elif rung_snap_ready and bid_target > current_price:
-                                new_price = min(bid_target, max_hedge) if not past_ceiling else bid_target
+                                new_price = min(bid_target, max_hedge)
                                 rung_walk_type = 'profit_snap'
                             elif bid_target > current_price:
-                                walk_cap = min(bid_target, max_hedge) if not past_ceiling else bid_target
+                                walk_cap = min(bid_target, max_hedge)
                                 new_price = min(current_price + 1, walk_cap)
                                 rung_walk_type = 'normal_walk'
                             else:

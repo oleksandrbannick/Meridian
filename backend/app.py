@@ -6462,12 +6462,16 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         # API call OUTSIDE ws_fill_lock but INSIDE _late_anchor_amend_lock
         # This serializes amends so the next thread sees our updated hedge_qty/hedge_price
         # DO NOT reset walk timer — walk_start_time / step count preserved
+        #
+        # IMPORTANT: Kalshi amend can only DECREASE count, never increase.
+        # If we need more contracts than the current order, place a supplemental order.
+        _need_extra = total_qty > old_hedge_qty
         try:
             amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
             api_rate_limiter.wait()
             amend_resp = kalshi_client.amend_order(
                 hedge_oid, ticker=ticker,
-                side=unfilled_side, count=total_qty,
+                side=unfilled_side, count=old_hedge_qty,  # keep existing count (can't increase)
                 **amend_kwargs
             )
             # Verify Kalshi actually accepted the count change
@@ -6476,24 +6480,50 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             _resp_status = _resp_order.get('status', '')
             _verified_count = total_qty  # assume success unless response says otherwise
 
-            # Write results back inside ws_fill_lock — only increase, never decrease
+            # Write results back inside ws_fill_lock
             with ws_fill_lock:
                 pre_max_hedge_qty = bot.get('hedge_qty', 0)
-                bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
                 if amend_price != bot.get('hedge_price'):
                     bot['hedge_price'] = amend_price
-            print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
-                  f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢'
-                  f' resp_status={_resp_status} resp_count={_resp_count}')
+            print(f'📈 LATE ANCHOR: {bot_id} amend price→{amend_price}¢'
+                  f' resp_status={_resp_status} resp_count={_resp_count}'
+                  f'{" +EXTRA needed" if _need_extra else ""}')
             bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
-                'old_hedge_qty': old_hedge_qty, 'total_qty_sent': total_qty,
-                'hedge_qty_before_max': pre_max_hedge_qty, 'hedge_qty_after': bot.get('hedge_qty', 0),
+                'old_hedge_qty': old_hedge_qty, 'total_qty_needed': total_qty,
                 'amend_price': amend_price, 'hedge_order_id': hedge_oid,
                 'avg_width': round(new_avg_width, 1), 'new_target': new_target,
                 'walk_offset': walk_offset, 'rung_idx': rung_idx,
                 '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                'need_extra': _need_extra, 'extra_qty': total_qty - old_hedge_qty if _need_extra else 0,
                 'resp_status': _resp_status, 'resp_count': str(_resp_count),
             })
+
+            # Place supplemental order for the extra contracts (can't increase via amend)
+            if _need_extra:
+                _extra_qty = total_qty - old_hedge_qty
+                try:
+                    _extra_kwargs = {'yes_price': max(1, amend_price)} if unfilled_side == 'yes' else {'no_price': max(1, amend_price)}
+                    api_rate_limiter.wait()
+                    _extra_resp = kalshi_client.create_order(ticker, unfilled_side, 'buy', _extra_qty, post_only=True, **_extra_kwargs)
+                    _extra_oid = _extra_resp.get('order', {}).get('order_id', '')
+                    with ws_fill_lock:
+                        bot['hedge_qty'] = old_hedge_qty + _extra_qty
+                        _all_h = bot.get('_all_hedge_order_ids', [])
+                        _all_h.append(_extra_oid)
+                        bot['_all_hedge_order_ids'] = _all_h
+                    print(f'📈 LATE ANCHOR EXTRA: {bot_id} +{_extra_qty} @ {amend_price}¢ oid={_extra_oid[:12]}')
+                    bot_log('APEX_LATE_ANCHOR_EXTRA_HEDGE', bot_id, {
+                        'extra_qty': _extra_qty, 'price': amend_price,
+                        'order_id': _extra_oid[:12], 'new_hedge_qty': bot.get('hedge_qty'),
+                    })
+                except Exception as _extra_err:
+                    print(f'⚠ LATE ANCHOR EXTRA FAIL: {bot_id}: {_extra_err}')
+                    bot_log('APEX_LATE_ANCHOR_EXTRA_FAIL', bot_id, {
+                        'extra_qty': _extra_qty, 'error': str(_extra_err)[:200],
+                    }, level='ERROR')
+            else:
+                with ws_fill_lock:
+                    bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
 
             # If Kalshi says the order is already executed, the amend was too late
             if _resp_status == 'executed':

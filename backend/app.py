@@ -10306,26 +10306,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'first_rung': _first_price, 'dog_bid': current_dog_bid, 'dog_ask': current_dog_ask,
             })
 
-        # Retreat check: if bid moved TOWARD our orders, depth floor violated → retreat away
-        # BUT: only retreat on SLOW drift, not fast dumps (whale dumps = the opportunity)
+        # Retreat check: if bid crept 2¢+ toward rungs since last post, retreat to restore full depth.
+        # No velocity check — real whale dumps blow past rungs in one tick (filled before retreat fires).
         retreat_triggered = False
         if total_fill == 0 and current_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
             _first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
             _depth_gap = current_dog_bid - _first_price if _first_price > 0 else 999
-            if 0 <= _depth_gap < _anchor_depth:
-                # Velocity check: how fast did the bid approach?
-                _prev_bid = bot.get('_prev_ws_bid', current_dog_bid)
-                _prev_bid_at = bot.get('_prev_ws_bid_at', now)
-                _bid_elapsed = max(now - _prev_bid_at, 0.1)
-                _bid_drop_per_sec = (_prev_bid - current_dog_bid) / _bid_elapsed
-                if _bid_drop_per_sec >= 0.5:
-                    bot_log('PHANTOM_LADDER_RETREAT_BLOCKED_DUMP', bot_id, {
-                        'first_rung': _first_price, 'dog_bid': current_dog_bid, 'prev_bid': _prev_bid,
-                        'drop_rate': round(_bid_drop_per_sec, 2), 'depth_gap': _depth_gap,
-                    })
-                else:
-                    retreat_triggered = True
+            _retreat_threshold = 2  # retreat if bid crept 2¢+ toward rungs
+            if 0 <= _depth_gap and _depth_gap <= (_anchor_depth - _retreat_threshold):
+                retreat_triggered = True
         # Track bid for velocity calculation next cycle
         bot['_prev_ws_bid'] = current_dog_bid
         bot['_prev_ws_bid_at'] = now

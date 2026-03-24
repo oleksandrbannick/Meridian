@@ -10410,6 +10410,21 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             repeat_specs = []
             repeat_qtys = []
             _rung_spacing = bot.get('rung_spacing', 2)
+            _num_rungs = len(bot.get('rungs', []))
+            _first_rung_price = max(1, anchor_base - anchor_depth)
+            _lowest_rung_price = max(1, _first_rung_price - ((_num_rungs - 1) * _rung_spacing)) if _num_rungs > 0 else _first_rung_price
+            if _lowest_rung_price <= 3:
+                # All rungs would hit the floor — market too thin, stop
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['repeat_count'] = 0
+                print(f'🛑 PHANTOM REPEAT FLOOR: {bot_id} lowest rung={_lowest_rung_price}¢ (dog_bid={current_dog_bid}¢) — too low, stopping')
+                bot_log('PHANTOM_REPEAT_SKIP_FLOOR', bot_id, {
+                    'first_rung': _first_rung_price, 'lowest_rung': _lowest_rung_price,
+                    'dog_bid': current_dog_bid, 'anchor_depth': anchor_depth,
+                })
+                save_state()
+                return
             for rung in bot.get('rungs', []):
                 rung_price = max(1, anchor_base - anchor_depth - (len(repeat_specs) * _rung_spacing))
                 rung_qty = rung.get('qty', qty)

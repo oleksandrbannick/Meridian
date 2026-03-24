@@ -5268,10 +5268,19 @@ def _is_game_ending(ticker: str) -> bool:
         status = score_info.get('status', '')
         if status == 'post':
             return True
-        # Check if we're in the final 60 seconds of the last period
         if status == 'in':
             r = rule[1]
             period = score_info.get('period', 0)
+            # Tennis: no clock — check if one player has match-winning sets
+            if r.get('tennis'):
+                home_sets = score_info.get('home_score', 0)
+                away_sets = score_info.get('away_score', 0)
+                sets_to_win = 2  # best of 3 (ATP main + WTA)
+                # One player has already won enough sets
+                if home_sets >= sets_to_win or away_sets >= sets_to_win:
+                    return True
+                return False
+            # Clock-based sports: check final 60 seconds
             clock = score_info.get('clock', '')
             secs = _parse_clock_seconds(clock)
             # Final period with ≤60s remaining
@@ -5292,6 +5301,9 @@ _LATE_GAME_RULES = {
     'KXNCAAWB': {'final': 4, 'block_period': 4, 'block_secs': 60,  'block_ot': False, 'name': 'NCAAWB Q4'},
     'KXNFL':    {'final': 4, 'block_period': 4, 'block_secs': 60,  'block_ot': False, 'name': 'NFL Q4'},
     'KXNHL':    {'final': 3, 'block_period': 3, 'block_secs': 60,  'block_ot': False, 'name': 'NHL P3'},
+    # Tennis: no clock, set-based. period = current set number, score = sets won.
+    'KXATP':    {'final': 3, 'block_period': 3, 'block_secs': None, 'block_ot': False, 'name': 'ATP Set 3', 'tennis': True},
+    'KXWTA':    {'final': 3, 'block_period': 3, 'block_secs': None, 'block_ot': False, 'name': 'WTA Set 3', 'tennis': True},
 }
 
 def _is_late_game(ticker):
@@ -8905,6 +8917,22 @@ def _get_game_urgency(ticker):
             return _get_price_velocity_urgency(ticker)
         r = rule[1]
         period = score_info.get('period', 0)
+
+        # Tennis: set-based urgency (no clock)
+        if r.get('tennis'):
+            home_sets = score_info.get('home_score', 0)
+            away_sets = score_info.get('away_score', 0)
+            sets_to_win = 2  # best of 3
+            # Deciding set (1-1 in sets, now in set 3+) → late
+            if period >= r['block_period']:
+                return 'late'
+            # One player is 1 set from winning AND in a set where they could close it
+            # e.g. up 1-0 and in set 2 → match could end this set
+            if (home_sets == sets_to_win - 1 or away_sets == sets_to_win - 1) and period >= 2:
+                return 'late'
+            return 'normal'
+
+        # Clock-based sports
         clock = score_info.get('clock', '')
         secs = _parse_clock_seconds(clock)
         # Final period (Q4/P3/2nd Half) = 'late'

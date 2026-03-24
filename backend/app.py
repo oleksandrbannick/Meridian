@@ -9423,7 +9423,8 @@ def _handle_phantom(bot_id, bot, actions):
             repeat_total = bot.get('repeat_count', 0)
             if repeats_done_now <= repeat_total:
                 bot['status'] = 'waiting_repeat'
-                bot['waiting_repeat_since'] = now
+                bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
+                bot['_just_completed'] = True
                 bot['dog_filled_at'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
@@ -9667,20 +9668,20 @@ def _handle_phantom(bot_id, bot, actions):
             new_fav_price = None
             walk_type = None
 
-            # PRIORITY 1: Profit snap to bid — fastest hedge fill
-            if snap_ready and walk_target > current_fav_price:
+            # PRIORITY 1: Profit snap — jump to bid when profitable (combined <= snap ceiling)
+            if snap_ready and walk_target != current_fav_price:
                 new_fav_price = walk_target
                 walk_type = 'profit_snap'
 
-            # PRIORITY 2: Drop to bid if price is above target
+            # PRIORITY 2: Drop to bid — if we're above bid, snap down immediately
             elif needs_drop:
                 new_fav_price = walk_target
                 walk_type = 'drop_to_bid'
 
-            # PRIORITY 3: Normal walk +1¢ toward bid (every 20s)
+            # PRIORITY 3: Follow bid up — if bid rose above us, match it
             elif walk_target > current_fav_price:
-                new_fav_price = min(current_fav_price + 1, walk_target)
-                walk_type = 'normal_walk'
+                new_fav_price = walk_target  # jump to bid, don't crawl +1
+                walk_type = 'follow_bid_up'
 
             if new_fav_price is None or new_fav_price == current_fav_price:
                 bot['fav_last_walk_at'] = now
@@ -10722,7 +10723,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             repeat_total = bot.get('repeat_count', 0)
             if repeats_done_now <= repeat_total:
                 bot['status'] = 'waiting_repeat'
-                bot['waiting_repeat_since'] = now
+                bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
+                bot['_just_completed'] = True
                 bot['dog_filled_at'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
@@ -10884,20 +10886,20 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             new_fav_price = None
             walk_type = None
 
-            # PRIORITY 1: Profit snap to bid — fastest hedge fill
-            if snap_ready and walk_target > current_fav_price:
+            # PRIORITY 1: Profit snap — jump to bid when profitable (combined <= snap ceiling)
+            if snap_ready and walk_target != current_fav_price:
                 new_fav_price = walk_target
                 walk_type = 'profit_snap'
 
-            # PRIORITY 2: Drop to bid if price is above target
+            # PRIORITY 2: Drop to bid — if we're above bid, snap down immediately
             elif needs_drop:
                 new_fav_price = walk_target
                 walk_type = 'drop_to_bid'
 
-            # PRIORITY 3: Normal walk +1¢ toward bid (every 20s)
+            # PRIORITY 3: Follow bid up — if bid rose above us, match it
             elif walk_target > current_fav_price:
-                new_fav_price = min(current_fav_price + 1, walk_target)
-                walk_type = 'normal_walk'
+                new_fav_price = walk_target  # jump to bid, don't crawl +1
+                walk_type = 'follow_bid_up'
 
             if new_fav_price is None or new_fav_price == current_fav_price:
                 bot['fav_last_walk_at'] = now

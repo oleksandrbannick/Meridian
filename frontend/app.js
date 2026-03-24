@@ -5435,13 +5435,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': '🔄 REPEATING',
+        'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : '🔄 REPEATING',
         'completed': '✅ COMPLETE', 'stopped': '🛑 STOPPED',
     };
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': '#00aaff', 'waiting_repeat': '#aa66ff',
+        'fav_hedge_posted': '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : '#aa66ff',
         'completed': '#00ff88', 'stopped': '#ff4444',
     };
     const borderCol = borderMap[status] || '#ffaa00';

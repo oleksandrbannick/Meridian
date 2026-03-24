@@ -2235,7 +2235,7 @@ def _apex_sellback_complete(bot_id, bot, sell_price, actions):
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now < repeat_total:
+    if repeats_done_now <= repeat_total:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['_trade_recorded'] = False
@@ -4096,7 +4096,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now < repeat_total:
+    if repeats_done_now <= repeat_total:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
@@ -8621,7 +8621,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
                 repeats_done_now = bot.get('repeats_done', 0) + 1
                 bot['repeats_done'] = repeats_done_now
                 repeat_total = orig_repeat_count
-                if repeats_done_now < repeat_total:
+                if repeats_done_now <= repeat_total:
                     bot['status'] = 'waiting_repeat'
                     bot['waiting_repeat_since'] = time.time()
                     bot['first_fill_at'] = None
@@ -9338,7 +9338,7 @@ def _handle_phantom(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            if repeats_done_now < repeat_total:
+            if repeats_done_now <= repeat_total:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 bot['dog_filled_at'] = None
@@ -10580,7 +10580,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            if repeats_done_now < repeat_total:
+            if repeats_done_now <= repeat_total:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 bot['dog_filled_at'] = None
@@ -12215,7 +12215,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now < repeat_total:
+    if repeats_done_now <= repeat_total:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None

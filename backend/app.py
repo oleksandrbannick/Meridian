@@ -3524,7 +3524,7 @@ def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
 def _execute_phantom_hedge(bot_id):
     """Post the favorite hedge immediately after the dog fills.
     Called from WS fill handler in a background thread for speed.
-    Uses pre-calculated hedge price — zero compute on the hot path."""
+    Posts at fav BID (maker) from WS cache — speed gets us first in queue."""
     try:
         bot = active_bots.get(bot_id)
         if not bot or bot.get('status') in ('stopped', 'completed'):
@@ -3537,14 +3537,31 @@ def _execute_phantom_hedge(bot_id):
         qty = bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
-        # Use pre-calculated hedge price — already ceiling-capped at creation time
-        hedge_price = bot.get('_precalc_hedge_price') or 0
-        if hedge_price < 1:
-            hedge_price = _precalc_phantom_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
+        # Ceiling: max we'll ever walk to
+        max_hedge = HARD_CEILING_CENTS - dog_price
+
+        # Post at fav BID from WS cache — maker order, first in queue with our speed
+        fav_bid = bot.get(f'live_{fav_side}_bid', 0)
+        fav_ask_key = 'live_yes_ask' if fav_side == 'yes' else 'live_no_ask'
+        # Derive ask from opposite bid: yes_ask = 100 - no_bid, no_ask = 100 - yes_bid
+        opp_bid = bot.get(f'live_{"no" if fav_side == "yes" else "yes"}_bid', 0)
+        fav_ask = (100 - opp_bid) if opp_bid > 0 else 0
+        fav_spread = (fav_ask - fav_bid) if fav_ask > 0 and fav_bid > 0 else 0
+
+        if fav_bid > 0:
+            # Gapped market (spread >= 2c): bid+1 for queue priority
+            # Tight market: post at bid
+            hedge_price = min(fav_bid + 1, fav_ask - 1) if fav_spread >= 2 and fav_ask > fav_bid else fav_bid
+            hedge_price = min(hedge_price, max_hedge)  # never exceed ceiling
+        else:
+            # No WS bid available — fall back to precalc
+            hedge_price = bot.get('_precalc_hedge_price') or 0
+            if hedge_price < 1:
+                hedge_price = _precalc_phantom_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
 
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
-            bot_log('PHANTOM_HEDGE_TOO_LOW', bot_id, {'hedge_price': hedge_price, 'dog_price': dog_price, 'path': 'ws_fast'})
+            bot_log('PHANTOM_HEDGE_TOO_LOW', bot_id, {'hedge_price': hedge_price, 'dog_price': dog_price, 'fav_bid': fav_bid, 'path': 'ws_fast'})
             bot['status'] = 'dog_filled'
             return
 
@@ -3592,18 +3609,6 @@ def _execute_phantom_hedge(bot_id):
             'ticker': ticker, 'fav_side': fav_side, 'fav_price': actual_fav_price,
             'fav_order_id': fav_order_id, 'dog_price': dog_price, 'qty': qty,
         })
-        # Track fill-to-hedge latency
-        fill_at = bot.get('dog_filled_at')
-        if fill_at:
-            f2h_ms = (time.time() - fill_at) * 1000
-            bot['hedge_latency_ms'] = round(f2h_ms, 1)
-            _record_latency('fill_to_hedge_phantom', f2h_ms, {'bot_id': bot_id, 'type': 'phantom', 'fav_price': actual_fav_price})
-            print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
-            bot_log('PHANTOM_HEDGE_LATENCY', bot_id, {
-                'raw_hedge_ms': bot.get('raw_hedge_ms'), 'fill_to_hedge_ms': round(f2h_ms, 1),
-                'path': 'ws_fast',
-            })
-
         # Async: verify actual dog fill price (non-blocking, after hedge is already placed)
         try:
             verified_price = get_actual_fill_price(bot.get('dog_order_id'), dog_side)
@@ -3748,6 +3753,18 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['status'] = 'ladder_filled_no_fav'
             save_state()
             return
+
+        # ── Post at fav BID from WS cache — maker, first in queue ──
+        _max_hedge = HARD_CEILING_CENTS - (avg_price or bot.get('dog_price', 0))
+        _fav_bid = bot.get(f'live_{fav_side}_bid', 0)
+        _opp_bid = bot.get(f'live_{"no" if fav_side == "yes" else "yes"}_bid', 0)
+        _fav_ask = (100 - _opp_bid) if _opp_bid > 0 else 0
+        _fav_spread = (_fav_ask - _fav_bid) if _fav_ask > 0 and _fav_bid > 0 else 0
+        if _fav_bid > 0:
+            hedge_price = min(_fav_bid + 1, _fav_ask - 1) if _fav_spread >= 2 and _fav_ask > _fav_bid else _fav_bid
+            hedge_price = min(hedge_price, _max_hedge)
+            print(f'   📊 LADDER HEDGE AT BID: fav_bid={_fav_bid}¢ spread={_fav_spread}¢ → posting@{hedge_price}¢ (ceiling={_max_hedge}¢)')
+        # else: keep precalc/computed hedge_price as fallback
 
         # ── HEDGE FIRST — record raw speed then fire ──
         _raw_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')

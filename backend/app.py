@@ -6468,13 +6468,18 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             amend_price = max(1, new_target + walk_offset)
             # Cap at hard ceiling to prevent combined from exceeding user-set limit
             _amend_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
-            _amend_max_hedge = _amend_ceiling - new_avg
+            _amend_max_hedge = _amend_ceiling - round(new_avg_price)
             if _amend_max_hedge > 0:
                 amend_price = min(amend_price, _amend_max_hedge)
             ticker = bot['ticker']
 
+            # Subtract already-completed hedge generations from total
+            # so we only hedge the REMAINING unhedged anchors
+            _completed_hedge_qty = sum(h.get('fill_qty', h.get('qty', 0)) for h in bot.get('hedge_history', []))
+            _needed_hedge_qty = max(1, total_qty - _completed_hedge_qty)
+
             # Skip if nothing changed
-            if amend_price == current_hedge_price and total_qty == old_hedge_qty:
+            if amend_price == current_hedge_price and _needed_hedge_qty == old_hedge_qty:
                 return
 
         # API call OUTSIDE ws_fill_lock but INSIDE _late_anchor_amend_lock
@@ -6484,17 +6489,18 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             api_rate_limiter.wait()
             kalshi_client.amend_order(
                 hedge_oid, ticker=ticker,
-                side=unfilled_side, count=total_qty,
+                side=unfilled_side, count=_needed_hedge_qty,
                 **amend_kwargs
             )
 
             with ws_fill_lock:
                 bot['hedge_price'] = amend_price
-                bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
+                bot['hedge_qty'] = _needed_hedge_qty
 
-            print(f'📈 LATE ANCHOR: {bot_id} hedge {old_hedge_qty}→{total_qty}× @ {amend_price}¢ (was {current_hedge_price}¢)')
+            print(f'📈 LATE ANCHOR: {bot_id} hedge {old_hedge_qty}→{_needed_hedge_qty}× @ {amend_price}¢ (anchors={total_qty} completed_hedges={_completed_hedge_qty})')
             bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
-                'old_hedge_qty': old_hedge_qty, 'new_hedge_qty': total_qty,
+                'old_hedge_qty': old_hedge_qty, 'new_hedge_qty': _needed_hedge_qty,
+                'total_anchors': total_qty, 'completed_hedges': _completed_hedge_qty,
                 'old_price': current_hedge_price, 'amend_price': amend_price,
                 'avg_width': round(new_avg_width, 1), 'new_target': new_target,
                 'walk_offset': walk_offset, 'rung_idx': rung_idx,

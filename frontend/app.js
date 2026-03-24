@@ -11866,24 +11866,12 @@ async function loadDogHistory() {
         const data = await resp.json();
         const trades = data.trades || [];
 
-        // ── Calendar (all dog trades, ignore date filter) ──
+        // ── Calendar (server-side bucketed to match /api/pnl timezone) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000&category=anchor_dog,anchor_ladder,anchor_sellback`);
+                const calResp = await fetch(`${API_BASE}/pnl/calendar?category=dog`);
                 const calData = await calResp.json();
-                const allDog = calData.trades || [];
-                // Build day buckets for calendar
-                const dayMap = {};
-                allDog.forEach(t => {
-                    const d = new Date((t.timestamp||0) * 1000);
-                    const key = _localDateStr(d);
-                    if (!dayMap[key]) dayMap[key] = { date: key, net_cents: 0, wins: 0, losses: 0, trades: 0 };
-                    const net = (t.profit_cents||0) - (t.loss_cents||0);
-                    dayMap[key].net_cents += net;
-                    dayMap[key].trades++;
-                    if (net >= 0) dayMap[key].wins++; else dayMap[key].losses++;
-                });
-                const days = Object.values(dayMap).sort((a,b) => a.date.localeCompare(b.date));
+                const days = calData.days || [];
                 renderPnLCalendar(calPanel, days);
             } catch (_) { calPanel.innerHTML = ''; }
         }

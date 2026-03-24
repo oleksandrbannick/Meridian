@@ -17172,12 +17172,26 @@ def get_pnl():
 @app.route('/api/pnl/calendar', methods=['GET'])
 def get_pnl_calendar():
     """Return daily P&L for every day that has trades — powers the calendar view.
-    Each day respects its own pnl_resets entry (if any)."""
+    Each day respects its own pnl_resets entry (if any).
+    ?category=arb|dog|middle|bet — filter by bot type (default: arb)."""
     from collections import defaultdict
+    cat = request.args.get('category', 'arb')
     day_buckets = defaultdict(list)
     for t in trade_history:
+        # Pre-filter by category to avoid bucketing irrelevant trades
+        if cat == 'dog':
+            if t.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+                continue
+        elif cat == 'arb':
+            if t.get('bot_category', 'arb') not in ('arb', 'ladder_arb', 'both_posted'):
+                continue
+        elif cat == 'middle':
+            if t.get('bot_category') != 'middle':
+                continue
+        elif cat == 'bet':
+            if t.get('bot_category') != 'bet' and t.get('type') != 'watch':
+                continue
         day = _trade_day_key(t)
-        # Respect per-day reset: exclude trades before that day's reset timestamp
         day_reset = _pnl_reset_for_day(day)
         if day_reset > 0 and (t.get('timestamp') or 0) < day_reset:
             continue
@@ -17185,7 +17199,8 @@ def get_pnl_calendar():
 
     calendar_data = []
     for day in sorted(day_buckets.keys()):
-        bucket = _compute_pnl_bucket(day_buckets[day], 'arb')
+        # Don't re-filter inside _compute_pnl_bucket — already filtered above
+        bucket = _compute_pnl_bucket(day_buckets[day])
         calendar_data.append({
             'date':        day,
             'net_cents':   bucket['net_cents'],

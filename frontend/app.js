@@ -6771,13 +6771,19 @@ async function loadBots() {
         window._lastBotsData = bots;  // used by emergencyExitGame
 
         // Track when bots first transition to completed/stopped so we can show them for 3s
+        // _botPrevStatus tracks what status each bot had last render — only mark completion
+        // for bots that TRANSITION during this session, not ones already completed on page load
         if (!window._botCompletedAt) window._botCompletedAt = {};
+        if (!window._botPrevStatus) window._botPrevStatus = {};
         const now = Date.now();
         for (const id of Object.keys(bots)) {
             const s = bots[id].status;
-            if ((s === 'completed' || s === 'stopped') && !window._botCompletedAt[id]) {
+            const prev = window._botPrevStatus[id];
+            // Only track transition: bot was previously active, now completed/stopped
+            if ((s === 'completed' || s === 'stopped') && prev && prev !== 'completed' && prev !== 'stopped' && !window._botCompletedAt[id]) {
                 window._botCompletedAt[id] = now;
             }
+            window._botPrevStatus[id] = s;
         }
         // Clean up old entries
         for (const id of Object.keys(window._botCompletedAt)) {

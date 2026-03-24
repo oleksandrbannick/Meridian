@@ -10260,6 +10260,18 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         else:
             bot['no_fill_qty'] = total_fill
 
+        # Monitor backup: if fills detected but hedge never fired, trigger it now
+        if total_fill > 0 and not bot.get('_hedge_fired') and not bot.get('fav_order_id'):
+            print(f'👻 PHANTOM MONITOR HEDGE: {bot_id} {total_fill} fills detected, hedge not fired — triggering')
+            bot_log('PHANTOM_LADDER_MONITOR_HEDGE_TRIGGER', bot_id, {
+                'total_fill': total_fill, 'dog_side': dog_side, 'status': status,
+            })
+            bot['_hedge_fired'] = True
+            bot['dog_filled_at'] = bot.get('dog_filled_at') or now
+            _hedge_worker_queue.put((_execute_phantom_ladder_hedge, (bot_id,)))
+            save_state()
+            return
+
         # Track lowest dog bid
         if current_dog_bid > 0:
             lowest = bot.get('lowest_dog_bid_seen', 999)

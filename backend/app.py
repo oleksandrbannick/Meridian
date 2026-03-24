@@ -4015,16 +4015,33 @@ def _execute_phantom_ladder_hedge(bot_id):
             old_target = max(1, 100 - avg_price - target_width)
             walk_offset = max(0, bot.get('fav_price', old_target) - old_target)
             amend_price = max(1, new_hedge_target + walk_offset)
-            fav_oid = bot.get('fav_order_id')
-            if fav_oid:
+            if bot.get('fav_order_id'):
                 _old_hedge_qty = bot.get('hedge_qty', 0) or hedge_qty
                 _extra_needed = new_total_fill - _old_hedge_qty
                 try:
                     fav_side = bot.get('fav_side', 'yes')
-                    # Amend price only (Kalshi can't increase count via amend)
                     amend_kwargs = {f'{fav_side}_price': amend_price}
-                    api_rate_limiter.wait()
-                    kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side, count=_old_hedge_qty, **amend_kwargs)
+                    # Acquire shared lock — prevents race with monitor walk and WS instant drop
+                    _phantom_drop_lock.acquire()
+                    try:
+                        fav_oid = bot.get('fav_order_id')  # Re-read after lock (may have changed)
+                        if not fav_oid:
+                            _phantom_drop_lock.release()
+                            save_state()
+                            return
+                        api_rate_limiter.wait()
+                        _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side, count=_old_hedge_qty, **amend_kwargs)
+                        # Capture new order ID
+                        _ao = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                        _new_oid = _ao.get('order_id', '')
+                        if _new_oid and _new_oid != fav_oid:
+                            bot['fav_order_id'] = _new_oid
+                            if fav_side == 'yes':
+                                bot['yes_order_id'] = _new_oid
+                            else:
+                                bot['no_order_id'] = _new_oid
+                    finally:
+                        _phantom_drop_lock.release()
                     bot['fav_price'] = amend_price
                     if fav_side == 'yes':
                         bot['yes_price'] = amend_price

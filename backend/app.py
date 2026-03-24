@@ -10225,6 +10225,19 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                             if rung.get('order_id') and rung.get('fill_qty', 0) < rung['qty']:
                                 _safe_cancel(rung['order_id'], f'phantom rung repost {bot_id}')
 
+                    # Check if lowest rung would hit floor — skip repost entirely
+                    _last_rung_idx = len(bot.get('rungs', [])) - 1
+                    _lowest_new_price = max(1, smart_first - (_last_rung_idx * _rung_spacing)) if _last_rung_idx >= 0 else smart_first
+                    if _lowest_new_price <= 3:
+                        bot['posted_at'] = now  # reset timer, don't repost
+                        bot_log('PHANTOM_LADDER_REPOST_SKIP_FLOOR', bot_id, {
+                            'smart_first': smart_first, 'lowest_would_be': _lowest_new_price,
+                            'unfilled_rungs': _unfilled_count, 'spacing': _rung_spacing,
+                        })
+                        print(f'⛔ PHANTOM REPOST SKIP: {bot_id} lowest rung would be {_lowest_new_price}¢ — too low')
+                        save_state()
+                        return
+
                     # Batch-place new orders for unfilled rungs
                     new_ph_group = _create_order_group()
                     repost_specs = []

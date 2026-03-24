@@ -587,10 +587,9 @@
                                 <div style="border-top:1px solid #1e2740;padding-top:6px;margin-top:6px;font-size:10px;color:#8892a6;">
                                     <strong style="color:#ffaa00;">Market line pills (active bots):</strong><br>
                                     <div style="margin:4px 0 4px 8px;">
-                                        <span style="color:#00ff88;font-weight:800;">👻 Y</span> = Phantom on YES (dog) side<br>
-                                        <span style="color:#ff4444;font-weight:800;">👻 N</span> = Phantom on NO (dog) side<br>
-                                        <span style="color:#00ddff;font-weight:800;">👻✕Y</span> = Cross-market Phantom (YES+YES across tickers)<br>
-                                        <span style="color:#00ddff;font-weight:800;">👻✕N</span> = Cross-market Phantom (NO+NO across tickers)
+                                        <span class="legend-icon" data-bot="phantom" style="display:inline-block;vertical-align:middle;width:14px;height:14px;"></span> = Phantom active on this line<br>
+                                        <span class="legend-icon" data-bot="phantom" style="display:inline-block;vertical-align:middle;width:14px;height:14px;"></span><span style="color:#00ddff;font-weight:800;">✕</span><span style="color:#00ff88;font-weight:800;">Y</span> = Cross-market YES+YES<br>
+                                        <span class="legend-icon" data-bot="phantom" style="display:inline-block;vertical-align:middle;width:14px;height:14px;"></span><span style="color:#00ddff;font-weight:800;">✕</span><span style="color:#ff4444;font-weight:800;">N</span> = Cross-market NO+NO
                                     </div>
                                     Same-market: one per line. Cross-market: one per side (Y+N can coexist).
                                 </div>
@@ -3073,6 +3072,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774281432"></script>
+    <script src="app.js?v=1774281433"></script>
 </body>
 </html>

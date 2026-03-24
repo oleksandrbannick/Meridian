@@ -2940,6 +2940,11 @@ class KalshiWSManager:
                     _ws_realtime_flip_check(ticker, yes_bid_rt, no_bid_rt)
                 except Exception as flip_err:
                     print(f'⚠ WS real-time flip check error: {flip_err}')
+                # ── Real-time phantom drop: if hedge is above bid, drop instantly ──
+                try:
+                    _ws_phantom_instant_drop(ticker, yb, nb, ya, na)
+                except Exception as _pd_err:
+                    pass  # don't spam logs on every tick
             return
 
         if msg_type == 'fill':
@@ -3019,6 +3024,87 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
     Kept for signature compatibility.
     """
     return
+
+
+# Lock to prevent concurrent phantom drop amends
+_phantom_drop_lock = threading.Lock()
+
+def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
+    """Instant drop: if any phantom bot's hedge is above the fav bid, amend down immediately.
+    Called on every WS price tick — must be fast. Only acts when price > bid (overpaying)."""
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+            continue
+        if bot.get('status') != 'fav_hedge_posted':
+            continue
+        # Match ticker (same-market or cross-market hedge)
+        hedge_ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
+        if hedge_ticker != ticker and bot.get('ticker') != ticker:
+            continue
+
+        fav_side = bot.get('fav_side', '')
+        fav_price = bot.get('fav_price') or 0
+        if fav_price <= 0 or not fav_side:
+            continue
+
+        # Get current bid for fav side from this WS tick
+        fav_bid = (yes_bid if fav_side == 'yes' else no_bid) if hedge_ticker == ticker else 0
+        if fav_bid <= 0:
+            continue
+
+        # Only drop if hedge is ABOVE bid (overpaying)
+        if fav_price <= fav_bid:
+            continue
+
+        # Calculate drop target (same logic as monitor: bid or bid+1 in gap)
+        fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
+        fav_spread = (fav_ask_now - fav_bid) if fav_ask_now > fav_bid else 1
+        if fav_spread >= 2 and fav_ask_now > fav_bid:
+            drop_target = min(fav_bid + 1, fav_ask_now - 1)
+        else:
+            drop_target = fav_bid
+
+        # Cap at ceiling
+        dog_price = bot.get('dog_price') or bot.get('avg_fill_price') or 0
+        if dog_price > 0:
+            max_fav = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS) - dog_price
+            drop_target = min(drop_target, max_fav)
+
+        if drop_target <= 0 or drop_target >= fav_price:
+            continue
+
+        # Acquire lock — only one drop at a time
+        if not _phantom_drop_lock.acquire(blocking=False):
+            return  # another drop in progress
+
+        try:
+            fav_oid = bot.get('fav_order_id')
+            if not fav_oid:
+                continue
+            amend_kwargs = {f'{fav_side}_price': drop_target}
+            api_rate_limiter.wait()
+            kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
+                                      count=bot.get('hedge_qty', bot.get('quantity', 1)),
+                                      **amend_kwargs)
+            bot['fav_price'] = drop_target
+            if fav_side == 'yes':
+                bot['yes_price'] = drop_target
+            else:
+                bot['no_price'] = drop_target
+            bot['fav_last_walk_at'] = time.time()
+            bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
+            print(f'⚡ WS PHANTOM DROP: {bot_id} fav {fav_price}→{drop_target}¢ (bid={fav_bid}¢)')
+            bot_log('PHANTOM_WS_INSTANT_DROP', bot_id, {
+                'old_price': fav_price, 'new_price': drop_target,
+                'fav_bid': fav_bid, 'fav_ask': fav_ask_now,
+            })
+            save_state()
+        except Exception as e:
+            if '404' not in str(e):
+                print(f'⚠ WS PHANTOM DROP FAIL: {bot_id}: {e}')
+        finally:
+            _phantom_drop_lock.release()
+        return  # one drop per tick max
 
 
 def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty, floor=None):
@@ -9818,8 +9904,8 @@ def _handle_phantom(bot_id, bot, actions):
         _ph_at_bid = current_fav_price > 0 and current_fav_price == walk_target
         _ph_queue_grace = _ph_at_bid and _ph_bid_stable_s >= 10 and not snap_ready and not needs_drop
 
-        # Interval: fixed 20s, instant on snap/drop
-        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
+        # Interval: instant drop, 3s stabilized snap, 20s normal walk
+        walk_interval = 0 if needs_drop else 3 if snap_ready else WALK_INTERVAL_S
         if _ph_queue_grace:
             walk_interval = max(walk_interval, 30)
         bot['_walk_interval'] = walk_interval
@@ -11067,9 +11153,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         _phl_at_bid = current_fav_price > 0 and current_fav_price == walk_target
         _phl_queue_grace = _phl_at_bid and _phl_bid_stable_s >= 10 and not snap_ready and not needs_drop
 
-        # Interval: adaptive based on ceiling proximity + game urgency
+        # Interval: instant drop, 3s stabilized snap, 20s normal walk
         _phl_combined = avg_dog + current_fav_price
-        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
+        walk_interval = 0 if needs_drop else 3 if snap_ready else WALK_INTERVAL_S
         if _phl_queue_grace:
             walk_interval = max(walk_interval, 30)
         bot['_walk_interval'] = walk_interval

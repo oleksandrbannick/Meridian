@@ -1399,6 +1399,7 @@ function displayMarkets(markets) {
     
     // Pre-build ticker → active bot type map + P&L map (O(n) once, not per row)
     const botMap = {};  // ticker → {phantom: N, apex: N, meridian: N, scout: N}
+    const phantomDetails = {};  // ticker → [{side, cross}] for phantom pills
     const pnlMap = {};  // ticker → total net P&L in cents (all bots, including completed)
     if (window._lastBotsData) {
         const deadSt = new Set(['completed','stopped','cancelled','drift_cancelled']);
@@ -1417,6 +1418,19 @@ function displayMarkets(markets) {
             if (!label) continue;
             if (!botMap[t]) botMap[t] = {};
             botMap[t][label] = (botMap[t][label] || 0) + 1;
+            // Track phantom details for side+cross display
+            if (label === 'phantom') {
+                if (!phantomDetails[t]) phantomDetails[t] = [];
+                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market });
+                // Cross-market: also tag the hedge ticker
+                if (b.cross_market && b.hedge_ticker && b.hedge_ticker !== t) {
+                    const ht = b.hedge_ticker;
+                    if (!botMap[ht]) botMap[ht] = {};
+                    botMap[ht].phantom = (botMap[ht].phantom || 0) + 1;
+                    if (!phantomDetails[ht]) phantomDetails[ht] = [];
+                    phantomDetails[ht].push({ side: b.dog_side || '?', cross: true, isHedgeSide: true });
+                }
+            }
             // Middle bots have two tickers
             if (b.type === 'middle') {
                 for (const leg of ['ticker_a', 'ticker_b']) {
@@ -1430,6 +1444,7 @@ function displayMarkets(markets) {
         }
     }
     window._botTypeMap = botMap;
+    window._phantomDetailMap = phantomDetails;
     window._botPnlMap = pnlMap;
 
     // Middle scanner auto-fetch removed — was firing 12 Kalshi reads on every render,
@@ -2296,19 +2311,35 @@ function createMarketRow(market, label) {
 
     // ── Active bot type icons ──
     const botTypes = (window._botTypeMap || {})[market.ticker] || {};
+    const phDetails = (window._phantomDetailMap || {})[market.ticker] || [];
     const activeBotTypes = Object.keys(botTypes);
     if (activeBotTypes.length > 0) {
         const wrap = document.createElement('span');
         wrap.style.cssText = 'margin-left:5px;white-space:nowrap;display:inline-flex;align-items:center;gap:2px;';
         const botOrder = ['apex','phantom','meridian','scout'];
         for (const bt of botOrder.filter(b => activeBotTypes.includes(b))) {
-            const c = BOT_COLORS[bt] || '#818cf8';
-            const n = botTypes[bt];
-            const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-            pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
-            pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
-            wrap.appendChild(pill);
+            if (bt === 'phantom' && phDetails.length > 0) {
+                // Render individual phantom pills with side + cross info
+                for (const ph of phDetails) {
+                    const sideChar = ph.side === 'yes' ? 'Y' : ph.side === 'no' ? 'N' : '?';
+                    const sideCol = ph.side === 'yes' ? '#00ff88' : '#ff4444';
+                    const crossMark = ph.cross ? '✕' : '';
+                    const bgCol = ph.cross ? '#00ddff' : sideCol;
+                    const pill = document.createElement('span');
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${bgCol}15;border:1px solid ${bgCol}55;border-radius:4px;font-size:9px;font-weight:800;color:${sideCol};`;
+                    pill.innerHTML = `${botIconImg('phantom', 14)}${crossMark}<span style="color:${sideCol};font-weight:900;">${sideChar}</span>`;
+                    pill.title = `Phantom ${ph.side.toUpperCase()}${ph.cross ? ' (cross-market)' : ''}${ph.isHedgeSide ? ' [hedge side]' : ''}`;
+                    wrap.appendChild(pill);
+                }
+            } else {
+                const c = BOT_COLORS[bt] || '#818cf8';
+                const n = botTypes[bt];
+                const pill = document.createElement('span');
+                pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+                pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
+                pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
+                wrap.appendChild(pill);
+            }
         }
         labelDiv.appendChild(wrap);
     }

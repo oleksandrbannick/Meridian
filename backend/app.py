@@ -7407,9 +7407,9 @@ def create_anchor_bot():
                 if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
                     return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
             else:
-                # Same-market: block same ticker+side
-                if not b_cross and b_ticker == ticker and b_side == dog_side:
-                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on this line: {bid[:30]}'}), 400
+                # Same-market: only one per ticker (there's only one dog)
+                if not b_cross and b_ticker == ticker:
+                    return jsonify({'error': f'Same-market Phantom already active on this line: {bid[:30]}'}), 400
 
         if target_width < 1:
             return jsonify({'error': 'target_width must be >= 1'}), 400
@@ -7598,8 +7598,9 @@ def create_ladder_bot():
                 if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
                     return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
             else:
-                if not b_cross and b_ticker == ticker and b_side == dog_side:
-                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on this line: {bid[:30]}'}), 400
+                # Same-market: only one per ticker (there's only one dog)
+                if not b_cross and b_ticker == ticker:
+                    return jsonify({'error': f'Same-market Phantom already active on this line: {bid[:30]}'}), 400
 
         if not rungs_input or len(rungs_input) < 1 or len(rungs_input) > 3:
             return jsonify({'error': 'Need 1-3 rungs'}), 400

@@ -7149,53 +7149,58 @@ def _execute_apex_completion(bot_id):
             _bc = bot.get('hard_ceiling', HARD_CEILING_CENTS)
             max_safe = _bc - avg_anchor
             hedge_price = min(max(1, target_hedge), max(1, max_safe))
-            print(f'⚠ APEX UNHEDGED ANCHORS: {bot_id} anchor={anchor_qty} hedge={hedge_qty} → placing {unhedged} extra hedge @ {hedge_price}¢')
-            bot_log('APEX_EXTRA_HEDGE_PLACING', bot_id, {
-                'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
-                'side': unfilled_side, 'price': hedge_price, 'avg_anchor': avg_anchor,
-                'target_hedge': target_hedge, 'max_safe': max_safe,
-                '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
-            })
-            try:
-                resp, actual_price = create_order_maker(
-                    ticker=ticker, side=unfilled_side, action='buy',
-                    count=unhedged, price=hedge_price, priority=True,
-                    skip_rate_limit=True,
-                )
-                extra_oid = resp['order']['order_id']
-                print(f'   ✅ Extra hedge placed: {unfilled_side.upper()} {unhedged}x @{actual_price}¢ | {extra_oid[:12]}')
-                bot_log('APEX_EXTRA_HEDGE_PLACED', bot_id, {
-                    'order_id': extra_oid, 'side': unfilled_side,
-                    'qty': unhedged, 'price_sent': hedge_price, 'actual_price': actual_price,
-                    'anchor_qty': anchor_qty, 'hedge_qty_before': hedge_qty,
+            # Re-check unhedged — GONE/404 paths above may have zeroed it
+            if unhedged <= 0:
+                print(f'✅ APEX EXTRA HEDGE: {bot_id} unhedged resolved to 0 after verify — proceeding to completion')
+                # Fall through to completion below
+            else:
+                print(f'⚠ APEX UNHEDGED ANCHORS: {bot_id} anchor={anchor_qty} hedge={hedge_qty} → placing {unhedged} extra hedge @ {hedge_price}¢')
+                bot_log('APEX_EXTRA_HEDGE_PLACING', bot_id, {
+                    'anchor_qty': anchor_qty, 'hedge_qty': hedge_qty, 'unhedged': unhedged,
+                    'side': unfilled_side, 'price': hedge_price, 'avg_anchor': avg_anchor,
+                    'target_hedge': target_hedge, 'max_safe': max_safe,
+                    '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
                 })
-                # Don't mark bot complete yet — let monitor handle the extra hedge fill
-                bot['hedge_order_id'] = extra_oid
-                bot['hedge_price'] = actual_price
-                bot['hedge_qty'] = unhedged
-                bot['_hedge_fill_count'] = 0
-                bot['_hedge_verified'] = False
-                bot['_ws_fill_handling'] = False
-                bot['_bot_completed'] = False
-                bot['_extra_hedge_placed'] = True
-                bot['status'] = f'ladder_arb_{filled_side}_filled'
-                all_ids = bot.get('_all_hedge_order_ids', [])
-                all_ids.append(extra_oid)
-                bot['_all_hedge_order_ids'] = all_ids
-                # Also track in placed IDs so verify loop counts its fills
-                _placed = bot.get('_all_placed_order_ids', [])
-                _placed.append(extra_oid)
-                bot['_all_placed_order_ids'] = _placed
-                save_state()
-                return  # Don't complete — wait for extra hedge to fill
-            except Exception as e:
-                print(f'   Extra hedge failed: {e} -- staying active to retry')
-                bot_log('APEX_EXTRA_HEDGE_FAIL', bot_id, {
-                    'side': unfilled_side, 'qty': unhedged, 'price': hedge_price,
-                    'error': str(e),
-                }, level='ERROR')
-                bot['_extra_hedge_placed'] = False
-                return
+                try:
+                    resp, actual_price = create_order_maker(
+                        ticker=ticker, side=unfilled_side, action='buy',
+                        count=unhedged, price=hedge_price, priority=True,
+                        skip_rate_limit=True,
+                    )
+                    extra_oid = resp['order']['order_id']
+                    print(f'   ✅ Extra hedge placed: {unfilled_side.upper()} {unhedged}x @{actual_price}¢ | {extra_oid[:12]}')
+                    bot_log('APEX_EXTRA_HEDGE_PLACED', bot_id, {
+                        'order_id': extra_oid, 'side': unfilled_side,
+                        'qty': unhedged, 'price_sent': hedge_price, 'actual_price': actual_price,
+                        'anchor_qty': anchor_qty, 'hedge_qty_before': hedge_qty,
+                    })
+                    # Don't mark bot complete yet — let monitor handle the extra hedge fill
+                    bot['hedge_order_id'] = extra_oid
+                    bot['hedge_price'] = actual_price
+                    bot['hedge_qty'] = unhedged
+                    bot['_hedge_fill_count'] = 0
+                    bot['_hedge_verified'] = False
+                    bot['_ws_fill_handling'] = False
+                    bot['_bot_completed'] = False
+                    bot['_extra_hedge_placed'] = True
+                    bot['status'] = f'ladder_arb_{filled_side}_filled'
+                    all_ids = bot.get('_all_hedge_order_ids', [])
+                    all_ids.append(extra_oid)
+                    bot['_all_hedge_order_ids'] = all_ids
+                    # Also track in placed IDs so verify loop counts its fills
+                    _placed = bot.get('_all_placed_order_ids', [])
+                    _placed.append(extra_oid)
+                    bot['_all_placed_order_ids'] = _placed
+                    save_state()
+                    return  # Don't complete — wait for extra hedge to fill
+                except Exception as e:
+                    print(f'   Extra hedge failed: {e} -- staying active to retry')
+                    bot_log('APEX_EXTRA_HEDGE_FAIL', bot_id, {
+                        'side': unfilled_side, 'qty': unhedged, 'price': hedge_price,
+                        'error': str(e),
+                    }, level='ERROR')
+                    bot['_extra_hedge_placed'] = False
+                    return
 
         total_pnl = bot.get('cumulative_pnl', 0)
         completed_count = bot.get('completed_rungs_count', 0)

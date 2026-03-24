@@ -12233,10 +12233,12 @@ def _handle_apex(bot_id, bot, actions):
                                                         'price': _rp_actual, 'total_anchors': _total_af,
                                                     })
                                                     save_state()
+                                                    return  # Fresh order — next cycle uses new ID
                                                 except Exception as _rp_err:
                                                     print(f'⚠ APEX HEDGE REPOST FAIL: {bot_id}: {_rp_err}')
                                         except Exception:
                                             pass
+                                        return  # Don't continue walk with stale order ID
                                     elif '409' in str(e):
                                         # 409 Conflict = order may be filled or market closed
                                         # Re-poll fills to check

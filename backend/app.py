@@ -12034,8 +12034,7 @@ def _handle_apex(bot_id, bot, actions):
         _hfc = bot.get('_hedge_fill_count', 0)
         _hq = bot.get('hedge_qty', 0)
         _hedge_done_trigger = (bot.get('_consolidated') and _hfc >= _hq and _hq > 0
-                               and bot.get('_hedge_verified')
-                               and not bot.get('_completion_in_progress'))
+                               and bot.get('_hedge_verified'))
         if (all_resolved and bot.get('completed_rungs_count', 0) > 0) or _hedge_done_trigger:
             _trigger = 'monitor_filled_all_resolved' if all_resolved else 'hedge_fully_filled'
             bot_log('APEX_MONITOR_COMPLETION_TRIGGER', bot_id, {

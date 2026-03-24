@@ -11866,7 +11866,11 @@ def _handle_apex(bot_id, bot, actions):
                                         })
                                         try:
                                             api_rate_limiter.wait()
-                                            kalshi_client.amend_order(hedge_oid, price=_cross_target)
+                                            _amend_ticker = bot.get('ticker', '')
+                                            _amend_side = unfilled_side
+                                            _amend_count = rq
+                                            _amend_kwargs = {'yes_price': _cross_target} if _amend_side == 'yes' else {'no_price': _cross_target}
+                                            kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
                                             bot['hedge_price'] = _cross_target
                                             if unfilled_side == 'yes':
                                                 bot['yes_price'] = _cross_target

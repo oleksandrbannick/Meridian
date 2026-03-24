@@ -6043,13 +6043,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             // ── AT CEILING — combined ≥ 98¢ (breakeven), waiting for fill or sell-back timer ──
             const bidGap = bot._bid_gap || 0;
             const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ bid ${bidGap}¢ from hedge — ${gameUrgency === 'critical' ? 'drift exit at 5¢' : gameUrgency === 'late' ? 'drift exit at 10¢' : 'watching'}</div>` : '';
-            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid · 10s'
-                : gameUrgency === 'late' ? 'Exit: sell-back · 60s'
-                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
-                : 'Exit: sell-back · 180s';
+            const sbTimeLeft = bot._sellback_time_left;
+            const sbGrace = bot._sellback_grace_s || 0;
             const sbTimerHtml = (() => {
-                const sbTimeLeft = bot._sellback_time_left;
-                const sbGrace = bot._sellback_grace_s || 0;
                 if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
                     const sbMin = Math.floor(sbTimeLeft / 60);
                     const sbSec = Math.floor(sbTimeLeft % 60);
@@ -6057,10 +6053,24 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     return `<span style="color:${sbCol};font-size:9px;font-weight:700;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
                 } else if (sbGrace >= 9999) {
                     return '<span style="color:#818cf8;font-size:9px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
+                } else if (sbTimeLeft != null && sbTimeLeft <= 0 && bot._apex_sellback_attempted) {
+                    return '<span style="color:#ffaa00;font-size:9px;font-weight:700;background:#ffaa0018;padding:1px 5px;border-radius:3px;">⏱ completing cheaper — waiting for fill</span>';
                 } else if (sbTimeLeft != null && sbTimeLeft <= 0) {
-                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back eligible NOW</span>';
+                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back checking...</span>';
                 }
                 return '';
+            })();
+            // Show live countdown in exit rule instead of static grace period
+            const exitRule = (() => {
+                if (gameUrgency === 'halftime') return 'Exit: paused until game resumes';
+                if (sbTimeLeft != null && sbTimeLeft > 0) {
+                    const m = Math.floor(sbTimeLeft / 60);
+                    const s = Math.floor(sbTimeLeft % 60);
+                    return `Exit: sell-back in ${m > 0 ? m + 'm ' : ''}${s}s`;
+                }
+                if (sbTimeLeft != null && sbTimeLeft <= 0) return 'Exit: sell-back timer expired — evaluating';
+                const grace = gameUrgency === 'critical' ? '10s' : gameUrgency === 'late' ? '60s' : '180s';
+                return `Exit: sell-back · ${grace}`;
             })();
             walkInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">

@@ -3704,8 +3704,11 @@ def _execute_phantom_hedge(bot_id):
             return
 
         # Record raw hedge speed RIGHT before API call — nothing between this and HTTP send
+        if not bot.get('dog_filled_at'):
+            bot['dog_filled_at'] = time.time()
         _raw_fill_at = bot.get('dog_filled_at')
-        if _raw_fill_at:
+        _is_retry = bot.get('raw_hedge_ms') is not None
+        if _raw_fill_at and not _is_retry:
             _raw_ms = (time.time() - _raw_fill_at) * 1000
             bot['raw_hedge_ms'] = round(_raw_ms, 1)
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom'})
@@ -3716,7 +3719,7 @@ def _execute_phantom_hedge(bot_id):
             skip_rate_limit=True
         )
         # Round trip measurement
-        _rt_ms = (time.time() - _raw_fill_at) * 1000 if _raw_fill_at else None
+        _rt_ms = (time.time() - _raw_fill_at) * 1000 if _raw_fill_at and not _is_retry else None
         if _rt_ms is not None:
             bot['hedge_latency_ms'] = round(_rt_ms, 1)
             _record_latency('fill_to_hedge_phantom', _rt_ms, {'bot_id': bot_id, 'type': 'phantom', 'fav_price': actual_fav_price})
@@ -3887,6 +3890,9 @@ def _execute_phantom_ladder_hedge(bot_id):
         print(f'👻 PHANTOM HEDGE: {bot_id} | avg={avg_price}¢ qty={total_fill_qty} | bid={_fav_bid}¢ spread={_fav_spread}¢ → @{hedge_price}¢ (ceil={_max_hedge}¢)')
 
         # ── Record raw speed (fill → right before API call) then fire ──
+        # Ensure dog_filled_at is set (WS handler sets it, but recovery/sweep paths may not)
+        if not bot.get('dog_filled_at') and not bot.get('first_fill_at'):
+            bot['dog_filled_at'] = time.time()
         _raw_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
         _is_retry = bot.get('raw_hedge_ms') is not None
         if _raw_fill_at and not _is_retry:

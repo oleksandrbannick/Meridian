@@ -2319,16 +2319,23 @@ function createMarketRow(market, label) {
         const botOrder = ['apex','phantom','meridian','scout'];
         for (const bt of botOrder.filter(b => activeBotTypes.includes(b))) {
             if (bt === 'phantom' && phDetails.length > 0) {
-                // Render individual phantom pills with side + cross info
-                for (const ph of phDetails) {
+                const sameMkt = phDetails.filter(p => !p.cross);
+                const crossMkt = phDetails.filter(p => p.cross);
+                if (sameMkt.length > 0) {
+                    const c = BOT_COLORS['phantom'] || '#ffaa00';
+                    const pill = document.createElement('span');
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
+                    pill.innerHTML = `${botIconImg('phantom', 14)}`;
+                    pill.title = 'Phantom active';
+                    wrap.appendChild(pill);
+                }
+                for (const ph of crossMkt) {
                     const sideChar = ph.side === 'yes' ? 'Y' : ph.side === 'no' ? 'N' : '?';
                     const sideCol = ph.side === 'yes' ? '#00ff88' : '#ff4444';
-                    const crossMark = ph.cross ? '✕' : '';
-                    const bgCol = ph.cross ? '#00ddff' : sideCol;
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:${bgCol}15;border:1px solid ${bgCol}55;border-radius:4px;font-size:9px;font-weight:800;color:${sideCol};`;
-                    pill.innerHTML = `${botIconImg('phantom', 14)}${crossMark}<span style="color:${sideCol};font-weight:900;">${sideChar}</span>`;
-                    pill.title = `Phantom ${ph.side.toUpperCase()}${ph.cross ? ' (cross-market)' : ''}${ph.isHedgeSide ? ' [hedge side]' : ''}`;
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:1px 4px;background:#00ddff15;border:1px solid #00ddff55;border-radius:4px;font-size:9px;font-weight:800;`;
+                    pill.innerHTML = `${botIconImg('phantom', 14)}<span style="color:#00ddff;">✕</span><span style="color:${sideCol};font-weight:900;">${sideChar}</span>`;
+                    pill.title = `Cross-market Phantom ${ph.side.toUpperCase()}${ph.isHedgeSide ? ' [hedge side]' : ''}`;
                     wrap.appendChild(pill);
                 }
             } else {

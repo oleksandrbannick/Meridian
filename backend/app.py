@@ -4008,6 +4008,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             new_total_fill = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
             new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / new_total_fill) if new_total_fill > 0 else avg_price
             bot['avg_fill_price'] = new_avg
+            _old_hedge_qty_before = bot.get('hedge_qty', 0) or hedge_qty
             bot['hedge_qty'] = new_total_fill
             target_width = bot.get('target_width', 5)
             new_hedge_target = max(1, 100 - new_avg - target_width)
@@ -4016,7 +4017,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             walk_offset = max(0, bot.get('fav_price', old_target) - old_target)
             amend_price = max(1, new_hedge_target + walk_offset)
             if bot.get('fav_order_id'):
-                _old_hedge_qty = bot.get('hedge_qty', 0) or hedge_qty
+                _old_hedge_qty = _old_hedge_qty_before
                 _extra_needed = new_total_fill - _old_hedge_qty
                 try:
                     fav_side = bot.get('fav_side', 'yes')
@@ -4076,10 +4077,12 @@ def _execute_phantom_ladder_hedge(bot_id):
                         'ticker': ticker, 'new_qty': new_total_fill, 'amend_price': amend_price,
                     })
                 except Exception as ae:
-                    print(f'   ⚠ LATE FILL AMEND FAIL: {bot_id}: {ae}')
-                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND_FAIL', _bid, {
+                    # Amend failed — restore hedge_qty to avoid state mismatch
+                    bot['hedge_qty'] = _old_hedge_qty_before
+                    print(f'   ⚠ LATE FILL AMEND FAIL: {bot_id}: {ae} — restored hedge_qty={_old_hedge_qty_before}')
+                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND_FAIL', bot_id, {
                         'error': str(ae)[:300], 'new_total_fill': new_total_fill,
-                        'amend_price': amend_price,
+                        'amend_price': amend_price, 'restored_hedge_qty': _old_hedge_qty_before,
                     }, level='ERROR')
             save_state()
 

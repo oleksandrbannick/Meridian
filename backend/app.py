@@ -16618,10 +16618,11 @@ def _sweep_orphaned_orders():
                 dog_qty = _safe_int_sweep(b.get('total_dog_fill_qty')) or _safe_int_sweep(b.get('dog_fill_qty')) or _safe_int_sweep(b.get('quantity'))
                 fav_side = b.get('fav_side', '')
                 fav_qty = _safe_int_sweep(b.get('fav_fill_qty'))
+                _hedge_t = b.get('hedge_ticker', t)  # cross-market: fav on different ticker
                 if dog_qty > 0 and dog_side:
                     managed_qty[(t, dog_side)] = managed_qty.get((t, dog_side), 0) + dog_qty
                 if fav_qty > 0 and fav_side:
-                    managed_qty[(t, fav_side)] = managed_qty.get((t, fav_side), 0) + fav_qty
+                    managed_qty[(_hedge_t, fav_side)] = managed_qty.get((_hedge_t, fav_side), 0) + fav_qty
             elif cat == 'ladder_arb':
                 yes_qty = _safe_int_sweep(b.get('filled_yes_qty'))
                 no_qty = _safe_int_sweep(b.get('filled_no_qty'))
@@ -18001,8 +18002,8 @@ def _run_startup():
             managed_qty = {}  # (ticker, side) -> qty
             for b in active_bots.values():
                 _bst = b.get('status', '')
-                # Include completed bots with one-sided fills (positions await settlement)
-                if _bst in ('completed', 'stopped', 'cancelled'):
+                # Include completed/awaiting bots with one-sided fills (positions await settlement)
+                if _bst in ('completed', 'stopped', 'cancelled', 'awaiting_settlement'):
                     _cat = b.get('bot_category', '')
                     if _cat in ('anchor_dog', 'anchor_ladder'):
                         _yf = _safe_int(b.get('yes_fill_qty', 0))

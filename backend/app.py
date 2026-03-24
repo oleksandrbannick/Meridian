@@ -7276,11 +7276,11 @@ def _execute_apex_completion(bot_id):
             bot['first_fill_at'] = None
             bot['first_fill_side'] = None
             bot['_consolidated'] = False
-            bot['_bot_completed'] = False
-            bot['_ws_fill_handling'] = False
+            # DO NOT reset _bot_completed or _completion_repeat_processed here —
+            # second completion trigger can fire before repeat posts new orders.
+            # These get reset when the repeat actually places orders (waiting_repeat handler).
             bot['_hedge_verified'] = False
-            bot['_apex_sellback_attempted'] = False  # reset so next cycle can sell back
-            bot['_completion_repeat_processed'] = False
+            bot['_apex_sellback_attempted'] = False
             bot['_extra_hedge_placed'] = False
             bot['hedge_history'] = []
             # lifetime_pnl already updated above — don't double-add
@@ -11427,6 +11427,8 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_consolidated'] = False
                 bot['_trade_recorded'] = False
                 bot['_ws_fill_handling'] = False
+                bot['_bot_completed'] = False
+                bot['_completion_repeat_processed'] = False
                 bot['hedge_order_id'] = None
                 bot['repost_count'] = bot.get('repost_count', 0) + 1
                 bot['live_yes_bid'] = fresh_yes_bid

@@ -804,8 +804,9 @@ function getMarketLiquidity(market) {
     const _phObCache = (window._obDepthCache || {})[market.ticker];
     const _phHasDepth = _phObCache && (Date.now() - _phObCache.ts) < 300000;
     // Fav side = thick (hedge absorbs), Dog side = thin (whale dumps fill you)
-    const _favDepth = _phHasDepth ? (_phObCache.favDepth || (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3)) : 0;
-    const _dogDepth = _phHasDepth ? (_phObCache.dogDepth || (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3)) : 0;
+    // Always use raw YES/NO depth + current dogSide — cached dogDepth/favDepth may be stale if sides flipped
+    const _favDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3) : 0;
+    const _dogDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3) : 0;
     // Fav depth (40 pts) — thick fav = hedge fills instantly
     const _phFavPts = _phHasDepth
         ? (_favDepth >= 1000 ? 40 : _favDepth >= 500 ? 35 : _favDepth >= 200 ? 28 : _favDepth >= 100 ? 20 : _favDepth >= 50 ? 10 : 0)
@@ -2447,9 +2448,10 @@ function createMarketRow(market, label) {
             pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
             pill.innerHTML = botIconImg(r.type, 14, 0.75);
             if (r.label) {
-                pill.innerHTML += `<span style="font-size:8px;color:${r.labelColor || c};font-weight:700;">${r.label}</span>`;
+                pill.innerHTML += `<span class="ghost-label" style="font-size:8px;color:${r.labelColor || c};font-weight:700;">${r.label}</span>`;
             }
             pill.title = r.tip;
+            if (r.type === 'phantom') pill.setAttribute('data-ghost-ticker', market.ticker);
             iconRow.appendChild(pill);
         }
     }
@@ -3118,57 +3120,80 @@ function displayOrderbookLadder(orderbook) {
     const favSideOb = dogSideOb === 'yes' ? 'no' : 'yes';
     const dogDepth = dogSideOb === 'yes' ? yesDepth : noDepth;
     const favDepth = dogSideOb === 'yes' ? noDepth : yesDepth;
-    // Phantom wants: thick fav (easy hedge) + thin dog (less competition)
-    const favThick = favDepth >= 200;
-    const dogThin = dogDepth < 200;
-    const phantomLabel = favThick ? 'HEDGE READY' : favDepth >= 50 ? 'OK' : 'THIN HEDGE';
-    const phantomCol = favThick ? '#00ff88' : favDepth >= 50 ? '#ffaa00' : '#ff4444';
-
     // Depth score component (0-35 pts, replaces spread tightness when real depth available)
     const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
 
-    // Store for ghost score updates
+    // Store for ghost score updates + pass catch score to market card pills
     const ticker = ob._ticker || '';
     if (ticker || (orderbook.ticker)) {
         const tk = ticker || orderbook.ticker;
         window._obDepthCache = window._obDepthCache || {};
-        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, ts: Date.now() };
+        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, catchScore, ts: Date.now() };
+        // Immediately update ghost pill on the market card
+        _updateGhostPill(tk, catchScore);
     }
 
-    // Show depth summary — YES on left, NO on right (matching orderbook layout)
-    // Each side labeled with its phantom role (DOG or FAV)
-    const yesRole = dogSideOb === 'yes' ? 'DOG' : 'FAV';
-    const noRole = dogSideOb === 'no' ? 'DOG' : 'FAV';
-    const yesRoleCol = yesRole === 'FAV' ? (yesDepth >= 200 ? '#00ff88' : yesDepth >= 50 ? '#ffaa00' : '#ff4444')
-                                          : (yesDepth < 200 ? '#00ff88' : yesDepth < 500 ? '#ffaa00' : '#ff4444');
-    const noRoleCol = noRole === 'FAV' ? (noDepth >= 200 ? '#00ff88' : noDepth >= 50 ? '#ffaa00' : '#ff4444')
-                                        : (noDepth < 200 ? '#00ff88' : noDepth < 500 ? '#ffaa00' : '#ff4444');
-    const yesNote = yesRole === 'FAV'
-        ? (yesDepth >= 200 ? 'thick — easy hedge' : yesDepth >= 50 ? 'ok' : 'thin — risky')
-        : (yesDepth < 200 ? 'thin — easy fill' : yesDepth < 500 ? 'moderate' : 'crowded');
-    const noNote = noRole === 'FAV'
-        ? (noDepth >= 200 ? 'thick — easy hedge' : noDepth >= 50 ? 'ok' : 'thin — risky')
-        : (noDepth < 200 ? 'thin — easy fill' : noDepth < 500 ? 'moderate' : 'crowded');
+    // Show depth from PHANTOM perspective: DOG on left, FAV on right
+    // DOG = cheap side (where whale dumps fill you), FAV = expensive side (hedge target)
+    const dogSideLabel = dogSideOb.toUpperCase();
+    const favSideLabel = favSideOb.toUpperCase();
+    const dogBidPrice = dogSideOb === 'yes' ? bestYesBid : bestNoBid;
+    const favBidPrice = favSideOb === 'yes' ? bestYesBid : bestNoBid;
+    const dogCol = dogDepth < 200 ? '#00ff88' : dogDepth < 500 ? '#ffaa00' : '#ff4444';
+    const favCol = favDepth >= 200 ? '#00ff88' : favDepth >= 50 ? '#ffaa00' : '#ff4444';
+    const dogNote = dogDepth < 200 ? 'thin — easy fill' : dogDepth < 500 ? 'moderate' : 'crowded';
+    const favNote = favDepth >= 200 ? 'thick — slow to move, easy catch' : favDepth >= 50 ? 'ok — hedge should catch' : 'thin — hedge may miss';
+    // Catch score: how likely the hedge fills based on fav depth (0-100)
+    const catchScore = Math.min(100, Math.round(
+        (favDepth >= 500 ? 50 : favDepth >= 200 ? 40 : favDepth >= 100 ? 28 : favDepth >= 50 ? 15 : 0) +
+        (dogDepth < 50 ? 20 : dogDepth < 200 ? 10 : 0) +
+        (minDepth >= 200 ? 15 : minDepth >= 50 ? 8 : 0) +
+        (favDepth > dogDepth * 2 ? 15 : favDepth > dogDepth ? 8 : 0)
+    ));
+    const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
+    const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>
-            <span style="color:${phantomCol};font-weight:800;font-size:12px;">👻 ${phantomLabel}</span>
+            <span style="color:${catchCol};font-weight:800;font-size:12px;">👻 ${catchLabel} ${catchScore}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div style="text-align:center;background:${yesRoleCol}08;border:1px solid ${yesRoleCol}22;border-radius:6px;padding:6px;">
-                <div style="color:#00ff88;font-size:9px;font-weight:700;margin-bottom:2px;">YES · ${yesRole}</div>
-                <div style="color:${yesRoleCol};font-weight:800;font-size:18px;">${yesDepth.toLocaleString()}</div>
-                <div style="color:${yesRoleCol};font-size:8px;font-weight:600;">${yesNote}</div>
+            <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
+                <div style="color:${dogCol};font-size:9px;font-weight:700;margin-bottom:2px;">🐕 DOG · ${dogSideLabel} @ ${dogBidPrice}¢</div>
+                <div style="color:${dogCol};font-weight:800;font-size:18px;">${dogDepth.toLocaleString()}</div>
+                <div style="color:${dogCol};font-size:8px;font-weight:600;">${dogNote}</div>
             </div>
-            <div style="text-align:center;background:${noRoleCol}08;border:1px solid ${noRoleCol}22;border-radius:6px;padding:6px;">
-                <div style="color:#ff4444;font-size:9px;font-weight:700;margin-bottom:2px;">NO · ${noRole}</div>
-                <div style="color:${noRoleCol};font-weight:800;font-size:18px;">${noDepth.toLocaleString()}</div>
-                <div style="color:${noRoleCol};font-size:8px;font-weight:600;">${noNote}</div>
+            <div style="text-align:center;background:${favCol}08;border:1px solid ${favCol}22;border-radius:6px;padding:6px;">
+                <div style="color:${favCol};font-size:9px;font-weight:700;margin-bottom:2px;">⭐ FAV · ${favSideLabel} @ ${favBidPrice}¢</div>
+                <div style="color:${favCol};font-weight:800;font-size:18px;">${favDepth.toLocaleString()}</div>
+                <div style="color:${favCol};font-size:8px;font-weight:600;">${favNote}</div>
             </div>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');
     if (ladderEl) ladderEl.insertAdjacentHTML('afterbegin', depthHtml);
+}
+
+// Update ghost recommendation pill on market card after depth is computed
+function _updateGhostPill(ticker, catchScore) {
+    const pill = document.querySelector(`[data-ghost-ticker="${ticker}"]`);
+    if (!pill) return;
+    const col = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
+    const qualLabel = catchScore >= 70 ? '🟢' : catchScore >= 40 ? '🟡' : '🔴';
+    const labelEl = pill.querySelector('.ghost-label');
+    if (labelEl) {
+        labelEl.textContent = `${qualLabel}${catchScore}`;
+        labelEl.style.color = col;
+    }
+    // Update tooltip with depth info
+    const cache = (window._obDepthCache || {})[ticker];
+    if (cache) {
+        pill.title = `Phantom: catch ${catchScore}/100 · fav depth ${cache.favDepth.toLocaleString()} · dog depth ${cache.dogDepth.toLocaleString()} (from orderbook)`;
+    }
+    // Flash the pill to show it updated
+    pill.style.opacity = '1';
+    pill.style.borderStyle = 'solid';
+    setTimeout(() => { pill.style.opacity = '0.75'; pill.style.borderStyle = 'dashed'; }, 2000);
 }
 
 

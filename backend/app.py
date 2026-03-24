@@ -3806,10 +3806,52 @@ def _execute_phantom_ladder_hedge(bot_id):
                 rung['cancelled'] = True
                 cancelled_rungs += 1
             else:
-                print(f'⚠ RUNG CANCEL FAIL: {bot_id} rung {rung.get("price")}¢')
-                bot_log('PHANTOM_LADDER_RUNG_CANCEL_FAIL', bot_id, {
-                    'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
-                }, level='ERROR')
+                # First cancel failed — wait and retry once more
+                time.sleep(0.3)
+                if _cancel_with_retry(rung['order_id'], max_retries=3):
+                    rung['cancelled'] = True
+                    cancelled_rungs += 1
+                    print(f'   ✅ RUNG CANCEL RECOVERED: {bot_id} rung @{rung.get("price")}¢ (2nd attempt)')
+                else:
+                    # Still failed — check Kalshi status to decide next step
+                    _orphan_filled = False
+                    try:
+                        api_read_limiter.wait()
+                        _oc_resp = kalshi_client.get_order(rung['order_id'])
+                        _oc_data = _oc_resp.get('order', _oc_resp) if isinstance(_oc_resp, dict) else {}
+                        _oc_fills = _parse_fill_count(_oc_data)
+                        _oc_status = _oc_data.get('status', '')
+                        if _oc_status in ('canceled', 'cancelled'):
+                            rung['cancelled'] = True
+                            cancelled_rungs += 1
+                            print(f'   ✅ RUNG ALREADY CANCELLED: {bot_id} rung @{rung.get("price")}¢')
+                        elif _oc_fills > 0:
+                            rung['fill_qty'] = _oc_fills
+                            if _oc_fills >= rung['qty'] and not rung.get('filled_at'):
+                                rung['filled_at'] = time.time()
+                            late_fill_qty += _oc_fills
+                            _orphan_filled = True
+                            print(f'   ⚡ RUNG CANCEL→FILL: {bot_id} rung @{rung.get("price")}¢ filled {_oc_fills} during cancel')
+                        else:
+                            # Not cancelled, not filled — force one last cancel
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(rung['order_id'])
+                                rung['cancelled'] = True
+                                cancelled_rungs += 1
+                                print(f'   ✅ RUNG FORCE CANCEL: {bot_id} rung @{rung.get("price")}¢')
+                            except Exception:
+                                print(f'⚠ RUNG ORPHAN: {bot_id} rung @{rung.get("price")}¢ — order {rung["order_id"][:12]} stuck on Kalshi')
+                                bot_log('PHANTOM_LADDER_RUNG_ORPHAN', bot_id, {
+                                    'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
+                                    'kalshi_status': _oc_status, 'fills': _oc_fills,
+                                }, level='ERROR')
+                    except Exception as _oc_err:
+                        print(f'⚠ RUNG CANCEL FAIL: {bot_id} rung {rung.get("price")}¢ — {_oc_err}')
+                        bot_log('PHANTOM_LADDER_RUNG_CANCEL_FAIL', bot_id, {
+                            'rung_price': rung.get('price'), 'order_id': rung['order_id'][:12],
+                            'error': str(_oc_err)[:200],
+                        }, level='ERROR')
         if cancelled_rungs:
             print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
         # If late fills found, amend hedge with updated qty + price

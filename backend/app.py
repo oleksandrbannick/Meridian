@@ -7253,6 +7253,12 @@ def _execute_apex_completion(bot_id):
         if _first_fill:
             bot['hedge_fill_latency_ms'] = round((now - _first_fill) * 1000, 1)
 
+        # Guard: prevent double-completion from incrementing repeats_done twice
+        if bot.get('_completion_repeat_processed'):
+            print(f'⚠ APEX COMPLETION SKIP: {bot_id} repeat already processed')
+            return
+        bot['_completion_repeat_processed'] = True
+
         # Repeat logic — repeat_count = number of ADDITIONAL runs after the first
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
@@ -7274,6 +7280,8 @@ def _execute_apex_completion(bot_id):
             bot['_ws_fill_handling'] = False
             bot['_hedge_verified'] = False
             bot['_apex_sellback_attempted'] = False  # reset so next cycle can sell back
+            bot['_completion_repeat_processed'] = False
+            bot['_extra_hedge_placed'] = False
             bot['hedge_history'] = []
             # lifetime_pnl already updated above — don't double-add
             bot['cumulative_pnl'] = 0

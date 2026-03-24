@@ -794,15 +794,23 @@ function getMarketLiquidity(market) {
     const dogSpread = dogSide === 'yes' ? yesSpread : noSpread;
     const favSpreadVal = favSide === 'yes' ? yesSpread : noSpread;
     // Note: on binary tickers, dogSpread === favSpread always (same order book)
-    // Phantom quality: tight spread (instant hedge) + volume (whale dumps) + good dog price range
+    // Phantom quality: fav depth/spread (instant hedge) + volume + dog price range + hedge room
     // Score 0-100: higher = better phantom opportunity
+    // When orderbook depth cached, use FAV-SIDE depth (that's where hedge needs to fill)
     const spread = Math.min(yesSpread, noSpread);  // they're equal, but min for safety
     const dogPrice = Math.min(yesBid, noBid);
     const favBid = Math.max(yesBid, noBid);
     const hedgeRoom = 98 - dogPrice - (100 - favBid);
+    const _phObCache = (window._obDepthCache || {})[market.ticker];
+    const _phHasDepth = _phObCache && (Date.now() - _phObCache.ts) < 300000;
+    // Fav side = the side with higher bid (where hedge posts)
+    const _favDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3) : 0;
+    const _phSpreadOrDepthPts = _phHasDepth
+        ? (_favDepth >= 500 ? 40 : _favDepth >= 200 ? 35 : _favDepth >= 100 ? 25 : _favDepth >= 50 ? 15 : 0)
+        : (spread <= 1 ? 40 : spread <= 2 ? 35 : spread <= 3 ? 25 : spread <= 5 ? 10 : 0);
     const phantomQuality = Math.round(Math.max(0, Math.min(100,
-        // Spread tightness (40 pts) — can we hedge instantly?
-        (spread <= 1 ? 40 : spread <= 2 ? 35 : spread <= 3 ? 25 : spread <= 5 ? 10 : 0) +
+        // Fav depth/spread (40 pts) — can hedge fill instantly?
+        _phSpreadOrDepthPts +
         // Volume (25 pts) — deeper book = more whale activity + hedge absorption
         (vol >= 200 ? 25 : vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
         // Dog price sweet spot (20 pts) — 10-25¢ ideal
@@ -811,12 +819,18 @@ function getMarketLiquidity(market) {
         (hedgeRoom >= 5 ? 15 : hedgeRoom >= 3 ? 10 : hedgeRoom >= 2 ? 5 : 0)
     )));
 
-    // Apex quality: tight spread (both legs fill) + balanced prices (oscillation) + live game + volume
+    // Apex quality: depth/spread (both legs fill) + balanced prices + live game + volume
     // Score 0-100: higher = better apex opportunity
+    // When orderbook depth is cached (user clicked orderbook), use real depth instead of spread proxy
     const balance = Math.max(yesBid, noBid) > 0 ? Math.min(yesBid, noBid) / Math.max(yesBid, noBid) : 0;
+    const _obCache = (window._obDepthCache || {})[market.ticker];
+    const _hasDepth = _obCache && (Date.now() - _obCache.ts) < 300000; // 5 min cache
+    const _spreadOrDepthPts = _hasDepth
+        ? _obCache.depthPts  // Real depth score (0-35)
+        : (spread <= 1 ? 35 : spread <= 2 ? 30 : spread <= 3 ? 20 : spread <= 5 ? 8 : 0);  // Spread proxy
     const apexQuality = Math.round(Math.max(0, Math.min(100,
-        // Spread tightness (35 pts) — both sides need tight for dual fills
-        (spread <= 1 ? 35 : spread <= 2 ? 30 : spread <= 3 ? 20 : spread <= 5 ? 8 : 0) +
+        // Depth/spread (35 pts) — real depth when orderbook opened, spread proxy otherwise
+        _spreadOrDepthPts +
         // Balance (30 pts) — coin-flip = price oscillates through both orders
         (balance >= 0.9 ? 30 : balance >= 0.7 ? 22 : balance >= 0.5 ? 12 : 0) +
         // Live game (20 pts) — volatility drives fills
@@ -3020,6 +3034,7 @@ async function fetchOrderbookForSidebar(ticker) {
         }
 
         // Kalshi returns { orderbook: { yes: [[p,q],...], no: [[p,q],...] } }
+        data.ticker = ticker;
         displayOrderbookLadder(data);
     } catch (error) {
         console.error('Error fetching orderbook:', error);
@@ -3076,6 +3091,50 @@ function displayOrderbookLadder(orderbook) {
     `;
 
     document.getElementById('orderbook-ladder').innerHTML = ladderHtml;
+
+    // ── Compute depth scores and update quality badges ──
+    const yesDepth3 = yesOrders.reduce((s, o) => {
+        const { price, qty } = parseOrderLevel(o);
+        return (bestYesBid && price >= bestYesBid - 3) ? s + qty : s;
+    }, 0);
+    const noDepth3 = noOrders.reduce((s, o) => {
+        const { price, qty } = parseOrderLevel(o);
+        return (bestNoBid && price >= bestNoBid - 3) ? s + qty : s;
+    }, 0);
+    const minDepth = Math.min(yesDepth3, noDepth3);
+
+    // Depth score component (0-35 pts, replaces spread tightness when real depth available)
+    const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
+    const depthLabel = minDepth >= 500 ? 'DEEP' : minDepth >= 200 ? 'THICK' : minDepth >= 100 ? 'GOOD' : minDepth >= 50 ? 'OK' : 'THIN';
+    const depthCol = minDepth >= 200 ? '#00ff88' : minDepth >= 50 ? '#ffaa00' : '#ff4444';
+
+    // Store for ghost score updates
+    const ticker = ob._ticker || '';
+    if (ticker || (orderbook.ticker)) {
+        const tk = ticker || orderbook.ticker;
+        window._obDepthCache = window._obDepthCache || {};
+        window._obDepthCache[tk] = { yesDepth3, noDepth3, minDepth, depthPts, ts: Date.now() };
+    }
+
+    // Show depth summary above the orderbook
+    const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN 3¢ OF BID</span>
+            <span style="color:${depthCol};font-weight:800;font-size:12px;">${depthLabel}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="text-align:center;background:#00ff8808;border-radius:6px;padding:6px;">
+                <div style="color:#00ff88;font-weight:800;font-size:18px;">${yesDepth3.toLocaleString()}</div>
+                <div style="color:#8892a6;font-size:9px;">YES contracts</div>
+            </div>
+            <div style="text-align:center;background:#ff444408;border-radius:6px;padding:6px;">
+                <div style="color:#ff4444;font-weight:800;font-size:18px;">${noDepth3.toLocaleString()}</div>
+                <div style="color:#8892a6;font-size:9px;">NO contracts</div>
+            </div>
+        </div>
+    </div>`;
+    const ladderEl = document.getElementById('orderbook-ladder');
+    if (ladderEl) ladderEl.insertAdjacentHTML('afterbegin', depthHtml);
 }
 
 
@@ -5510,6 +5569,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 })()}
                 ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
                 ${repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
+                ${_botCeiling < 98 ? `<span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
@@ -10867,6 +10927,7 @@ async function loadTradeHistoryList() {
                 _net_pnl: netPnl,
                 _run_number: rungTrades[0].repeat_cycle || null,
                 _repeat_total: rungTrades[0].repeat_total || null,
+                _hard_ceiling: rungTrades[0].hard_ceiling || null,
             });
         }
         // Sort by timestamp descending
@@ -10938,6 +10999,7 @@ async function loadTradeHistoryList() {
                             <span style="background:${isSellback ? '#ff880022' : pnl >= 0 ? '#00ff8822' : '#ff444422'};color:${isSellback ? '#ff8800' : pnlCol};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${resultLabel}</span>
                             <span style="background:#ffaa0022;color:#ffaa00;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t._rungs_completed}/${t._rungs_total} rungs</span>
                             ${t._run_number ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">Run ${t._run_number}${t._repeat_total ? '/' + t._repeat_total : ''}</span>` : ''}
+                            ${t._hard_ceiling && t._hard_ceiling < 98 ? `<span style="background:${t._hard_ceiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${t._hard_ceiling <= 96 ? '#00ff88' : '#ffaa00'};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">⬆ ${t._hard_ceiling}¢</span>` : ''}
                             ${t._width_range ? `<span style="color:#555;font-size:9px;">Widths: ${t._width_range}</span>` : ''}
                         </div>
                         <div style="text-align:right;">

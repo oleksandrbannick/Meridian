@@ -6245,6 +6245,7 @@ def _record_rung_completion(bot_id, bot, rung):
         'repeat_cycle': bot.get('repeats_done', 0) + 1,
         'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
         'walk_count': bot.get('walk_count', 0),
+        'hard_ceiling': bot.get('hard_ceiling', 98),
     }, bot)
 
     # Calculate hedge latency from rung fill timestamps

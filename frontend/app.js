@@ -11285,9 +11285,9 @@ async function loadTradeHistoryList() {
                 <div style="background:#0f1419;border:1px solid ${borderColor};border-radius:8px;padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px;">
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
-                            <span style="font-size:14px;">${icon}</span>
+                            ${isLadderArbTrade ? '<svg width="18" height="18" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 3px #00aaff44);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>' : `<span style="font-size:14px;">${icon}</span>`}
                             <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
-                            <span style="background:${typeColor}22;color:${typeColor};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${tradeType}</span>
+                            <span style="background:${typeColor}22;color:${typeColor};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${isLadderArbTrade ? '△ APEX' : tradeType}</span>
                             ${settleBadge}
                             ${gameCtxHtml}
                             ${histCycleHtml}

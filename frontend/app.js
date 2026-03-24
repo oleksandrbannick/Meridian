@@ -6946,7 +6946,9 @@ async function loadBots() {
                 awaitList.innerHTML = '';
                 awaitList.style.display = 'none';
             } else {
-                awaitList.style.display = '';
+                // Only show on phantom tab — check if dog-bots-list is visible
+                const _dogListVisible = document.getElementById('dog-bots-list')?.style.display !== 'none';
+                awaitList.style.display = _dogListVisible ? '' : 'none';
                 const nowSec = Date.now() / 1000;
                 const _collapsed = awaitList.dataset.collapsed === 'true';
                 let awHtml = `<div onclick="(function(el){el.parentElement.parentElement.dataset.collapsed=el.parentElement.parentElement.dataset.collapsed==='true'?'false':'true';el.parentElement.parentElement.querySelector('.await-body').style.display=el.parentElement.parentElement.dataset.collapsed==='true'?'none':'';el.querySelector('.await-arrow').textContent=el.parentElement.parentElement.dataset.collapsed==='true'?'▸':'▾';})(this)" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0d1117;border-left:3px solid #818cf8;border-radius:6px;cursor:pointer;margin-bottom:6px;">

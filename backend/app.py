@@ -12048,7 +12048,6 @@ def _handle_apex(bot_id, bot, actions):
                 'hedge_order_id': bot.get('hedge_order_id'),
                 '_all_hedge_order_ids': bot.get('_all_hedge_order_ids', []),
             })
-            bot['_completion_in_progress'] = True
             bot['_completion_repeat_processed'] = False
             threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
             return

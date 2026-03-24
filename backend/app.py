@@ -3817,18 +3817,6 @@ def _execute_phantom_ladder_hedge(bot_id):
             'path': 'ws_fast',
         })
         _audit('LADDER_HEDGE_POSTED', bot_id, {'ticker': hedge_ticker, 'fav_side': fav_side, 'hedge_qty': total_fill_qty, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
-        # Track fill-to-hedge latency
-        fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
-        if fill_at:
-            f2h_ms = (time.time() - fill_at) * 1000
-            bot['hedge_latency_ms'] = round(f2h_ms, 1)
-            _record_latency('fill_to_hedge_phantom', f2h_ms, {'bot_id': bot_id, 'type': 'phantom_ladder', 'fav_price': actual_fav_price, 'avg_dog': avg_price})
-            print(f'   ⏱ Hedge placed latency: {f2h_ms:.0f}ms')
-            bot_log('PHANTOM_LADDER_HEDGE_LATENCY', bot_id, {
-                'raw_hedge_ms': bot.get('raw_hedge_ms'), 'fill_to_hedge_ms': round(f2h_ms, 1),
-                'path': 'ws_fast',
-            })
-
         # ── THEN cancel unfilled rung orders (lower priority) ──
         # Verify each rung on Kalshi before cancelling — fills may have arrived
         # that WS hasn't processed yet. If a rung actually filled, amend the hedge.

@@ -3261,7 +3261,33 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             else:
                 save_state()
             break
-        elif bot.get('status') == 'fav_hedge_posted':
+        elif bot.get('status') in ('fav_hedge_posted', 'ladder_filled_no_fav'):
+            # Check rung order IDs first (late dog fills AFTER hedge posted)
+            _late_rung = None
+            for idx, rung in enumerate(bot.get('rungs', [])):
+                if order_id == rung.get('order_id'):
+                    _late_rung = idx
+                    break
+            if _late_rung is not None:
+                rung = bot['rungs'][_late_rung]
+                rung['fill_qty'] = rung.get('fill_qty', 0) + count
+                if rung['fill_qty'] >= rung['qty'] and not rung.get('filled_at'):
+                    rung['filled_at'] = time.time()
+                total_fill = sum(r.get('fill_qty', 0) for r in bot['rungs'])
+                bot['total_dog_fill_qty'] = total_fill
+                if bot['dog_side'] == 'yes':
+                    bot['yes_fill_qty'] = total_fill
+                else:
+                    bot['no_fill_qty'] = total_fill
+                print(f'👻 WS LATE RUNG FILL: {bot_id} rung[{_late_rung}] @{rung["price"]}¢ +{count} (hedge already posted, total {total_fill})')
+                bot_log('PHANTOM_LADDER_LATE_RUNG_FILL', bot_id, {
+                    'rung_idx': _late_rung, 'rung_price': rung.get('price'),
+                    'fill_qty': rung['fill_qty'], 'total_fill': total_fill,
+                    'status': bot.get('status'),
+                })
+                save_state()
+                break
+            # Then check fav order ID (hedge fills)
             if order_id != bot.get('fav_order_id'):
                 continue
             bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count

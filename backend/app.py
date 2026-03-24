@@ -12199,11 +12199,42 @@ def _handle_apex(bot_id, bot, actions):
                                                 bot['_hedge_fill_count'] = _404_fills
                                             if _404_status == 'executed':
                                                 bot['_hedge_verified'] = True
-                                            print(f'🔍 APEX WALK 404: {bot_id} hedge status={_404_status} fills={_404_fills} — completion will handle')
+                                            print(f'🔍 APEX WALK 404: {bot_id} hedge status={_404_status} fills={_404_fills}')
                                             bot_log('APEX_WALK_404_VERIFY', bot_id, {
                                                 'hedge_status': _404_status, 'hedge_fills': _404_fills,
                                                 'hedge_qty': bot.get('hedge_qty', 0),
                                             })
+                                            # Canceled with 0 fills = hedge is dead, place new one
+                                            if _404_status == 'canceled' and _404_fills == 0 and unfilled_bid > 0:
+                                                _fs = bot.get('first_fill_side', 'yes')
+                                                _total_af = sum(
+                                                    min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
+                                                    for r in bot.get('rungs', [])
+                                                )
+                                                _repost_qty = max(1, _total_af)
+                                                _repost_price = min(unfilled_bid, max_hedge) if max_hedge > 0 else unfilled_bid
+                                                try:
+                                                    _rp_resp, _rp_actual = create_order_maker(
+                                                        ticker=ticker, side=unfilled_side, action='buy',
+                                                        count=_repost_qty, price=_repost_price
+                                                    )
+                                                    _rp_oid = _rp_resp['order']['order_id']
+                                                    bot['hedge_order_id'] = _rp_oid
+                                                    bot['hedge_price'] = _rp_actual
+                                                    bot['hedge_qty'] = _repost_qty
+                                                    _all_ids = bot.get('_all_hedge_order_ids', [])
+                                                    _all_ids.append(_rp_oid)
+                                                    bot['_all_hedge_order_ids'] = _all_ids
+                                                    bot['walk_count'] = 0
+                                                    bot['last_walk_at'] = now
+                                                    print(f'🔄 APEX HEDGE REPOST: {bot_id} new {unfilled_side} {_repost_qty}× @ {_rp_actual}¢ (old was canceled)')
+                                                    bot_log('APEX_HEDGE_REPOST_404', bot_id, {
+                                                        'new_oid': _rp_oid[:12], 'qty': _repost_qty,
+                                                        'price': _rp_actual, 'total_anchors': _total_af,
+                                                    })
+                                                    save_state()
+                                                except Exception as _rp_err:
+                                                    print(f'⚠ APEX HEDGE REPOST FAIL: {bot_id}: {_rp_err}')
                                         except Exception:
                                             pass
                                     elif '409' in str(e):

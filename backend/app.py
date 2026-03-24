@@ -12413,15 +12413,16 @@ def _handle_apex(bot_id, bot, actions):
                             bot['_sellback_time_left'] = max(0, _sellback_grace - _hedge_age_s)
                             _above_snap = combined > _apex_snap_ceiling or _market_combined > _apex_snap_ceiling
                             if (_above_snap and _hedge_age_s >= _sellback_grace
-                                    and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted')):
+                                    and not bot.get('_trade_recorded')):
                                 if _apex_sellback_check(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, rq):
+                                    # Selling back is cheaper — do it
                                     bot['_apex_sellback_attempted'] = True
                                     bot['_sellback_decision'] = 'selling_back'
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
                                     return
                                 else:
-                                    # Complete is cheaper than selling back — cross to bid to actually fill
-                                    # (ceiling only applies to profitable walks, not loss-exit)
+                                    # Complete is cheaper — cross to bid to actually fill
+                                    # Re-evaluated EVERY cycle: if bid moves and selling becomes cheaper, we'll sell next cycle
                                     bot['_sellback_decision'] = 'crossing_to_bid'
                                     _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
                                     _cross_target = min(_cross_target, walk_cap) if walk_cap > 0 else _cross_target

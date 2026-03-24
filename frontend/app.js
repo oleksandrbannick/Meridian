@@ -5536,18 +5536,20 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         rungsHTML = rungs.map((r, i) => {
             const filled = r.fill_qty >= r.qty;
             const cancelled = r.cancelled === true;
+            const hasPartialFills = r.fill_qty > 0 && !filled;
             const fillPct = r.qty > 0 ? Math.round((r.fill_qty / r.qty) * 100) : 0;
             const fillCol = filled ? '#00ff88' : r.fill_qty > 0 ? '#ffaa00' : cancelled ? '#ff4444' : '#333';
-            const priceStyle = cancelled ? 'text-decoration:line-through;color:#555;' : 'color:#fff;font-weight:700;';
-            const statusDisplay = cancelled
+            // Only strikethrough if cancelled with ZERO fills — partial fills should show normally
+            const priceStyle = (cancelled && !hasPartialFills) ? 'text-decoration:line-through;color:#555;' : 'color:#fff;font-weight:700;';
+            const statusDisplay = (cancelled && !hasPartialFills)
                 ? `<span style="color:#ff4444;font-weight:700;">✕</span>`
-                : `<span style="color:${fillCol};font-weight:700;">${r.fill_qty}/${r.qty}</span>`;
+                : `<span style="color:${fillCol};font-weight:700;">${r.fill_qty}/${r.qty}${cancelled && hasPartialFills ? ' ⚡' : ''}</span>`;
             return `<div style="display:flex;align-items:center;gap:4px;font-size:10px;">
                 <span style="color:#555;">#${i+1}</span>
                 <span style="${priceStyle}">${r.price}¢</span>
                 <span style="color:#8892a6;">×${r.qty}</span>
                 <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${cancelled ? 100 : fillPct}%;height:100%;background:${cancelled ? '#ff444444' : fillCol};border-radius:2px;"></div>
+                    <div style="width:${(cancelled && !hasPartialFills) ? 100 : fillPct}%;height:100%;background:${(cancelled && !hasPartialFills) ? '#ff444444' : fillCol};border-radius:2px;"></div>
                 </div>
                 ${statusDisplay}
             </div>`;

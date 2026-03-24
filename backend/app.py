@@ -12335,7 +12335,9 @@ def _handle_apex(bot_id, bot, actions):
                                                         min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
                                                         for r in bot.get('rungs', [])
                                                     ))
-                                                _repost_price = min(unfilled_bid, max_hedge) if max_hedge > 0 else unfilled_bid
+                                                # Repost at where the order WAS (or bid), not the original target
+                                                # This prevents bouncing between target (35¢) and bid (60¢)
+                                                _repost_price = max(current_price, unfilled_bid) if current_price > 0 else unfilled_bid
                                                 try:
                                                     _rp_resp, _rp_actual = create_order_maker(
                                                         ticker=ticker, side=unfilled_side, action='buy',

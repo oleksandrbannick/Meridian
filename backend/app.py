@@ -3806,6 +3806,11 @@ def _execute_phantom_ladder_hedge(bot_id):
             count=total_fill_qty, price=hedge_price, priority=True,
             skip_rate_limit=True
         )
+        # Round trip measurement (fill → order confirmed on Kalshi)
+        if _raw_fill_at:
+            _rt_ms = (time.time() - _raw_fill_at) * 1000
+            bot['hedge_latency_ms'] = round(_rt_ms, 1)
+            _record_latency('fill_to_hedge_phantom', _rt_ms, {'bot_id': bot_id, 'type': 'phantom_ladder', 'fav_price': actual_fav_price})
         fav_order_id = fav_resp['order']['order_id']
         bot['fav_order_id'] = fav_order_id
         bot['fav_price'] = actual_fav_price
@@ -9425,17 +9430,20 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
                 bot['_just_completed'] = True
+                bot['_last_pnl'] = net_pnl
+                bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
+                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
                 bot['dog_filled_at'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
                 bot['dog_fill_qty'] = 0
                 bot['yes_fill_qty'] = 0
                 bot['no_fill_qty'] = 0
-                bot['_hedge_fired'] = False  # clear so next cycle can hedge
+                bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
-                print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total}')
+                print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
             else:
@@ -9775,6 +9783,10 @@ def _handle_phantom(bot_id, bot, actions):
         wait_since = bot.get('waiting_repeat_since', now)
         if now - wait_since < 10:  # 10s cooldown between repeats
             return
+        # Clear completion linger flag
+        bot.pop('_just_completed', None)
+        bot.pop('_last_pnl', None)
+        bot.pop('_last_result', None)
 
         # Recalculate smart price from current orderbook (don't reuse stale price)
         try:
@@ -10725,6 +10737,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
                 bot['_just_completed'] = True
+                bot['_last_pnl'] = net_pnl
+                bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
+                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
                 bot['dog_filled_at'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
@@ -10734,7 +10749,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 for rung in bot.get('rungs', []):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None
-                print(f'👻 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — resetting for re-anchor')
+                print(f'👻 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} pnl={net_pnl}¢ — resetting for re-anchor')
                 bot_log('PHANTOM_LADDER_ENTER_REPEAT', bot_id, {
                     'cycle': repeats_done_now, 'total': repeat_total, 'net_pnl': net_pnl,
                 })

@@ -5648,6 +5648,15 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <span style="color:#555;font-size:9px;">at bid ${estFavPrice}¢</span>
                 </div>`;
             }
+            if (bot._just_completed && bot._last_pnl != null) {
+                const lp = bot._last_pnl;
+                const lpCol = lp > 0 ? '#00ff88' : lp < 0 ? '#ff4444' : '#ffaa00';
+                const ltPnl = bot.lifetime_pnl || 0;
+                return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:#060a14;border:1px solid ${lpCol}44;border-radius:6px;font-size:12px;">
+                    <span style="color:${lpCol};font-weight:800;">✅ ${lp >= 0 ? '+' : ''}${lp}¢</span>
+                    <span style="color:#555;font-size:9px;">Lifetime: ${ltPnl >= 0 ? '+' : ''}${ltPnl}¢</span>
+                </div>`;
+            }
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">

@@ -1445,7 +1445,7 @@ function displayMarkets(markets) {
             // P&L aggregation: include ALL bots (active + completed) for this session
             const t = b.ticker || '';
             if (t) {
-                const pnl = (b.net_pnl_cents || 0) + (b.lifetime_pnl || 0);
+                const pnl = (b.net_pnl_cents || 0);
                 pnlMap[t] = (pnlMap[t] || 0) + pnl;
             }
             if (deadSt.has(b.status)) continue;

@@ -6042,14 +6042,32 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>`;
         } else if (atCeiling && currentHedgePrice > 0) {
             // ── AT CEILING — combined ≥ 98¢ (breakeven), waiting for fill or sell-back timer ──
-            const isGapped = unfilledAsk > 0 && (unfilledAsk - unfilledBid) > 2;
             const bidGap = bot._bid_gap || 0;
             const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ bid ${bidGap}¢ from hedge — ${gameUrgency === 'critical' ? 'drift exit at 5¢' : gameUrgency === 'late' ? 'drift exit at 10¢' : 'watching'}</div>` : '';
+            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid · 10s'
+                : gameUrgency === 'late' ? 'Exit: sell-back · 60s'
+                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
+                : 'Exit: sell-back · 180s';
+            const sbTimerHtml = (() => {
+                const sbTimeLeft = bot._sellback_time_left;
+                const sbGrace = bot._sellback_grace_s || 0;
+                if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
+                    const sbMin = Math.floor(sbTimeLeft / 60);
+                    const sbSec = Math.floor(sbTimeLeft % 60);
+                    const sbCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#818cf8';
+                    return `<span style="color:${sbCol};font-size:9px;font-weight:700;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
+                } else if (sbGrace >= 9999) {
+                    return '<span style="color:#818cf8;font-size:9px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
+                } else if (sbTimeLeft != null && sbTimeLeft <= 0) {
+                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back eligible NOW</span>';
+                }
+                return '';
+            })();
             walkInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                    <span style="font-weight:700;">⏸ <strong>AT CEILING ${combined}¢</strong></span>
+                    <span style="font-weight:700;">🔴 <strong>AT CEILING ${combined}¢</strong></span>
                     ${urgencyBadge}
-                    <span style="color:#888;font-size:9px;">filled ${fillAgeStr} ago · step #${walkCount}</span>
+                    ${sbTimerHtml}
                 </div>
                 <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:3px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
@@ -6057,7 +6075,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#8892a6;">anchor ${avgFilled}¢ · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
                     </div>
                 </div>
-                <div style="color:#8892a6;font-size:9px;">Breakeven — waiting for fill or sell-back timer</div>
+                <div style="color:#8892a6;font-size:9px;">filled ${fillAgeStr} ago · step #${walkCount} · <span style="color:#ffaa00;">${exitRule}</span></div>
                 ${bidGapWarn}
             </div>`;
         } else if (walkCount > 0 && currentHedgePrice > 0) {

@@ -4286,6 +4286,8 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
+        bot['raw_hedge_ms'] = None
+        bot['hedge_latency_ms'] = None
         bot['fav_order_id'] = None
         bot['fav_fill_qty'] = 0
         bot['total_dog_fill_qty'] = 0
@@ -9744,6 +9746,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
                 bot['dog_filled_at'] = None
+                bot['raw_hedge_ms'] = None
+                bot['hedge_latency_ms'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
                 bot['dog_fill_qty'] = 0
@@ -10187,6 +10191,8 @@ def _handle_phantom(bot_id, bot, actions):
             bot['fav_walk_count'] = 0
             bot['fav_last_walk_at'] = None
             bot['dog_filled_at'] = None
+            bot['raw_hedge_ms'] = None
+            bot['hedge_latency_ms'] = None
             bot['_sellback_attempts'] = 0
             bot['status'] = 'dog_anchor_posted'
             bot['posted_at'] = now
@@ -10466,6 +10472,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['total_dog_fill_qty'] = 0
                 bot['dog_fill_qty'] = 0
                 bot['dog_filled_at'] = None
+                bot['raw_hedge_ms'] = None
+                bot['hedge_latency_ms'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
                 bot['fav_price'] = None
@@ -11092,6 +11100,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
                 bot['dog_filled_at'] = None
+                bot['raw_hedge_ms'] = None
+                bot['hedge_latency_ms'] = None
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
                 bot['total_dog_fill_qty'] = 0
@@ -12867,6 +12877,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
+        bot['raw_hedge_ms'] = None
+        bot['hedge_latency_ms'] = None
         bot['fav_order_id'] = None
         bot['fav_fill_qty'] = 0
         bot['dog_fill_qty'] = 0

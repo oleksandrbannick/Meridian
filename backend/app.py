@@ -12084,11 +12084,13 @@ def _handle_apex(bot_id, bot, actions):
                                     and not bot.get('_trade_recorded') and not bot.get('_apex_sellback_attempted')):
                                 if _apex_sellback_check(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, rq):
                                     bot['_apex_sellback_attempted'] = True
+                                    bot['_sellback_decision'] = 'selling_back'
                                     _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
                                     return
                                 else:
                                     # Complete is cheaper than selling back — cross to bid to actually fill
                                     # (ceiling only applies to profitable walks, not loss-exit)
+                                    bot['_sellback_decision'] = 'crossing_to_bid'
                                     _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
                                     if _cross_target > current_price and unfilled_bid > 0:
                                         print(f'💀 APEX LOSS-EXIT: {bot_id} crossing to {_cross_target}¢ (bid={unfilled_bid}) — cheaper than sell-back')

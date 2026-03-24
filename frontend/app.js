@@ -6156,7 +6156,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 } else if (sbTimeLeft != null && sbTimeLeft <= 0 && bot._apex_sellback_attempted) {
                     return '<span style="color:#ffaa00;font-size:9px;font-weight:700;background:#ffaa0018;padding:1px 5px;border-radius:3px;">⏱ completing cheaper — waiting for fill</span>';
                 } else if (sbTimeLeft != null && sbTimeLeft <= 0) {
-                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back checking...</span>';
+                    const decision = bot._sellback_decision;
+                    if (decision === 'selling_back') {
+                        return '<span style="color:#ff8800;font-size:9px;font-weight:700;background:#ff880018;padding:1px 5px;border-radius:3px;">🔙 SELLING BACK — posting maker sell</span>';
+                    } else if (decision === 'crossing_to_bid') {
+                        return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">💀 CROSSING TO BID — completing cheaper</span>';
+                    }
+                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back evaluating...</span>';
                 }
                 return '';
             })();
@@ -6168,7 +6174,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     const s = Math.floor(sbTimeLeft % 60);
                     return `Exit: sell-back in ${m > 0 ? m + 'm ' : ''}${s}s`;
                 }
-                if (sbTimeLeft != null && sbTimeLeft <= 0) return 'Exit: sell-back timer expired — evaluating';
+                if (sbTimeLeft != null && sbTimeLeft <= 0) {
+                    const d = bot._sellback_decision;
+                    if (d === 'selling_back') return 'Exit: sell-back — posting maker sell order';
+                    if (d === 'crossing_to_bid') return 'Exit: crossing to bid — completing is cheaper than sell-back';
+                    return 'Exit: sell-back timer expired — evaluating';
+                }
                 const grace = gameUrgency === 'critical' ? '10s' : gameUrgency === 'late' ? '60s' : '180s';
                 return `Exit: sell-back · ${grace}`;
             })();

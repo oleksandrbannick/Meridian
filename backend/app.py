@@ -12324,19 +12324,21 @@ def _handle_apex(bot_id, bot, actions):
                                                 bot['_completion_in_progress'] = True
                                                 threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
                                                 return
-                                            # Canceled with 0 fills = hedge is dead, place new one
-                                            if _404_status == 'canceled' and _404_fills == 0 and unfilled_bid > 0:
-                                                # Use current hedge_qty (correct for extra hedges too)
-                                                # Only fall back to anchor sum if hedge_qty is missing
-                                                _repost_qty = bot.get('hedge_qty', 0)
-                                                if _repost_qty <= 0:
-                                                    _fs = bot.get('first_fill_side', 'yes')
-                                                    _repost_qty = max(1, sum(
-                                                        min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
-                                                        for r in bot.get('rungs', [])
-                                                    ))
-                                                # Repost at where the order WAS (or bid), not the original target
-                                                # This prevents bouncing between target (35¢) and bid (60¢)
+                                            # Canceled (with or without partial fills) = repost REMAINING qty at current price
+                                            if _404_status in ('canceled', 'cancelled') and unfilled_bid > 0:
+                                                # Update fill count from Kalshi truth
+                                                if _404_fills > 0:
+                                                    bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _404_fills)
+                                                # Only repost the REMAINING unfilled qty, not the full hedge
+                                                _remaining = bot.get('hedge_qty', 0) - bot.get('_hedge_fill_count', 0)
+                                                if _remaining <= 0:
+                                                    # Fully filled despite cancelled status — trigger completion
+                                                    bot['_hedge_verified'] = True
+                                                    bot['_completion_repeat_processed'] = False
+                                                    threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
+                                                    return
+                                                _repost_qty = _remaining
+                                                # Repost at where the order WAS (or bid) — never drop mid-fill
                                                 _repost_price = max(current_price, unfilled_bid) if current_price > 0 else unfilled_bid
                                                 try:
                                                     _rp_resp, _rp_actual = create_order_maker(

@@ -3123,16 +3123,6 @@ function displayOrderbookLadder(orderbook) {
     // Depth score component (0-35 pts, replaces spread tightness when real depth available)
     const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
 
-    // Store for ghost score updates + pass catch score to market card pills
-    const ticker = ob._ticker || '';
-    if (ticker || (orderbook.ticker)) {
-        const tk = ticker || orderbook.ticker;
-        window._obDepthCache = window._obDepthCache || {};
-        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, catchScore, ts: Date.now() };
-        // Immediately update ghost pill on the market card
-        _updateGhostPill(tk, catchScore);
-    }
-
     // Show depth from PHANTOM perspective: DOG on left, FAV on right
     // DOG = cheap side (where whale dumps fill you), FAV = expensive side (hedge target)
     const dogSideLabel = dogSideOb.toUpperCase();
@@ -3152,6 +3142,16 @@ function displayOrderbookLadder(orderbook) {
     ));
     const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
     const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
+
+    // Store for ghost score updates + pass catch score to market card pills
+    const ticker = ob._ticker || '';
+    if (ticker || (orderbook.ticker)) {
+        const tk = ticker || orderbook.ticker;
+        window._obDepthCache = window._obDepthCache || {};
+        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, catchScore, ts: Date.now() };
+        _updateGhostPill(tk, catchScore);
+    }
+
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>

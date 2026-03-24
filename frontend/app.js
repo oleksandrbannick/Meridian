@@ -6645,6 +6645,8 @@ function setBotsTab(mode) {
     if (arbList)   arbList.style.display   = mode === 'arb'    ? '' : 'none';
     if (midList)   midList.style.display   = mode === 'middle' ? '' : 'none';
     if (dogList)   dogList.style.display   = mode === 'dog'    ? '' : 'none';
+    const _awaitDiv = document.getElementById('awaiting-settlement-list');
+    if (_awaitDiv) _awaitDiv.style.display = mode === 'dog' ? '' : 'none';
     if (betsList)  betsList.style.display  = mode === 'bets'   ? '' : 'none';
     if (arbDaily)  arbDaily.style.display  = mode === 'arb'    ? 'flex' : 'none';
     if (midDaily)  midDaily.style.display  = mode === 'middle' ? 'flex' : 'none';

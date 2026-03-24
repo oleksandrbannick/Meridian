@@ -804,21 +804,21 @@ function getMarketLiquidity(market) {
     const _phObCache = (window._obDepthCache || {})[market.ticker];
     const _phHasDepth = _phObCache && (Date.now() - _phObCache.ts) < 300000;
     // Fav side = thick (hedge absorbs), Dog side = thin (whale dumps fill you)
-    const _favDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3) : 0;
-    const _dogDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3) : 0;
-    // Fav depth (40 pts) — thick fav = hedge catches
+    const _favDepth = _phHasDepth ? (_phObCache.favDepth || (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3)) : 0;
+    const _dogDepth = _phHasDepth ? (_phObCache.dogDepth || (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3)) : 0;
+    // Fav depth (40 pts) — thick fav = hedge fills instantly
     const _phFavPts = _phHasDepth
-        ? (_favDepth >= 500 ? 40 : _favDepth >= 200 ? 35 : _favDepth >= 100 ? 25 : _favDepth >= 50 ? 15 : 0)
+        ? (_favDepth >= 1000 ? 40 : _favDepth >= 500 ? 35 : _favDepth >= 200 ? 28 : _favDepth >= 100 ? 20 : _favDepth >= 50 ? 10 : 0)
         : (spread <= 1 ? 40 : spread <= 2 ? 35 : spread <= 3 ? 25 : spread <= 5 ? 10 : 0);
-    // Dog thinness penalty (up to -20 pts) — thick dog = hard to fill, BAD
-    const _phDogPenalty = _phHasDepth
-        ? (_dogDepth >= 5000 ? -20 : _dogDepth >= 2000 ? -15 : _dogDepth >= 500 ? -10 : _dogDepth >= 200 ? -5 : 0)
+    // Dog thinness bonus/penalty — thin dog = GOOD (easy fill), thick dog = BAD (competition)
+    const _phDogPts = _phHasDepth
+        ? (_dogDepth <= 50 ? 10 : _dogDepth <= 200 ? 5 : _dogDepth >= 2000 ? -15 : _dogDepth >= 500 ? -10 : 0)
         : 0;
     const phantomQuality = Math.round(Math.max(0, Math.min(100,
         // Fav depth/spread (40 pts) — can hedge fill instantly?
         _phFavPts +
-        // Dog thinness penalty — thick dog is bad (whale can't move price to fill you)
-        _phDogPenalty +
+        // Dog depth bonus/penalty — thin dog good, thick dog bad
+        _phDogPts +
         // Volume (25 pts) — deeper book = more whale activity + hedge absorption
         (vol >= 200 ? 25 : vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
         // Dog price sweet spot (20 pts) — 10-25¢ ideal
@@ -3101,43 +3101,67 @@ function displayOrderbookLadder(orderbook) {
     document.getElementById('orderbook-ladder').innerHTML = ladderHtml;
 
     // ── Compute depth scores and update quality badges ──
-    const yesDepth3 = yesOrders.reduce((s, o) => {
+    // Asymmetric windows: dog side needs wider (your anchor posts deep), fav side tighter (hedge near bid)
+    const _obDogSide = bestYesBid < bestNoBid ? 'yes' : 'no';
+    const DOG_DEPTH_WINDOW = 15;  // Dog: 15¢ window (anchor posts deep in the book)
+    const FAV_DEPTH_WINDOW = 8;   // Fav: 8¢ window (hedge fills near top of book)
+    const yesWindow = _obDogSide === 'yes' ? DOG_DEPTH_WINDOW : FAV_DEPTH_WINDOW;
+    const noWindow = _obDogSide === 'no' ? DOG_DEPTH_WINDOW : FAV_DEPTH_WINDOW;
+    const yesDepth = yesOrders.reduce((s, o) => {
         const { price, qty } = parseOrderLevel(o);
-        return (bestYesBid && price >= bestYesBid - 3) ? s + qty : s;
+        return (bestYesBid && price >= bestYesBid - yesWindow) ? s + qty : s;
     }, 0);
-    const noDepth3 = noOrders.reduce((s, o) => {
+    const noDepth = noOrders.reduce((s, o) => {
         const { price, qty } = parseOrderLevel(o);
-        return (bestNoBid && price >= bestNoBid - 3) ? s + qty : s;
+        return (bestNoBid && price >= bestNoBid - noWindow) ? s + qty : s;
     }, 0);
-    const minDepth = Math.min(yesDepth3, noDepth3);
+    const minDepth = Math.min(yesDepth, noDepth);
+
+    // Identify dog/fav sides for phantom context
+    const dogSideOb = bestYesBid < bestNoBid ? 'yes' : 'no';
+    const favSideOb = dogSideOb === 'yes' ? 'no' : 'yes';
+    const dogDepth = dogSideOb === 'yes' ? yesDepth : noDepth;
+    const favDepth = dogSideOb === 'yes' ? noDepth : yesDepth;
+    // Phantom: thick fav = GOOD (hedge fills easy), thin dog = GOOD (less competition)
+    const phantomDepthGood = favDepth > dogDepth;
+    const phantomDepthLabel = phantomDepthGood
+        ? (favDepth >= 500 ? 'GREAT' : favDepth >= 200 ? 'GOOD' : 'OK')
+        : (dogDepth >= 500 ? 'CROWDED' : dogDepth >= 200 ? 'WATCH' : 'OK');
+    const phantomDepthCol = phantomDepthGood ? '#00ff88' : '#ffaa00';
 
     // Depth score component (0-35 pts, replaces spread tightness when real depth available)
     const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
     const depthLabel = minDepth >= 500 ? 'DEEP' : minDepth >= 200 ? 'THICK' : minDepth >= 100 ? 'GOOD' : minDepth >= 50 ? 'OK' : 'THIN';
     const depthCol = minDepth >= 200 ? '#00ff88' : minDepth >= 50 ? '#ffaa00' : '#ff4444';
 
-    // Store for ghost score updates
+    // Store for ghost score updates (keep yesDepth3/noDepth3 keys for backward compat)
     const ticker = ob._ticker || '';
     if (ticker || (orderbook.ticker)) {
         const tk = ticker || orderbook.ticker;
         window._obDepthCache = window._obDepthCache || {};
-        window._obDepthCache[tk] = { yesDepth3, noDepth3, minDepth, depthPts, ts: Date.now() };
+        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, ts: Date.now() };
     }
 
-    // Show depth summary above the orderbook
+    // Show depth summary above the orderbook — phantom-aware labeling
+    const dogLabel = dogSideOb.toUpperCase();
+    const favLabel = favSideOb.toUpperCase();
+    const dogDepthCol = dogDepth >= 500 ? '#ff4444' : dogDepth >= 200 ? '#ffaa00' : '#00ff88';
+    const favDepthCol = favDepth >= 500 ? '#00ff88' : favDepth >= 200 ? '#00ff88' : favDepth >= 50 ? '#ffaa00' : '#ff4444';
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN 3¢ OF BID</span>
-            <span style="color:${depthCol};font-weight:800;font-size:12px;">${depthLabel}</span>
+            <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH (fav ${FAV_DEPTH_WINDOW}¢ · dog ${DOG_DEPTH_WINDOW}¢)</span>
+            <span style="color:${phantomDepthCol};font-weight:800;font-size:12px;">👻 ${phantomDepthLabel}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div style="text-align:center;background:#00ff8808;border-radius:6px;padding:6px;">
-                <div style="color:#00ff88;font-weight:800;font-size:18px;">${yesDepth3.toLocaleString()}</div>
-                <div style="color:#8892a6;font-size:9px;">YES contracts</div>
+            <div style="text-align:center;background:${favDepthCol}08;border-radius:6px;padding:6px;">
+                <div style="color:${favDepthCol};font-weight:800;font-size:18px;">${favDepth.toLocaleString()}</div>
+                <div style="color:#8892a6;font-size:9px;">${favLabel} · FAV hedge liquidity</div>
+                <div style="color:${favDepthCol};font-size:8px;font-weight:700;">${favDepth >= 200 ? 'THICK — easy hedge' : favDepth >= 50 ? 'OK' : 'THIN — risky hedge'}</div>
             </div>
-            <div style="text-align:center;background:#ff444408;border-radius:6px;padding:6px;">
-                <div style="color:#ff4444;font-weight:800;font-size:18px;">${noDepth3.toLocaleString()}</div>
-                <div style="color:#8892a6;font-size:9px;">NO contracts</div>
+            <div style="text-align:center;background:${dogDepthCol}08;border-radius:6px;padding:6px;">
+                <div style="color:${dogDepthCol};font-weight:800;font-size:18px;">${dogDepth.toLocaleString()}</div>
+                <div style="color:#8892a6;font-size:9px;">${dogLabel} · DOG competition</div>
+                <div style="color:${dogDepthCol};font-size:8px;font-weight:700;">${dogDepth >= 500 ? 'CROWDED — hard fill' : dogDepth >= 200 ? 'MODERATE' : 'THIN — easy fill'}</div>
             </div>
         </div>
     </div>`;

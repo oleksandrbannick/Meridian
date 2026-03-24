@@ -9670,14 +9670,11 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         # ── Fav Walk-Up System ──
-        # Adaptive walk: speed scales with ceiling proximity and game phase.
-        # Hard stop: combined cost (dog + fav) >= WALK_CEILING (98c).
+        # Fixed 20s walk interval. Snap at 96c. Hard stop at 98c.
         # After hedge_timeout_s total, if still no fill → sell dog back.
-        _phantom_urgency = _get_game_urgency(ticker)
-        _phantom_snap_ceiling = URGENCY_PARAMS.get(_phantom_urgency, {}).get('snap_ceiling', SNAP_CEILING_CENTS)
+        WALK_INTERVAL_S = 20
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
         dog_price = bot['dog_price']
-        bot['_game_urgency'] = _phantom_urgency
 
         # Check absolute timeout — give up after hedge_timeout_s total
         if wait_s >= hedge_timeout_s:
@@ -9770,9 +9767,8 @@ def _handle_phantom(bot_id, bot, actions):
             _dog_crashed = _dog_bid_now < dog_price * 0.5  # dog lost 50%+ value
             _patience_half = hedge_timeout_s * 0.5
             _bail_threshold = hedge_timeout_s * 0.75
-            _urgency = _phantom_urgency
-            # In critical game phase, skip patience — bail immediately
-            _force_bail = _urgency == 'critical'
+            # No game-phase urgency for phantom — fixed timeout behavior
+            _force_bail = False
             _should_bail = _force_bail or (wait_s >= _bail_threshold) or (wait_s >= _patience_half and _dog_crashed and _no_bid_count >= 2)
             _patience_tier = 'critical_bail' if _force_bail else 'blowout_bail' if (_dog_crashed and _no_bid_count >= 2) else 'timeout_bail' if wait_s >= _bail_threshold else 'waiting'
             bot_log('PHANTOM_NO_FAV_BID_WALK', bot_id, {
@@ -9811,7 +9807,7 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Determine action priority
         needs_drop = current_fav_price > walk_target
-        snap_ready = (dog_price + walk_target) <= _phantom_snap_ceiling and walk_target != current_fav_price
+        snap_ready = (dog_price + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
 
         # Queue position: track fav bid stability
         _ph_prev_bid = bot.get('_fav_bid_seen', 0)
@@ -9822,9 +9818,8 @@ def _handle_phantom(bot_id, bot, actions):
         _ph_at_bid = current_fav_price > 0 and current_fav_price == walk_target
         _ph_queue_grace = _ph_at_bid and _ph_bid_stable_s >= 10 and not snap_ready and not needs_drop
 
-        # Interval: adaptive based on ceiling proximity + game urgency
-        _ph_combined = dog_price + current_fav_price
-        walk_interval = _calc_walk_interval(_ph_combined, _phantom_urgency, snap_ready, False, needs_drop)
+        # Interval: fixed 20s, instant on snap/drop
+        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
         if _ph_queue_grace:
             walk_interval = max(walk_interval, 30)
         bot['_walk_interval'] = walk_interval
@@ -9890,7 +9885,7 @@ def _handle_phantom(bot_id, bot, actions):
                     'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
                     'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
                     'wait_s': round(wait_s, 1),
-                    'walk_interval': walk_interval, 'urgency': _phantom_urgency,
+                    'walk_interval': walk_interval,
                 })
                 bot['fav_price'] = new_fav_price
                 bot['fav_walk_count'] = walk_count
@@ -11023,9 +11018,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
 
         # ── Phantom Ladder Walk + Snap System ──
-        _phl_urgency = _get_game_urgency(ticker)
-        _phl_snap_ceiling = URGENCY_PARAMS.get(_phl_urgency, {}).get('snap_ceiling', SNAP_CEILING_CENTS)
-        bot['_game_urgency'] = _phl_urgency
+        # Fixed 20s walk, snap at 96c, ceiling at 98c. No game-phase urgency.
+        WALK_INTERVAL_S = 20
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
         current_fav_price = bot.get('fav_price', 0)
         if current_fav_price <= 0:
@@ -11062,7 +11056,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         # Determine action priority
         needs_drop = current_fav_price > walk_target
-        snap_ready = (avg_dog + walk_target) <= _phl_snap_ceiling and walk_target != current_fav_price
+        snap_ready = (avg_dog + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
 
         # Queue position: track fav bid stability
         _phl_prev_bid = bot.get('_fav_bid_seen', 0)
@@ -11075,7 +11069,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         # Interval: adaptive based on ceiling proximity + game urgency
         _phl_combined = avg_dog + current_fav_price
-        walk_interval = _calc_walk_interval(_phl_combined, _phl_urgency, snap_ready, False, needs_drop)
+        walk_interval = 0 if (needs_drop or snap_ready) else WALK_INTERVAL_S
         if _phl_queue_grace:
             walk_interval = max(walk_interval, 30)
         bot['_walk_interval'] = walk_interval
@@ -11136,7 +11130,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
                     'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
                     'wait_s': round(wait_s, 1),
-                    'walk_interval': walk_interval, 'urgency': _phl_urgency,
+                    'walk_interval': walk_interval,
                     'new_order_id': _new_oid[:12] if _new_oid and _new_oid != fav_order_id else None,
                 })
                 bot['fav_price'] = new_fav_price

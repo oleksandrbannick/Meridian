@@ -5592,15 +5592,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
-                ${(() => {
-                    const gu = bot._game_urgency || '';
-                    const wi = bot._walk_interval || 20;
-                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s</span>';
-                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s</span>`;
-                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALF</span>';
-                    if (dogFilled && favPrice > 0) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● ${wi}s walk</span>`;
-                    return '';
-                })()}
+                ${dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● 20s walk</span>' : ''}
                 ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
                 ${repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
             </div>

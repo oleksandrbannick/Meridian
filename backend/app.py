@@ -6465,11 +6465,17 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         try:
             amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(
+            amend_resp = kalshi_client.amend_order(
                 hedge_oid, ticker=ticker,
                 side=unfilled_side, count=total_qty,
                 **amend_kwargs
             )
+            # Verify Kalshi actually accepted the count change
+            _resp_order = amend_resp.get('order', amend_resp) if isinstance(amend_resp, dict) else {}
+            _resp_count = _resp_order.get('count', _resp_order.get('count_fp', '')) if _resp_order else None
+            _resp_status = _resp_order.get('status', '')
+            _verified_count = total_qty  # assume success unless response says otherwise
+
             # Write results back inside ws_fill_lock — only increase, never decrease
             with ws_fill_lock:
                 pre_max_hedge_qty = bot.get('hedge_qty', 0)
@@ -6477,7 +6483,8 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
                 if amend_price != bot.get('hedge_price'):
                     bot['hedge_price'] = amend_price
             print(f'📈 LATE ANCHOR: {bot_id} qty {old_hedge_qty}→{total_qty} '
-                  f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢')
+                  f'avg_w={new_avg_width:.1f}¢ target={new_target}¢ walk+{walk_offset}¢ amend@{amend_price}¢'
+                  f' resp_status={_resp_status} resp_count={_resp_count}')
             bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
                 'old_hedge_qty': old_hedge_qty, 'total_qty_sent': total_qty,
                 'hedge_qty_before_max': pre_max_hedge_qty, 'hedge_qty_after': bot.get('hedge_qty', 0),
@@ -6485,18 +6492,48 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
                 'avg_width': round(new_avg_width, 1), 'new_target': new_target,
                 'walk_offset': walk_offset, 'rung_idx': rung_idx,
                 '_hedge_fill_count': bot.get('_hedge_fill_count', 0),
+                'resp_status': _resp_status, 'resp_count': str(_resp_count),
             })
+
+            # If Kalshi says the order is already executed, the amend was too late
+            if _resp_status == 'executed':
+                _actual_fills = _parse_fill_count(_resp_order)
+                print(f'⚠ LATE ANCHOR AMEND: order already executed with {_actual_fills} fills (wanted {total_qty})')
+                with ws_fill_lock:
+                    bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _actual_fills)
+                    bot['_hedge_verified'] = True
+                bot_log('APEX_LATE_ANCHOR_AMEND_ALREADY_EXECUTED', bot_id, {
+                    'actual_fills': _actual_fills, 'wanted_qty': total_qty,
+                    'hedge_order_id': hedge_oid,
+                }, level='WARN')
+
         except Exception as e:
-            print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {e}')
+            err_str = str(e)
+            print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {err_str}')
             bot_log('APEX_LATE_ANCHOR_AMEND_FAIL', bot_id, {
                 'old_hedge_qty': old_hedge_qty, 'total_qty_attempted': total_qty,
                 'amend_price': amend_price, 'hedge_order_id': hedge_oid,
-                'error': str(e), 'rung_idx': rung_idx,
+                'error': err_str[:300], 'rung_idx': rung_idx,
             }, level='ERROR')
-            # Hedge likely already filled (Kalshi auto-settled) — still update hedge_qty
-            # so completion flow knows anchors > hedge and places a new generation
-            with ws_fill_lock:
-                bot['hedge_qty'] = max(bot.get('hedge_qty', 0), total_qty)
+            # DON'T blindly update hedge_qty on failure — verify order state first
+            try:
+                api_read_limiter.wait()
+                _verify_resp = kalshi_client.get_order(hedge_oid)
+                _verify_data = _verify_resp.get('order', _verify_resp) if isinstance(_verify_resp, dict) else {}
+                _verify_fills = _parse_fill_count(_verify_data)
+                _verify_status = _verify_data.get('status', '')
+                _verify_count_raw = _verify_data.get('count', _verify_data.get('count_fp', ''))
+                print(f'   AMEND FAIL VERIFY: status={_verify_status} fills={_verify_fills} count={_verify_count_raw}')
+                bot_log('APEX_LATE_ANCHOR_AMEND_FAIL_VERIFY', bot_id, {
+                    'status': _verify_status, 'fills': _verify_fills, 'count': str(_verify_count_raw),
+                })
+                with ws_fill_lock:
+                    if _verify_fills > 0:
+                        bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _verify_fills)
+                    if _verify_status == 'executed':
+                        bot['_hedge_verified'] = True
+            except Exception:
+                pass
 
 
 def _execute_ladder_arb_sweep_and_hedge(bot_id):

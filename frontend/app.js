@@ -6856,10 +6856,11 @@ async function loadBots() {
                 sortedBetKeys.forEach(gk => {
                     const groupIds = betGameGroups[gk];
                     const sampleBot = bots[groupIds[0]];
-                    const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+                    const rawTickerBets = sampleBot.ticker || '';
+                    const sampleTicker = rawTickerBets.toUpperCase();
                     const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
                     const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
-                    const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+                    const kalshiUrl = `https://kalshi.com/markets/${rawTickerBets.split('-')[0]}/${rawTickerBets}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
                     const header = document.createElement('div');
@@ -6902,10 +6903,11 @@ async function loadBots() {
                 sortedMidKeys.forEach(gk => {
                     const groupIds = midGameGroups[gk];
                     const sampleBot = bots[groupIds[0]];
-                    const sampleTicker = (sampleBot.ticker_a || sampleBot.ticker || '').toUpperCase();
+                    const rawTickerMid = sampleBot.ticker_a || sampleBot.ticker || '';
+                    const sampleTicker = rawTickerMid.toUpperCase();
                     const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
                     const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
-                    const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+                    const kalshiUrl = `https://kalshi.com/markets/${rawTickerMid.split('-')[0]}/${rawTickerMid}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
                     const header = document.createElement('div');
@@ -6950,9 +6952,10 @@ async function loadBots() {
                     const groupIds = dogGameGroups[gk];
                     const sampleBot = bots[groupIds[0]];
                     const groupName = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
-                    const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+                    const rawTickerDog = sampleBot.ticker || '';
+                    const sampleTicker = rawTickerDog.toUpperCase();
                     const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
-                    const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+                    const kalshiUrl = `https://kalshi.com/markets/${rawTickerDog.split('-')[0]}/${rawTickerDog}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
                     const groupIsLive = groupIds.some(id => bots[id].game_phase === 'live');
@@ -7127,9 +7130,10 @@ async function loadBots() {
 
             const groupHeader = document.createElement('div');
             groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00aaff;border-radius:4px;font-size:12px;';
-            const sampleTicker = (sampleBot.ticker || '').toUpperCase();
+            const rawTickerApex = sampleBot.ticker || '';
+            const sampleTicker = rawTickerApex.toUpperCase();
             const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
-            const kalshiUrl = `https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}`;
+            const kalshiUrl = `https://kalshi.com/markets/${rawTickerApex.split('-')[0]}/${rawTickerApex}`;
             // Live score from backend
             const gs = gameScores[gameKey] || {};
             const groupScoreBadge = buildScoreBadgeHtml(gs, 'normal');
@@ -7140,7 +7144,7 @@ async function loadBots() {
             const escapedGameKey = gameKey.replace(/'/g, "\\'");
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <a href="https://kalshi.com/markets/${sampleTicker.split('-')[0]}/${sampleTicker}" target="_blank" style="color:#00aaff;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupMatchup}</a>
+                    <a href="${kalshiUrl}" target="_blank" style="color:#00aaff;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupMatchup}</a>
                     <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                     ${groupScoreBadge}
                     ${groupSignalBadge}
@@ -8161,8 +8165,8 @@ async function showBotDetail(botId) {
 
         // ── Ticker link ──
         html += `<div style="text-align:center;font-size:10px;color:#555;">
-            <a href="#" onclick="navigateToMarket('${(bot.ticker||'').toUpperCase().split('-').slice(0,2).join('-')}');closeBotDetail();return false;" style="color:#00d4ff;">View in Markets</a>
-            · <a href="https://kalshi.com/markets/${bot.ticker}" target="_blank" style="color:#8892a6;">Kalshi ↗</a>
+            <a href="#" onclick="navigateToMarket('${(bot.ticker||'').toUpperCase().split('-').slice(0,2).join('-')}');closeBotDetail();return false;" style="color:#00d4ff;">View in Meridian</a>
+            · <a href="https://kalshi.com/markets/${(bot.ticker||'').split('-')[0]}/${bot.ticker||''}" target="_blank" style="color:#8892a6;">Kalshi ↗</a>
         </div>`;
 
         content.innerHTML = html;

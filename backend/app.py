@@ -3801,17 +3801,17 @@ def _execute_phantom_ladder_hedge(bot_id):
         # else: keep precalc/computed hedge_price as fallback
 
         # ── HEDGE FIRST — record raw speed then fire ──
-        # Only record on FIRST attempt — retries from ladder_filled_no_fav would inflate the metric
+        # raw_hedge_ms = fill → function entry (captured at top of function)
+        # This excludes precalc/compute time, measures only queue dispatch speed
         _raw_fill_at = bot.get('dog_filled_at') or bot.get('first_fill_at')
         _is_retry = bot.get('raw_hedge_ms') is not None
         if _raw_fill_at and not _is_retry:
-            _raw_ms = (time.time() - _raw_fill_at) * 1000
+            _raw_ms = (_fn_entry_at - _raw_fill_at) * 1000
             bot['raw_hedge_ms'] = round(_raw_ms, 1)
             _record_latency('raw_hedge_phantom', _raw_ms, {'bot_id': bot_id, 'type': 'phantom_ladder'})
-            print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (before API round trip)')
+            print(f'   ⚡ Raw hedge speed: {_raw_ms:.1f}ms (fill → function entry)')
         elif _is_retry:
-            _raw_ms = (time.time() - _raw_fill_at) * 1000 if _raw_fill_at else None
-            print(f'   🔄 Hedge RETRY (original raw={bot["raw_hedge_ms"]}ms, elapsed={round(_raw_ms, 1) if _raw_ms else "?"}ms)')
+            print(f'   🔄 Hedge RETRY (original raw={bot["raw_hedge_ms"]}ms)')
         fav_resp, actual_fav_price = create_order_maker(
             ticker=hedge_ticker, side=fav_side, action='buy',
             count=total_fill_qty, price=hedge_price, priority=True,
@@ -7236,6 +7236,8 @@ def _execute_apex_completion(bot_id):
         bot['_completion_repeat_processed'] = True
 
         # ── Orphan check: verify Kalshi position is actually 0 before completing ──
+        # CRITICAL: subtract positions held by OTHER active bots on same ticker
+        # (e.g. phantom ladders), otherwise we'd hedge THEIR positions as "orphans"
         _ticker_for_pos = bot.get('ticker', '')
         _orphan_qty = 0
         _orphan_side = None
@@ -7246,16 +7248,30 @@ def _execute_apex_completion(bot_id):
             for _p in _pos_list:
                 if _p.get('ticker') == _ticker_for_pos:
                     _net_pos = float(_p.get('position_fp', '0') or '0')
-                    if abs(_net_pos) >= 1:
-                        _orphan_qty = int(abs(_net_pos))
-                        # Positive = long YES, need to sell YES (or buy NO to hedge)
-                        # Negative = short YES (= long NO), need to sell NO (or buy YES)
-                        _orphan_side = 'yes' if _net_pos > 0 else 'no'
-                        print(f'⚠ APEX ORPHAN CHECK: {bot_id} Kalshi position={_net_pos} → {_orphan_qty} orphan {_orphan_side.upper()} contracts')
+                    # Subtract positions held by OTHER active bots on this ticker
+                    _other_bot_pos = 0
+                    for _ob_id, _ob in active_bots.items():
+                        if _ob_id == bot_id:
+                            continue
+                        if _ob.get('ticker') != _ticker_for_pos and _ob.get('hedge_ticker') != _ticker_for_pos:
+                            continue
+                        if _ob.get('status') in ('stopped', 'completed'):
+                            continue
+                        _ob_yes = _ob.get('yes_fill_qty', 0) or 0
+                        _ob_no = _ob.get('no_fill_qty', 0) or 0
+                        _other_bot_pos += (_ob_yes - _ob_no)
+                    _this_bot_pos = _net_pos - _other_bot_pos
+                    if abs(_this_bot_pos) >= 1:
+                        _orphan_qty = int(abs(_this_bot_pos))
+                        _orphan_side = 'yes' if _this_bot_pos > 0 else 'no'
+                        print(f'⚠ APEX ORPHAN CHECK: {bot_id} Kalshi net={_net_pos} other_bots={_other_bot_pos} this_bot={_this_bot_pos} → {_orphan_qty} orphan {_orphan_side.upper()}')
                         bot_log('APEX_ORPHAN_DETECTED', bot_id, {
                             'ticker': _ticker_for_pos, 'net_position': _net_pos,
+                            'other_bot_position': _other_bot_pos, 'this_bot_position': _this_bot_pos,
                             'orphan_qty': _orphan_qty, 'orphan_side': _orphan_side,
                         })
+                    elif abs(_net_pos) >= 1:
+                        print(f'👻 APEX ORPHAN SKIP: {bot_id} Kalshi net={_net_pos} but {_other_bot_pos} held by other bots — not orphaned')
                     break
         except Exception as _pe:
             print(f'⚠ APEX ORPHAN CHECK failed: {bot_id}: {_pe}')

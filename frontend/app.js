@@ -3035,7 +3035,7 @@ function closeOrderbookSidebar() {
 
 async function fetchOrderbookForSidebar(ticker) {
     try {
-        const response = await fetch(`${API_BASE}/orderbook/${ticker}`);
+        const response = await fetch(`${API_BASE}/orderbook/${ticker}?_=${Date.now()}`);
         const data = await response.json();
 
         if (data.error) {
@@ -5007,7 +5007,7 @@ function closeModal() {
 // View orderbook for a market
 async function viewOrderbook(ticker) {
     try {
-        const response = await fetch(`${API_BASE}/orderbook/${ticker}`);
+        const response = await fetch(`${API_BASE}/orderbook/${ticker}?_=${Date.now()}`);
         const data = await response.json();
         
         if (data.error) {

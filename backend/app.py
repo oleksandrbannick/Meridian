@@ -12161,6 +12161,22 @@ def _run_monitor():
         # Auto-reset P&L if the date has changed
         auto_reset_daily_pnl()
 
+        # ── Purge stale completed/stopped bots from active_bots ──
+        # Keep them for 60s so the frontend sees the final state, then remove.
+        _purge_cutoff = time.time() - 60
+        _purge_ids = [bid for bid, b in active_bots.items()
+                      if b.get('status') in ('completed', 'stopped', 'cancelled')
+                      and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
+                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)]  # keep if repeats pending
+        if _purge_ids:
+            for _pid in _purge_ids:
+                del active_bots[_pid]
+            if len(_purge_ids) <= 5:
+                print(f'🧹 Purged {len(_purge_ids)} stale bots: {[p[:25] for p in _purge_ids]}')
+            else:
+                print(f'🧹 Purged {len(_purge_ids)} stale bots')
+            save_state()
+
         # ── Drift-cancelled smart wait: re-enter waiting_repeat if prices recover ──
         _now = time.time()
         for _bot_id, _bot in list(active_bots.items()):

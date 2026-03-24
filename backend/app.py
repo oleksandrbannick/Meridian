@@ -3394,11 +3394,62 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             min(r.get(f'{_filled_side_chk}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
             for r in bot.get('rungs', [])
         )
-        _hedge_fully_done = (bot.get('_consolidated')
-                             and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
-                             and bot.get('hedge_qty', 0) > 0
+        _hedge_fully_filled = (bot.get('_consolidated')
+                               and bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0)
+                               and bot.get('hedge_qty', 0) > 0)
+        _hedge_fully_done = (_hedge_fully_filled
                              and bot.get('_hedge_verified')
                              and bot.get('hedge_qty', 0) >= _total_anchor_fills)
+
+        # Hedge fully filled but unhedged anchors remain → place new hedge generation
+        _unhedged_qty = _total_anchor_fills - bot.get('hedge_qty', 0)
+        if (_hedge_fully_filled and _unhedged_qty > 0
+                and not bot.get('_extra_hedge_placed') and not bot.get('_ws_fill_handling')):
+            _unfilled_side = 'no' if bot.get('first_fill_side') == 'yes' else 'yes'
+            _new_avg_anchor = round(sum(
+                r.get(f'{bot["first_fill_side"]}_price', 0) * min(r.get(f'{bot["first_fill_side"]}_fill_qty', 0), r.get('quantity', 1))
+                for r in bot.get('rungs', []) if r.get(f'{bot["first_fill_side"]}_fill_qty', 0) > 0
+            ) / _total_anchor_fills) if _total_anchor_fills > 0 else 0
+            _avg_width = bot.get('_avg_width', 5)
+            _new_hedge_price = max(1, 100 - _new_avg_anchor - _avg_width)
+            # Cap at ceiling
+            _new_hedge_price = min(_new_hedge_price, HARD_CEILING_CENTS - _new_avg_anchor)
+            bot['_extra_hedge_placed'] = True
+            bot_log('APEX_NEW_HEDGE_GEN', bot_id, {
+                'unhedged_qty': _unhedged_qty, 'new_hedge_price': _new_hedge_price,
+                'new_avg_anchor': _new_avg_anchor, 'old_hedge_qty': bot.get('hedge_qty', 0),
+                'total_anchor_fills': _total_anchor_fills,
+            })
+            print(f'🔄 APEX NEW HEDGE GEN: {bot_id} {_unhedged_qty} unhedged — placing {_unfilled_side} hedge @ {_new_hedge_price}¢')
+            def _place_extra_hedge(_bid, _bot, _qty, _price, _side):
+                try:
+                    _tk = _bot.get('ticker', '')
+                    _kwargs = {'yes_price': _price} if _side == 'yes' else {'no_price': _price}
+                    api_rate_limiter.wait()
+                    resp = kalshi_client.create_order(_tk, _side, 'buy', _qty, post_only=True, **_kwargs)
+                    _new_oid = resp.get('order', {}).get('order_id', '')
+                    with ws_fill_lock:
+                        _bot['hedge_order_id'] = _new_oid
+                        _bot['hedge_price'] = _price
+                        _bot['hedge_qty'] = _bot.get('hedge_qty', 0) + _qty
+                        _bot['_hedge_fill_count'] = _bot.get('_hedge_fill_count', 0)  # keep existing
+                        _all_hedge = _bot.get('_all_hedge_order_ids', [])
+                        _all_hedge.append(_new_oid)
+                        _bot['_all_hedge_order_ids'] = _all_hedge
+                        _bot['_hedge_verified'] = False
+                        _bot['_extra_hedge_placed'] = True
+                        _bot['walk_count'] = 0
+                        _bot['last_walk_at'] = time.time()
+                    print(f'✅ APEX EXTRA HEDGE: {_bid} placed {_side} {_qty}× @ {_price}¢ oid={_new_oid[:12]}')
+                    bot_log('APEX_EXTRA_HEDGE_PLACED', _bid, {
+                        'side': _side, 'qty': _qty, 'price': _price, 'order_id': _new_oid[:12],
+                    })
+                    save_state()
+                except Exception as _eh:
+                    print(f'⚠ APEX EXTRA HEDGE FAIL: {_bid}: {_eh}')
+                    bot_log('APEX_EXTRA_HEDGE_FAIL', _bid, {'error': str(_eh)[:200]}, level='ERROR')
+                    _bot['_extra_hedge_placed'] = False  # allow retry
+            threading.Thread(target=_place_extra_hedge, args=(bot_id, bot, _unhedged_qty, _new_hedge_price, _unfilled_side), daemon=True).start()
 
         if _all_rungs_filled or _hedge_fully_done:
             # Both sides fully filled OR hedge fully done — complete!
@@ -11958,8 +12009,13 @@ def _handle_apex(bot_id, bot, actions):
                                         'old_price': current_price, 'target_price': new_price,
                                     })
                                     if '404' in str(e):
-                                        # Order gone — place a new one at the walk price
-                                        remaining_qty = rq - bot.get('_hedge_fill_count', 0)
+                                        # Order gone — check total anchor fills vs hedge fills
+                                        _fs = bot.get('first_fill_side', 'yes')
+                                        _total_af = sum(
+                                            min(r.get(f'{_fs}_fill_qty', 0), r.get('quantity', bot.get('quantity', 1)))
+                                            for r in bot.get('rungs', [])
+                                        )
+                                        remaining_qty = _total_af - bot.get('_hedge_fill_count', 0)
                                         if remaining_qty > 0:
                                             try:
                                                 new_resp, actual_price = create_order_maker(

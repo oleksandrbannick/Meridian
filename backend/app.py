@@ -10455,7 +10455,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             gap_thresh = 0  # force repost
             print(f'⚠ PHANTOM ABOVE MARKET: {bot_id} first_rung={_first_price}¢ >= bid={current_dog_bid}¢ — forcing repost down')
             bot_log('PHANTOM_LADDER_ABOVE_MARKET', bot_id, {
-                'first_rung': _first_price, 'dog_bid': current_dog_bid, 'dog_ask': current_dog_ask,
+                'first_rung': _first_price, 'dog_bid': current_dog_bid,
             })
 
         # Retreat check: if bid crept 2¢+ toward rungs since last post, retreat to restore full depth.
@@ -10546,7 +10546,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         bot['posted_at'] = now  # reset timer, don't repost
                         bot_log('PHANTOM_LADDER_REPOST_SKIP_FLOOR', bot_id, {
                             'smart_first': smart_first, 'lowest_would_be': _lowest_new_price,
-                            'unfilled_rungs': _unfilled_count, 'spacing': _rung_spacing,
+                            'spacing': _rung_spacing,
                         })
                         print(f'⛔ PHANTOM REPOST SKIP: {bot_id} lowest rung would be {_lowest_new_price}¢ — too low')
                         save_state()

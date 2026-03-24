@@ -11369,11 +11369,8 @@ def _handle_apex(bot_id, bot, actions):
                     'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid,
                     'price_lean': price_lean, 'reason': 'blowout_drift',
                 })
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                bot['repeat_count'] = 0
-                print(f'🛑 APEX DRIFT STOP: {bot_id} lean={price_lean} — blowout, stopping')
-                save_state()
+                # Don't kill repeats — game can swing back. Just wait.
+                print(f'⏳ APEX DRIFT WAIT: {bot_id} lean={price_lean} — waiting for market to balance')
                 return
             use_scaling = bot.get('width_scaling', False)
             valid_specs = []

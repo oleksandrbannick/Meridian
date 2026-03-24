@@ -12180,7 +12180,7 @@ def _handle_apex(bot_id, bot, actions):
                                     # (ceiling only applies to profitable walks, not loss-exit)
                                     bot['_sellback_decision'] = 'crossing_to_bid'
                                     _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
-                                    if _cross_target > current_price and unfilled_bid > 0:
+                                    if unfilled_bid > 0 and (_cross_target > current_price or current_price <= 0):
                                         print(f'💀 APEX LOSS-EXIT: {bot_id} crossing to {_cross_target}¢ (bid={unfilled_bid}) — cheaper than sell-back')
                                         bot_log('APEX_LOSS_EXIT_CROSS', bot_id, {
                                             'old_price': current_price, 'cross_target': _cross_target,

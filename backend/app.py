@@ -6303,17 +6303,26 @@ def _check_apex_rung_completions(bot_id, bot):
 
 
 def _cancel_with_retry(oid, max_retries=2):
-    """Cancel an order with rate limiting + retry on 429."""
+    """Cancel an order with rate limiting + retry on 429.
+    Returns True on success, False on failure. Logs last error for debugging."""
+    _last_err = None
     for attempt in range(max_retries + 1):
         try:
             api_rate_limiter.wait()
             kalshi_client.cancel_order(oid)
             return True
         except Exception as e:
-            if '429' in str(e) and attempt < max_retries:
+            _last_err = e
+            err_str = str(e)
+            # 404 = already cancelled/filled — treat as success
+            if '404' in err_str:
+                return True
+            if '429' in err_str and attempt < max_retries:
                 time.sleep(0.5)
                 continue
-            return False
+            # Log the actual error so we can debug orphans
+            print(f'⚠ _cancel_with_retry({oid[:12]}) failed after {attempt+1} attempts: {err_str[:200]}')
+    return False
 
 
 def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):

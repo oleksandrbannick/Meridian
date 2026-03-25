@@ -261,16 +261,19 @@ class KalshiAPI:
         return self._make_request('DELETE', f'/portfolio/orders/{order_id}', authenticated=True)
 
     def amend_order(self, order_id: str, ticker: str, side: str, count: int,
-                    yes_price: Optional[int] = None, no_price: Optional[int] = None) -> Dict:
+                    yes_price: Optional[int] = None, no_price: Optional[int] = None,
+                    action: str = 'buy') -> Dict:
         """Amend a resting limit order's price and/or quantity.
         Kalshi POST /portfolio/orders/{order_id}/amend
-        Requires: ticker, side ('yes'/'no'), order_qty, and exactly one of yes_price/no_price (cents).
+        Requires: ticker, side, action, and exactly one of yes_price/no_price (cents).
         Increasing qty forfeits queue position. Decreasing preserves it.
+        Returns: {old_order: Order, order: Order} — order_id stays the same.
         """
         data: Dict[str, Any] = {
             'ticker': ticker,
             'side': side,
-            'order_qty': count,
+            'action': action,
+            'count': count,
         }
         if yes_price is not None:
             data['yes_price'] = yes_price

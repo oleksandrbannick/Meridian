@@ -6689,6 +6689,28 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         # API call OUTSIDE ws_fill_lock but INSIDE _late_anchor_amend_lock
         # Single amend: update BOTH price AND qty on the existing hedge order
         try:
+            # Pre-amend diagnostic: check order status before attempting
+            try:
+                api_read_limiter.wait()
+                _pre_check = kalshi_client.get_order(hedge_oid)
+                _pre_data = _pre_check.get('order', _pre_check) if isinstance(_pre_check, dict) else {}
+                _pre_status = _pre_data.get('status', 'unknown')
+                _pre_fills = _parse_fill_count(_pre_data)
+                if _pre_status != 'resting':
+                    print(f'⚠ LATE ANCHOR PRE-CHECK: {bot_id} hedge {hedge_oid[:12]} status={_pre_status} fills={_pre_fills} — NOT RESTING, skipping amend')
+                    bot_log('APEX_LATE_ANCHOR_PRE_CHECK', bot_id, {
+                        'hedge_oid': hedge_oid[:12], 'status': _pre_status, 'fills': _pre_fills,
+                        'needed_qty': _needed_hedge_qty, 'rung_idx': rung_idx,
+                    }, level='WARN')
+                    with ws_fill_lock:
+                        if _pre_fills > bot.get('_hedge_fill_count', 0):
+                            bot['_hedge_fill_count'] = _pre_fills
+                        if _pre_status == 'executed':
+                            bot['_hedge_verified'] = True
+                    return  # Don't try to amend a non-resting order — 404 recovery will handle it
+            except Exception as _pc_err:
+                print(f'⚠ LATE ANCHOR PRE-CHECK failed: {bot_id}: {_pc_err}')
+
             amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
             api_rate_limiter.wait()
             kalshi_client.amend_order(
@@ -8875,7 +8897,7 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
     return False, {'attempts': MAX_ATTEMPTS, 'status': 'all_attempts_failed'}
 
 
-def execute_net_via_amend(order_id, amend_side, amend_price, qty, ticker, reason='timeout'):
+def execute_net_via_amend(order_id, amend_side, amend_price, qty, ticker, reason='timeout', action='buy'):
     """
     Complete an open leg by AMENDING its resting limit order price to the
     current bid (where buyers already ARE), so it fills quickly and Kalshi
@@ -8913,7 +8935,7 @@ def execute_net_via_amend(order_id, amend_side, amend_price, qty, ticker, reason
         # 2. PATCH amend the order price to the current bid
         print(f'🔧 execute_net_via_amend({reason}): amending {order_id} → {amend_side}@{amend_price}¢ qty={qty}')
         api_rate_limiter.wait()
-        amend_kwargs = {'order_id': order_id, 'ticker': ticker, 'side': amend_side, 'count': qty}
+        amend_kwargs = {'order_id': order_id, 'ticker': ticker, 'side': amend_side, 'count': qty, 'action': action}
         if amend_side == 'yes':
             amend_kwargs['yes_price'] = amend_price
         else:
@@ -11889,7 +11911,7 @@ def _handle_apex(bot_id, bot, actions):
                         amend_kwargs = {f'{anchor_side}_price': new_sell_price}
                         api_rate_limiter.wait()
                         kalshi_client.amend_order(sell_oid, ticker=ticker, side=anchor_side,
-                                                 count=sell_qty, **amend_kwargs)
+                                                 count=sell_qty, action='sell', **amend_kwargs)
                         walk_count = bot.get('_sellback_walk_count', 0) + 1
                         bot['_sellback_price'] = new_sell_price
                         bot['_sellback_last_walk_at'] = now
@@ -12711,14 +12733,7 @@ def _handle_apex(bot_id, bot, actions):
                                             _amend_side = unfilled_side
                                             _amend_count = rq
                                             _amend_kwargs = {'yes_price': _cross_target} if _amend_side == 'yes' else {'no_price': _cross_target}
-                                            _cross_resp = kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
-                                            _cross_ao = _cross_resp.get('order', _cross_resp) if isinstance(_cross_resp, dict) else {}
-                                            _cross_new_oid = _cross_ao.get('order_id', '')
-                                            if _cross_new_oid and _cross_new_oid != hedge_oid:
-                                                bot['hedge_order_id'] = _cross_new_oid
-                                                _all = bot.get('_all_hedge_order_ids', [])
-                                                _all.append(_cross_new_oid)
-                                                bot['_all_hedge_order_ids'] = _all
+                                            kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
                                             bot['hedge_price'] = _cross_target
                                             if unfilled_side == 'yes':
                                                 bot['yes_price'] = _cross_target
@@ -12798,26 +12813,37 @@ def _handle_apex(bot_id, bot, actions):
                                 _late_anchor_amend_lock.acquire()
                                 try:
                                     oid = bot.get('hedge_order_id', oid)  # re-read after lock
+                                    # Pre-amend diagnostic: check order status before attempting
+                                    try:
+                                        api_read_limiter.wait()
+                                        _pre_check = kalshi_client.get_order(oid)
+                                        _pre_data = _pre_check.get('order', _pre_check) if isinstance(_pre_check, dict) else {}
+                                        _pre_status = _pre_data.get('status', 'unknown')
+                                        _pre_fills = _parse_fill_count(_pre_data)
+                                        _pre_remaining = _pre_data.get('remaining_count_fp', _pre_data.get('remaining_count', '?'))
+                                        if _pre_status != 'resting':
+                                            print(f'⚠ APEX WALK PRE-CHECK: {bot_id} hedge {oid[:12]} status={_pre_status} fills={_pre_fills} remaining={_pre_remaining} — NOT RESTING')
+                                            bot_log('APEX_WALK_PRE_CHECK_NOT_RESTING', bot_id, {
+                                                'hedge_oid': oid[:12], 'status': _pre_status,
+                                                'fills': _pre_fills, 'remaining': str(_pre_remaining),
+                                            }, level='WARN')
+                                            if _pre_fills > bot.get('_hedge_fill_count', 0):
+                                                bot['_hedge_fill_count'] = _pre_fills
+                                            if _pre_status == 'executed':
+                                                bot['_hedge_verified'] = True
+                                            _late_anchor_amend_lock.release()
+                                            return  # Don't try to amend a non-resting order
+                                    except Exception as _pc_err:
+                                        print(f'⚠ APEX WALK PRE-CHECK failed: {bot_id}: {_pc_err}')
                                     api_rate_limiter.wait()
                                     # Use remaining qty (hedge_qty - fills already counted) to avoid over-buying
                                     _amend_count = max(1, rq - bot.get('_hedge_fill_count', 0))
-                                    amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
+                                    kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
                                                               count=_amend_count, **{f'{unfilled_side}_price': new_price})
-                                    # Track order_id if Kalshi returns one in the response
-                                    new_oid_from_amend = (amend_resp.get('order', {}).get('order_id') if isinstance(amend_resp, dict) else None)
-                                    if new_oid_from_amend and new_oid_from_amend != oid:
-                                        bot['hedge_order_id'] = new_oid_from_amend
-                                        all_ids = bot.get('_all_hedge_order_ids', [])
-                                        all_ids.append(new_oid_from_amend)
-                                        bot['_all_hedge_order_ids'] = all_ids
-                                        if bot.get('rungs'):
-                                            bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid_from_amend
-                                        print(f'🔄 APEX WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
                                     bot['hedge_price'] = new_price
                                     walked_any = True
                                     bot_log('APEX_WALK_SUCCESS', bot_id, {
                                         'walk_type': walk_type, 'old_price': current_price, 'new_price': new_price,
-                                        'new_order_id': new_oid_from_amend[:12] if new_oid_from_amend else None,
                                         'walk_interval': walk_interval, 'urgency': _apex_urgency,
                                     })
                                 except Exception as e:
@@ -18770,8 +18796,9 @@ def amend_order_endpoint(order_id):
         price = int(data.get('price', 0))
         if not ticker or not side or price < 1 or price > 99:
             return jsonify({'error': 'Missing/invalid: ticker, side, count, price (1-99)'}), 400
+        action = data.get('action', 'buy')
         price_kwargs = {'yes_price': price} if side == 'yes' else {'no_price': price}
-        result = kalshi_client.amend_order(order_id, ticker, side, count, **price_kwargs)
+        result = kalshi_client.amend_order(order_id, ticker, side, count, action=action, **price_kwargs)
         return jsonify({'success': True, 'result': result})
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -3701,6 +3701,17 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
+        # At ceiling — don't hedge at breakeven, let monitor sell back
+        if dog_price + hedge_price >= HARD_CEILING_CENTS:
+            print(f'🚫 PHANTOM HEDGE SKIP: {bot_id} combined {dog_price}+{hedge_price}={dog_price + hedge_price}¢ >= {HARD_CEILING_CENTS}¢ — deferring to sellback')
+            bot_log('PHANTOM_HEDGE_AT_CEILING', bot_id, {
+                'dog_price': dog_price, 'hedge_price': hedge_price,
+                'combined': dog_price + hedge_price, 'fav_bid': fav_bid,
+                'max_hedge': max_hedge, 'path': 'ws_fast',
+            })
+            bot['status'] = 'dog_filled'
+            return
+
         # Record raw hedge speed RIGHT before API call — nothing between this and HTTP send
         if not bot.get('dog_filled_at'):
             bot['dog_filled_at'] = time.time()
@@ -3882,6 +3893,21 @@ def _execute_phantom_ladder_hedge(bot_id):
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
             bot['status'] = 'ladder_filled_no_fav'
+            bot['_hedge_thread_active'] = False
+            save_state()
+            return
+
+        # At ceiling — don't hedge at breakeven, flag for monitor to sell back
+        _ladder_combined = (avg_price or bot.get('dog_price', 0)) + hedge_price
+        if _ladder_combined >= HARD_CEILING_CENTS:
+            print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ >= {HARD_CEILING_CENTS}¢ — deferring to sellback')
+            bot_log('PHANTOM_LADDER_HEDGE_AT_CEILING', bot_id, {
+                'avg_price': avg_price, 'hedge_price': hedge_price,
+                'combined': _ladder_combined, 'fav_bid': _fav_bid,
+                'max_hedge': _max_hedge, 'path': 'ws_fast',
+            })
+            bot['_ceiling_sellback'] = True
+            bot['_hedge_thread_active'] = False
             save_state()
             return
 
@@ -9577,13 +9603,15 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         total_cost = dog_price + hedge_price
-        if total_cost > HARD_CEILING_CENTS:
-            safe_hedge = HARD_CEILING_CENTS - dog_price
-            if safe_hedge < 1:
-                _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
-                return
-            print(f'⚠ PHANTOM CEILING CAP: {bot_id} capped hedge {hedge_price}→{safe_hedge}¢')
-            hedge_price = safe_hedge
+        if total_cost >= HARD_CEILING_CENTS:
+            # At breakeven or worse — sell back, don't waste time hedging
+            print(f'🚫 PHANTOM CEILING: {bot_id} combined {total_cost}¢ >= {HARD_CEILING_CENTS}¢ — selling dog back')
+            bot_log('PHANTOM_CEILING_NO_HEDGE', bot_id, {
+                'dog_price': dog_price, 'hedge_price': hedge_price,
+                'fav_bid': fav_bid, 'total_cost': total_cost,
+            })
+            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
+            return
 
         # Guard: WS handler may have already posted the fav hedge
         if bot.get('_hedge_fired') and bot.get('fav_order_id'):
@@ -10949,6 +10977,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot_log('PHANTOM_LADDER_NO_FAV_TIMEOUT', bot_id, {
                 'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
                 'avg_dog': avg_dog, 'total_fill_qty': bot.get('total_dog_fill_qty', 0),
+            })
+            _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
+            return
+        # Ceiling flag: hedge thread found combined >= 98¢ — sell back immediately
+        if bot.get('_ceiling_sellback'):
+            del bot['_ceiling_sellback']
+            avg_dog = bot.get('avg_fill_price', 0)
+            print(f'🚫 PHANTOM LADDER CEILING: {bot_id} hedge at ceiling — selling back')
+            bot_log('PHANTOM_LADDER_CEILING_NO_HEDGE', bot_id, {
+                'avg_dog': avg_dog, 'wait_s': round(wait_s, 1),
             })
             _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
             return

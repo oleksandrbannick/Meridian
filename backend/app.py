@@ -7826,9 +7826,10 @@ def create_anchor_bot():
             return jsonify({'error': 'Required: ticker, dog_price (1-99)'}), 400
 
         # Phantom duplicate check:
-        # RULE: no two phantom bots may have dogs on the same ticker+side.
-        # When multiple bots share a dog ticker+side, sellback uses the aggregate
-        # position and one bot's sell consumes the other's fills → deadlock.
+        # Same-market: one per ticker+side (YES and NO can coexist)
+        # Cross-market: one per ticker+hedge_ticker+side (YES+YES and NO+NO are separate arbs)
+        # NOTE: cross-market and same-market CAN share a dog ticker+side — sellback
+        # handles this via order-level fill verification, not aggregate position checks.
         for bid, b in active_bots.items():
             if b.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
                 continue
@@ -7838,11 +7839,6 @@ def create_anchor_bot():
             b_ticker = b.get('ticker', '')
             b_hedge = b.get('hedge_ticker', b_ticker)
             b_side = b.get('dog_side', '')
-            # Universal dog-ticker conflict: no two bots can post dogs on the same ticker+side
-            # (regardless of whether either is cross-market or same-market)
-            if b_ticker == ticker and b_side == dog_side:
-                return jsonify({'error': f'Another Phantom already has a dog on {ticker} {dog_side.upper()}: {bid[:30]}. '
-                                         f'Use a different ticker for the dog side.'}), 400
             if cross_market:
                 # Block exact same cross-market arb (same ticker+hedge+side)
                 if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
@@ -7851,9 +7847,9 @@ def create_anchor_bot():
                 if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
                     return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
             else:
-                # Same-market: only one per ticker (there's only one dog)
-                if not b_cross and b_ticker == ticker:
-                    return jsonify({'error': f'Same-market Phantom already active on this line: {bid[:30]}'}), 400
+                # Same-market: block duplicate on same ticker+side
+                if not b_cross and b_ticker == ticker and b_side == dog_side:
+                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on {ticker}: {bid[:30]}'}), 400
 
         if target_width < 1:
             return jsonify({'error': 'target_width must be >= 1'}), 400
@@ -8036,19 +8032,15 @@ def create_ladder_bot():
             b_ticker = b.get('ticker', '')
             b_hedge = b.get('hedge_ticker', b_ticker)
             b_side = b.get('dog_side', '')
-            # Universal dog-ticker conflict: no two bots can post dogs on the same ticker+side
-            if b_ticker == ticker and b_side == dog_side:
-                return jsonify({'error': f'Another Phantom already has a dog on {ticker} {dog_side.upper()}: {bid[:30]}. '
-                                         f'Use a different ticker for the dog side.'}), 400
             if cross_market:
                 if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
                     return jsonify({'error': f'Cross-market Phantom ({dog_side.upper()}) already active: {bid[:30]}'}), 400
                 if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
                     return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
             else:
-                # Same-market: only one per ticker (there's only one dog)
-                if not b_cross and b_ticker == ticker:
-                    return jsonify({'error': f'Same-market Phantom already active on this line: {bid[:30]}'}), 400
+                # Same-market: block duplicate on same ticker+side
+                if not b_cross and b_ticker == ticker and b_side == dog_side:
+                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on {ticker}: {bid[:30]}'}), 400
 
         if not rungs_input or len(rungs_input) < 1 or len(rungs_input) > 3:
             return jsonify({'error': 'Need 1-3 rungs'}), 400
@@ -12812,37 +12804,102 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     # Verify actual fill by checking the dog order on Kalshi (not positions —
     # positions are aggregate across all bots on the same ticker)
     dog_oid = bot.get('dog_order_id')
+    _order_actual_fills = None
     if dog_oid:
         try:
             api_read_limiter.wait()
             resp = kalshi_client.get_order(dog_oid)
             ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-            actual = _parse_fill_count(ord_data)
-            if actual != qty and actual > 0:
-                print(f'⚠ PHANTOM SELLBACK ORDER CHECK: {bot_id} local={qty} Kalshi={actual} — using Kalshi')
-                qty = actual
+            _order_actual_fills = _parse_fill_count(ord_data)
+            if _order_actual_fills == 0:
+                # Dog order was cancelled/never filled (e.g. self-trade prevention) —
+                # nothing to sell back, complete the bot with 0 cost
+                print(f'✅ PHANTOM SELLBACK SKIP: {bot_id} dog order {dog_oid} has 0 fills on Kalshi — '
+                      f'order was cancelled, no position to sell')
+                bot_log('PHANTOM_SELLBACK_NO_FILLS', bot_id, {
+                    'dog_order_id': dog_oid, 'order_status': ord_data.get('status', '?'),
+                    'kalshi_status': ord_data.get('kalshi_status', '?'),
+                }, level='WARN')
+                # Record as 0-cost completion — no position was ever held
+                _record_trade(bot_id, {
+                    'result': 'anchor_sellback',
+                    'ticker': ticker, 'dog_side': dog_side, 'fav_side': bot.get('fav_side', ''),
+                    'dog_price': 0, 'fav_price': 0, 'profit_cents': 0, 'net_pnl_cents': 0,
+                    'quantity': 0, 'sell_price': 0, 'loss_cents': 0, 'fees_cents': 0,
+                    'timestamp': now, 'fill_source': 'anchor_sellback_no_fills',
+                    'bot_category': 'anchor_dog',
+                    'cross_market': bot.get('cross_market', False),
+                    'hedge_ticker': bot.get('hedge_ticker', ''),
+                }, bot)
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                save_state()
+                actions.append({'bot_id': bot_id, 'action': 'sellback_no_fills'})
+                return
+            if _order_actual_fills != qty:
+                print(f'⚠ PHANTOM SELLBACK ORDER CHECK: {bot_id} local={qty} Kalshi={_order_actual_fills} — using Kalshi')
+                qty = _order_actual_fills
         except Exception as vf_err:
             print(f'⚠ PHANTOM SELLBACK order check failed: {bot_id}: {vf_err} — using local qty')
 
     sold_back, sell_info = execute_sell(ticker, dog_side, qty, reason=f'anchor_sellback_{bot_id}')
 
     if not sold_back:
-        # Sell FAILED — keep the bot alive so monitor retries next cycle
-        # DO NOT record a trade or mark as stopped — position is still held
-        print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
-        bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
+        _attempts = bot.get('_sellback_attempts', 0) + 1
+        bot['_sellback_attempts'] = _attempts
         # CRITICAL: clear hedge state so monitor doesn't deadlock at the
-        # "if _hedge_fired and fav_order_id: return" guard (line ~9589)
+        # "if _hedge_fired and fav_order_id: return" guard
         bot['_hedge_fired'] = False
         bot['fav_order_id'] = None
-        bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
+
+        # If position_not_found and we verified the order DID fill, another bot
+        # or emergency exit already cleared this position — record as 0-cost
+        _sell_err = (sell_info or {}).get('error', '') if isinstance(sell_info, dict) else ''
+        _pos_empty = (sell_info or {}).get('position_check_empty', False) if isinstance(sell_info, dict) else False
+        if _pos_empty and _order_actual_fills is not None and _order_actual_fills > 0:
+            print(f'✅ PHANTOM SELLBACK CLEARED: {bot_id} position gone but order had {_order_actual_fills} fills — '
+                  f'another bot or emergency exit already sold. Recording 0-cost.')
+            bot_log('PHANTOM_SELLBACK_ALREADY_CLEARED', bot_id, {
+                'dog_price': dog_price, 'qty': qty, 'order_fills': _order_actual_fills,
+            }, level='WARN')
+            _record_trade(bot_id, {
+                'result': 'anchor_sellback',
+                'ticker': ticker, 'dog_side': dog_side, 'fav_side': bot.get('fav_side', ''),
+                'dog_price': dog_price, 'fav_price': 0, 'profit_cents': 0, 'net_pnl_cents': 0,
+                'quantity': qty, 'sell_price': dog_price, 'loss_cents': 0, 'fees_cents': 0,
+                'timestamp': now, 'fill_source': 'anchor_sellback_position_cleared',
+                'bot_category': 'anchor_dog',
+                'cross_market': bot.get('cross_market', False),
+                'hedge_ticker': bot.get('hedge_ticker', ''),
+            }, bot)
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            save_state()
+            actions.append({'bot_id': bot_id, 'action': 'sellback_position_cleared'})
+            return
+
+        # Max retry limit — don't retry forever
+        if _attempts >= 5:
+            print(f'⚠ PHANTOM SELLBACK MAX RETRIES: {bot_id} failed {_attempts} times — giving up')
+            bot_log('PHANTOM_SELLBACK_MAX_RETRIES', bot_id, {
+                'dog_price': dog_price, 'qty': qty, 'attempts': _attempts,
+            }, level='ERROR')
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = now
+            save_state()
+            actions.append({'bot_id': bot_id, 'action': 'sellback_max_retries'})
+            return
+
+        # Normal retry — keep alive for next monitor cycle
+        print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} attempt {_attempts}/5 — retrying next cycle')
+        bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
         bot_log('PHANTOM_SELLBACK_FAILED', bot_id, {
             'dog_price': dog_price, 'qty': qty, 'dog_side': dog_side,
-            'attempt': bot['_sellback_attempts'],
+            'attempt': _attempts,
             'sell_info': str(sell_info)[:200] if sell_info else 'none',
         }, level='ERROR')
-        _audit('PHANTOM_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': bot['_sellback_attempts']})
-        actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': bot['_sellback_attempts']})
+        _audit('PHANTOM_SELLBACK_FAIL', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'attempt': _attempts})
+        actions.append({'bot_id': bot_id, 'action': 'sellback_retry', 'attempt': _attempts})
         return
 
     already_cleared = (sell_info or {}).get('already_cleared', False)

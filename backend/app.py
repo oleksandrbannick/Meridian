@@ -6691,17 +6691,26 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
         try:
             amend_kwargs = {f'{unfilled_side}_price': max(1, amend_price)}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(
+            _amend_resp = kalshi_client.amend_order(
                 hedge_oid, ticker=ticker,
                 side=unfilled_side, count=_needed_hedge_qty,
                 **amend_kwargs
             )
 
+            # Kalshi amend does cancel+replace — capture new order ID
+            _new_oid = (_amend_resp.get('order', {}).get('order_id') if isinstance(_amend_resp, dict) else None)
+
             with ws_fill_lock:
                 bot['hedge_price'] = amend_price
                 bot['hedge_qty'] = _needed_hedge_qty
+                if _new_oid and _new_oid != hedge_oid:
+                    bot['hedge_order_id'] = _new_oid
+                    _all_ids = bot.get('_all_hedge_order_ids', [])
+                    _all_ids.append(_new_oid)
+                    bot['_all_hedge_order_ids'] = _all_ids
 
-            print(f'📈 LATE ANCHOR: {bot_id} hedge {old_hedge_qty}→{_needed_hedge_qty}× @ {amend_price}¢ (anchors={total_qty} completed_hedges={_completed_hedge_qty})')
+            _oid_msg = f' new_oid={_new_oid[:12]}' if _new_oid and _new_oid != hedge_oid else ''
+            print(f'📈 LATE ANCHOR: {bot_id} hedge {old_hedge_qty}→{_needed_hedge_qty}× @ {amend_price}¢ (anchors={total_qty} completed_hedges={_completed_hedge_qty}){_oid_msg}')
             bot_log('APEX_LATE_ANCHOR_AMEND', bot_id, {
                 'old_hedge_qty': old_hedge_qty, 'new_hedge_qty': _needed_hedge_qty,
                 'total_anchors': total_qty, 'completed_hedges': _completed_hedge_qty,
@@ -6714,11 +6723,11 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
             err_str = str(e)
             print(f'⚠️ LATE ANCHOR AMEND FAIL {bot_id}: {err_str}')
             bot_log('APEX_LATE_ANCHOR_AMEND_FAIL', bot_id, {
-                'total_anchor_qty': total_qty, 'hedge_qty': hedge_qty,
+                'total_anchor_qty': total_qty, 'hedge_qty': _needed_hedge_qty,
                 'amend_price': amend_price, 'hedge_order_id': hedge_oid,
                 'error': err_str[:300], 'rung_idx': rung_idx,
             }, level='ERROR')
-            # If 404, hedge order is gone — check if it filled
+            # If 404, hedge order is gone — verify fills then repost with correct qty
             if '404' in err_str:
                 try:
                     api_read_limiter.wait()
@@ -6732,6 +6741,30 @@ def _handle_late_anchor_fill(bot_id, bot, rung_idx, fill_count):
                             bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _verify_fills)
                         if _verify_status == 'executed':
                             bot['_hedge_verified'] = True
+                    # Repost hedge for the needed qty (minus any fills already counted)
+                    _repost_needed = _needed_hedge_qty - bot.get('_hedge_fill_count', 0)
+                    if _repost_needed > 0 and _verify_status != 'executed':
+                        _rp_price = max(1, amend_price)
+                        try:
+                            _rp_resp, _rp_actual = create_order_maker(
+                                ticker=ticker, side=unfilled_side, action='buy',
+                                count=_repost_needed, price=_rp_price,
+                            )
+                            _rp_oid = _rp_resp['order']['order_id']
+                            with ws_fill_lock:
+                                bot['hedge_order_id'] = _rp_oid
+                                bot['hedge_price'] = _rp_actual
+                                bot['hedge_qty'] = _repost_needed
+                                _all_ids = bot.get('_all_hedge_order_ids', [])
+                                _all_ids.append(_rp_oid)
+                                bot['_all_hedge_order_ids'] = _all_ids
+                            print(f'🔄 LATE ANCHOR REPOST: {bot_id} {unfilled_side} {_repost_needed}× @ {_rp_actual}¢ (old order 404d)')
+                            bot_log('APEX_LATE_ANCHOR_REPOST_404', bot_id, {
+                                'new_oid': _rp_oid[:12], 'qty': _repost_needed,
+                                'price': _rp_actual, 'old_oid': hedge_oid[:12],
+                            })
+                        except Exception as _rp_err:
+                            print(f'⚠ LATE ANCHOR REPOST FAIL: {bot_id}: {_rp_err}')
                 except Exception:
                     pass
 
@@ -12834,8 +12867,13 @@ def _handle_apex(bot_id, bot, actions):
                                                 # Update fill count from Kalshi truth
                                                 if _404_fills > 0:
                                                     bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), _404_fills)
-                                                # Only repost the REMAINING unfilled qty, not the full hedge
-                                                _remaining = bot.get('hedge_qty', 0) - bot.get('_hedge_fill_count', 0)
+                                                # Repost for ALL unhedged anchors (not stale bot.hedge_qty)
+                                                # Recalculate from actual anchor fills
+                                                _filled_side = bot.get('first_fill_side', 'no')
+                                                _qty_per = bot.get('quantity', 1)
+                                                _total_anchor = sum(min(r.get(f'{_filled_side}_fill_qty', 0), r.get('quantity', _qty_per)) for r in bot.get('rungs', []))
+                                                _completed_h = sum(h.get('fill_qty', h.get('qty', 0)) for h in bot.get('hedge_history', []))
+                                                _remaining = max(_total_anchor - _completed_h - bot.get('_hedge_fill_count', 0), bot.get('hedge_qty', 0) - bot.get('_hedge_fill_count', 0))
                                                 if _remaining <= 0:
                                                     # Fully filled despite cancelled status — trigger completion
                                                     bot['_hedge_verified'] = True
@@ -17779,10 +17817,46 @@ def emergency_sell():
         success, info = execute_sell(ticker, side, count, reason='emergency_orphan_sell')
         sell_price = (info or {}).get('actual_fill_price') or (info or {}).get('sell_price', 0)
         if success:
+            # Cancel any resting orders on this ticker not tracked by active bots
+            # (orphan hedge orders from completion that would create naked positions)
+            _cancelled_orphan_orders = []
+            try:
+                _active_oids = set()
+                for _b in bots.values():
+                    if _b.get('ticker') == ticker and _b.get('status', '') not in ('completed', 'cancelled'):
+                        for _key in ('hedge_order_id', '_orphan_hedge_oid'):
+                            _oid = _b.get(_key)
+                            if _oid:
+                                _active_oids.add(_oid)
+                        for _oid in _b.get('_all_hedge_order_ids', []):
+                            _active_oids.add(_oid)
+                api_read_limiter.wait()
+                _resting = kalshi_client.get_orders(status='resting', ticker=ticker)
+                _resting_orders = _resting.get('orders', []) if isinstance(_resting, dict) else []
+                for _ro in _resting_orders:
+                    _ro_id = _ro.get('order_id', '')
+                    if _ro_id and _ro_id not in _active_oids:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_ro_id)
+                            _cancelled_orphan_orders.append(_ro_id[:12])
+                            print(f'🧹 ORPHAN SELL CLEANUP: cancelled stale order {_ro_id[:12]} on {ticker}')
+                        except Exception:
+                            pass
+                if _cancelled_orphan_orders:
+                    bot_log('ORPHAN_SELL_ORDER_CLEANUP', f'orphan_{ticker}', {
+                        'ticker': ticker, 'cancelled_orders': _cancelled_orphan_orders,
+                        'count': len(_cancelled_orphan_orders),
+                    })
+            except Exception as _cleanup_err:
+                print(f'⚠ Orphan order cleanup failed for {ticker}: {_cleanup_err}')
+
             bot_log('EMERGENCY_SELL', f'orphan_{ticker}', {
                 'ticker': ticker, 'side': side, 'count': count,
-                'sell_price': sell_price, 'reason': 'orphan_sell_button'})
-            return jsonify({'success': True, 'sell_price': sell_price})
+                'sell_price': sell_price, 'reason': 'orphan_sell_button',
+                'cancelled_stale_orders': len(_cancelled_orphan_orders)})
+            return jsonify({'success': True, 'sell_price': sell_price,
+                            'cancelled_stale_orders': len(_cancelled_orphan_orders)})
         else:
             return jsonify({'success': False, 'error': (info or {}).get('error', 'Sell failed')})
     except Exception as e:

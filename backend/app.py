@@ -7826,8 +7826,9 @@ def create_anchor_bot():
             return jsonify({'error': 'Required: ticker, dog_price (1-99)'}), 400
 
         # Phantom duplicate check:
-        # Same-market: one per ticker+side (YES and NO can coexist)
-        # Cross-market: one per ticker+hedge_ticker+side (YES+YES and NO+NO are separate arbs)
+        # RULE: no two phantom bots may have dogs on the same ticker+side.
+        # When multiple bots share a dog ticker+side, sellback uses the aggregate
+        # position and one bot's sell consumes the other's fills → deadlock.
         for bid, b in active_bots.items():
             if b.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
                 continue
@@ -7837,6 +7838,11 @@ def create_anchor_bot():
             b_ticker = b.get('ticker', '')
             b_hedge = b.get('hedge_ticker', b_ticker)
             b_side = b.get('dog_side', '')
+            # Universal dog-ticker conflict: no two bots can post dogs on the same ticker+side
+            # (regardless of whether either is cross-market or same-market)
+            if b_ticker == ticker and b_side == dog_side:
+                return jsonify({'error': f'Another Phantom already has a dog on {ticker} {dog_side.upper()}: {bid[:30]}. '
+                                         f'Use a different ticker for the dog side.'}), 400
             if cross_market:
                 # Block exact same cross-market arb (same ticker+hedge+side)
                 if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
@@ -8030,6 +8036,10 @@ def create_ladder_bot():
             b_ticker = b.get('ticker', '')
             b_hedge = b.get('hedge_ticker', b_ticker)
             b_side = b.get('dog_side', '')
+            # Universal dog-ticker conflict: no two bots can post dogs on the same ticker+side
+            if b_ticker == ticker and b_side == dog_side:
+                return jsonify({'error': f'Another Phantom already has a dog on {ticker} {dog_side.upper()}: {bid[:30]}. '
+                                         f'Use a different ticker for the dog side.'}), 400
             if cross_market:
                 if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
                     return jsonify({'error': f'Cross-market Phantom ({dog_side.upper()}) already active: {bid[:30]}'}), 400
@@ -9791,6 +9801,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
+                bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
                 print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} pnl={net_pnl}¢')
@@ -12820,6 +12831,10 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         # DO NOT record a trade or mark as stopped — position is still held
         print(f'⚠ PHANTOM SELLBACK FAILED: {bot_id} — sell did not fill, keeping bot alive for retry')
         bot['status'] = 'dog_filled'  # go back to dog_filled so monitor retries
+        # CRITICAL: clear hedge state so monitor doesn't deadlock at the
+        # "if _hedge_fired and fav_order_id: return" guard (line ~9589)
+        bot['_hedge_fired'] = False
+        bot['fav_order_id'] = None
         bot['_sellback_attempts'] = bot.get('_sellback_attempts', 0) + 1
         bot_log('PHANTOM_SELLBACK_FAILED', bot_id, {
             'dog_price': dog_price, 'qty': qty, 'dog_side': dog_side,
@@ -12939,6 +12954,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
+        bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')

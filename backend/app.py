@@ -7625,6 +7625,17 @@ def create_ladder_arb_bot():
         if existing_apex:
             return jsonify({'error': f'Already have an active Apex bot on this line: {existing_apex[:30]}'}), 400
 
+        # Phantom interference check — Apex has both-side orders, phantom positions would net
+        _phantom_conflict = next(
+            (bid for bid, b in active_bots.items()
+             if b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
+             and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')
+             and (b.get('ticker') == ticker or b.get('hedge_ticker') == ticker)),
+            None
+        )
+        if _phantom_conflict:
+            return jsonify({'error': f'Phantom bot active on {ticker} — Apex positions would interfere: {_phantom_conflict[:30]}'}), 400
+
         # Bot cap
         MAX_BOTS_PER_TICKER = 5
         active_on_ticker = sum(
@@ -7815,6 +7826,65 @@ def create_ladder_arb_bot():
 # ═══════════════════════════════════════════════════════════════════
 # ANCHOR-DOG BOT — posts ONLY the dog leg first, fav on fill
 # ═══════════════════════════════════════════════════════════════════
+def _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market):
+    """Check if creating this phantom would cause position netting with existing bots.
+
+    Returns (error_message, conflicting_bot_id) or (None, None) if safe.
+
+    Netting rules (Kalshi auto-nets YES+NO on same ticker):
+    1. Cross-market correlated: two cross-market phantoms with swapped tickers
+       and opposite dog sides fire on the same game event → hedges cross-net
+       all positions to zero. E.g. LAKERS-YES→SUNS-YES + SUNS-NO→LAKERS-NO
+       both fire when Lakers lose.
+    2. Apex interference: Apex has both YES+NO orders on its ticker. Phantom
+       positions on the same ticker would tangle with Apex fills/sellbacks.
+    """
+    for bid, b in active_bots.items():
+        if b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
+            continue
+        b_cat = b.get('bot_category', '')
+        b_ticker = b.get('ticker', '')
+        b_hedge = b.get('hedge_ticker', b_ticker)
+        b_side = b.get('dog_side', '')
+        b_cross = b.get('cross_market', False)
+
+        # ── Guard 1: Apex on same ticker as phantom dog or hedge ──
+        # Apex places both YES+NO orders. Phantom positions would net with Apex.
+        if b_cat == 'ladder_arb':
+            if b_ticker == ticker:
+                return (f'Apex bot active on {b_ticker} — phantom dog would interfere with Apex positions', bid)
+            if b_ticker == hedge_ticker and hedge_ticker != ticker:
+                return (f'Apex bot active on {b_ticker} — phantom hedge would interfere with Apex positions', bid)
+
+        # Only check phantom-vs-phantom from here
+        if b_cat not in ('anchor_dog', 'anchor_ladder'):
+            continue
+
+        # ── Guard 2: Duplicate check (existing logic) ──
+        if cross_market:
+            # Block exact same cross-market arb
+            if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
+                return (f'Cross-market Phantom ({dog_side.upper()}) already active', bid)
+            # Block reverse with same side
+            if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
+                return (f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair', bid)
+            # ── Guard 3: Cross-market correlated netting ──
+            # Swapped tickers + opposite dog sides = same game outcome = cross-net to zero
+            # E.g. (LAKERS-YES→SUNS-YES) + (SUNS-NO→LAKERS-NO) both fire when Lakers lose
+            if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side != dog_side:
+                return (
+                    f'Netting risk: {b_side.upper()} on {b_ticker} fires on same game event as '
+                    f'{dog_side.upper()} on {ticker} — hedges would cross-net all positions to zero',
+                    bid
+                )
+        else:
+            # Same-market: block duplicate on same ticker+side
+            if not b_cross and b_ticker == ticker and b_side == dog_side:
+                return (f'Same-market Phantom ({dog_side.upper()}) already active on {ticker}', bid)
+
+    return (None, None)
+
+
 @app.route('/api/bot/anchor', methods=['POST'])
 def create_anchor_bot():
     """
@@ -7849,31 +7919,10 @@ def create_anchor_bot():
         if not ticker or dog_price < 1 or dog_price > 99:
             return jsonify({'error': 'Required: ticker, dog_price (1-99)'}), 400
 
-        # Phantom duplicate check:
-        # Same-market: one per ticker+side (YES and NO can coexist)
-        # Cross-market: one per ticker+hedge_ticker+side (YES+YES and NO+NO are separate arbs)
-        # NOTE: cross-market and same-market CAN share a dog ticker+side — sellback
-        # handles this via order-level fill verification, not aggregate position checks.
-        for bid, b in active_bots.items():
-            if b.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
-                continue
-            if b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
-                continue
-            b_cross = b.get('cross_market', False)
-            b_ticker = b.get('ticker', '')
-            b_hedge = b.get('hedge_ticker', b_ticker)
-            b_side = b.get('dog_side', '')
-            if cross_market:
-                # Block exact same cross-market arb (same ticker+hedge+side)
-                if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
-                    return jsonify({'error': f'Cross-market Phantom ({dog_side.upper()}) already active: {bid[:30]}'}), 400
-                # Block reverse with same side
-                if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
-                    return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
-            else:
-                # Same-market: block duplicate on same ticker+side
-                if not b_cross and b_ticker == ticker and b_side == dog_side:
-                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on {ticker}: {bid[:30]}'}), 400
+        # Netting / duplicate / interference guardrails
+        _net_err, _net_bid = _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market)
+        if _net_err:
+            return jsonify({'error': f'{_net_err}: {_net_bid[:30]}'}), 400
 
         if target_width < 1:
             return jsonify({'error': 'target_width must be >= 1'}), 400
@@ -8046,25 +8095,10 @@ def create_ladder_bot():
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
 
-        # Phantom duplicate check (same logic as single phantom)
-        for bid, b in active_bots.items():
-            if b.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
-                continue
-            if b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
-                continue
-            b_cross = b.get('cross_market', False)
-            b_ticker = b.get('ticker', '')
-            b_hedge = b.get('hedge_ticker', b_ticker)
-            b_side = b.get('dog_side', '')
-            if cross_market:
-                if b_cross and b_ticker == ticker and b_hedge == hedge_ticker and b_side == dog_side:
-                    return jsonify({'error': f'Cross-market Phantom ({dog_side.upper()}) already active: {bid[:30]}'}), 400
-                if b_cross and b_hedge == ticker and b_ticker == hedge_ticker and b_side == dog_side:
-                    return jsonify({'error': f'Reverse cross-market Phantom ({dog_side.upper()}) already covers this pair: {bid[:30]}'}), 400
-            else:
-                # Same-market: block duplicate on same ticker+side
-                if not b_cross and b_ticker == ticker and b_side == dog_side:
-                    return jsonify({'error': f'Same-market Phantom ({dog_side.upper()}) already active on {ticker}: {bid[:30]}'}), 400
+        # Netting / duplicate / interference guardrails
+        _net_err, _net_bid = _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market)
+        if _net_err:
+            return jsonify({'error': f'{_net_err}: {_net_bid[:30]}'}), 400
 
         if not rungs_input or len(rungs_input) < 1 or len(rungs_input) > 3:
             return jsonify({'error': 'Need 1-3 rungs'}), 400

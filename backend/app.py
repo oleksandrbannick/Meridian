@@ -15468,11 +15468,26 @@ def _run_monitor():
             if _cs in ('completed', 'cancelled', 'error'):
                 continue
             if _cs in active_statuses and _cs != 'stopped':
-                # Active bot — check if market expired with no fills (stuck unfilled bot)
-                _age_h = (_cleanup_now - (_cb.get('created_at', _cleanup_now))) / 3600
-                if _age_h < 6:
-                    continue  # too young to reap
-                # Check for any fills
+                # Active bot — only clean up when the market itself has closed/settled
+                _ticker = _cb.get('ticker', '')
+                if not _ticker:
+                    continue
+                # Check market status on Kalshi (only check once per bot per cycle, throttled)
+                _last_mkt_check = _cb.get('_last_stale_market_check', 0)
+                if _cleanup_now - _last_mkt_check < 300:  # check at most every 5 min
+                    continue
+                _cb['_last_stale_market_check'] = _cleanup_now
+                try:
+                    api_read_limiter.wait()
+                    _mkt_resp = kalshi_client.get_market(_ticker)
+                    _mkt_data = _mkt_resp.get('market', _mkt_resp) if isinstance(_mkt_resp, dict) else {}
+                    _mkt_status = _mkt_data.get('status', 'active')
+                    _mkt_result = _mkt_data.get('result', '')
+                except Exception:
+                    continue  # API error — skip this cycle, don't reap
+                if _mkt_status in ('active', 'open') and not _mkt_result:
+                    continue  # market still open — bot is doing its job, leave it alone
+                # Market closed/settled — check for fills
                 _has_fills = False
                 for _rung in _cb.get('rungs', []):
                     if (_rung.get('yes_fill_qty', 0) or 0) > 0 or (_rung.get('no_fill_qty', 0) or 0) > 0:
@@ -15486,11 +15501,50 @@ def _run_monitor():
                                  (_cb.get('fill_qty', 0) or 0) > 0)
                 if _has_fills:
                     continue  # has positions — keep for settlement tracking
-                # No fills + old → auto-complete
+                # No fills + old → cancel resting orders on Kalshi, then auto-complete
+                _cancelled_orders = []
+                for _okey in ('dog_order_id', 'fav_order_id', 'hedge_order_id', 'order_a_id', 'order_b_id', 'yes_order_id', 'no_order_id'):
+                    _oid = _cb.get(_okey)
+                    if _oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_oid)
+                            _cancelled_orders.append(_oid[:12])
+                        except Exception:
+                            pass
+                # Cancel rung orders (ladders)
+                _ac_group = _cb.get('_order_group_id')
+                if _ac_group:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order_group(_ac_group)
+                    except Exception:
+                        _ac_group = None
+                if not _ac_group:
+                    for _rung in _cb.get('rungs', []):
+                        for _side in ('yes', 'no'):
+                            _oid = _rung.get(f'{_side}_order_id')
+                            if _oid and not _rung.get('cancelled'):
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(_oid)
+                                    _cancelled_orders.append(_oid[:12])
+                                except Exception:
+                                    pass
+                # Also cancel any tracked dog order IDs
+                for _oid in _cb.get('_all_dog_order_ids', []):
+                    if _oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_oid)
+                            _cancelled_orders.append(_oid[:12])
+                        except Exception:
+                            pass
                 _cb['status'] = 'completed'
                 _cb['completed_at'] = _cleanup_now
                 _cb['_auto_cleaned'] = True
-                print(f'🧹 AUTO-CLEAN: {_cid} ({_cs}) — {_age_h:.1f}h old, no fills, marking completed')
+                print(f'🧹 AUTO-CLEAN: {_cid} ({_cs}) — market {_mkt_status}/{_mkt_result}, no fills, cancelled {len(_cancelled_orders)} orders, marking completed')
+                bot_log('AUTO_CLEAN_STALE', _cid, {'market_status': _mkt_status, 'market_result': _mkt_result, 'cancelled_orders': _cancelled_orders})
                 actions.append({'bot_id': _cid, 'action': 'auto_clean_stale'})
             elif _cs == 'stopped':
                 # Stopped bots: clean up after 1 hour if no fills to track

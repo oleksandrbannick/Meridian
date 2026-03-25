@@ -3129,8 +3129,9 @@ function displayOrderbookLadder(orderbook) {
     const favSideLabel = favSideOb.toUpperCase();
     const dogBidPrice = dogSideOb === 'yes' ? bestYesBid : bestNoBid;
     const favBidPrice = favSideOb === 'yes' ? bestYesBid : bestNoBid;
-    const dogCol = dogDepth < 200 ? '#00ff88' : dogDepth < 500 ? '#ffaa00' : '#ff4444';
-    const favCol = favDepth >= 200 ? '#00ff88' : favDepth >= 50 ? '#ffaa00' : '#ff4444';
+    // Use standard YES=green, NO=red for side colors
+    const dogCol = dogSideOb === 'yes' ? '#00ff88' : '#ff4444';
+    const favCol = favSideOb === 'yes' ? '#00ff88' : '#ff4444';
     const dogNote = dogDepth < 200 ? 'thin — easy fill' : dogDepth < 500 ? 'moderate' : 'crowded';
     const favNote = favDepth >= 200 ? 'thick — slow to move, easy catch' : favDepth >= 50 ? 'ok — hedge should catch' : 'thin — hedge may miss';
     // Catch score: how likely the hedge fills based on fav depth (0-100)
@@ -3155,7 +3156,7 @@ function displayOrderbookLadder(orderbook) {
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>
-            <span style="color:${catchCol};font-weight:800;font-size:12px;">👻 ${catchLabel} ${catchScore}</span>
+            <span style="color:${catchCol};font-weight:800;font-size:12px;">${botIconImg('phantom', 14)} ${catchLabel} ${catchScore}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">

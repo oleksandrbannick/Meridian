@@ -9935,7 +9935,7 @@ def _handle_phantom(bot_id, bot, actions):
 
         # ── Phantom Walk + Snap System ──
         # Priority 1: Drop to bid if above it (instant)
-        # Priority 2: Profit snap to bid if combined <= 95¢ (instant, up or down)
+        # Priority 2: Profit snap to bid if combined <= 96¢ (instant, up or down)
         # Priority 3: Normal walk +1¢ toward bid (every 20s)
         # Hard ceiling: combined (dog + fav) never exceeds WALK_CEILING (98¢)
         current_fav_price = bot.get('fav_price', 0)
@@ -10035,10 +10035,10 @@ def _handle_phantom(bot_id, bot, actions):
                 new_fav_price = walk_target
                 walk_type = 'drop_to_bid'
 
-            # PRIORITY 3: Follow bid up — if bid rose above us, match it
+            # PRIORITY 3: Walk +1¢ toward bid — only if bid is above us
             elif walk_target > current_fav_price:
-                new_fav_price = walk_target  # jump to bid, don't crawl +1
-                walk_type = 'follow_bid_up'
+                new_fav_price = current_fav_price + 1  # crawl +1¢, never jump
+                walk_type = 'walk_up'
 
             if new_fav_price is None or new_fav_price == current_fav_price:
                 bot['fav_last_walk_at'] = now
@@ -11311,10 +11311,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 new_fav_price = walk_target
                 walk_type = 'drop_to_bid'
 
-            # PRIORITY 3: Follow bid up — if bid rose above us, match it
+            # PRIORITY 3: Walk +1¢ toward bid — only if bid is above us
             elif walk_target > current_fav_price:
-                new_fav_price = walk_target  # jump to bid, don't crawl +1
-                walk_type = 'follow_bid_up'
+                new_fav_price = current_fav_price + 1  # crawl +1¢, never jump
+                walk_type = 'walk_up'
 
             if new_fav_price is None or new_fav_price == current_fav_price:
                 bot['fav_last_walk_at'] = now

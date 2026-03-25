@@ -3609,15 +3609,13 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
 def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
     """Pre-calculate the hedge price so it's ready to fire instantly on dog fill.
-    Returns the ceiling-capped hedge price or 0 if too low."""
-    max_fav_price = 100 - dog_price - target_width
-    if max_fav_price < 1:
-        return 0
-    # Ceiling cap — no fees in bot logic, 98¢ combined = breakeven
+    Returns the ceiling-capped hedge price or 0 if too low.
+    This is a FALLBACK when no live bid is available — the WS path uses the actual bid."""
+    # Cap at 98¢ walk ceiling only (profit target determines dog depth, not hedge cap)
     max_hedge = HARD_CEILING_CENTS - dog_price
-    if max_fav_price <= max_hedge:
-        return max_fav_price
-    return max(0, max_hedge)
+    if max_hedge < 1:
+        return 0
+    return max_hedge
 
 
 def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
@@ -9570,10 +9568,10 @@ def _handle_phantom(bot_id, bot, actions):
         dog_price = bot['dog_price']
         target_width = bot.get('target_width', 5)
         fav_shave = bot.get('fav_shave', 0)
-        max_fav_price = 100 - dog_price - target_width
-        # Initial hedge: post at bid minus fav_shave
+        max_hedge = HARD_CEILING_CENTS - dog_price  # 98¢ ceiling only
+        # Initial hedge: post at bid (or bid - shave), capped only by walk ceiling
         initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
-        hedge_price = min(initial_fav_target, max_fav_price)
+        hedge_price = min(initial_fav_target, max_hedge)
         if hedge_price < 1:
             _phantom_sell_back(bot_id, bot, dog_price, fav_bid, 999, actions)
             return

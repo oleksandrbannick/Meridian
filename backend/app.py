@@ -12711,7 +12711,14 @@ def _handle_apex(bot_id, bot, actions):
                                             _amend_side = unfilled_side
                                             _amend_count = rq
                                             _amend_kwargs = {'yes_price': _cross_target} if _amend_side == 'yes' else {'no_price': _cross_target}
-                                            kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
+                                            _cross_resp = kalshi_client.amend_order(hedge_oid, _amend_ticker, _amend_side, _amend_count, **_amend_kwargs)
+                                            _cross_ao = _cross_resp.get('order', _cross_resp) if isinstance(_cross_resp, dict) else {}
+                                            _cross_new_oid = _cross_ao.get('order_id', '')
+                                            if _cross_new_oid and _cross_new_oid != hedge_oid:
+                                                bot['hedge_order_id'] = _cross_new_oid
+                                                _all = bot.get('_all_hedge_order_ids', [])
+                                                _all.append(_cross_new_oid)
+                                                bot['_all_hedge_order_ids'] = _all
                                             bot['hedge_price'] = _cross_target
                                             if unfilled_side == 'yes':
                                                 bot['yes_price'] = _cross_target
@@ -12794,8 +12801,18 @@ def _handle_apex(bot_id, bot, actions):
                                     api_rate_limiter.wait()
                                     # Use remaining qty (hedge_qty - fills already counted) to avoid over-buying
                                     _amend_count = max(1, rq - bot.get('_hedge_fill_count', 0))
-                                    kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
+                                    amend_resp = kalshi_client.amend_order(oid, ticker=ticker, side=unfilled_side,
                                                               count=_amend_count, **{f'{unfilled_side}_price': new_price})
+                                    # Track order_id if Kalshi returns one in the response
+                                    new_oid_from_amend = (amend_resp.get('order', {}).get('order_id') if isinstance(amend_resp, dict) else None)
+                                    if new_oid_from_amend and new_oid_from_amend != oid:
+                                        bot['hedge_order_id'] = new_oid_from_amend
+                                        all_ids = bot.get('_all_hedge_order_ids', [])
+                                        all_ids.append(new_oid_from_amend)
+                                        bot['_all_hedge_order_ids'] = all_ids
+                                        if bot.get('rungs'):
+                                            bot['rungs'][0][f'{unfilled_side}_order_id'] = new_oid_from_amend
+                                        print(f'🔄 APEX WALK {bot_id}: amend returned new order_id {new_oid_from_amend[:12]}')
                                     bot['hedge_price'] = new_price
                                     walked_any = True
                                     bot_log('APEX_WALK_SUCCESS', bot_id, {

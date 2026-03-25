@@ -11973,7 +11973,7 @@ def _handle_apex(bot_id, bot, actions):
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
         # Safety: if no repeats left, cancel orphaned orders and complete
-        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) >= bot.get('repeat_count', 0):
+        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) > bot.get('repeat_count', 0):
             for rung in bot.get('rungs', []):
                 for side in ('yes', 'no'):
                     oid = rung.get(f'{side}_order_id')

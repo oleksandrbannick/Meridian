@@ -10136,13 +10136,28 @@ def _handle_phantom(bot_id, bot, actions):
         # The normal hedge timeout handles exits if the fill never comes.
         # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
 
+        # ── Check if bid has gone past ceiling — sell back ──
+        if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold:
+            # Bid is above ceiling AND we're already at ceiling — can't profit, sell back
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_order_id)
+            except Exception:
+                pass
+            _over_combined = dog_price + current_fav_bid
+            print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ combined_at_bid={_over_combined}¢ — selling back')
+            bot_log('PHANTOM_CEILING_EXIT', bot_id, {
+                'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                'fav_price': current_fav_price, 'max_fav_hold': max_fav_hold,
+                'combined_at_bid': _over_combined, 'ceiling': WALK_CEILING,
+            })
+            _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
+            return
+
         # ── Bid-follow: always snap to bid, no walk intervals ──
-        # Phantom follows the bid every cycle. No 20s crawl, no +1¢ steps.
-        # Up: bid above us → snap to bid. Down: bid below us → snap to bid.
-        # At bid: hold position. Cap at 98-dog (hold for fill at ceiling).
         new_fav_price = walk_target
         if new_fav_price == current_fav_price:
-            return  # already at bid, nothing to do
+            return  # already at bid/ceiling, holding
 
         walk_type = 'snap_to_bid'
         combined = dog_price + new_fav_price

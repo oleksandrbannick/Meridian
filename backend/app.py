@@ -5164,13 +5164,18 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
         record['game_phase'] = 'live'
     # Bot category for split P&L tracking (preserve if already set)
     if 'bot_category' not in record:
-        bot_type = record.get('type') or (bot.get('type') if bot else None) or 'arb'
-        if bot_type == 'watch':
-            record['bot_category'] = 'bet'
-        elif bot_type == 'middle':
-            record['bot_category'] = 'middle'
+        # Use bot's actual bot_category first, fall back to type-based detection
+        _bot_cat = (bot.get('bot_category') if bot else None)
+        if _bot_cat:
+            record['bot_category'] = _bot_cat
         else:
-            record['bot_category'] = 'arb'
+            bot_type = record.get('type') or (bot.get('type') if bot else None) or 'arb'
+            if bot_type == 'watch':
+                record['bot_category'] = 'bet'
+            elif bot_type == 'middle':
+                record['bot_category'] = 'middle'
+            else:
+                record['bot_category'] = 'arb'
     # Sport from series ticker prefix
     series = ticker.split('-')[0].upper() if ticker else ''
     _SPORT_MAP = {

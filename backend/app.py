@@ -11211,7 +11211,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     w_off = max(0, bot.get('fav_price', amend_p) - old_tgt)
                     amend_p = max(1, amend_p + w_off)
                     try:
-                        # Amend price only (Kalshi can't increase count)
                         amend_kw = {f'{fav_side}_price': amend_p}
                         api_rate_limiter.wait()
                         kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kw)

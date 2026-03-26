@@ -9997,15 +9997,17 @@ def _handle_phantom(bot_id, bot, actions):
             actions.append({'bot_id': bot_id, 'action': 'anchor_fav_halftime_pause'})
             return
 
-        # ── Fav Walk-Up System ──
-        # Fixed 20s walk interval. Snap at 96c. Hard stop at 98c.
-        # After hedge_timeout_s total, if still no fill → sell dog back.
-        WALK_INTERVAL_S = 20
+        # ── Fav Bid-Follow System ──
+        # Snap to bid every cycle. Hold at 98. Timeout sells back.
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
         dog_price = bot['dog_price']
 
         # Check absolute timeout — give up after hedge_timeout_s total
-        if wait_s >= hedge_timeout_s:
+        # But ONLY if hedge is already at or near the bid (snap first, then timeout)
+        _current_fav = bot.get('fav_price', 0)
+        _live_bid = bot.get(f'live_{fav_side}_bid', 0)
+        _at_bid = _current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True
+        if wait_s >= hedge_timeout_s and _at_bid:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
                 'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

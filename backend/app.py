@@ -3706,8 +3706,21 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # At ceiling — cap at max_hedge and post anyway. Fill at 98 = breakeven > sellback loss.
+        # Ceiling handling:
+        # combined = 98 (fav_bid == max_hedge): post at max_hedge, hold for breakeven fill
+        # combined > 98 (fav_bid > max_hedge): sell back immediately, can't hedge profitably
         if dog_price + hedge_price >= HARD_CEILING_CENTS:
+            if fav_bid > max_hedge:
+                # 99+: posting below bid is pointless, sell back now
+                print(f'🚫 PHANTOM HEDGE SKIP 99+: {bot_id} fav_bid={fav_bid}¢ > max_hedge={max_hedge}¢ — selling back')
+                bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
+                    'dog_price': dog_price, 'fav_bid': fav_bid,
+                    'max_hedge': max_hedge, 'combined_at_bid': dog_price + fav_bid,
+                    'path': 'ws_fast',
+                })
+                bot['status'] = 'dog_filled'
+                return
+            # Exactly 98: post at max_hedge, breakeven fill > sellback loss
             hedge_price = max(1, max_hedge)
             print(f'📌 PHANTOM HEDGE AT CEILING: {bot_id} capped to {hedge_price}¢ (combined={dog_price + hedge_price}¢) — posting and holding')
             bot_log('PHANTOM_HEDGE_AT_CEILING_POST', bot_id, {

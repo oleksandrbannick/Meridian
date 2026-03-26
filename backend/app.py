@@ -3930,9 +3930,9 @@ def _execute_phantom_ladder_hedge(bot_id):
             save_state()
             return
 
-        # At ceiling — don't hedge at breakeven, flag for monitor to sell back
+        # At ceiling — only sell back if truly over ceiling, not at breakeven
         _ladder_combined = (avg_price or bot.get('dog_price', 0)) + hedge_price
-        if _ladder_combined >= HARD_CEILING_CENTS:
+        if _ladder_combined > HARD_CEILING_CENTS:
             print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ >= {HARD_CEILING_CENTS}¢ — deferring to sellback')
             bot_log('PHANTOM_LADDER_HEDGE_AT_CEILING', bot_id, {
                 'avg_price': avg_price, 'hedge_price': hedge_price,

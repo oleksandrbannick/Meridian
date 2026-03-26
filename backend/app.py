@@ -11313,8 +11313,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             actions.append({'bot_id': bot_id, 'action': 'ladder_fav_halftime_pause'})
             return
 
-        # Absolute timeout
-        if wait_s >= hedge_timeout_s:
+        # Absolute timeout — only if hedge is at/near bid (let snap catch up first)
+        _lad_fav = bot.get('fav_price', 0)
+        _lad_bid = bot.get(f'live_{fav_side}_bid', 0)
+        _lad_at_bid = _lad_fav >= _lad_bid - 1 if _lad_bid > 0 and _lad_fav > 0 else True
+        if wait_s >= hedge_timeout_s and _lad_at_bid:
             # Check for partial fav fills before selling back
             _partial_fav = bot.get('fav_fill_qty', 0)
             if _partial_fav > 0 and _partial_fav < hedge_qty:
@@ -11364,9 +11367,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _phantom_ladder_sell_back(bot_id, bot, avg_dog, bot.get('fav_price', 0), 999, actions)
             return
 
-        # ── Phantom Ladder Walk + Snap System ──
-        # Fixed 20s walk, snap at 96c, ceiling at 98c. No game-phase urgency.
-        WALK_INTERVAL_S = 20
+        # ── Phantom Ladder Bid-Follow System ──
         WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
         current_fav_price = bot.get('fav_price', 0)
         if current_fav_price <= 0:
@@ -11384,115 +11385,109 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         if current_fav_bid <= 0:
             return
 
-        # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Walk target: always bid — phantom needs ceiling margin, walk follows bid
-        walk_target = current_fav_bid
-
-        # Hard ceiling: 98¢ combined = hold for fill, timeout handles exit
+        # Walk target: always bid, capped at ceiling
         max_fav = WALK_CEILING - avg_dog
-        walk_target = min(walk_target, max_fav)
+        walk_target = min(current_fav_bid, max_fav)
 
         if walk_target <= 0:
             return
 
-        # ── Bid-follow: always snap to bid, no walk intervals ──
+        # ── Ceiling exit: bid above max and we're already at max ──
+        if current_fav_bid > max_fav and current_fav_price >= max_fav:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_order_id)
+            except Exception:
+                pass
+            _over = avg_dog + current_fav_bid
+            print(f'🚫 PHANTOM LADDER CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav}¢ combined_at_bid={_over}¢ — selling back')
+            bot_log('PHANTOM_LADDER_CEILING_EXIT', bot_id, {
+                'avg_dog': avg_dog, 'fav_bid': current_fav_bid,
+                'fav_price': current_fav_price, 'max_fav': max_fav,
+                'combined_at_bid': _over, 'ceiling': WALK_CEILING,
+            })
+            _phantom_ladder_sell_back(bot_id, bot, avg_dog, current_fav_price, 999, actions)
+            return
+
+        # ── Bid-follow: snap to bid every cycle ──
         new_fav_price = walk_target
         if new_fav_price == current_fav_price:
-            return  # already at bid
+            return
 
         walk_type = 'snap_to_bid'
         combined = avg_dog + new_fav_price
         if combined > WALK_CEILING:
             return
 
+        try:
+            _phantom_drop_lock.acquire()
             try:
-                # Acquire shared lock — prevents race with WS instant drop on same order
-                _phantom_drop_lock.acquire()
+                fav_order_id = bot.get('fav_order_id', fav_order_id)
+                amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
+            finally:
+                _phantom_drop_lock.release()
+            walk_count = bot.get('fav_walk_count', 0) + 1
+            direction = '↓' if new_fav_price < current_fav_price else '↑'
+            print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
+                  f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
+            bot_log('PHANTOM_LADDER_WALK_SUCCESS', bot_id, {
+                'walk_type': walk_type, 'old_price': current_fav_price,
+                'new_price': new_fav_price, 'fav_bid': current_fav_bid,
+                'avg_dog': avg_dog, 'combined': combined,
+                'ceiling': WALK_CEILING, 'walk_count': walk_count,
+                'wait_s': round(wait_s, 1),
+            })
+            bot['fav_price'] = new_fav_price
+            bot['fav_walk_count'] = walk_count
+            bot['fav_last_walk_at'] = now
+            if fav_side == 'yes':
+                bot['yes_price'] = new_fav_price
+            else:
+                bot['no_price'] = new_fav_price
+            save_state()
+        except Exception as e:
+            err_str = str(e)
+            print(f'❌ PHANTOM {bot_id}: fav {walk_type} failed: {e}')
+            bot_log('PHANTOM_LADDER_WALK_ERROR', bot_id, {
+                'walk_type': walk_type, 'error': err_str[:300],
+                'old_price': current_fav_price, 'target_price': new_fav_price,
+                'fav_order_id': fav_order_id[:12],
+            }, level='ERROR')
+            bot['fav_last_walk_at'] = now
+            # 404 = fav order no longer exists on Kalshi — check if it was filled
+            if '404' in err_str:
                 try:
-                    # Re-read order ID (instant drop may have updated it)
-                    fav_order_id = bot.get('fav_order_id', fav_order_id)
-                    amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
-                    api_rate_limiter.wait()
-                    _amend_resp = kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kwargs)
-                    # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
-                    _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                    _new_oid = _amend_order.get('order_id', '')
-                    if _new_oid and _new_oid != fav_order_id:
-                        bot['fav_order_id'] = _new_oid
-                        if fav_side == 'yes':
-                            bot['yes_order_id'] = _new_oid
-                        else:
-                            bot['no_order_id'] = _new_oid
-                        fav_order_id = _new_oid
-                finally:
-                    _phantom_drop_lock.release()
-                walk_count = bot.get('fav_walk_count', 0) + 1
-                direction = '↓' if new_fav_price < current_fav_price else '↑'
-                print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
-                      f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
-                bot_log('PHANTOM_LADDER_WALK_SUCCESS', bot_id, {
-                    'walk_type': walk_type, 'old_price': current_fav_price,
-                    'new_price': new_fav_price, 'fav_bid': current_fav_bid,
-                    'fav_ask': current_fav_ask, 'fav_spread': fav_spread,
-                    'avg_dog': avg_dog, 'combined': combined,
-                    'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
-                    'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
-                    'wait_s': round(wait_s, 1),
-                    'walk_interval': walk_interval,
-                    'new_order_id': _new_oid[:12] if _new_oid and _new_oid != fav_order_id else None,
-                })
-                bot['fav_price'] = new_fav_price
-                bot['fav_walk_count'] = walk_count
-                bot['fav_last_walk_at'] = now
-                if fav_side == 'yes':
-                    bot['yes_price'] = new_fav_price
-                else:
-                    bot['no_price'] = new_fav_price
-                save_state()
-            except Exception as e:
-                err_str = str(e)
-                print(f'❌ PHANTOM {bot_id}: fav {walk_type} failed: {e}')
-                bot_log('PHANTOM_LADDER_WALK_ERROR', bot_id, {
-                    'walk_type': walk_type, 'error': err_str[:300],
-                    'old_price': current_fav_price, 'target_price': new_fav_price,
-                    'fav_order_id': fav_order_id[:12],
-                }, level='ERROR')
-                bot['fav_last_walk_at'] = now
-                # 404 = fav order no longer exists on Kalshi — check if it was filled
-                if '404' in err_str:
-                    try:
-                        api_read_limiter.wait()
-                        _fav_resp = kalshi_client.get_order(fav_order_id)
-                        _fav_data = _fav_resp.get('order', _fav_resp) if isinstance(_fav_resp, dict) else {}
-                        _fav_fills = _parse_fill_count(_fav_data)
-                        _fav_status = _fav_data.get('status', '')
-                        print(f'   🔍 PHANTOM LADDER FAV ORDER CHECK: {bot_id} status={_fav_status} fills={_fav_fills}/{hedge_qty}')
-                        bot_log('PHANTOM_LADDER_FAV_404_CHECK', bot_id, {
-                            'fav_order_id': fav_order_id[:12], 'kalshi_status': _fav_status,
-                            'kalshi_fills': _fav_fills, 'expected_qty': hedge_qty,
-                        })
-                        if _fav_fills >= hedge_qty:
-                            # Fav fully filled — complete
-                            print(f'   ✅ PHANTOM LADDER FAV FILLED (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
-                            bot[f'{fav_side}_fill_qty'] = _fav_fills
-                            bot['fav_fill_qty'] = _fav_fills
-                        elif _fav_fills > 0:
-                            # Partial fill
-                            print(f'   ⚠ PHANTOM LADDER FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
-                            bot[f'{fav_side}_fill_qty'] = _fav_fills
-                            bot['fav_fill_qty'] = _fav_fills
-                        else:
-                            # Order gone with 0 fills — sell back
-                            print(f'   🔙 PHANTOM LADDER FAV GONE (404 recovery): {bot_id} — triggering sellback')
-                            bot['fav_order_id'] = None
-                            bot['status'] = 'ladder_filled_no_fav'
-                    except Exception as _check_err:
-                        if '404' in str(_check_err):
-                            print(f'   🔙 PHANTOM LADDER FAV GONE 404 (recovery): {bot_id} — triggering sellback')
-                            bot['fav_order_id'] = None
-                            bot['status'] = 'ladder_filled_no_fav'
+                    api_read_limiter.wait()
+                    _fav_resp = kalshi_client.get_order(fav_order_id)
+                    _fav_data = _fav_resp.get('order', _fav_resp) if isinstance(_fav_resp, dict) else {}
+                    _fav_fills = _parse_fill_count(_fav_data)
+                    _fav_status = _fav_data.get('status', '')
+                    print(f'   🔍 PHANTOM LADDER FAV ORDER CHECK: {bot_id} status={_fav_status} fills={_fav_fills}/{hedge_qty}')
+                    bot_log('PHANTOM_LADDER_FAV_404_CHECK', bot_id, {
+                        'fav_order_id': fav_order_id[:12], 'kalshi_status': _fav_status,
+                        'kalshi_fills': _fav_fills, 'expected_qty': hedge_qty,
+                    })
+                    if _fav_fills >= hedge_qty:
+                        print(f'   ✅ PHANTOM LADDER FAV FILLED (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
+                        bot[f'{fav_side}_fill_qty'] = _fav_fills
+                        bot['fav_fill_qty'] = _fav_fills
+                    elif _fav_fills > 0:
+                        print(f'   ⚠ PHANTOM LADDER FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
+                        bot[f'{fav_side}_fill_qty'] = _fav_fills
+                        bot['fav_fill_qty'] = _fav_fills
+                    else:
+                        print(f'   🔙 PHANTOM LADDER FAV GONE (404 recovery): {bot_id} — triggering sellback')
+                        bot['fav_order_id'] = None
+                        bot['status'] = 'ladder_filled_no_fav'
+                except Exception as _check_err:
+                    if '404' in str(_check_err):
+                        print(f'   🔙 PHANTOM LADDER FAV GONE 404 (recovery): {bot_id} — triggering sellback')
+                        bot['fav_order_id'] = None
+                        bot['status'] = 'ladder_filled_no_fav'
         return
 
 

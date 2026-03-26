@@ -5134,7 +5134,6 @@ function updateAllWidthsPreview() {
         return;
     }
     const baseQty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const useScaling = selectedArr.length >= 2;
 
     let rows = '';
     let totalCost = 0;
@@ -5148,7 +5147,7 @@ function updateAllWidthsPreview() {
         const noPrice  = arb.targetNo;
         const profit = 100 - yesPrice - noPrice;
         const blocked = profit <= 0;
-        const rungQty = useScaling ? scaleQtyForWidth(baseQty, w) : baseQty;
+        const rungQty = baseQty;
         const cost = blocked ? 0 : (yesPrice + noPrice) * rungQty;
         const profitTotal = blocked ? 0 : profit * rungQty;
         if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; totalContracts += rungQty; }
@@ -5157,7 +5156,7 @@ function updateAllWidthsPreview() {
         const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
         const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
         const qtyLabel = blocked ? '—' : `${rungQty}×`;
-        const qtyColor = (useScaling && !blocked && rungQty > baseQty) ? '#818cf8' : '#8892a6';
+        const qtyColor = '#8892a6';
         rows += `<div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
             <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
             <span style="color:${qtyColor};font-size:10px;font-weight:700;text-align:center;">${qtyLabel}</span>
@@ -5171,7 +5170,7 @@ function updateAllWidthsPreview() {
 
     const totalDollars  = (totalCost / 100).toFixed(2);
     const profitDollars = (totalProfit / 100).toFixed(2);
-    const qtyDesc = useScaling ? `${totalContracts} contracts (scaled)` : `${baseQty}× each`;
+    const qtyDesc = `${baseQty}× each`;
     preview.innerHTML = `
         <div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
             <span style="color:#555;font-size:9px;">W</span>

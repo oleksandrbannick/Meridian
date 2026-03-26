@@ -5840,42 +5840,17 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const favPostedAt = bot.fav_posted_at || bot.dog_filled_at || 0;
                     const waitSec = favPostedAt > 0 ? Date.now()/1000 - favPostedAt : 0;
                     const secsLeft = Math.max(0, hedgeTimeout - waitSec);
-                    const wc = bot.fav_walk_count || 0;
                     const combined = avgDogPrice + favPrice;
-                    const nextWalkAt = bot.fav_last_walk_at || favPostedAt || 0;
-                    const sinceWalk = nextWalkAt > 0 ? Date.now()/1000 - nextWalkAt : 0;
-                    const _phWalkInt = bot._walk_interval != null ? bot._walk_interval : 20;
-                    const nextWalkIn = Math.max(0, Math.ceil(_phWalkInt - sinceWalk));
-                    const walkPct = Math.min(100, ((_phWalkInt - nextWalkIn) / _phWalkInt) * 100);
                     const atBid = favPrice >= favBid && favBid > 0;
                     const atCeiling = combined >= 98;
-                    const _phUrgency = bot._game_urgency || 'normal';
-                    const _phUrgBadge = _phUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
-                        : _phUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>'
-                        : '';
-                    const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : wc > 0 ? '📈' : '⏳';
-                    const statusText = atCeiling ? 'AT CEILING' : atBid ? 'AT BID' : wc > 0 ? 'WALKING' : 'HEDGE POSTED';
-                    const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : secsLeft <= 15 ? '#ff4444' : secsLeft <= 30 ? '#ff8800' : '#00aaff';
-                    const startPrice = bot.fav_start_price || (favPrice - wc) || favPrice;
-                    const prevPrice = wc > 0 ? favPrice - 1 : startPrice;
-                    const nextPrice = atBid ? favPrice : favPrice + 1;
+                    const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
+                    const statusText = atCeiling ? 'AT CEILING' : atBid ? 'AT BID' : 'SNAPPING TO BID';
+                    const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
                             <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${favSide.toUpperCase()} hedge</span>
-                            ${wc > 0 ? `<span style="color:#666;font-size:9px;">start ${startPrice}¢</span>
-                            <span style="color:#888;">prev ${prevPrice}¢ →</span>
                             <span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>
-                            <span style="color:#888;">→ next ${nextPrice}¢</span>` : `<span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>`}
-                            <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
-                              <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
-                                <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
-                                <circle cx="10" cy="10" r="8" fill="none" stroke="${statusCol}" stroke-width="2"
-                                  stroke-dasharray="${2*Math.PI*8}" stroke-dashoffset="${2*Math.PI*8*(1-walkPct/100)}"
-                                  stroke-linecap="round"/>
-                              </svg>
-                              <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${nextWalkIn}</span>
-                            </span>
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                             <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${wc > 0 ? ` · step #${wc} · ${_phWalkInt}s` : ''} ${_phUrgBadge}</span>

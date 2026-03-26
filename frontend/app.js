@@ -6867,6 +6867,8 @@ function _renderPnlDisplay(mode) {
 }
 
 async function loadBots() {
+    // Don't re-render while smart exit menu is open — it destroys the menu
+    if (window._smartExitMenuOpen) return;
     try {
         const response = await fetch(`${API_BASE}/bot/list`);
         const data = await response.json();
@@ -8301,11 +8303,13 @@ async function stopSmart(botId) {
 function smartExitMenu(botId) {
     // Show menu with options: Sell Now or Set Price Trigger
     const existing = document.getElementById('smart-exit-menu-' + botId);
-    if (existing) { existing.remove(); return; }
+    if (existing) { existing.remove(); window._smartExitMenuOpen = false; return; }
     // Remove any other open menus
     document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
     const btn = document.querySelector(`button[onclick*="smartExitMenu('${botId}')"]`);
     if (!btn) return;
+    // Pause bot list refresh while menu is open
+    window._smartExitMenuOpen = true;
     const menu = document.createElement('div');
     menu.id = 'smart-exit-menu-' + botId;
     menu.style.cssText = 'position:absolute;right:0;top:100%;background:#0d1117;border:1px solid #64ffda44;border-radius:8px;padding:10px;z-index:999;min-width:200px;box-shadow:0 4px 12px rgba(0,0,0,.5);';
@@ -8316,7 +8320,7 @@ function smartExitMenu(botId) {
         <div style="display:flex;gap:4px;margin-bottom:6px;">
             ${[3, 5, 8, 10, 15].map(p => `<button onclick="setSmartExitTrigger('${botId}', ${p})" style="flex:1;background:#1a2540;color:#fff;border:1px solid #333;border-radius:4px;padding:4px;font-size:10px;cursor:pointer;font-weight:600;">${p}¢</button>`).join('')}
         </div>
-        <button onclick="document.getElementById('smart-exit-menu-${botId}').remove()" style="display:block;width:100%;background:transparent;color:#555;border:1px solid #333;border-radius:6px;padding:4px;font-size:10px;cursor:pointer;">Cancel</button>
+        <button onclick="document.getElementById('smart-exit-menu-${botId}').remove(); window._smartExitMenuOpen=false;" style="display:block;width:100%;background:transparent;color:#555;border:1px solid #333;border-radius:6px;padding:4px;font-size:10px;cursor:pointer;">Cancel</button>
     `;
     btn.parentElement.style.position = 'relative';
     btn.parentElement.appendChild(menu);
@@ -8324,6 +8328,7 @@ function smartExitMenu(botId) {
 
 async function smartExitNow(botId) {
     document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
+    window._smartExitMenuOpen = false;
     if (!confirm('Sell the losing side at market now?')) return;
     try {
         const resp = await fetch(`${API_BASE}/bot/smart-exit/${botId}`, {
@@ -8345,6 +8350,7 @@ async function smartExitNow(botId) {
 
 async function setSmartExitTrigger(botId, price) {
     document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
+    window._smartExitMenuOpen = false;
     try {
         const resp = await fetch(`${API_BASE}/bot/smart-exit-trigger/${botId}`, {
             method: 'POST',

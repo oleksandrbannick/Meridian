@@ -2300,12 +2300,12 @@ function categorizeMarkets(markets) {
 function createMarketRow(market, label) {
     const row = document.createElement('div');
     const isProp = market.market_type === 'prop';
-    const cols = isProp ? '1fr 80px 80px auto' : 'minmax(100px, 1.5fr) 1fr 1fr auto';
+    const cols = isProp ? '1fr 80px 80px auto' : 'minmax(120px, 2fr) 1fr 1fr auto';
     row.style.cssText = `display: grid; grid-template-columns: ${cols}; gap: 8px; align-items: center; padding: 8px; background: #0f1419; border-radius: 6px;`;
     
     // Market label — trust the caller's label (they compute the right one)
     const labelDiv = document.createElement('div');
-    labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6; overflow: hidden;';
+    labelDiv.style.cssText = 'font-size: 13px; font-weight: 600; color: #8892a6; overflow: visible; min-width: 0;';
 
     // If this prop has a live stat, show it as a badge next to the label
     if (market._liveStat) {
@@ -2352,7 +2352,7 @@ function createMarketRow(market, label) {
     const activeBotTypes = Object.keys(botTypes);
     // Shared icon row: active bots + recommendations share one flex-wrap line
     const iconRow = document.createElement('div');
-    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;max-width:100%;overflow:hidden;';
+    iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:4px;';
     let hasIcons = false;
     if (activeBotTypes.length > 0) {
         hasIcons = true;
@@ -3776,11 +3776,13 @@ function addAnchorRung() {
     }
     // Recalculate all rung offsets with depth-floor-on-rung-0 logic
     initAnchorDogPrices();
+    // Force render — bypass focus guard since this is an explicit user action
+    renderAnchorRungs(true);
 }
 
 function removeAnchorRung(idx) {
     _anchorRungs.splice(idx, 1);
-    renderAnchorRungs();
+    renderAnchorRungs(true);
     updateAnchorPreview();
 }
 
@@ -3846,13 +3848,16 @@ function toggleAnchorAutoQty() {
     updateAnchorPreview();
 }
 
-function renderAnchorRungs() {
+function renderAnchorRungs(force) {
     const container = document.getElementById('anchor-rungs-container');
     if (!container) return;
     // Don't overwrite inputs while user is typing (Bug 4 fix)
     // Use both activeElement check AND a flag for mobile where focus is delayed
-    if (container.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
-    if (window._anchorInputFocused) return;
+    // Skip guard when force=true (explicit user actions like Add Rung)
+    if (!force) {
+        if (container.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+        if (window._anchorInputFocused) return;
+    }
     const countEl = document.getElementById('anchor-rung-count');
     if (countEl) {
         const scaleLabel = _anchorAutoQty

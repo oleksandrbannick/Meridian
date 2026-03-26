@@ -12661,7 +12661,7 @@ def _handle_apex(bot_id, bot, actions):
                                 return
 
                             # ── Sell-back escape (time-gated by urgency) ──
-                            _sellback_grace = {'normal': 180, 'halftime': 9999, 'late': 60, 'critical': 10}.get(_apex_urgency, 180)
+                            _sellback_grace = {'normal': 600, 'halftime': 9999, 'late': 60, 'critical': 10}.get(_apex_urgency, 600)
                             _fill_at = bot.get('first_fill_at') or now
                             _hedge_age_s = now - _fill_at
                             bot['_sellback_grace_s'] = _sellback_grace
@@ -12679,9 +12679,8 @@ def _handle_apex(bot_id, bot, actions):
                                     # Complete is cheaper — cross to bid to actually fill
                                     # Re-evaluated EVERY cycle: if bid moves and selling becomes cheaper, we'll sell next cycle
                                     bot['_sellback_decision'] = 'crossing_to_bid'
+                                    # Bypass ceiling when exiting — ceiling is for entries, not exits
                                     _cross_target = unfilled_bid + 1 if unfilled_ask > unfilled_bid + 1 else unfilled_bid
-                                    _cross_cap = max(1, max_hedge)
-                                    _cross_target = min(_cross_target, _cross_cap) if _cross_cap > 0 else _cross_target
                                     if unfilled_bid > 0 and (_cross_target > current_price or current_price <= 0):
                                         print(f'💀 APEX LOSS-EXIT: {bot_id} crossing to {_cross_target}¢ (bid={unfilled_bid}) — cheaper than sell-back')
                                         bot_log('APEX_LOSS_EXIT_CROSS', bot_id, {

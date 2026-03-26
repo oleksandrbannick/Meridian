@@ -1153,9 +1153,15 @@
                         </div>
                         <div>
                             <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(extra×)</span></label>
-                            <input type="number" id="bot-repeat-count" min="0" max="50" value="0"
-                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
-                                   title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                <input type="number" id="bot-repeat-count" min="0" max="50" value="0"
+                                       style="width:60px;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
+                                       title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
+                                <label style="display:flex;align-items:center;gap:3px;cursor:pointer;" id="apex-smart-label">
+                                    <input type="checkbox" id="apex-smart-mode" onchange="toggleApexSmartMode(this.checked)" style="accent-color:#00e5ff;">
+                                    <span style="color:#00e5ff;font-size:10px;font-weight:600;">Smart</span>
+                                </label>
+                            </div>
                         </div>
                         <div>
                             <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Ceiling <span id="ceiling-value" style="color:#ffaa00;font-weight:700;">98¢</span></label>
@@ -1396,10 +1402,17 @@
                             style="width:100%;padding:7px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
                         <div style="color:#555;font-size:9px;margin-top:3px;">Walk-up bumps fav +1¢/20s toward bid. If still no fill after this timeout, sells dog back</div>
                     </div>
-                    <!-- Repeat count -->
+                    <!-- Repeat / Smart Mode -->
                     <div style="margin-bottom:12px;">
-                        <label style="display:block;color:#8892a6;font-size:10px;font-weight:600;margin-bottom:3px;">Repeat Cycles</label>
-                        <div style="display:flex;gap:6px;align-items:center;">
+                        <label style="display:block;color:#8892a6;font-size:10px;font-weight:600;margin-bottom:3px;">Repeat Mode</label>
+                        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+                            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;padding:4px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;" id="anchor-smart-label">
+                                <input type="checkbox" id="anchor-smart-mode" onchange="toggleAnchorSmartMode(this.checked)" style="accent-color:#00e5ff;">
+                                <span style="color:#00e5ff;font-size:11px;font-weight:600;">Smart</span>
+                            </label>
+                            <span style="color:#555;font-size:9px;">Win → repeat. 2 losses → stop.</span>
+                        </div>
+                        <div id="anchor-runs-section" style="display:flex;gap:6px;align-items:center;">
                             <input type="number" id="anchor-repeat-count" min="0" max="50" value="0"
                                 style="width:70px;padding:7px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
                             <div style="display:flex;gap:4px;">
@@ -3087,6 +3100,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774490999"></script>
+    <script src="app.js?v=1774493100"></script>
 </body>
 </html>

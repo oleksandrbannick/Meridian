@@ -1966,6 +1966,23 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
     """Total Kalshi maker fee for both legs of an arb trade, in cents."""
     return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
 
+def _smart_mode_should_repeat(bot, cycle_pnl):
+    """Smart mode repeat decision. Returns (should_repeat: bool, reason: str).
+    Smart mode: repeat on wins, stop after 2 consecutive losses."""
+    if not bot.get('smart_mode'):
+        return None, ''  # not smart mode, use normal repeat logic
+    losses = bot.get('consecutive_losses', 0)
+    if cycle_pnl < 0:
+        losses += 1
+        bot['consecutive_losses'] = losses
+        if losses >= 2:
+            bot['_smart_stopped'] = True
+            return False, f'smart_stop_{losses}L'
+        return True, f'smart_loss_{losses}L_continue'
+    else:
+        bot['consecutive_losses'] = 0
+        return True, 'smart_win'
+
 def _apex_snap_check(anchor_price, bid_price, qty=1, snap_ceiling=None):
     """Return True if snapping to bid is profitable. Simple cents check — no fee math.
     Snap only if combined <= snap_ceiling (default SNAP_CEILING_CENTS)."""
@@ -2236,11 +2253,13 @@ def _apex_sellback_complete(bot_id, bot, sell_price, actions):
     _audit('APEX_SELLBACK_COMPLETE', bot_id, {'ticker': ticker, 'sell_price': sell_price, 'qty': sell_qty})
     _audit_position_check(bot_id, ticker, anchor_side, 'after_apex_sellback')
 
-    # Repeat support: sell-back counts as a cycle, continue if repeats remain
+    # Repeat support: sell-back counts as a cycle (always a loss), continue if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now <= repeat_total:
+    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -(loss_cents or 1))
+    _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+    if _will_repeat:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['_trade_recorded'] = False
@@ -4342,11 +4361,13 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
 
-    # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
+    # Repeat logic — sellback counts as a cycle (always a loss), re-anchor if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now <= repeat_total:
+    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
+    _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+    if _will_repeat:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
@@ -4361,10 +4382,11 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         for rung in bot.get('rungs', []):
             rung['fill_qty'] = 0
             rung['order_id'] = None
-        print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+        _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
+        print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} {_label} — re-anchoring')
         bot_log('PHANTOM_LADDER_SELLBACK_REPEAT', bot_id, {
             'cycle': repeats_done_now, 'total': repeat_total,
-            'profit_cents': profit_cents, 'loss_cents': loss_cents,
+            'profit_cents': profit_cents, 'loss_cents': loss_cents, 'smart': _smart_reason,
         })
         _audit('LADDER_SELLBACK_REPEAT', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
         _audit_position_check(bot_id, ticker, dog_side, 'entering_sellback_repeat')
@@ -4611,7 +4633,9 @@ def _execute_ws_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        will_repeat = repeats_done_now <= repeat_total
+        # Smart mode: both legs filled = always a win
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, 1)
+        will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -7578,7 +7602,9 @@ def _execute_apex_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        will_repeat = repeats_done_now <= repeat_total
+        # Smart mode: completed arb = both sides filled = profit
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, total_pnl)
+        will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -7663,6 +7689,9 @@ def create_ladder_arb_bot():
         widths = data.get('widths', [])
         quantity = int(data.get('quantity', 1))
         repeat_count = int(data.get('repeat_count', 0))
+        smart_mode   = bool(data.get('smart_mode', False))
+        if smart_mode:
+            repeat_count = 999  # effectively infinite — smart mode controls stopping
         hard_ceiling = min(98, max(96, int(data.get('hard_ceiling', HARD_CEILING_CENTS))))
 
         if not ticker:
@@ -7828,6 +7857,8 @@ def create_ladder_arb_bot():
             'posted_at': time.time(),
             'repeat_count': repeat_count,
             'repeats_done': 0,
+            'smart_mode': smart_mode,
+            'consecutive_losses': 0,
             'hard_ceiling': hard_ceiling,
             'arb_width': narrowest_width,
             'live_yes_bid': live_yes_bid,
@@ -7980,6 +8011,9 @@ def create_anchor_bot():
         quantity      = int(data.get('quantity', 1))
         hedge_timeout = int(data.get('hedge_timeout_s', 120))
         repeat_count  = int(data.get('repeat_count', 0))
+        smart_mode    = bool(data.get('smart_mode', False))
+        if smart_mode:
+            repeat_count = 999  # effectively infinite — smart mode controls stopping
         dog_side      = data.get('dog_side', '').lower()
         cross_market  = data.get('cross_market', False)
         hedge_ticker  = data.get('hedge_ticker', '').strip() or ticker
@@ -8101,6 +8135,8 @@ def create_anchor_bot():
             'dog_filled_at':       None,
             'repeat_count':        repeat_count,
             'repeats_done':        0,
+            'smart_mode':          smart_mode,
+            'consecutive_losses':  0,
             'anchor_depth':        anchor_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
@@ -9931,7 +9967,10 @@ def _handle_phantom(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            if repeats_done_now <= repeat_total:
+            # Smart mode override
+            _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
+            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+            if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
                 bot['_just_completed'] = True
@@ -9951,8 +9990,9 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
-                print(f'🔄 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} pnl={net_pnl}¢')
-                _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
+                _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
+                print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
+                _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
             else:
                 bot['status'] = 'completed'
@@ -10446,6 +10486,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             if _pos1_qty == 0 and _pos2_qty == 0:
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
+                bot['_positions_cleared'] = True
                 print(f'✅ SETTLED: {bot_id} both positions cleared ({ticker} + {_hedge_t})')
                 bot_log('PHANTOM_CROSS_MARKET_SETTLED', bot_id, {
                     'ticker': ticker, 'hedge_ticker': _hedge_t,
@@ -11285,7 +11326,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            if repeats_done_now <= repeat_total:
+            # Smart mode override
+            _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
+            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+            if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
                 bot['_just_completed'] = True
@@ -11303,11 +11347,12 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 for rung in bot.get('rungs', []):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None
-                print(f'👻 PHANTOM REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} pnl={net_pnl}¢ — resetting for re-anchor')
+                _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
+                print(f'👻 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢ — resetting for re-anchor')
                 bot_log('PHANTOM_LADDER_ENTER_REPEAT', bot_id, {
-                    'cycle': repeats_done_now, 'total': repeat_total, 'net_pnl': net_pnl,
+                    'cycle': repeats_done_now, 'total': repeat_total, 'net_pnl': net_pnl, 'smart': _smart_reason,
                 })
-                _audit('LADDER_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
+                _audit('LADDER_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_ladder_repeat')
             else:
                 _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
@@ -13141,11 +13186,14 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     except Exception as _pe:
         print(f'⚠ PHANTOM SELLBACK LEFTOVER CHECK FAIL: {bot_id}: {_pe}')
 
-    # Repeat logic — sellback counts as a cycle, re-anchor if repeats remain
+    # Repeat logic — sellback counts as a cycle (always a loss), re-anchor if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    if repeats_done_now <= repeat_total:
+    # Smart mode: sellback is always a loss
+    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
+    _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+    if _will_repeat:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
@@ -13162,7 +13210,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0
-        print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} cycle {repeats_done_now}/{repeat_total} — re-anchoring')
+        _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
+        print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} {_label} — re-anchoring')
     else:
         bot['status'] = 'stopped'
         bot['stopped_at'] = now
@@ -13183,7 +13232,8 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
-                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)]  # keep if repeats pending
+                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
+                      and not (b.get('cross_market') and not b.get('_positions_cleared'))]  # keep cross-market until settled
         if _purge_ids:
             for _pid in _purge_ids:
                 del active_bots[_pid]
@@ -14289,7 +14339,10 @@ def _run_monitor():
                     repeats_done_now = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = repeats_done_now
                     repeat_total = bot.get('repeat_count', 0)
-                    will_repeat = repeats_done_now <= repeat_total
+                    # Smart mode: both sides filled, P&L computed below — use estimate
+                    _est_pnl = (100 - (bot.get('yes_price', 0) or 0) - (bot.get('no_price', 0) or 0)) * qty
+                    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _est_pnl)
+                    will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
                     bot['completed_at'] = now
                     bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
@@ -16433,6 +16486,38 @@ def set_bot_phase(bot_id):
     active_bots[bot_id]['posted_at'] = time.time()
     save_state()
     return jsonify({'success': True, 'bot_id': bot_id, 'phase': new_phase})
+
+
+@app.route('/api/bot/add-runs/<bot_id>', methods=['POST'])
+def add_runs(bot_id):
+    """Add more repeat cycles to a runs-mode bot. Can restart completed/stopped bots."""
+    data = request.get_json() or {}
+    count = max(1, int(data.get('count', 1)))
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if bot.get('smart_mode'):
+        # Smart mode bot that was stopped — restart it by resetting loss counter
+        bot['_smart_stopped'] = False
+        bot['consecutive_losses'] = 0
+        if bot.get('status') in ('completed', 'stopped'):
+            bot['status'] = 'waiting_repeat'
+            bot['waiting_repeat_since'] = time.time()
+            bot.pop('completed_at', None)
+            bot.pop('stopped_at', None)
+        save_state()
+        return jsonify({'success': True, 'mode': 'smart_restart'})
+
+    bot['repeat_count'] = bot.get('repeat_count', 0) + count
+    # Restart completed/stopped bots
+    if bot.get('status') in ('completed', 'stopped'):
+        bot['status'] = 'waiting_repeat'
+        bot['waiting_repeat_since'] = time.time()
+        bot.pop('completed_at', None)
+        bot.pop('stopped_at', None)
+    save_state()
+    bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
+    return jsonify({'success': True, 'new_repeat_count': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
 
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])

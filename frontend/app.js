@@ -5459,6 +5459,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         // Total contracts: from tracked qty, or reconstruct from runs × quantity
         const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
         const _crossQty = bot._cross_settled_qty || (_runs * _qtyPer);
+        const _crossQtyDog = bot._cross_settled_qty_dog || _crossQty;
+        const _crossQtyFav = bot._cross_settled_qty_fav || _crossQty;
         const _isSmart = bot._smart_stopped;
         const _col = _isAwaiting ? '#818cf8' : _isSmart ? '#00e5ff' : '#00ff88';
         const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
@@ -5500,7 +5502,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <div style="padding:8px;background:${_col}11;border-radius:6px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                             <span style="color:#ffaa00;font-size:9px;font-weight:700;">DOG · ${dogSide.toUpperCase()}</span>
-                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQty}x</span>
+                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQtyDog}x</span>
                         </div>
                         <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
                             <div style="background:#ffaa00;height:100%;width:100%;border-radius:3px;"></div>
@@ -5510,7 +5512,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <div style="padding:8px;background:${_col}11;border-radius:6px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                             <span style="color:#00aaff;font-size:9px;font-weight:700;">FAV · ${favSide.toUpperCase()}</span>
-                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQty}x</span>
+                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQtyFav}x</span>
                         </div>
                         <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
                             <div style="background:#00aaff;height:100%;width:100%;border-radius:3px;"></div>
@@ -5532,7 +5534,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
                     <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
-                    <span>Holding: <strong style="color:#fff;">${_crossQty}x</strong> each side</span>
+                    <span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? `${_crossQtyDog}x each` : `${_crossQtyDog}x / ${_crossQtyFav}x`}</strong></span>
                     <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
                 </div>
                 ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit trigger: sell loser when bid ≤ ${_trigger.price}¢</div>` : ''}
@@ -5648,7 +5650,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         : favBid > 0 ? Math.min(favBid, maxFavPrice) : maxFavPrice;
     if (favPrice > 0 && walkCount > 0) {
         const combined = avgDogPrice + favPrice;
-        favStatusText = `📈 walked +${walkCount}¢ · combined ${combined}¢ · +${100 - combined}¢/contract`;
+        favStatusText = `⭐ Hedge @${favPrice}¢ · combined ${combined}¢ · +${100 - combined}¢/contract`;
     } else if (favPrice > 0) {
         const combined = avgDogPrice + favPrice;
         favStatusText = `Posted @${favPrice}¢ · combined ${combined}¢`;

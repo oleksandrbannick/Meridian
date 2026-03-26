@@ -6123,6 +6123,17 @@ def create_bot():
         if profit_per <= 0:
             return jsonify({'error': f'Not an arb: yes({yes_price}¢) + no({no_price}¢) = {yes_price+no_price}¢ ≥ 100¢'}), 400
 
+        # ── AWAITING SETTLEMENT GUARD — block if cross-market bot holds positions on this ticker ──
+        for _ab in active_bots.values():
+            if _ab.get('status') != 'awaiting_settlement':
+                continue
+            _ab_tickers = {_ab.get('ticker', '')}
+            _ab_ht = _ab.get('hedge_ticker')
+            if _ab_ht and _ab_ht != _ab.get('ticker'):
+                _ab_tickers.add(_ab_ht)
+            if ticker in _ab_tickers:
+                return jsonify({'error': f'Awaiting settlement on {", ".join(_ab_tickers)} — restart or +runs on existing bot instead'}), 400
+
         # ── PER-TICKER BOT CAP ─────────────────────────────────
         MAX_BOTS_PER_TICKER = 5
         active_on_ticker = sum(
@@ -7706,6 +7717,17 @@ def create_ladder_arb_bot():
         # Apex has NO late-game block — Meridian rebalancer handles late-game exits
         # (late game block is only on phantom/anchor bots)
 
+        # Awaiting settlement guard — block if cross-market bot holds positions on this ticker
+        for _ab in active_bots.values():
+            if _ab.get('status') != 'awaiting_settlement':
+                continue
+            _ab_tickers = {_ab.get('ticker', '')}
+            _ab_ht = _ab.get('hedge_ticker')
+            if _ab_ht and _ab_ht != _ab.get('ticker'):
+                _ab_tickers.add(_ab_ht)
+            if ticker in _ab_tickers:
+                return jsonify({'error': f'Awaiting settlement on {", ".join(_ab_tickers)} — positions held until Kalshi settles'}), 400
+
         # One Apex per ticker — prevent duplicate bots on same line
         existing_apex = next(
             (bid for bid, b in active_bots.items()
@@ -7940,6 +7962,17 @@ def _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market):
         b_hedge = b.get('hedge_ticker', b_ticker)
         b_side = b.get('dog_side', '')
         b_cross = b.get('cross_market', False)
+
+        # ── Guard 0: Awaiting settlement blocks ALL new bots on its tickers ──
+        # Cross-market bots hold positions until Kalshi settles. Any new bot on
+        # either ticker would cause Kalshi to net fills and destroy positions.
+        if b.get('status') == 'awaiting_settlement':
+            _awaiting_tickers = {b_ticker}
+            if b_hedge and b_hedge != b_ticker:
+                _awaiting_tickers.add(b_hedge)
+            if ticker in _awaiting_tickers or (hedge_ticker and hedge_ticker in _awaiting_tickers):
+                return (f'Awaiting settlement on {", ".join(_awaiting_tickers)} — restart or +runs on existing bot instead', bid)
+            continue  # no further checks needed for awaiting bots
 
         # ── Guard 1: Apex on same ticker as phantom dog or hedge ──
         # Apex places both YES+NO orders. Phantom positions would net with Apex.
@@ -9573,8 +9606,8 @@ def _handle_phantom(bot_id, bot, actions):
                     if _has_settled_positions:
                         bot['status'] = 'awaiting_settlement'
                         bot['awaiting_since'] = now
-                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty', 0)
-                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty', 0)
+                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty_dog', bot.get('_cross_settled_qty', 0))
+                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty_fav', bot.get('_cross_settled_qty', 0))
                         print(f'⏳ PHANTOM GAME OVER: {bot_id} holding {bot["_cross_settled_qty"]}x cross-market — awaiting settlement')
                         bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot['_cross_settled_qty'], 'trigger': 'dead_market'})
                     else:
@@ -9612,8 +9645,8 @@ def _handle_phantom(bot_id, bot, actions):
                     if _has_settled_positions or _is_cross:
                         bot['status'] = 'awaiting_settlement'
                         bot['awaiting_since'] = now
-                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty', 0)
-                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty', 0)
+                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty_dog', bot.get('_cross_settled_qty', 0))
+                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty_fav', bot.get('_cross_settled_qty', 0))
                         print(f'⏳ PHANTOM DRIFT → AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot.get("hedge_ticker")}')
                         bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot.get('_cross_settled_qty', 0), 'trigger': 'drift'})
                     else:
@@ -9993,8 +10026,11 @@ def _handle_phantom(bot_id, bot, actions):
             # Track accumulated cross-market positions before fill reset
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
             if _is_cross:
-                _cycle_qty = bot.get('dog_fill_qty', 0) or qty
-                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_qty
+                _cycle_dog = bot.get('dog_fill_qty', 0) or qty
+                _cycle_fav = bot.get('fav_fill_qty', 0) or qty
+                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog
+                bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog
+                bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav
             # Record run history before resetting fills
             bot.setdefault('_run_history', []).append({
                 'run': repeats_done_now,
@@ -11333,8 +11369,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             # Track accumulated cross-market positions before fill reset
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
             if _is_cross:
-                _cycle_qty = bot.get('total_dog_fill_qty', 0) or hedge_qty
-                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_qty
+                _cycle_dog = bot.get('total_dog_fill_qty', 0) or hedge_qty
+                _cycle_fav = bot.get('fav_fill_qty', 0) or hedge_qty
+                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog
+                bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog
+                bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav
             # Record run history before resetting fills
             bot.setdefault('_run_history', []).append({
                 'run': repeats_done_now,
@@ -13300,6 +13339,11 @@ def _run_monitor():
                 if _b.get('rungs'):
                     _qty_per = sum(r.get('qty', 1) for r in _b.get('rungs', []))
                 _b['_cross_settled_qty'] = _runs * _qty_per
+                # Separate dog/fav — for old bots without tracking, use same value
+                if _b.get('_cross_settled_qty_dog', 0) <= 0:
+                    _b['_cross_settled_qty_dog'] = _runs * _qty_per
+                if _b.get('_cross_settled_qty_fav', 0) <= 0:
+                    _b['_cross_settled_qty_fav'] = _runs * _qty_per
                 _cross_fixed += 1
             # Auto smart exit: check price trigger
             _trigger = _b.get('_smart_exit_trigger')
@@ -13317,7 +13361,8 @@ def _run_monitor():
                         _loser_ticker = _b['ticker'] if _dog_bid <= _fav_bid else _ht
                         _loser_side = _dog_side if _dog_bid <= _fav_bid else _fav_side
                         _winner_ticker = _ht if _dog_bid <= _fav_bid else _b['ticker']
-                        _exit_qty = _b.get('_cross_settled_qty', 0)
+                        _loser_is_dog = (_dog_bid <= _fav_bid)
+                        _exit_qty = _b.get('_cross_settled_qty_dog' if _loser_is_dog else '_cross_settled_qty_fav', _b.get('_cross_settled_qty', 0))
                         if _exit_qty > 0:
                             try:
                                 _sold, _sell_info = execute_sell(_loser_ticker, _loser_side, _exit_qty,
@@ -13342,11 +13387,12 @@ def _run_monitor():
         # ── Purge stale completed/stopped bots from active_bots ──
         # Keep them for 60s so the frontend sees the final state, then remove.
         # awaiting_settlement bots are never purged (they hold positions until Kalshi settles).
-        _purge_cutoff = time.time() - 60
+        _purge_cutoff = time.time() - 300  # 5 min — gives user time to restart
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
                       and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
+                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
                       ]
         if _purge_ids:
             for _pid in _purge_ids:
@@ -16700,6 +16746,8 @@ def smart_exit(bot_id):
     dog_side = bot.get('dog_side', 'no')
     fav_side = bot.get('fav_side', dog_side)
     cross_qty = bot.get('_cross_settled_qty', 0)
+    cross_qty_dog = bot.get('_cross_settled_qty_dog', 0)
+    cross_qty_fav = bot.get('_cross_settled_qty_fav', 0)
     if cross_qty <= 0:
         # Reconstruct from bot data
         _runs = (bot.get('repeats_done', 0) or 0) + 1
@@ -16707,7 +16755,15 @@ def smart_exit(bot_id):
         if bot.get('rungs'):
             _qty_per = sum(r.get('qty', 1) for r in bot.get('rungs', []))
         cross_qty = _runs * _qty_per
+        cross_qty_dog = cross_qty
+        cross_qty_fav = cross_qty
         bot['_cross_settled_qty'] = cross_qty
+        bot['_cross_settled_qty_dog'] = cross_qty_dog
+        bot['_cross_settled_qty_fav'] = cross_qty_fav
+    if cross_qty_dog <= 0:
+        cross_qty_dog = cross_qty
+    if cross_qty_fav <= 0:
+        cross_qty_fav = cross_qty
     if cross_qty <= 0:
         return jsonify({'error': 'No positions to exit'}), 400
 
@@ -16748,28 +16804,31 @@ def smart_exit(bot_id):
     winner_side = fav_side if dog_bid <= fav_bid else dog_side
     winner_bid = max(dog_bid, fav_bid)
 
+    # Use side-specific qty for the loser
+    _loser_is_dog = (loser_ticker == ticker)
+    _loser_qty = cross_qty_dog if _loser_is_dog else cross_qty_fav
     result = {
         'loser_ticker': loser_ticker, 'loser_side': loser_side, 'loser_bid': loser_bid,
         'winner_ticker': winner_ticker, 'winner_side': winner_side, 'winner_bid': winner_bid,
-        'qty': cross_qty,
+        'qty': _loser_qty, 'qty_dog': cross_qty_dog, 'qty_fav': cross_qty_fav,
     }
 
     # Sell the losing leg at market
     try:
-        _sold, _sell_info = execute_sell(loser_ticker, loser_side, cross_qty,
+        _sold, _sell_info = execute_sell(loser_ticker, loser_side, _loser_qty,
                                          reason=f'smart_exit_{bot_id}')
         sell_price = _sell_info.get('avg_price', 0) if isinstance(_sell_info, dict) else 0
-        sell_revenue = sell_price * cross_qty
+        sell_revenue = sell_price * _loser_qty
         result['sold'] = True
         result['sell_price'] = sell_price
         result['sell_revenue_cents'] = sell_revenue
         bot['_smart_exit_sold'] = {
             'ticker': loser_ticker, 'side': loser_side,
-            'qty': cross_qty, 'price': sell_price,
+            'qty': _loser_qty, 'price': sell_price,
             'winner_ticker': winner_ticker, 'winner_side': winner_side,
         }
         bot_log('SMART_EXIT_SELL', bot_id, {
-            'loser': loser_ticker, 'side': loser_side, 'qty': cross_qty,
+            'loser': loser_ticker, 'side': loser_side, 'qty': _loser_qty,
             'sell_price': sell_price, 'winner': winner_ticker,
             'dog_bid': dog_bid, 'fav_bid': fav_bid,
         })
@@ -18638,8 +18697,9 @@ def get_active_positions():
                 # Cross-market: fav position is on hedge_ticker, not ticker
                 _fav_ticker = b.get('hedge_ticker', t) or t
                 _is_same_market = _fav_ticker == t
-                # Include accumulated positions from previous cross-market runs
-                _cross_settled = _si(b.get('_cross_settled_qty', 0))
+                # Include accumulated positions from previous cross-market runs (separate per side)
+                _cross_settled_dog = _si(b.get('_cross_settled_qty_dog', b.get('_cross_settled_qty', 0)))
+                _cross_settled_fav = _si(b.get('_cross_settled_qty_fav', b.get('_cross_settled_qty', 0)))
                 # Same-market: Kalshi settles matching fills instantly - use NET only
                 if _is_same_market and dog_side and fav_side and dog_side != fav_side:
                     net_dog = max(0, dog_fills - fav_qty)
@@ -18651,8 +18711,8 @@ def get_active_positions():
                 else:
                     # Cross-market: dog on ticker, fav on hedge_ticker (separate positions)
                     # Current cycle fills + accumulated from previous completed runs
-                    _total_dog = dog_fills + _cross_settled
-                    _total_fav = fav_qty + _cross_settled
+                    _total_dog = dog_fills + _cross_settled_dog
+                    _total_fav = fav_qty + _cross_settled_fav
                     if _total_dog > 0:
                         _add(t, dog_side, 'phantom', _total_dog)
                     if _total_fav > 0:

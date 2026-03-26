@@ -8175,6 +8175,9 @@ def create_ladder_bot():
         hedge_timeout = int(data.get('hedge_timeout_s', 120))
         bounce_threshold = int(data.get('bounce_threshold', 2))
         repeat_count = int(data.get('repeat_count', 0))
+        smart_mode   = bool(data.get('smart_mode', False))
+        if smart_mode:
+            repeat_count = 999  # effectively infinite — smart mode controls stopping
         dog_side = data.get('dog_side', '')
         cross_market = data.get('cross_market', False)
         hedge_ticker = data.get('hedge_ticker', '').strip() or ticker
@@ -8327,6 +8330,8 @@ def create_ladder_bot():
             'arb_width': target_width,
             'repeat_count': repeat_count,
             'repeats_done': 0,
+            'smart_mode': smart_mode,
+            'consecutive_losses': 0,
             'anchor_depth': anchor_depth,
             'rung_spacing': rung_spacing,
             'fav_shave': fav_shave,

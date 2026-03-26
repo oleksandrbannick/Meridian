@@ -6912,8 +6912,6 @@ async function loadBots() {
             if (s === 'awaiting_settlement') return true;
             // Smart-stopped bots stay visible
             if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
-            // Cross-market bots ALWAYS stay visible (awaiting settlement)
-            if ((s === 'completed' || s === 'stopped') && bots[id].cross_market && bots[id].hedge_ticker && bots[id].hedge_ticker !== bots[id].ticker) return true;
             // Keep completed/stopped bots visible for 3 seconds
             if (s === 'completed' || s === 'stopped') {
                 const finishedAt = (window._botCompletedAt || {})[id];

@@ -13341,13 +13341,12 @@ def _run_monitor():
 
         # ── Purge stale completed/stopped bots from active_bots ──
         # Keep them for 60s so the frontend sees the final state, then remove.
-        # NEVER purge cross-market bots — they hold positions until settlement.
+        # awaiting_settlement bots are never purged (they hold positions until Kalshi settles).
         _purge_cutoff = time.time() - 60
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
                       and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
-                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
                       ]
         if _purge_ids:
             for _pid in _purge_ids:

@@ -3663,20 +3663,21 @@ def _execute_phantom_hedge(bot_id):
         max_hedge = HARD_CEILING_CENTS - dog_price
 
         # Post at fav BID — maker order, first in queue with our speed
-        # Cross-market: ALWAYS read fresh from ws_manager (bot cache is stale, updated every ~60s)
+        # ALWAYS read from ws_manager first (real-time), fall back to bot cache
         _is_cross = hedge_ticker != ticker
         fav_bid = 0
         fav_ask = 0
-        if _is_cross and ws_manager:
-            _ws_hedge = ws_manager.get_price(hedge_ticker)
-            if _ws_hedge:
-                fav_bid = _ws_hedge.get(f'{fav_side}_bid', 0)
-                fav_ask = _ws_hedge.get(f'{fav_side}_ask', 0)
+        _ws_ticker = hedge_ticker if _is_cross else ticker
+        if ws_manager:
+            _ws_data = ws_manager.get_price(_ws_ticker)
+            if _ws_data:
+                fav_bid = _ws_data.get(f'{fav_side}_bid', 0)
+                fav_ask = _ws_data.get(f'{fav_side}_ask', 0)
                 if fav_ask <= 0:
-                    _opp = _ws_hedge.get(f'{"no" if fav_side == "yes" else "yes"}_bid', 0)
+                    _opp = _ws_data.get(f'{"no" if fav_side == "yes" else "yes"}_bid', 0)
                     fav_ask = (100 - _opp) if _opp > 0 else 0
         if fav_bid <= 0:
-            # Same-market or WS unavailable: use bot cache
+            # WS unavailable: fall back to bot cache
             _pfx = 'live_hedge_' if _is_cross else 'live_'
             fav_bid = bot.get(f'{_pfx}{fav_side}_bid', 0)
             if fav_ask <= 0:

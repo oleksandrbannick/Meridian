@@ -9662,9 +9662,10 @@ def _handle_phantom(bot_id, bot, actions):
                     for _drift_oid in bot.get('_all_dog_order_ids', []):
                         if _drift_oid and _drift_oid != dog_order_id:
                             _safe_cancel(_drift_oid, f'phantom drift cancel old dog {bot_id}')
-                    # Cross-market → awaiting settlement (positions held on both tickers)
+                    # Cross-market → awaiting settlement ONLY if it actually holds positions
                     _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-                    if _has_settled_positions or _is_cross:
+                    _has_any_fills = _has_settled_positions or (bot.get('dog_fill_qty', 0) > 0) or (bot.get('_cross_settled_qty', 0) > 0)
+                    if _is_cross and _has_any_fills:
                         bot['status'] = 'awaiting_settlement'
                         bot['awaiting_since'] = now
                         bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty_dog', bot.get('_cross_settled_qty', 0))
@@ -13356,18 +13357,23 @@ def _run_monitor():
             if not _is_cross or _b.get('status') != 'awaiting_settlement':
                 continue
             # Fix settled qty: reconstruct from bot data if missing
+            # Only reconstruct if the bot actually completed runs (has run_history or repeats_done > 0)
             if _b.get('_cross_settled_qty', 0) <= 0:
-                _runs = (_b.get('repeats_done', 0) or 0) + 1
-                _qty_per = _b.get('quantity', 1) or 1
-                if _b.get('rungs'):
-                    _qty_per = sum(r.get('qty', 1) for r in _b.get('rungs', []))
-                _b['_cross_settled_qty'] = _runs * _qty_per
-                # Separate dog/fav — for old bots without tracking, use same value
-                if _b.get('_cross_settled_qty_dog', 0) <= 0:
-                    _b['_cross_settled_qty_dog'] = _runs * _qty_per
-                if _b.get('_cross_settled_qty_fav', 0) <= 0:
-                    _b['_cross_settled_qty_fav'] = _runs * _qty_per
-                _cross_fixed += 1
+                _has_run_history = len(_b.get('_run_history', [])) > 0
+                _has_fills = (_b.get('dog_fill_qty', 0) > 0) or (_b.get('repeats_done', 0) > 0) or _has_run_history
+                if _has_fills:
+                    _runs = max(1, (_b.get('repeats_done', 0) or 0) + (1 if not _has_run_history else 0))
+                    if _has_run_history:
+                        _runs = len(_b.get('_run_history', []))
+                    _qty_per = _b.get('quantity', 1) or 1
+                    if _b.get('rungs'):
+                        _qty_per = sum(r.get('qty', 1) for r in _b.get('rungs', []))
+                    _b['_cross_settled_qty'] = _runs * _qty_per
+                    if _b.get('_cross_settled_qty_dog', 0) <= 0:
+                        _b['_cross_settled_qty_dog'] = _runs * _qty_per
+                    if _b.get('_cross_settled_qty_fav', 0) <= 0:
+                        _b['_cross_settled_qty_fav'] = _runs * _qty_per
+                    _cross_fixed += 1
             # Auto smart exit: check price trigger
             _trigger = _b.get('_smart_exit_trigger')
             if _trigger and not _b.get('_smart_exit_sold'):
@@ -16775,14 +16781,18 @@ def smart_exit(bot_id):
     cross_qty_dog = bot.get('_cross_settled_qty_dog', 0)
     cross_qty_fav = bot.get('_cross_settled_qty_fav', 0)
     if cross_qty <= 0:
-        # Reconstruct from bot data
-        _runs = (bot.get('repeats_done', 0) or 0) + 1
-        _qty_per = bot.get('quantity', 1) or 1
-        if bot.get('rungs'):
-            _qty_per = sum(r.get('qty', 1) for r in bot.get('rungs', []))
-        cross_qty = _runs * _qty_per
-        cross_qty_dog = cross_qty
-        cross_qty_fav = cross_qty
+        # Reconstruct from bot data — only if bot actually had fills
+        _rh = bot.get('_run_history', [])
+        _runs = len(_rh) if _rh else max(0, bot.get('repeats_done', 0))
+        if _runs > 0 or bot.get('dog_fill_qty', 0) > 0:
+            if _runs == 0:
+                _runs = 1
+            _qty_per = bot.get('quantity', 1) or 1
+            if bot.get('rungs'):
+                _qty_per = sum(r.get('qty', 1) for r in bot.get('rungs', []))
+            cross_qty = _runs * _qty_per
+            cross_qty_dog = cross_qty
+            cross_qty_fav = cross_qty
         bot['_cross_settled_qty'] = cross_qty
         bot['_cross_settled_qty_dog'] = cross_qty_dog
         bot['_cross_settled_qty_fav'] = cross_qty_fav

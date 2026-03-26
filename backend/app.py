@@ -17745,7 +17745,7 @@ def emergency_sell():
             _cancelled_orphan_orders = []
             try:
                 _active_oids = set()
-                for _b in bots.values():
+                for _b in active_bots.values():
                     if _b.get('ticker') == ticker and _b.get('status', '') not in ('completed', 'cancelled'):
                         for _key in ('hedge_order_id', '_orphan_hedge_oid'):
                             _oid = _b.get(_key)

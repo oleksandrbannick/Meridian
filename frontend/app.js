@@ -5868,33 +5868,24 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const rungs = bot.rungs || [];
     const qtyPer = bot.quantity || 1;
     const phase = bot.game_phase || 'pregame';
-    // Legacy compat
-    const totalExpected = rungs.reduce((s, r) => s + (r.quantity || qtyPer), 0);
-    const totalYesFill = bot.filled_yes_qty || bot.yes_fill_qty || 0;
-    const totalNoFill = bot.filled_no_qty || bot.no_fill_qty || 0;
-    const avgYes = bot.avg_yes_price || 0;
-    const avgNo = bot.avg_no_price || 0;
-    const walkCount = bot.walk_count || 0;
 
     const statusMap = {
         'ladder_arb_posted': '⚡ BOTH LIVE',
         'ladder_arb_active': '🔥 ACTIVE',
-        'ladder_arb_yes_filled': '✓ YES FILLED',
-        'ladder_arb_no_filled': '✓ NO FILLED',
         'waiting_repeat': '🔄 REPEATING',
-        'drift_cancelled': '🚫 DRIFT GUARD',
-        'completed': '✅ COMPLETE',
+        'drift_cancelled': '🚫 DRIFT',
+        'completed': '✅ DONE',
         'stopped': '🛑 STOPPED',
+        'awaiting_settlement': '⏳ SETTLE',
     };
     const borderMap = {
         'ladder_arb_posted': '#00aaff',
         'ladder_arb_active': '#ffaa00',
-        'ladder_arb_yes_filled': '#00ff88',
-        'ladder_arb_no_filled': '#ff4444',
         'waiting_repeat': '#aa66ff',
         'drift_cancelled': '#ff8800',
         'completed': '#00ff88',
         'stopped': '#ff4444',
+        'awaiting_settlement': '#00e5ff',
     };
     const borderCol = borderMap[status] || '#00aaff';
     const statusLabel = statusMap[status] || status;
@@ -5909,8 +5900,189 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         }
     }
 
-    // P&L color — when consolidated, use actual hedge price for accurate P&L
-    const hedgePriceForPnl = bot.hedge_price || 0;
+    // Repeat info
+    const repeatCount = bot.repeat_count || 0;
+    const repeatsDone = bot.repeats_done || 0;
+    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.cumulative_pnl || 0);
+    let cycleInfo = '';
+    if (repeatCount > 0) {
+        cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>`;
+    }
+
+    // ── Per-rung rendering — each rung is its own independent scalp ──
+    let rungTotalPnl = 0;
+    let activeCount = 0, doneCount = 0, postedCount = 0;
+
+    const rungsHTML = rungs.map((r, i) => {
+        const rQty = r.quantity || qtyPer;
+        const rs = r.status || 'posted';
+        const width = r.width;
+
+        // ── POSTED: waiting for any fill — show both sides ──
+        if (rs === 'posted' || !rs) {
+            postedCount++;
+            const yFill = r.yes_fill_qty || 0;
+            const nFill = r.no_fill_qty || 0;
+            const dimmed = (status === 'ladder_arb_active') ? 'opacity:0.4;' : '';
+            return `<div style="display:grid;grid-template-columns:32px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;${dimmed}">
+                <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFill >= rQty ? '#00ff88' : '#333'};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:#555;font-size:8px;">${yFill}/${rQty}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#ff4444;font-size:9px;width:26px;">N${r.no_price}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFill >= rQty ? '#ff4444' : '#333'};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:#555;font-size:8px;">${nFill}/${rQty}</span>
+                </div>
+                <span style="color:#333;font-size:9px;text-align:right;">—</span>
+            </div>`;
+        }
+
+        // ── COMPLETED: shaded, show result + P&L ──
+        if (rs === 'completed' || r._profit_recorded) {
+            doneCount++;
+            const aS = r.anchor_side || 'yes';
+            const aP = r[`${aS}_price`] || 0;
+            const hP = r.hedge_price || 0;
+            const comb = aP + hP;
+            const prof = comb > 0 ? 100 - comb : 0;
+            rungTotalPnl += prof * rQty;
+            const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
+            const aCol = aS === 'yes' ? '#00ff88' : '#ff4444';
+            return `<div style="display:grid;grid-template-columns:32px 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.3;">
+                <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="color:${aCol};font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
+                    <span style="color:#444;">→</span>
+                    <span style="color:#555;font-size:9px;">hedge ${hP}¢</span>
+                    <span style="background:#00ff8815;color:#00ff88;font-size:7px;font-weight:700;padding:1px 4px;border-radius:3px;">DONE</span>
+                </div>
+                <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${prof > 0 ? '+' : ''}${prof}¢</span>
+            </div>`;
+        }
+
+        // ── ACTIVE: anchor filled, running time-decay ──
+        activeCount++;
+        const aS = r.anchor_side || 'yes';
+        const aP = r[`${aS}_price`] || 0;
+        const hP = r.hedge_price || 0;
+        const hFill = r.hedge_fill_qty || 0;
+        const elapsed = Math.floor(nowSec - (r.anchor_fill_at || nowSec));
+        const ts = r.time_stage || 'profit';
+        const aCol = aS === 'yes' ? '#00ff88' : '#ff4444';
+
+        // Stage config
+        const stageMap = { profit: { l:'PROFIT', c:'#00ff88', lim:15 }, scratch: { l:'SCRATCH', c:'#ffaa00', lim:30 }, panic: { l:'PANIC', c:'#ff4444', lim:60 } };
+        const st = stageMap[ts] || stageMap.profit;
+        const cdStr = ts === 'profit' ? `${Math.max(0,15-elapsed)}s` : ts === 'scratch' ? `${Math.max(0,30-elapsed)}s` : `${elapsed}s`;
+
+        // Hedge status
+        let hStr, hCol;
+        if (hFill >= rQty && hP > 0) { hStr = `${hP}¢ ✓`; hCol = '#00ff88'; }
+        else if (hP > 0) { hStr = `${hP}¢ ${hFill}/${rQty}`; hCol = '#ffaa00'; }
+        else { hStr = rs === 'anchor_filled' ? 'posting...' : '—'; hCol = '#555'; }
+
+        // Live P&L estimate
+        const estProf = hP > 0 ? 100 - aP - hP : 0;
+        const estCol = estProf > 0 ? '#00ff88' : estProf < 0 ? '#ff4444' : '#555';
+
+        const tPct = Math.min(100, (elapsed / st.lim) * 100);
+
+        return `<div style="padding:4px 0;border-bottom:1px solid #1e274022;">
+            <div style="display:grid;grid-template-columns:32px 1fr 50px;gap:4px;align-items:center;font-size:10px;">
+                <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+                <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
+                    <span style="color:${aCol};font-weight:700;font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
+                    <span style="background:${st.c}22;color:${st.c};font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;">${st.l}</span>
+                    <span style="color:${st.c};font-family:monospace;font-weight:700;font-size:11px;">${cdStr}</span>
+                    <span style="color:${hCol};font-size:9px;">hedge ${hStr}</span>
+                </div>
+                <span style="color:${estCol};font-weight:700;font-size:10px;text-align:right;">${hP > 0 ? (estProf > 0 ? '+' : '') + estProf + '¢' : '—'}</span>
+            </div>
+            <div style="height:2px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;">
+                <div style="width:${tPct}%;height:100%;background:${st.c}66;border-radius:2px;transition:width 1s;"></div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // ── Status summary bar ──
+    let statusInfo = '';
+    if (status === 'ladder_arb_active') {
+        statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#0a0e1a;border-radius:5px;margin-top:6px;">
+            ${activeCount > 0 ? `<span style="color:#ffaa00;font-weight:700;">🔥 ${activeCount} active</span>` : ''}
+            ${doneCount > 0 ? `<span style="color:#00ff88;">✅ ${doneCount} done</span>` : ''}
+            ${postedCount > 0 ? `<span style="color:#555;">⏳ ${postedCount} waiting</span>` : ''}
+            ${rungTotalPnl !== 0 ? `<span style="color:${rungTotalPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;margin-left:auto;">Total: ${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</span>` : ''}
+        </div>`;
+    } else if (status === 'ladder_arb_posted') {
+        const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
+        const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
+        const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
+        const nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
+        statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#00aaff08;border:1px solid #00aaff22;border-radius:5px;margin-top:6px;">
+            <span style="color:#00aaff;">⚡ ${rungs.length} rungs live</span>
+            <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${yBid}/${yAsk}¢</strong> · N <strong style="color:#ff4444;">${nBid}/${nAsk}¢</strong></span>
+        </div>`;
+    } else if (status === 'waiting_repeat') {
+        statusInfo = `<div style="padding:6px 8px;background:#aa66ff08;border:1px solid #aa66ff22;border-radius:5px;margin-top:6px;font-size:10px;color:#aa66ff;">
+            🔄 Cycle ${repeatsDone + 1}/${repeatCount + 1} done${rungTotalPnl !== 0 ? ` · <strong>${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</strong>` : ''} — reposting ~10s
+        </div>`;
+    } else if (status === 'completed' || status === 'stopped') {
+        statusInfo = rungTotalPnl !== 0 ? `<div style="padding:6px 8px;background:#0a0e1a;border-radius:5px;margin-top:6px;font-size:10px;">
+            <span style="color:${rungTotalPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total P&L: ${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</span>
+        </div>` : '';
+    } else if (status === 'awaiting_settlement') {
+        statusInfo = `<div style="padding:6px 8px;background:#00e5ff08;border:1px solid #00e5ff22;border-radius:5px;margin-top:6px;font-size:10px;color:#00e5ff;">
+            ⏳ Awaiting settlement — position held
+        </div>`;
+    }
+
+    const item = document.createElement('div');
+    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
+    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
+    item.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #00aaff66);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>
+                <span style="color:#00aaff;font-weight:800;font-size:10px;letter-spacing:.08em;">APEX</span>
+                <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
+                <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
+                <span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">🪜 ${rungs.length}</span>
+                ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
+                ${liveScoreHtml}
+                ${cycleInfo}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+            </div>
+        </div>
+        <div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:8px 10px;">
+            ${rungsHTML}
+        </div>
+        ${statusInfo}
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
+            <span style="color:#ffaa00;">Widths: ${rungs.map(r => r.width + '¢').join(', ')}</span>
+            <span style="color:#8892a6;">×${qtyPer}</span>
+            <span style="color:#555;">${phase === 'live' ? '🔴 LIVE' : '⏳ PRE'}</span>
+            ${bot.repost_count ? `<span style="color:#555;">Repost #${bot.repost_count}</span>` : ''}
+        </div>
+        <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+            <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>
+            <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
+        </div>
+    `;
+    container.appendChild(item);
+}
+
+
+function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const combinedAvg = (status === 'ladder_arb_yes_filled' || status === 'ladder_arb_no_filled') && hedgePriceForPnl > 0
         ? (status === 'ladder_arb_yes_filled' ? avgYes : avgNo) + hedgePriceForPnl  // anchor avg + actual hedge
         : avgYes + avgNo;

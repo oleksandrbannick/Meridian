@@ -11303,10 +11303,20 @@ async function loadTradeHistoryList() {
                         </div>
                     </div>
                     <div style="display:flex;gap:16px;font-size:11px;margin-bottom:6px;flex-wrap:wrap;">
+                        ${isSellback ? (() => {
+                            const filledSide = (t.exit_via || '').includes('yes') ? 'YES' : 'NO';
+                            const filledPrice = filledSide === 'YES' ? t.yes_price : t.no_price;
+                            const otherBid = filledSide === 'YES' ? t.no_price : t.yes_price;
+                            const sellPrice = t.sell_back_price || t.sell_price || filledPrice || 0;
+                            return `<span style="color:#ff8800;">Filled ${filledSide}: <strong>${filledPrice}¢</strong></span>
+                                <span style="color:#ff4444;">Sold back @<strong>${sellPrice}¢</strong></span>
+                                <span style="color:#555;">Other side bid: ${otherBid}¢ (too expensive)</span>
+                                <span style="color:#8892a6;">×${t.quantity} contracts</span>`;
+                        })() : `
                         <span style="color:#00ff88;">Avg YES: <strong>${t.yes_price}¢</strong></span>
                         <span style="color:#ff4444;">Avg NO: <strong>${t.no_price}¢</strong></span>
                         <span style="color:#8892a6;">Combined: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'};">${totalCost}¢</strong></span>
-                        <span style="color:#8892a6;">×${t.quantity} contracts</span>
+                        <span style="color:#8892a6;">×${t.quantity} contracts</span>`}
                     </div>
                     <div style="display:flex;gap:12px;font-size:10px;margin-bottom:4px;flex-wrap:wrap;">
                         <span style="color:#555;">Fees: ${t.fee_cents}¢</span>

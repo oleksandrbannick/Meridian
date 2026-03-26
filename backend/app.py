@@ -10381,21 +10381,15 @@ def _handle_phantom(bot_id, bot, actions):
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             new_dog_price = max(1, anchor_base - anchor_depth)
 
-            # Hedge fill drift guard: phantom posts at fav_bid, check if combined is within ceiling
-            _combined_est = new_dog_price + _current_fav_bid if _current_fav_bid > 0 else 999
-            _hedge_room = HARD_CEILING_CENTS - _combined_est  # positive = profitable
-            if _hedge_room < -5 or current_dog_bid <= 3:
+            # Drift guard: only stop if dog is dead (bid at 1¢) — let normal ceiling/sellback handle the rest
+            if current_dog_bid <= 1:
                 bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
-                    'new_dog_price': new_dog_price, 'combined_est': _combined_est,
-                    'hedge_room': _hedge_room,
-                    'reason': 'hedge_unfillable' if _hedge_room < -5 else 'dog_dead',
+                    'dog_bid': current_dog_bid, 'reason': 'dog_dead',
                 })
-                # Market is dead — stop the bot completely
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
                 bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — market dead, stopping')
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
                 save_state()
                 return
         except Exception:
@@ -10636,31 +10630,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             _avg_dog_est = max(1, anchor_base - anchor_depth)  # estimate new avg dog price
-            # Phantom posts hedge at fav_bid — check if combined is within ceiling
-            _combined_est = _avg_dog_est + _current_fav_bid if _current_fav_bid > 0 else 999
-            _hedge_room = HARD_CEILING_CENTS - _combined_est  # positive = profitable
-            if _hedge_room < -5 or current_dog_bid <= 3:
-                bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'fav_bid': _current_fav_bid,
-                    'avg_dog_est': _avg_dog_est, 'combined_est': _combined_est,
-                    'hedge_room': _hedge_room,
-                    'reason': 'hedge_unfillable' if _hedge_room < -5 else 'dog_dead',
-                })
-                # Market is dead — stop the bot, don't leave it hanging
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                bot['repeat_count'] = 0  # cancel remaining repeats
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ hedge_gap={_hedge_gap} — market dead, stopping')
-                save_state()
-                return
-            # Don't repost if market is dead (bid at 1c = pointless)
+            # Drift guard: only stop if dog is dead (bid at 1¢) — let normal ceiling/sellback handle the rest
             if current_dog_bid <= 1:
+                bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
+                    'dog_bid': current_dog_bid, 'reason': 'dog_dead',
+                })
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
                 bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM REPEAT SKIP: {bot_id} dog bid={current_dog_bid}¢ — market dead, stopping')
-                bot_log('PHANTOM_REPEAT_SKIP', bot_id, {'dog_bid': current_dog_bid, 'reason': 'market_dead'})
-                _audit('PHANTOM_REPEAT_SKIP', bot_id, {'dog_bid': current_dog_bid})
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
                 save_state()
                 return
             # spread and anchor_base already computed above for hedge check

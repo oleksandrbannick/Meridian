@@ -4180,6 +4180,15 @@ def _ladder_sweep_then_hedge(bot_id):
 def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
     """Sell all filled ladder rung contracts back."""
     now = time.time()
+    # Safety: cancel fav hedge if still live
+    _fav_oid = bot.get('fav_order_id')
+    if _fav_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(_fav_oid)
+        except Exception:
+            pass
+        bot['fav_order_id'] = None
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     total_fill_qty = bot.get('hedge_qty') or sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
@@ -10162,6 +10171,7 @@ def _handle_phantom(bot_id, bot, actions):
                 kalshi_client.cancel_order(fav_order_id)
             except Exception:
                 pass
+            bot['fav_order_id'] = None  # clear so sellback/repeat doesn't think hedge is live
             _over_combined = dog_price + current_fav_bid
             print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ combined_at_bid={_over_combined}¢ — selling back')
             bot_log('PHANTOM_CEILING_EXIT', bot_id, {
@@ -10186,6 +10196,7 @@ def _handle_phantom(bot_id, bot, actions):
                 kalshi_client.cancel_order(fav_order_id)
             except Exception:
                 pass
+            bot['fav_order_id'] = None
             print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ would make combined={combined}¢ > {WALK_CEILING}¢ — selling back')
             bot_log('PHANTOM_CEILING_EXIT', bot_id, {
                 'dog_price': dog_price, 'fav_bid': current_fav_bid,
@@ -11434,6 +11445,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 kalshi_client.cancel_order(fav_order_id)
             except Exception:
                 pass
+            bot['fav_order_id'] = None
             _over = avg_dog + current_fav_bid
             print(f'🚫 PHANTOM LADDER CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav}¢ combined_at_bid={_over}¢ — selling back')
             bot_log('PHANTOM_LADDER_CEILING_EXIT', bot_id, {
@@ -12968,6 +12980,15 @@ def _handle_apex(bot_id, bot, actions):
 def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     """Sell the filled dog leg back to recover capital when arb is dead."""
     now = time.time()
+    # Safety: cancel fav hedge if still live
+    _fav_oid = bot.get('fav_order_id')
+    if _fav_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(_fav_oid)
+        except Exception:
+            pass
+        bot['fav_order_id'] = None
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     qty = bot.get('quantity', 1)

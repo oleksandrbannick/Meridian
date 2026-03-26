@@ -355,11 +355,13 @@ _TEAM_ALIASES = {
 
 @app.route('/')
 def index():
-    """Serve the frontend — no-cache so Cloudflare/mobile always gets fresh code"""
+    """Serve the frontend — aggressive no-cache for Cloudflare/mobile"""
     resp = make_response(send_from_directory(app.static_folder, 'index.html'))
-    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0'
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
+    resp.headers['CDN-Cache-Control'] = 'no-store'
+    resp.headers['Cloudflare-CDN-Cache-Control'] = 'no-store'
     return resp
 
 
@@ -368,9 +370,11 @@ def serve_static(path):
     """Serve static files — disable cache for JS/HTML/CSS"""
     resp = make_response(send_from_directory(app.static_folder, path))
     if path.endswith(('.js', '.html', '.css')):
-        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0'
         resp.headers['Pragma'] = 'no-cache'
         resp.headers['Expires'] = '0'
+        resp.headers['CDN-Cache-Control'] = 'no-store'
+        resp.headers['Cloudflare-CDN-Cache-Control'] = 'no-store'
     return resp
 
 

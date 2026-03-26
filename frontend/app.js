@@ -1205,9 +1205,9 @@ async function autoLogin() {
             await loadBalance();
             startBalancePoll();  // live balance updates every 15s via WS cache
             await loadBots();
-            loadPnL();
+            await loadPnL();
             loadOpeningLines(); // fire-and-forget, non-blocking
-            loadMarkets(); // non-blocking — don't let slow markets delay page
+            await loadMarkets();
 
             // Auto-resume monitoring if bots exist
             await autoResumeMonitor();

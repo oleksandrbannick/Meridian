@@ -10147,57 +10147,57 @@ def _handle_phantom(bot_id, bot, actions):
         walk_type = 'snap_to_bid'
         combined = dog_price + new_fav_price
         if combined > WALK_CEILING:
-            return  # would exceed ceiling
-
-            # Amend fav order (shared lock with WS instant drop to prevent race)
+            # Bid is above ceiling — sell back, can't hedge profitably
             try:
-                _phantom_drop_lock.acquire()
-                try:
-                    fav_order_id = bot.get('fav_order_id', fav_order_id)
-                    amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
-                    api_rate_limiter.wait()
-                    _amend_resp = kalshi_client.amend_order(
-                        fav_order_id, ticker=hedge_ticker, side=fav_side,
-                        count=qty, **amend_kwargs
-                    )
-                    # Capture new order ID if Kalshi reassigned (price change = cancel+repost)
-                    _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                    _new_oid = _amend_order.get('order_id', '')
-                    if _new_oid and _new_oid != fav_order_id:
-                        bot['fav_order_id'] = _new_oid
-                        if fav_side == 'yes':
-                            bot['yes_order_id'] = _new_oid
-                        else:
-                            bot['no_order_id'] = _new_oid
-                        fav_order_id = _new_oid
-                finally:
-                    _phantom_drop_lock.release()
-                walk_count = bot.get('fav_walk_count', 0) + 1
-                direction = '↓' if new_fav_price < current_fav_price else '↑'
-                print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
-                      f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
-                bot_log('PHANTOM_WALK_SUCCESS', bot_id, {
-                    'walk_type': walk_type, 'old_price': current_fav_price,
-                    'new_price': new_fav_price, 'fav_bid': current_fav_bid,
-                    'fav_ask': current_fav_ask, 'fav_spread': fav_spread,
-                    'dog_price': dog_price, 'combined': combined,
-                    'ceiling': WALK_CEILING, 'snap_ready': snap_ready,
-                    'walk_count': walk_count, 'since_walk_s': round(since_last_walk, 1),
-                    'wait_s': round(wait_s, 1),
-                    'walk_interval': walk_interval,
-                })
-                bot['fav_price'] = new_fav_price
-                bot['fav_walk_count'] = walk_count
-                bot['fav_last_walk_at'] = now
-                if fav_side == 'yes':
-                    bot['yes_price'] = new_fav_price
-                else:
-                    bot['no_price'] = new_fav_price
-                save_state()
-                actions.append({'bot_id': bot_id, 'action': f'anchor_fav_{walk_type}',
-                                'old_price': current_fav_price, 'new_price': new_fav_price,
-                                'walk_count': walk_count, 'combined': combined})
-            except Exception as e:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_order_id)
+            except Exception:
+                pass
+            print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ would make combined={combined}¢ > {WALK_CEILING}¢ — selling back')
+            bot_log('PHANTOM_CEILING_EXIT', bot_id, {
+                'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                'combined': combined, 'ceiling': WALK_CEILING,
+            })
+            _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
+            return
+
+        # Amend fav order (shared lock with WS instant drop to prevent race)
+        try:
+            _phantom_drop_lock.acquire()
+            try:
+                fav_order_id = bot.get('fav_order_id', fav_order_id)
+                amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(
+                    fav_order_id, ticker=hedge_ticker, side=fav_side,
+                    count=qty, **amend_kwargs
+                )
+            finally:
+                _phantom_drop_lock.release()
+            walk_count = bot.get('fav_walk_count', 0) + 1
+            direction = '↓' if new_fav_price < current_fav_price else '↑'
+            print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
+                  f'(bid={current_fav_bid}¢ combined={combined}¢ ceiling={WALK_CEILING}¢ step #{walk_count})')
+            bot_log('PHANTOM_WALK_SUCCESS', bot_id, {
+                'walk_type': walk_type, 'old_price': current_fav_price,
+                'new_price': new_fav_price, 'fav_bid': current_fav_bid,
+                'fav_ask': current_fav_ask,
+                'dog_price': dog_price, 'combined': combined,
+                'ceiling': WALK_CEILING,
+                'walk_count': walk_count, 'wait_s': round(wait_s, 1),
+            })
+            bot['fav_price'] = new_fav_price
+            bot['fav_walk_count'] = walk_count
+            bot['fav_last_walk_at'] = now
+            if fav_side == 'yes':
+                bot['yes_price'] = new_fav_price
+            else:
+                bot['no_price'] = new_fav_price
+            save_state()
+            actions.append({'bot_id': bot_id, 'action': f'anchor_fav_{walk_type}',
+                            'old_price': current_fav_price, 'new_price': new_fav_price,
+                            'walk_count': walk_count, 'combined': combined})
+        except Exception as e:
                 err_str = str(e)
                 print(f'❌ PHANTOM {bot_id}: fav {walk_type} amend failed: {e}')
                 bot_log('PHANTOM_WALK_ERROR', bot_id, {

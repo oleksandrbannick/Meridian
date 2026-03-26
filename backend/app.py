@@ -10110,65 +10110,9 @@ def _handle_phantom(bot_id, bot, actions):
         if walk_target <= 0:
             return
 
-        # ── Ceiling sellback: only at 99¢+ combined (guaranteed loss) ──
-        # At 98¢: hold for fill — breakeven/1¢ profit beats taker-fee sellback loss
-        # At 99¢+: even if hedge fills, fee eats the profit — sell back
-        if max_fav_hold > 0 and current_fav_bid > max_fav_hold:
-            # Combined would be 99+, check if we should sell back
-            _ceil_fav_filled = bot.get('fav_fill_qty', 0)
-            try:
-                api_read_limiter.wait()
-                _ceil_fav_ord = kalshi_client.get_order(fav_order_id)
-                _ceil_fav_filled = max(_ceil_fav_filled, _parse_fill_count(_ceil_fav_ord.get('order', _ceil_fav_ord)))
-                bot['fav_fill_qty'] = _ceil_fav_filled
-            except Exception:
-                pass
-            qty = bot.get('quantity', 1)
-            if _ceil_fav_filled >= qty:
-                return  # Filled — let completion handle it
-            bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
-                'dog_price': dog_price, 'fav_price': current_fav_price,
-                'max_fav_hold': max_fav_hold, 'ceiling': WALK_CEILING,
-                'fav_bid': current_fav_bid, 'fav_filled': _ceil_fav_filled,
-                'qty': qty, 'wait_s': round(wait_s, 1),
-                'reason': 'combined_99_plus',
-            })
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_order_id)
-            except Exception:
-                pass
-            if _ceil_fav_filled > 0 and _ceil_fav_filled < qty:
-                sell_qty = qty - _ceil_fav_filled
-                fav_price = current_fav_price
-                profit_per = 100 - dog_price - fav_price
-                est_fee = kalshi_fee_cents(
-                    dog_price if bot['dog_side'] == 'yes' else fav_price,
-                    dog_price if bot['dog_side'] == 'no' else fav_price,
-                    _ceil_fav_filled
-                )
-                net_profit = max(0, profit_per * _ceil_fav_filled - est_fee)
-                session_pnl['gross_profit_cents'] += net_profit
-                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
-                _record_trade({
-                    'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': dog_price if bot['dog_side'] == 'yes' else fav_price,
-                    'no_price': dog_price if bot['dog_side'] == 'no' else fav_price,
-                    'quantity': _ceil_fav_filled, 'profit_cents': net_profit, 'loss_cents': 0,
-                    'fee_cents': est_fee, 'result': 'anchor_partial_arb',
-                    'exit_via': 'ceiling_sellback_partial',
-                    'timestamp': now, 'placed_at': bot.get('created_at', now),
-                    'arb_width': bot.get('target_width', 0),
-                    'fill_source': 'anchor_dog', 'bot_category': 'anchor_dog',
-                }, bot)
-                print(f'🚫 PHANTOM CEILING (PARTIAL): {bot_id} fav {_ceil_fav_filled}/{qty} filled at {fav_price}¢ (ceiling {max_fav_hold}¢) — selling back {sell_qty} dogs')
-                bot['quantity'] = sell_qty
-                _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-                bot['quantity'] = qty
-            else:
-                print(f'🚫 PHANTOM CEILING 99+: {bot_id} fav_bid={current_fav_bid}¢ > max_hold={max_fav_hold}¢ — selling dog back')
-                _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-            return
+        # No premature ceiling sellback — snap to max_fav_hold and hold.
+        # The normal hedge timeout handles exits if the fill never comes.
+        # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
 
         # ── Bid-follow: always snap to bid, no walk intervals ──
         # Phantom follows the bid every cycle. No 20s crawl, no +1¢ steps.

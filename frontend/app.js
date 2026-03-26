@@ -6894,10 +6894,8 @@ async function loadBots() {
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
-            // Awaiting settlement bots shown inline now
+            // Awaiting settlement bots shown inline
             if (s === 'awaiting_settlement') return true;
-            // Cross-market completed bots stay visible until positions cleared
-            if ((s === 'completed' || s === 'stopped') && bots[id].cross_market && !bots[id]._positions_cleared) return true;
             // Smart-stopped bots stay visible
             if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
             // Keep completed/stopped bots visible for 3 seconds

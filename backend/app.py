@@ -10162,35 +10162,7 @@ def _handle_phantom(bot_id, bot, actions):
             current_fav_ask = 0
 
         if current_fav_bid <= 0:
-            # No fav bid — patience tier logic before bailing
-            # First half of timeout: only bail on confirmed blowout (dog price crashed 50%+)
-            # Second half: bail if no fav bid (existing behavior)
-            _no_bid_count = bot.get('_no_fav_bid_count', 0) + 1
-            bot['_no_fav_bid_count'] = _no_bid_count
-            _dog_bid_now = bot.get(f'live_{bot["dog_side"]}_bid', dog_price)  # current dog bid from WS
-            _dog_crashed = _dog_bid_now < dog_price * 0.5  # dog lost 50%+ value
-            _patience_half = hedge_timeout_s * 0.5
-            _bail_threshold = hedge_timeout_s * 0.75
-            # No game-phase urgency for phantom — fixed timeout behavior
-            _force_bail = False
-            _should_bail = _force_bail or (wait_s >= _bail_threshold) or (wait_s >= _patience_half and _dog_crashed and _no_bid_count >= 2)
-            _patience_tier = 'critical_bail' if _force_bail else 'blowout_bail' if (_dog_crashed and _no_bid_count >= 2) else 'timeout_bail' if wait_s >= _bail_threshold else 'waiting'
-            bot_log('PHANTOM_NO_FAV_BID_WALK', bot_id, {
-                'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
-                'bail_threshold': round(_bail_threshold, 1),
-                'patience_tier': _patience_tier, 'no_bid_count': _no_bid_count,
-                'dog_price': dog_price, 'dog_bid_now': _dog_bid_now,
-                'dog_crashed': _dog_crashed,
-                'will_bail': _should_bail,
-            })
-            if _should_bail:
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(fav_order_id)
-                except Exception:
-                    pass
-                _phantom_sell_back(bot_id, bot, dog_price, 0, 999, actions)
-            return
+            return  # no fav bid — normal hedge timeout will handle bail
 
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
@@ -11468,25 +11440,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             current_fav_ask = 0
 
         if current_fav_bid <= 0:
-            # No fav bid — patience tier logic before bailing (same as single-rung phantom)
-            _no_bid_count = bot.get('_no_fav_bid_count', 0) + 1
-            bot['_no_fav_bid_count'] = _no_bid_count
-            _dog_bid_now = bot.get(f'live_{dog_side}_bid', avg_dog)
-            _dog_crashed = _dog_bid_now < avg_dog * 0.5
-            hedge_timeout_s = bot.get('hedge_timeout_s', 120)
-            _fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
-            _wait_s = now - _fav_posted_at
-            _bail_threshold = hedge_timeout_s * 0.75
-            _patience_half = hedge_timeout_s * 0.5
-            _should_bail = (_wait_s >= _bail_threshold) or (_wait_s >= _patience_half and _dog_crashed and _no_bid_count >= 2)
-            if _should_bail:
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(fav_order_id)
-                except Exception:
-                    pass
-                _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
-                return
             return
 
         bot['_no_fav_bid_count'] = 0
@@ -13262,7 +13215,7 @@ def _run_monitor():
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
                       and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
-                      and not (b.get('cross_market') and not b.get('_positions_cleared'))]  # keep cross-market until settled
+                      ]
         if _purge_ids:
             for _pid in _purge_ids:
                 del active_bots[_pid]

@@ -9995,8 +9995,18 @@ def _handle_phantom(bot_id, bot, actions):
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
             else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                if _is_cross:
+                    bot['status'] = 'awaiting_settlement'
+                    bot['awaiting_since'] = now
+                    print(f'⏳ PHANTOM AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot["hedge_ticker"]}')
+                    bot_log('PHANTOM_AWAITING_SETTLEMENT', bot_id, {
+                        'ticker': ticker, 'hedge_ticker': bot['hedge_ticker'],
+                        'qty': bot.get('dog_fill_qty', qty), 'pnl': net_pnl,
+                    })
+                else:
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
                 bot['_just_completed'] = True
                 bot['_last_pnl'] = net_pnl
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
@@ -11458,6 +11468,25 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             current_fav_ask = 0
 
         if current_fav_bid <= 0:
+            # No fav bid — patience tier logic before bailing (same as single-rung phantom)
+            _no_bid_count = bot.get('_no_fav_bid_count', 0) + 1
+            bot['_no_fav_bid_count'] = _no_bid_count
+            _dog_bid_now = bot.get(f'live_{dog_side}_bid', avg_dog)
+            _dog_crashed = _dog_bid_now < avg_dog * 0.5
+            hedge_timeout_s = bot.get('hedge_timeout_s', 120)
+            _fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
+            _wait_s = now - _fav_posted_at
+            _bail_threshold = hedge_timeout_s * 0.75
+            _patience_half = hedge_timeout_s * 0.5
+            _should_bail = (_wait_s >= _bail_threshold) or (_wait_s >= _patience_half and _dog_crashed and _no_bid_count >= 2)
+            if _should_bail:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(fav_order_id)
+                except Exception:
+                    pass
+                _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
+                return
             return
 
         bot['_no_fav_bid_count'] = 0

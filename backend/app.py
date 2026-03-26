@@ -3891,6 +3891,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             if _fav_ask <= 0:
                 _opp_bid = bot.get(f'{_ppfx}{"no" if fav_side == "yes" else "yes"}_bid', 0)
                 _fav_ask = (100 - _opp_bid) if _opp_bid > 0 else 0
+        _fav_spread = (_fav_ask - _fav_bid) if _fav_ask > 0 and _fav_bid > 0 else 0
 
         if _fav_bid > 0:
             # Always post at bid — phantom needs ceiling margin, walk follows bid
@@ -9531,10 +9532,18 @@ def _handle_phantom(bot_id, bot, actions):
                     for _dm_oid in bot.get('_all_dog_order_ids', []):
                         if _dm_oid and _dm_oid != dog_order_id:
                             _safe_cancel(_dm_oid, f'phantom dead market old dog {bot_id}')
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
-                    bot['repeat_count'] = 0
-                    bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
+                    # Preserve repeats — dead market is temporary, don't count as a cycle
+                    _repeat_count = bot.get('repeat_count', 0)
+                    _repeats_done = bot.get('repeats_done', 0)
+                    if _repeat_count > 0 and _repeats_done < _repeat_count:
+                        bot['status'] = 'waiting_repeat'
+                        bot['waiting_repeat_since'] = time.time()
+                        print(f'🔄 DEAD MARKET REPEAT: {bot_id} — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
+                    else:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        bot['repeat_count'] = 0
+                    bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'will_repeat': bot['status'] == 'waiting_repeat'})
                     _audit('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
                     actions.append({'bot_id': bot_id, 'action': 'anchor_dead_market_cancel'})
                     save_state()
@@ -10288,10 +10297,18 @@ def _handle_phantom(bot_id, bot, actions):
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
+                # Preserve repeats — no market is temporary
+                _repeat_count = bot.get('repeat_count', 0)
+                _repeats_done = bot.get('repeats_done', 0)
+                if _repeat_count > 0 and _repeats_done < _repeat_count:
+                    bot['status'] = 'waiting_repeat'
+                    bot['waiting_repeat_since'] = time.time()
+                    print(f'🔄 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
+                else:
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    bot['repeat_count'] = 0
+                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
                 save_state()
                 return
             # Smart pricing first — need new_dog_price for hedge fill check
@@ -12258,8 +12275,9 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_target_hedge_price'] = target_hedge
                 bot['_avg_width'] = weighted_avg_width
 
-                # Safety: cap at 98¢ combined
-                max_safe = HARD_CEILING_CENTS - avg_filled_price
+                # Safety: cap at per-bot ceiling (default 98¢)
+                _bot_ceiling_for_hedge = bot.get('hard_ceiling', HARD_CEILING_CENTS)
+                max_safe = _bot_ceiling_for_hedge - avg_filled_price
                 if hedge_price > max_safe:
                     print(f'⚠ APEX CEILING: {bot_id} target_hedge={target_hedge}¢ capped to {max_safe}¢ (avg_anchor={avg_filled_price}¢)')
                     hedge_price = max(max_safe, 1)
@@ -12539,15 +12557,20 @@ def _handle_apex(bot_id, bot, actions):
                             _bid_gap = max(_gap_above, _gap_below)
                             bot['_bid_gap'] = _bid_gap
                             _bid_drift_threshold = 5 if _apex_urgency == 'critical' else 10 if _apex_urgency == 'late' else 0
+                            # Grace period: don't check bid-drift until hedge has been alive for 30s
+                            _fav_posted_at = bot.get('fav_posted_at')
+                            _hedge_age_for_drift = (now - _fav_posted_at) if _fav_posted_at else 999
                             if (_bid_drift_threshold > 0 and _bid_gap >= _bid_drift_threshold
+                                    and _hedge_age_for_drift >= 30
                                     and unfilled_bid > 0 and not bot.get('_trade_recorded')
                                     and not bot.get('_apex_sellback_attempted')):
                                 print(f'🚨 APEX BID-DRIFT EXIT: {bot_id} hedge@{current_price}¢ bid@{unfilled_bid}¢ '
-                                      f'gap={_bid_gap}¢ threshold={_bid_drift_threshold}¢ urgency={_apex_urgency}')
+                                      f'gap={_bid_gap}¢ threshold={_bid_drift_threshold}¢ urgency={_apex_urgency} age={_hedge_age_for_drift:.0f}s')
                                 bot_log('APEX_BID_DRIFT_EXIT', bot_id, {
                                     'hedge_price': current_price, 'bid': unfilled_bid,
                                     'gap': _bid_gap, 'threshold': _bid_drift_threshold,
                                     'urgency': _apex_urgency, 'combined': combined,
+                                    'hedge_age_s': round(_hedge_age_for_drift, 1),
                                 })
                                 bot['_apex_sellback_attempted'] = True
                                 _apex_sell_back(bot_id, bot, anchor_price_for_ceiling, unfilled_bid, actions)
@@ -13160,7 +13183,7 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
-                      and not b.get('repeat_count', 0) >= b.get('repeats_done', 0)]  # keep if repeats pending
+                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)]  # keep if repeats pending
         if _purge_ids:
             for _pid in _purge_ids:
                 del active_bots[_pid]

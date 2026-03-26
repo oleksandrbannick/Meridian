@@ -6163,8 +6163,9 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                     rung['time_stage'] = 'panic'
                     rung['stage_entered_at'] = now
 
-    # Get live bid for hedge side
+    # Get live bid/ask for hedge side
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
+    hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
 
     # Midpoint drift check: if market moved against us, escalate
     current_midpoint = (bot.get('live_yes_bid', 0) + bot.get('live_no_bid', 0)) // 2
@@ -6243,9 +6244,11 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     should_stop = adverse_drift or (unrealized_loss >= stop_threshold and hedge_bid > 0)
 
     if should_stop or elapsed >= APEX_SCRATCH_WINDOW_S + 30:  # hard 60s max
-        # Execute stop: amend to bid+1 (aggressive maker) or cross as taker
+        # Execute stop: maker at bid (tight) or bid+1 (gapped) — never cross to ask
         if hedge_oid and hedge_bid > 0:
-            stop_price = min(hedge_bid + 1, 98 - anchor_price)
+            spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+            stop_price = hedge_bid + 1 if spread > 1 else hedge_bid  # bid+1 only if gapped
+            stop_price = min(stop_price, 98 - anchor_price)
             stop_price = max(1, stop_price)
             try:
                 amend_kwargs = {f'{hedge_side}_price': stop_price}
@@ -6254,7 +6257,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                                          count=qty, action='buy', **amend_kwargs)
                 rung['hedge_price'] = stop_price
                 rung['stop_price'] = stop_price
-                print(f'🛑 APEX STOP: {bot_id} rung#{rung_idx} ({width}c) → bid+1 @{stop_price}c (loss≈{unrealized_loss}c)')
+                print(f'🛑 APEX STOP: {bot_id} rung#{rung_idx} ({width}c) → {"bid+1" if spread > 1 else "bid"} @{stop_price}c (spread={spread}c loss≈{unrealized_loss}c)')
                 bot_log('APEX_PANIC_STOP', bot_id, {
                     'rung_idx': rung_idx, 'width': width, 'stop_price': stop_price,
                     'hedge_bid': hedge_bid, 'unrealized_loss': unrealized_loss,

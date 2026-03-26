@@ -1,4 +1,6 @@
 // Meridian — Sports Trading Terminal
+window.onerror = function(msg, url, line, col, err) { console.error('🔴 GLOBAL ERROR:', msg, 'at', url, 'line', line, col, err); document.title = 'JS ERR: ' + msg; };
+window.addEventListener('unhandledrejection', function(e) { console.error('🔴 UNHANDLED PROMISE:', e.reason); });
 /** Return local YYYY-MM-DD string (avoids UTC date-shift bug) */
 function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
 
@@ -572,6 +574,8 @@ function filterBySport(sport) {
 }
 
 function applyFilters() {
+    try {
+    console.log('🔍 applyFilters called, allMarkets:', allMarkets.length);
     const query = (document.getElementById('search-box')?.value || '').toLowerCase();
     let filtered = allMarkets;
 
@@ -629,7 +633,9 @@ function applyFilters() {
     }
 
     window._lastFilteredMarkets = filtered;
+    console.log('🔍 applyFilters displaying', filtered.length, 'markets');
     displayMarkets(filtered);
+    } catch(e) { console.error('🔴 applyFilters ERROR:', e); document.getElementById('markets-grid').innerHTML = `<p style="color:red;grid-column:1/-1;">applyFilters error: ${e.message}<br><pre>${e.stack}</pre></p>`; }
 }
 
 // ─── LIVE BADGE on game event rows ────────────────────────────────────────────
@@ -1432,8 +1438,10 @@ async function refreshVisiblePrices() {
 
 // Display markets using trading floor layout (compact event rows)
 function displayMarkets(markets) {
+    console.log('🖥 displayMarkets called with', markets?.length, 'markets');
+    try {
     const grid = document.getElementById('markets-grid');
-    
+
     if (!markets ||markets.length === 0) {
         grid.innerHTML = '<p style="color: #8892a6; grid-column: 1 / -1;">No markets to display.</p>';
         return;
@@ -1506,6 +1514,7 @@ function displayMarkets(markets) {
     Object.values(events).forEach(eventData => {
         displayEventRow(eventData, grid);
     });
+    } catch(e) { console.error('🔴 displayMarkets ERROR:', e); document.getElementById('markets-grid').innerHTML = `<p style="color:red;grid-column:1/-1;">displayMarkets error: ${e.message}<br><pre>${e.stack}</pre></p>`; }
 }
 
 // Group markets by GAME - extracts game ID from event_ticker

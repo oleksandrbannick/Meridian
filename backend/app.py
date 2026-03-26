@@ -446,8 +446,13 @@ def auto_login():
             ws_manager.connect(kalshi_client)
             ws_manager.start_balance_poll(kalshi_client)
             # Subscribe to tickers of any existing active bots
-            active_tickers = list({b['ticker'] for b in active_bots.values()
-                                   if b.get('status') in ('fav_posted', 'pending_fills', 'yes_filled', 'no_filled', 'watching')})
+            _ws_tickers = set()
+            for b in active_bots.values():
+                if b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead'):
+                    _ws_tickers.add(b['ticker'])
+                    if b.get('hedge_ticker') and b['hedge_ticker'] != b['ticker']:
+                        _ws_tickers.add(b['hedge_ticker'])
+            active_tickers = list(_ws_tickers)
             if active_tickers:
                 threading.Timer(2.0, lambda: ws_manager.subscribe(active_tickers)).start()
         except Exception as ws_err:
@@ -18542,8 +18547,13 @@ def _run_startup():
                 try:
                     ws_manager.connect(kalshi_client)
                     ws_manager.start_balance_poll(kalshi_client)
-                    active_tickers = list({b['ticker'] for b in active_bots.values()
-                                           if b.get('status') in ('pending_fills', 'yes_filled', 'no_filled', 'watching')})
+                    _ws_tickers = set()
+                    for b in active_bots.values():
+                        if b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead'):
+                            _ws_tickers.add(b['ticker'])
+                            if b.get('hedge_ticker') and b['hedge_ticker'] != b['ticker']:
+                                _ws_tickers.add(b['hedge_ticker'])
+                    active_tickers = list(_ws_tickers)
                     if active_tickers:
                         threading.Timer(2.0, lambda: ws_manager.subscribe(active_tickers)).start()
                 except Exception as ws_err:

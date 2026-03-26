@@ -3656,7 +3656,7 @@ function initAnchorDogPrices() {
     let anchorDepth = parseInt(depthSlider?.value) || 0;
     const isAutoDepth = anchorDepth <= 0;
     if (isAutoDepth) {
-        anchorDepth = targetWidth <= 3 ? 5 : Math.max(5, Math.round(targetWidth * 0.8));
+        anchorDepth = targetWidth <= 1 ? 3 : targetWidth <= 3 ? 5 : Math.max(5, targetWidth);
     }
     const smartPrice = Math.max(1, anchorBase - anchorDepth);
 
@@ -3731,7 +3731,7 @@ function initAnchorDogPrices() {
                 </div>`;
         }
         // Update fav bid detail
-        const _fav_shave_preview = isAutoDepth ? (targetWidth <= 3 ? 0 : Math.max(0, targetWidth - anchorDepth)) : Math.max(0, targetWidth - anchorDepth);
+        const _fav_shave_preview = 0;  // all depth on dog, fav posts at bid
         const _fav_start = _fav_shave_preview > 0 ? Math.max(1, _anchorFavBid - _fav_shave_preview) : _anchorFavBid;
         const favBidElNew = document.getElementById('anchor-auto-fav-bid');
         if (favBidElNew) favBidElNew.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#00aaff;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
@@ -3913,11 +3913,14 @@ function updateAnchorPreview() {
     const shaveInfo = document.getElementById('anchor-shave-info');
     let fav_shave = 0;
     if (anchorDepth <= 0) {
-        if (targetWidth <= 3) {
+        if (targetWidth <= 1) {
+            anchorDepth = 3;
+            fav_shave = 0;
+        } else if (targetWidth <= 3) {
             anchorDepth = 5;
             fav_shave = 0;
         } else {
-            anchorDepth = Math.max(5, Math.round(targetWidth * 0.8));
+            anchorDepth = Math.max(5, targetWidth);
             fav_shave = Math.max(0, targetWidth - anchorDepth);
         }
         if (depthDisplay) depthDisplay.textContent = `auto (${anchorDepth}¢)`;

@@ -1175,18 +1175,10 @@
                                 </label>
                             </div>
                         </div>
-                        <div>
-                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Ceiling <span id="ceiling-value" style="color:#ffaa00;font-weight:700;">98¢</span></label>
-                            <input type="range" id="bot-ceiling" min="96" max="98" value="98" step="1"
-                                   oninput="document.getElementById('ceiling-value').textContent=this.value+'¢';document.getElementById('ceiling-value').style.color=this.value<=96?'#00ff88':this.value<=97?'#ffaa00':'#ff4444';"
-                                   style="width:100%;accent-color:#ffaa00;"
-                                   title="Max combined price (anchor+hedge). 96¢ = guaranteed profit, 97¢ = thin profit, 98¢ = breakeven">
-                        </div>
                     </div>
                     <div id="bot-game-phase-display" style="display:none;">🔄 Auto</div>
-                    <div style="margin-bottom:16px;padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#8892a6;">⚡ Simultaneous:</strong> Both YES+NO post below bids. When one fills, walks the other up +1¢/20s toward the bid (maker only).<br>
-                        <strong style="color:#8892a6;">⚡ Snap-to-bid:</strong> At 98¢+ combined, jumps straight to bid to finish fast. Reposts every 3 min if no fills.
+                    <div style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00aaff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;">
+                        <strong style="color:#00aaff;">△ Apex 2.0</strong> — Posts YES+NO per rung. On fill: <span style="color:#00ff88;">15s profit</span> → <span style="color:#ffaa00;">15s scratch</span> → <span style="color:#ff4444;">panic at bid</span>. Each rung is an independent scalp. Reposts every 1 min if no fills.
                     </div>
 
                     <!-- All-widths stats preview (shown inline when multiple selected) -->
@@ -3096,6 +3088,6 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1774558053"></script>
+    <script src="app.js?v=1774561026"></script>
 </body>
 </html>

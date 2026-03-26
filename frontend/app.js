@@ -4545,59 +4545,30 @@ function openBotModal(market, _side, _price) {
     const signal = getGameSignal(gameId, sport, [market]);
     const sigType = signal.type; // anchor, swing, caution, pregame, none
     const recEl = document.getElementById('preset-recommendation');
+    // Apex 2.0: show game signal info only (no auto-selected widths)
     if (recEl && liq.yesBid > 0 && liq.noBid > 0) {
-        const recPresets = getRecommendedPresets(liq.tier, sigType, market);
-        const recLabel = recPresets.join('¢, ') + '¢';
-        // Signal-aware recommendation text
-        let sigText = '', sigColor = liq.tierColor;
-        if (sigType === 'coin_flip') {
-            sigText = '🔵 COIN FLIP — close game, both legs will bounce → best entry';
-            sigColor = '#60a5fa';
-        } else if (sigType === 'lean') {
-            sigText = '🟢 LEAN — small lead, still volatile, decent entry';
-            sigColor = '#4ade80';
-        } else if (sigType === 'drifting') {
-            sigText = '🟡 DRIFTING — lead building, dog fills getting harder';
-            sigColor = '#ffaa33';
-        } else if (sigType === 'runaway') {
-            sigText = '🔴 RUNAWAY — blowout, dog side dead, use very wide or skip';
-            sigColor = '#ff6644';
-        } else if (sigType === 'late_game') {
-            sigText = '⌛ LATE GAME — running out of time for both legs to fill';
-            sigColor = '#ff4444';
-        } else if (sigType === 'early') {
-            sigText = '⚪ EARLY — game just started, no score context yet';
-            sigColor = '#8892a6';
-        } else if (sigType === 'pregame') {
-            sigText = '⏳ PREGAME — waiting for tip-off';
-            sigColor = '#8892a6';
-        } else {
-            sigText = `💡 ${liq.tierLabel}`;
-        }
+        let sigText = '', sigColor = '#8892a6';
+        if (sigType === 'coin_flip') { sigText = '🔵 COIN FLIP — close game, both legs bounce'; sigColor = '#60a5fa'; }
+        else if (sigType === 'lean') { sigText = '🟢 LEAN — small lead, still volatile'; sigColor = '#4ade80'; }
+        else if (sigType === 'drifting') { sigText = '🟡 DRIFTING — lead building, dog fills harder'; sigColor = '#ffaa33'; }
+        else if (sigType === 'runaway') { sigText = '🔴 RUNAWAY — blowout, very wide or skip'; sigColor = '#ff6644'; }
+        else if (sigType === 'late_game') { sigText = '⌛ LATE — running out of time'; sigColor = '#ff4444'; }
+        else if (sigType === 'early') { sigText = '⚪ EARLY — no score context yet'; sigColor = '#8892a6'; }
+        else if (sigType === 'pregame') { sigText = '⏳ PREGAME'; sigColor = '#8892a6'; }
+        else { sigText = `💡 ${liq.tierLabel}`; }
         recEl.style.display = 'block';
         recEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">`
             + `<span style="color:${sigColor};font-weight:700;">${sigText}</span>`
             + `<span style="color:#8892a6;font-size:10px;">${liq.yesBid}+${liq.noBid}=${liq.bidSum}¢ · spread ${liq.avgSpread}¢</span>`
-            + `</div>`
-            + (signal.description ? `<div style="color:#6a7488;font-size:10px;margin-top:2px;">${signal.description}</div>` : '');
-        // Highlight recommended tier buttons + add ★ to ALL recommended
-        window._recPresets = recPresets;  // store for _syncPresetStyles
-        _selectedWidths.clear();
-        recPresets.forEach(w => _selectedWidths.add(w));
-        _syncPresetStyles();
-        // Set slider to middle preset for price display
-        const midPreset = recPresets[Math.floor(recPresets.length / 2)];
-        const widthSlider = document.getElementById('bot-arb-width');
-        if (widthSlider) { widthSlider.value = midPreset; }
-        document.getElementById('width-display').textContent = `${midPreset}¢`;
-        recalcArbPrices();
-        _updateDeployButton();
-        updateAllWidthsPreview();
+            + `</div>`;
     } else if (recEl) {
         recEl.style.display = 'none';
-        window._recPresets = [];
-        _syncPresetStyles();
     }
+    window._recPresets = [];
+    _selectedWidths.clear();
+    _syncPresetStyles();
+    recalcArbPrices();
+    _updateDeployButton();
 
     // Underdog warning removed — no longer relevant for dual arb strategy
     const warnEl = document.getElementById('modal-underdog-warning');
@@ -4858,11 +4829,11 @@ function updateProfitPreview() {
     const favEntry = Math.max(yes, no);
 
 
-    // Exit timer info
+    // Exit info
     const exitInfo = isArb
         ? `<div style="padding:6px 16px 10px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:10px;color:#8892a6;border-top:1px solid #00aaff11;">
                <span style="color:#00aaff;">⏱</span>
-               <span>Simultaneous orders — if one leg fills solo: fav fills → 20 min exit · dog fills → 10 min exit</span>
+               <span>On fill → <span style="color:#00ff88;">15s profit</span> → <span style="color:#ffaa00;">15s scratch</span> → <span style="color:#ff4444;">panic at bid</span></span>
            </div>`
         : '';
 
@@ -4915,28 +4886,20 @@ function applyPreset(width) {
 }
 
 function _syncPresetStyles() {
-    const recPresets = window._recPresets || [];
     document.querySelectorAll('.arb-preset-btn').forEach(btn => {
         const w = parseInt(btn.dataset.width);
         const label = btn.querySelector('div');
-        const isRec = recPresets.includes(w);
         const isSelected = _selectedWidths.has(w);
         if (isSelected) {
             btn.style.border = '2px solid #ffd700';
             btn.style.background = '#ffd70022';
             btn.style.boxShadow = '0 0 8px #ffd70044';
-            if (label) {
-                label.textContent = isRec ? `${w}¢ ★` : `${w}¢`;
-                label.style.color = '#ffd700';
-            }
+            if (label) { label.textContent = `${w}¢`; label.style.color = '#ffd700'; }
         } else {
-            btn.style.border = isRec ? '2px dashed #ffaa3366' : '2px solid #1e274066';
+            btn.style.border = '2px solid #1e274066';
             btn.style.background = '#0a0e1a';
-            btn.style.boxShadow = isRec ? '0 0 6px #ffaa3322' : 'none';
-            if (label) {
-                label.textContent = isRec ? `${w}¢ ★` : `${w}¢`;
-                label.style.color = isRec ? '#ffaa33' : '#00ff88';
-            }
+            btn.style.boxShadow = 'none';
+            if (label) { label.textContent = `${w}¢`; label.style.color = '#00ff88'; }
         }
     });
 }
@@ -5065,7 +5028,13 @@ function closeOrderbookModal() {
 const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
-// Width scaling removed in Apex 2.0 — all rungs use same quantity
+// Apex 2.0 stop-loss thresholds per width (mirrors backend _apex_stop_loss_threshold)
+function _apexStopLossThreshold(width) {
+    if (width <= 5) return 8;
+    if (width <= 8) return 12;
+    if (width <= 14) return 20;
+    return 25;
+}
 
 // ── Multi-width selector state ──
 let _selectedWidths = new Set();
@@ -5156,9 +5125,12 @@ function updateAllWidthsPreview() {
         const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
         const qtyLabel = blocked ? '—' : `${rungQty}×`;
         const qtyColor = '#8892a6';
-        rows += `<div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
+        const slThreshold = _apexStopLossThreshold(w);
+        const slColor = slThreshold <= 8 ? '#00ff8888' : slThreshold <= 12 ? '#ffaa0088' : slThreshold <= 20 ? '#ff880088' : '#ff444488';
+        rows += `<div style="display:grid;grid-template-columns:28px 30px 30px 1fr 38px 34px 55px 46px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
             <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
             <span style="color:${qtyColor};font-size:10px;font-weight:700;text-align:center;">${qtyLabel}</span>
+            <span style="color:${blocked ? '#333' : slColor};font-size:9px;text-align:center;">${blocked ? '—' : slThreshold + '¢'}</span>
             <span style="color:${statusColor};font-size:10px;">${statusText}</span>
             <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : yesPrice + '¢'}</span>
             <span style="color:#8892a6;font-size:10px;text-align:center;">${blocked ? '—' : noPrice + '¢'}</span>
@@ -5171,9 +5143,10 @@ function updateAllWidthsPreview() {
     const profitDollars = (totalProfit / 100).toFixed(2);
     const qtyDesc = `${baseQty}× each`;
     preview.innerHTML = `
-        <div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
+        <div style="display:grid;grid-template-columns:28px 30px 30px 1fr 38px 34px 55px 46px;gap:3px;padding:2px 6px;margin-bottom:4px;">
             <span style="color:#555;font-size:9px;">W</span>
             <span style="color:#555;font-size:9px;text-align:center;">QTY</span>
+            <span style="color:#ff444488;font-size:9px;text-align:center;">SL</span>
             <span style="color:#555;font-size:9px;">STATUS</span>
             <span style="color:#555;font-size:9px;text-align:center;">YES</span>
             <span style="color:#555;font-size:9px;text-align:center;">NO</span>
@@ -5226,7 +5199,6 @@ async function createBot() {
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const smart_mode      = !!document.getElementById('apex-smart-mode')?.checked;
-    const hard_ceiling    = parseInt(document.getElementById('bot-ceiling')?.value) || 98;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
     if (yes_price + no_price >= 100) {
@@ -5248,7 +5220,8 @@ async function createBot() {
     const profitPer = 100 - yes_price - no_price;
     const totalCost = (yes_price + no_price) * quantity;
     const repeatMsg = smart_mode ? '\n↻ Smart Mode (repeat on wins, stop after 2 losses)' : repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    if (!confirm(`△ Deploy Apex Bot — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nWalk-up if one fills (+1¢/20s toward bid, maker only)${repeatMsg}\n\nConfirm order?`)) return;
+    const slInfo = `Stop-loss: ${_apexStopLossThreshold(arb_width)}¢`;
+    if (!confirm(`△ Deploy Apex 2.0 — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\nExit: 15s profit → 15s scratch → panic at bid\n${slInfo}${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
@@ -5258,10 +5231,8 @@ async function createBot() {
                 ticker: currentArbMarket.ticker,
                 widths: [arb_width],
                 quantity,
-                width_scaling: false,
                 repeat_count: smart_mode ? 0 : repeat_count,
                 smart_mode,
-                hard_ceiling,
             }),
         });
         const data = await resp.json();
@@ -5309,7 +5280,7 @@ async function placeSelectedWidthsBots() {
     if (selectedArr.length === 0) return;
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
-    const hardCeiling = parseInt(document.getElementById('bot-ceiling')?.value) || 98;
+    const smartMode   = !!document.getElementById('apex-smart-mode')?.checked;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
     // ── Fetch fresh orderbook prices before computing widths ───────────────────
@@ -5410,8 +5381,8 @@ async function placeSelectedWidthsBots() {
             ticker: deployTicker,
             widths: validWidths.map(v => v.w),
             quantity: qty,
-            repeat_count: repeatCount,
-            hard_ceiling: hardCeiling,
+            repeat_count: smartMode ? 0 : repeatCount,
+            smart_mode: smartMode,
             game_phase: gamePhase,
         }),
     }).then(r => r.json()).then(data => {
@@ -5924,8 +5895,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const yFill = r.yes_fill_qty || 0;
             const nFill = r.no_fill_qty || 0;
             const dimmed = (status === 'ladder_arb_active') ? 'opacity:0.4;' : '';
-            return `<div style="display:grid;grid-template-columns:32px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;${dimmed}">
-                <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+            const _sl = _apexStopLossThreshold(width);
+            const _slC = _sl <= 8 ? '#00ff8855' : _sl <= 12 ? '#ffaa0055' : '#ff444455';
+            return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;${dimmed}">
+                <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slC};font-size:7px;">SL${_sl}</span></span>
                 <div style="display:flex;align-items:center;gap:4px;">
                     <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>
                     <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
@@ -5994,9 +5967,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         const tPct = Math.min(100, (elapsed / st.lim) * 100);
 
+        const _slA = r.stop_loss_cents || _apexStopLossThreshold(width);
+        const _slAc = _slA <= 8 ? '#00ff8855' : _slA <= 12 ? '#ffaa0055' : '#ff444455';
         return `<div style="padding:4px 0;border-bottom:1px solid #1e274022;">
-            <div style="display:grid;grid-template-columns:32px 1fr 50px;gap:4px;align-items:center;font-size:10px;">
-                <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+            <div style="display:grid;grid-template-columns:52px 1fr 50px;gap:4px;align-items:center;font-size:10px;">
+                <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slAc};font-size:7px;">SL${_slA}</span></span>
                 <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
                     <span style="color:${aCol};font-weight:700;font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
                     <span style="background:${st.c}22;color:${st.c};font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;">${st.l}</span>
@@ -6070,7 +6045,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <span style="color:#ffaa00;">Widths: ${rungs.map(r => r.width + '¢').join(', ')}</span>
             <span style="color:#8892a6;">×${qtyPer}</span>
             <span style="color:#555;">${phase === 'live' ? '🔴 LIVE' : '⏳ PRE'}</span>
-            ${bot.repost_count ? `<span style="color:#555;">Repost #${bot.repost_count}</span>` : ''}
+            ${bot.repost_count ? `<span style="color:#ff8800;font-weight:700;background:#ff880015;padding:1px 6px;border-radius:4px;">↻ #${bot.repost_count}</span>` : ''}
         </div>
         <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
@@ -8305,8 +8280,18 @@ async function showBotDetail(botId) {
             html += `</div>`;
         }
 
-        // ── Walk + Urgency Status (live bots only) ──
-        if (walkCount > 0 || urgency !== 'normal') {
+        // ── Time-Decay Status (Apex 2.0) / Walk Status (legacy) ──
+        if (isApex) {
+            html += `<div style="background:#0a0e1a;border:1px solid #00aaff33;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="color:#00aaff;font-size:10px;font-weight:700;margin-bottom:6px;">TIME-DECAY EXIT</div>`;
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;">`;
+            html += `<div><span style="color:#00ff88;">●</span> Profit <strong>0-15s</strong></div>`;
+            html += `<div><span style="color:#ffaa00;">●</span> Scratch <strong>15-30s</strong></div>`;
+            html += `<div><span style="color:#ff4444;">●</span> Panic <strong>30s+</strong></div>`;
+            html += `</div>`;
+            html += `<div style="color:#555;font-size:9px;margin-top:4px;">Drift threshold: 3¢ adverse → escalate · Panic exit: maker at bid (bid+1 if gapped)</div>`;
+            html += `</div>`;
+        } else if (walkCount > 0 || urgency !== 'normal') {
             const urgColors = {normal:'#8892a6', late:'#ff8800', critical:'#ff4444', halftime:'#818cf8'};
             const urgLabels = {normal:'NORMAL', late:'LATE GAME', critical:'CRITICAL', halftime:'HALFTIME'};
             html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
@@ -8318,12 +8303,7 @@ async function showBotDetail(botId) {
             html += `<div><span style="color:#8892a6;">Steps:</span> <strong>${walkCount}</strong></div>`;
             html += `<div><span style="color:#8892a6;">Interval:</span> <strong>${walkInterval}s</strong></div>`;
             html += `<div><span style="color:#8892a6;">Phase:</span> <strong>${gamePhase}</strong></div>`;
-            html += `</div>`;
-            if (bot.walk_start_price && hedgePrice) {
-                const walkDist = hedgePrice - bot.walk_start_price;
-                html += `<div style="font-size:10px;margin-top:6px;color:#8892a6;">Walk: ${bot.walk_start_price}¢ → ${hedgePrice}¢ <span style="color:${walkDist > 0 ? '#ffaa00' : '#00ff88'};">(${walkDist > 0 ? '+' : ''}${walkDist}¢)</span></div>`;
-            }
-            html += `</div>`;
+            html += `</div></div>`;
         }
 
         // ── Latency section (Phantom/Apex) ──
@@ -8358,13 +8338,13 @@ async function showBotDetail(botId) {
             if (bot.take_profit_cents > 0) html += `<div>TP: <strong style="color:#00ff88;">${(bot.entry_price||50) + bot.take_profit_cents}¢</strong></div>`;
             html += `</div>`;
         } else if (isApex) {
+            const rungWidths = (bot.rungs || []).map(r => r.width).filter(Boolean);
+            const widthRange = rungWidths.length > 1 ? `${Math.min(...rungWidths)}-${Math.max(...rungWidths)}¢` : rungWidths.length === 1 ? `${rungWidths[0]}¢` : '?';
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
-            html += `<div>Avg anchor (${filledSide||'?'}): <strong style="color:#ff9900;">${avgFilled||'?'}¢</strong></div>`;
-            html += `<div>Hedge (${unfilledSide}): <strong style="color:#00aaff;">${hedgePrice||'?'}¢</strong></div>`;
-            html += `<div>Avg width: <strong>${bot.avg_width||bot.target_width||'?'}¢</strong></div>`;
-            html += `<div>Ceiling: <strong>98¢</strong> <span style="color:#555;">(${98-combined}¢ left)</span></div>`;
+            html += `<div>Widths: <strong>${widthRange}</strong> (${rungWidths.length} rungs)</div>`;
+            html += `<div>Phase: <strong>${gamePhase}</strong></div>`;
             if (repeatsTotal > 0) html += `<div>Repeats: <strong>${repeatsDone}/${repeatsTotal}</strong></div>`;
-            html += `<div>Consolidated: <strong style="color:${bot._consolidated?'#00ff88':'#ffaa00'};">${bot._consolidated?'Yes':'No'}</strong></div>`;
+            if (bot.repost_count) html += `<div>Reposts: <strong style="color:#ff8800;">${bot.repost_count}</strong></div>`;
             html += `</div>`;
         } else {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
@@ -8388,9 +8368,43 @@ async function showBotDetail(botId) {
             html += `</div></div>`;
         }
 
-        // ── Rungs section (Apex / Phantom Ladder) ──
+        // ── Rungs section (Apex 2.0 / Phantom Ladder) ──
         const rungs = bot.rungs || bot.placed_rungs;
-        if (rungs && rungs.length > 0) {
+        if (isApex && rungs && rungs.length > 0) {
+            const stageColors = { profit:'#00ff88', scratch:'#ffaa00', panic:'#ff4444' };
+            const stageLabels = { profit:'PROFIT', scratch:'SCRATCH', panic:'PANIC', posted:'POSTED', completed:'DONE', anchor_filled:'FILLING' };
+            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">RUNGS (${rungs.length})</div>`;
+            html += `<div style="font-size:10px;">`;
+            rungs.forEach((r, i) => {
+                const rs = r.status || 'posted';
+                const w = r.width || '?';
+                const sl = r.stop_loss_cents || _apexStopLossThreshold(w);
+                const stage = r.time_stage || rs;
+                const sCol = stageColors[stage] || '#8892a6';
+                const sLabel = stageLabels[stage] || rs.toUpperCase();
+                const isDone = rs === 'completed' || r._profit_recorded;
+                const dim = isDone ? 'opacity:0.35;' : '';
+                let pnlStr = '';
+                if (isDone) {
+                    const aS = r.anchor_side || 'yes';
+                    const aP = r[`${aS}_price`] || 0;
+                    const hP = r.hedge_price || 0;
+                    const prof = (aP + hP > 0) ? 100 - aP - hP : 0;
+                    const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
+                    pnlStr = `<span style="color:${pCol};font-weight:700;">${prof > 0 ? '+' : ''}${prof}¢</span>`;
+                }
+                html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;${dim}">
+                    <span style="color:#555;width:16px;">#${i+1}</span>
+                    <span style="color:#ffaa00;font-weight:700;width:28px;">${w}¢</span>
+                    <span style="color:#ff444466;font-size:9px;width:28px;">SL${sl}</span>
+                    <span style="background:${sCol}22;color:${sCol};font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;width:55px;text-align:center;">${sLabel}</span>
+                    <span style="flex:1;"></span>
+                    ${pnlStr}
+                </div>`;
+            });
+            html += `</div></div>`;
+        } else if (rungs && rungs.length > 0) {
             html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
             html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">RUNGS (${rungs.length})</div>`;
             html += `<div style="font-size:10px;">`;

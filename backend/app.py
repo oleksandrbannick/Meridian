@@ -3035,7 +3035,12 @@ class KalshiWSManager:
 
     def get_total_fills(self, order_id):
         """Sum up fill counts for an order_id from WS events."""
-        return sum(f.get('count', 0) for f in self.fill_events if f.get('order_id') == order_id)
+        total = 0
+        for f in self.fill_events:
+            if f.get('order_id') == order_id:
+                _c = f.get('count') or f.get('count_fp') or 0
+                total += int(float(_c)) if _c else 0
+        return total
 
 
 # Global WS manager instance
@@ -4336,8 +4341,8 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
             })
             # Sell the late-fill contracts
             try:
-                _late_sell_ok, _late_info = _execute_sell(
-                    ticker, dog_side, _recheck_qty, bot_id, reason='late_fill_cleanup')
+                _late_sell_ok, _late_info = execute_sell(
+                    ticker, dog_side, _recheck_qty, reason='late_fill_cleanup')
                 if _late_sell_ok:
                     _late_price = (_late_info or {}).get('actual_fill_price', 0)
                     print(f'   ✅ Late fill sold: {_recheck_qty}x @{_late_price}¢')
@@ -6199,6 +6204,14 @@ def create_bot():
             {'ticker': ticker, 'side': 'yes', 'count': quantity, 'price': yes_price},
             {'ticker': ticker, 'side': 'no',  'count': quantity, 'price': no_price},
         ])
+        # Guard against partial batch failure — cancel orphaned order if one side failed
+        if batch_results[0] is None or batch_results[1] is None:
+            for _br in batch_results:
+                if _br is not None:
+                    _orphan_oid = (_br[0] or {}).get('order', {}).get('order_id')
+                    if _orphan_oid:
+                        _safe_cancel(_orphan_oid, f'partial_batch_failure_{ticker}')
+            return jsonify({'error': 'Failed to place both YES and NO orders — partial batch failure'}), 500
         yes_order, yes_price = batch_results[0]
         no_order, no_price   = batch_results[1]
         yes_order_id = yes_order['order']['order_id']
@@ -8971,6 +8984,14 @@ def execute_sell(ticker, side, count, reason='stop_loss'):
             # Not fully filled — cancel remaining and retry at the NEW bid
             last_sell_price = cur_bid  # Track for partial fill P&L
             total_sold += filled2
+            remaining_to_sell -= filled2
+            if remaining_to_sell <= 0:
+                cleared, remaining = verify_position_cleared(ticker, side, count)
+                actual_price = get_actual_fill_price(order_id, side)
+                sell_price = actual_price if actual_price else cur_bid
+                return True, {'order_id': order_id, 'filled': total_sold, 'sell_price': sell_price,
+                              'verified_cleared': cleared, 'remaining': remaining,
+                              'actual_fill_price': actual_price}
             print(f'⚠ execute_sell({reason}) attempt {attempt}: {side} {remaining_to_sell}x {ticker} not filled at {cur_bid}¢ ({filled2}/{remaining_to_sell}), cancelling...')
             _safe_cancel(order_id, f'execute_sell timeout {reason} {ticker}')
 
@@ -9150,7 +9171,8 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
                 yes_p = bot['yes_price']
                 no_p = bot['no_price']
                 filled_qty = bot.get(f'{filled_leg}_fill_qty') or qty
-                pnl_cents = (100 - yes_p - no_p) * filled_qty
+                fee = kalshi_fee_cents(yes_p, no_p, filled_qty)
+                pnl_cents = (100 - yes_p - no_p) * filled_qty - fee
                 if pnl_cents >= 0:
                     session_pnl['gross_profit_cents'] += pnl_cents
                 else:
@@ -9162,7 +9184,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
                     'bot_id': bot_id, 'ticker': ticker,
                     'yes_price': yes_p, 'no_price': no_p,
                     'original_yes': bot.get('original_yes', yes_p), 'original_no': bot.get('original_no', no_p),
-                    'quantity': filled_qty,
+                    'quantity': filled_qty, 'fee_cents': fee,
                     'profit_cents': pnl_cents if pnl_cents >= 0 else 0,
                     'loss_cents': abs(pnl_cents) if pnl_cents < 0 else 0,
                     'result': 'completed' if pnl_cents >= 0 else 'amended',
@@ -11092,6 +11114,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             avg_dog = bot.get('avg_fill_price', 0)
             # Check if market is dead (settled/closed) — don't retry sells on dead markets
             try:
+                api_read_limiter.wait()
                 _mkt_check = kalshi_client.get_market(ticker)
                 _mkt_data = _mkt_check.get('market', _mkt_check)
                 _mkt_status = _mkt_data.get('status', '')
@@ -11162,6 +11185,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         verified_total += rung.get('fill_qty', 0)
                         continue
                     try:
+                        api_read_limiter.wait()
                         resp_v = kalshi_client.get_order(oid)
                         ord_v = resp_v.get('order', resp_v) if isinstance(resp_v, dict) else {}
                         actual_v = _parse_fill_count(ord_v)
@@ -13103,8 +13127,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                     'kalshi_status': ord_data.get('kalshi_status', '?'),
                 }, level='WARN')
                 # Record as 0-cost completion — no position was ever held
-                _record_trade(bot_id, {
-                    'result': 'anchor_sellback',
+                _record_trade({
+                    'bot_id': bot_id, 'result': 'anchor_sellback',
                     'ticker': ticker, 'dog_side': dog_side, 'fav_side': bot.get('fav_side', ''),
                     'dog_price': 0, 'fav_price': 0, 'profit_cents': 0, 'net_pnl_cents': 0,
                     'quantity': 0, 'sell_price': 0, 'loss_cents': 0, 'fees_cents': 0,
@@ -13144,8 +13168,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
             bot_log('PHANTOM_SELLBACK_ALREADY_CLEARED', bot_id, {
                 'dog_price': dog_price, 'qty': qty, 'order_fills': _order_actual_fills,
             }, level='WARN')
-            _record_trade(bot_id, {
-                'result': 'anchor_sellback',
+            _record_trade({
+                'bot_id': bot_id, 'result': 'anchor_sellback',
                 'ticker': ticker, 'dog_side': dog_side, 'fav_side': bot.get('fav_side', ''),
                 'dog_price': dog_price, 'fav_price': 0, 'profit_cents': 0, 'net_pnl_cents': 0,
                 'quantity': qty, 'sell_price': dog_price, 'loss_cents': 0, 'fees_cents': 0,
@@ -14527,7 +14551,10 @@ def _run_monitor():
                         fee = kalshi_fee_cents(real_yes, real_no, qty)
                         profit_cents = (100 - real_yes - real_no) * qty - fee
 
-                        session_pnl['gross_profit_cents'] += profit_cents
+                        if profit_cents >= 0:
+                            session_pnl['gross_profit_cents'] += profit_cents
+                        else:
+                            session_pnl['gross_loss_cents'] += abs(profit_cents)
                         session_pnl['completed_bots']     += 1
                         bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents
 
@@ -19204,7 +19231,7 @@ def get_risk_exposure_endpoint():
                 continue
             ticker = bot.get('ticker', '?')
             cat = bot.get('bot_category', bot.get('type', '?'))
-            count = bot.get('count', bot.get('quantity', 1))
+            count = bot.get('count', bot.get('quantity', bot.get('qty', 1)))
 
             # Calculate capital at risk for this bot
             if cat in ('anchor_dog', 'anchor_ladder'):
@@ -19227,7 +19254,7 @@ def get_risk_exposure_endpoint():
         balance_cents = 0
         try:
             if ws_manager and ws_manager.balance_cache:
-                balance_cents = int(ws_manager.balance_cache.get('balance', 0) * 100)
+                balance_cents = int(ws_manager.balance_cache.get('balance_cents', 0))
         except Exception:
             pass
 

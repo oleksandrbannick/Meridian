@@ -300,6 +300,7 @@ function switchTab(tab) {
     });
     // Load tab-specific data + auto-refresh for active tab
     if (_tabRefreshInterval) { clearInterval(_tabRefreshInterval); _tabRefreshInterval = null; }
+    if (_latencyInterval) { clearInterval(_latencyInterval); _latencyInterval = null; }
     if (tab === 'positions') {
         loadPositions();
         _tabRefreshInterval = setInterval(loadPositions, 5000);
@@ -1256,13 +1257,17 @@ async function loadMarkets() {
         let response, data;
         for (let _attempt = 0; _attempt < 3; _attempt++) {
             try {
-                const timeoutId = setTimeout(() => myAbort.abort(), 30000);
-                response = await fetch(url, { signal: myAbort.signal });
+                // Fresh AbortController per attempt so a prior timeout doesn't poison retries
+                const attemptAbort = new AbortController();
+                const timeoutId = setTimeout(() => attemptAbort.abort(), 30000);
+                // Also abort if superseded by a newer loadMarkets() call
+                if (myAbort !== _marketsAbort) return;
+                response = await fetch(url, { signal: attemptAbort.signal });
                 clearTimeout(timeoutId);
                 data = await response.json();
                 if (!data.error) break;
             } catch (_retryErr) {
-                if (_retryErr.name === 'AbortError' && myAbort !== _marketsAbort) {
+                if (myAbort !== _marketsAbort) {
                     // Superseded by a newer loadMarkets() call — silently exit
                     return;
                 }
@@ -8254,12 +8259,12 @@ async function addRuns(botId) {
         });
         const data = await resp.json();
         if (data.success) {
-            showToast(`+${count} runs added (${data.new_repeat_count - data.repeats_done} remaining)`, 'success');
+            showNotification(`+${count} runs added (${data.new_repeat_count - data.repeats_done} remaining)`, 'success');
         } else {
-            showToast(data.error || 'Failed to add runs', 'error');
+            showNotification(data.error || 'Failed to add runs', 'error');
         }
     } catch (e) {
-        showToast('Failed to add runs: ' + e.message, 'error');
+        showNotification('Failed to add runs: ' + e.message, 'error');
     }
 }
 
@@ -8274,12 +8279,12 @@ async function restartSmart(botId) {
         });
         const data = await resp.json();
         if (data.success) {
-            showToast('Smart mode restarted', 'success');
+            showNotification('Smart mode restarted', 'success');
         } else {
-            showToast(data.error || 'Failed to restart', 'error');
+            showNotification(data.error || 'Failed to restart', 'error');
         }
     } catch (e) {
-        showToast('Failed to restart: ' + e.message, 'error');
+        showNotification('Failed to restart: ' + e.message, 'error');
     }
 }
 
@@ -8292,13 +8297,13 @@ async function stopSmart(botId) {
         });
         const data = await resp.json();
         if (data.success) {
-            showToast(data.message || 'Smart mode stopping', 'success');
+            showNotification(data.message || 'Smart mode stopping', 'success');
         } else {
-            showToast(data.error || 'Failed to stop', 'error');
+            showNotification(data.error || 'Failed to stop', 'error');
         }
         loadBots();
     } catch (e) {
-        showToast('Failed to stop: ' + e.message, 'error');
+        showNotification('Failed to stop: ' + e.message, 'error');
     }
 }
 
@@ -8327,9 +8332,10 @@ function smartExitMenu(botId) {
 }
 
 async function smartExitNow(botId) {
-    document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
-    window._smartExitMenuOpen = false;
     if (!confirm('Sell the losing side at market now?')) return;
+    const _seo = document.getElementById('smart-exit-overlay');
+    if (_seo) _seo.remove();
+    window._smartExitMenuOpen = false;
     try {
         const resp = await fetch(`${API_BASE}/bot/smart-exit/${botId}`, {
             method: 'POST',
@@ -8338,18 +8344,19 @@ async function smartExitNow(botId) {
         const data = await resp.json();
         if (data.success) {
             const loser = (data.loser_ticker || '').split('-').pop();
-            showToast(`Sold ${data.qty}x ${loser} @ ${data.sell_price}¢ — holding winner for settlement`, 'success');
+            showNotification(`Sold ${data.qty}x ${loser} @ ${data.sell_price}¢ — holding winner for settlement`, 'success');
         } else {
-            showToast(data.error || 'Smart exit failed', 'error');
+            showNotification(data.error || 'Smart exit failed', 'error');
         }
         loadBots();
     } catch (e) {
-        showToast('Smart exit failed: ' + e.message, 'error');
+        showNotification('Smart exit failed: ' + e.message, 'error');
     }
 }
 
 async function setSmartExitTrigger(botId, price) {
-    document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
+    const _seo = document.getElementById('smart-exit-overlay');
+    if (_seo) _seo.remove();
     window._smartExitMenuOpen = false;
     try {
         const resp = await fetch(`${API_BASE}/bot/smart-exit-trigger/${botId}`, {
@@ -8359,13 +8366,13 @@ async function setSmartExitTrigger(botId, price) {
         });
         const data = await resp.json();
         if (data.success) {
-            showToast(`Auto exit set: sell loser when bid ≤ ${price}¢`, 'success');
+            showNotification(`Auto exit set: sell loser when bid ≤ ${price}¢`, 'success');
         } else {
-            showToast(data.error || 'Failed to set trigger', 'error');
+            showNotification(data.error || 'Failed to set trigger', 'error');
         }
         loadBots();
     } catch (e) {
-        showToast('Failed: ' + e.message, 'error');
+        showNotification('Failed: ' + e.message, 'error');
     }
 }
 
@@ -11090,7 +11097,7 @@ function selectHistoryDay(dateStr, event) {
         const start = new Date(last), end = new Date(dateStr);
         const lo = start < end ? start : end, hi = start < end ? end : start;
         for (let d = new Date(lo); d <= hi; d.setDate(d.getDate() + 1)) {
-            const key = d.toISOString().slice(0, 10);
+            const key = _localDateStr(d);
             if (!selectedHistoryDays.includes(key)) selectedHistoryDays.push(key);
         }
     } else {

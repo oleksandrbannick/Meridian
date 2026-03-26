@@ -3706,16 +3706,15 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # At ceiling — don't hedge at breakeven, let monitor sell back
+        # At ceiling — cap at max_hedge and post anyway. Fill at 98 = breakeven > sellback loss.
         if dog_price + hedge_price >= HARD_CEILING_CENTS:
-            print(f'🚫 PHANTOM HEDGE SKIP: {bot_id} combined {dog_price}+{hedge_price}={dog_price + hedge_price}¢ >= {HARD_CEILING_CENTS}¢ — deferring to sellback')
-            bot_log('PHANTOM_HEDGE_AT_CEILING', bot_id, {
+            hedge_price = max(1, max_hedge)
+            print(f'📌 PHANTOM HEDGE AT CEILING: {bot_id} capped to {hedge_price}¢ (combined={dog_price + hedge_price}¢) — posting and holding')
+            bot_log('PHANTOM_HEDGE_AT_CEILING_POST', bot_id, {
                 'dog_price': dog_price, 'hedge_price': hedge_price,
                 'combined': dog_price + hedge_price, 'fav_bid': fav_bid,
                 'max_hedge': max_hedge, 'path': 'ws_fast',
             })
-            bot['status'] = 'dog_filled'
-            return
 
         # Record raw hedge speed RIGHT before API call — nothing between this and HTTP send
         if not bot.get('dog_filled_at'):

@@ -9970,6 +9970,11 @@ def _handle_phantom(bot_id, bot, actions):
             # Smart mode override
             _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
             _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+            # Track accumulated cross-market positions before fill reset
+            _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if _is_cross:
+                _cycle_qty = bot.get('dog_fill_qty', 0) or qty
+                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_qty
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
@@ -9995,7 +10000,6 @@ def _handle_phantom(bot_id, bot, actions):
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
             else:
-                _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'
                     bot['awaiting_since'] = now
@@ -11311,6 +11315,11 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             # Smart mode override
             _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
             _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+            # Track accumulated cross-market positions before fill reset
+            _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if _is_cross:
+                _cycle_qty = bot.get('total_dog_fill_qty', 0) or hedge_qty
+                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_qty
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
@@ -11337,7 +11346,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 _audit('LADDER_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 _audit_position_check(bot_id, ticker, dog_side, 'entering_ladder_repeat')
             else:
-                _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'
                     bot['awaiting_since'] = now
@@ -18330,6 +18338,8 @@ def get_active_positions():
                 # Cross-market: fav position is on hedge_ticker, not ticker
                 _fav_ticker = b.get('hedge_ticker', t) or t
                 _is_same_market = _fav_ticker == t
+                # Include accumulated positions from previous cross-market runs
+                _cross_settled = _si(b.get('_cross_settled_qty', 0))
                 # Same-market: Kalshi settles matching fills instantly - use NET only
                 if _is_same_market and dog_side and fav_side and dog_side != fav_side:
                     net_dog = max(0, dog_fills - fav_qty)
@@ -18340,10 +18350,13 @@ def get_active_positions():
                         _add(t, fav_side, 'phantom', net_fav)
                 else:
                     # Cross-market: dog on ticker, fav on hedge_ticker (separate positions)
-                    if dog_fills > 0:
-                        _add(t, dog_side, 'phantom', dog_fills)
-                    if fav_qty > 0:
-                        _add(_fav_ticker, fav_side, 'phantom', fav_qty)
+                    # Current cycle fills + accumulated from previous completed runs
+                    _total_dog = dog_fills + _cross_settled
+                    _total_fav = fav_qty + _cross_settled
+                    if _total_dog > 0:
+                        _add(t, dog_side, 'phantom', _total_dog)
+                    if _total_fav > 0:
+                        _add(_fav_ticker, fav_side, 'phantom', _total_fav)
             elif cat == 'ladder_arb':
                 # Kalshi instantly settles matching YES+NO - only NET imbalance is real
                 _apex_yes = _si(b.get('filled_yes_qty'))

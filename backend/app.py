@@ -3686,9 +3686,8 @@ def _execute_phantom_hedge(bot_id):
         fav_spread = (fav_ask - fav_bid) if fav_ask > 0 and fav_bid > 0 else 0
 
         if fav_bid > 0:
-            # Gapped market (spread >= 2c): bid+1 for queue priority
-            # Tight market: post at bid
-            hedge_price = min(fav_bid + 1, fav_ask - 1) if fav_spread >= 2 and fav_ask > fav_bid else fav_bid
+            # Always post at bid — phantom needs ceiling margin, walk follows bid
+            hedge_price = fav_bid
             hedge_price = min(hedge_price, max_hedge)  # never exceed ceiling
         else:
             # No WS bid available — fall back to precalc
@@ -10100,25 +10099,22 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
-        fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
-        if fav_spread >= 2 and current_fav_ask > current_fav_bid:
-            walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
-        else:
-            walk_target = current_fav_bid
+        # Walk target: always bid — phantom needs ceiling margin, walk handles the rest
+        walk_target = current_fav_bid
 
-        # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
-        max_fav = WALK_CEILING - dog_price
-        walk_target = min(walk_target, max_fav)
+        # Hard ceiling: 98¢ = hold for fill, 99¢+ = sellback
+        max_fav_hold = WALK_CEILING - dog_price       # 98 - dog = hold here
+        max_fav_sellback = WALK_CEILING + 1 - dog_price  # 99 - dog = sellback
+        walk_target = min(walk_target, max_fav_hold)
 
         if walk_target <= 0:
             return
 
-        # ── Ceiling sellback: at breakeven (98¢ combined), exit immediately ──
-        # Phantom's edge is instant fills. Walking to ceiling = trade failed.
-        # Don't wait for 120s timeout — sell back now to minimize loss.
-        if max_fav > 0 and current_fav_price >= max_fav and walk_target >= current_fav_price:
-            # Check for partial fav fills before bailing
+        # ── Ceiling sellback: only at 99¢+ combined (guaranteed loss) ──
+        # At 98¢: hold for fill — breakeven/1¢ profit beats taker-fee sellback loss
+        # At 99¢+: even if hedge fills, fee eats the profit — sell back
+        if max_fav_hold > 0 and current_fav_bid > max_fav_hold:
+            # Combined would be 99+, check if we should sell back
             _ceil_fav_filled = bot.get('fav_fill_qty', 0)
             try:
                 api_read_limiter.wait()
@@ -10129,13 +10125,13 @@ def _handle_phantom(bot_id, bot, actions):
                 pass
             qty = bot.get('quantity', 1)
             if _ceil_fav_filled >= qty:
-                # Filled at ceiling — let completion handle it
-                return
+                return  # Filled — let completion handle it
             bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
                 'dog_price': dog_price, 'fav_price': current_fav_price,
-                'max_fav': max_fav, 'ceiling': WALK_CEILING,
+                'max_fav_hold': max_fav_hold, 'ceiling': WALK_CEILING,
                 'fav_bid': current_fav_bid, 'fav_filled': _ceil_fav_filled,
                 'qty': qty, 'wait_s': round(wait_s, 1),
+                'reason': 'combined_99_plus',
             })
             try:
                 api_rate_limiter.wait()
@@ -10143,7 +10139,6 @@ def _handle_phantom(bot_id, bot, actions):
             except Exception:
                 pass
             if _ceil_fav_filled > 0 and _ceil_fav_filled < qty:
-                # Partial fav fill — record partial arb, sell back uncovered dogs
                 sell_qty = qty - _ceil_fav_filled
                 fav_price = current_fav_price
                 profit_per = 100 - dog_price - fav_price
@@ -10166,64 +10161,27 @@ def _handle_phantom(bot_id, bot, actions):
                     'arb_width': bot.get('target_width', 0),
                     'fill_source': 'anchor_dog', 'bot_category': 'anchor_dog',
                 }, bot)
-                print(f'🚫 PHANTOM CEILING (PARTIAL): {bot_id} fav {_ceil_fav_filled}/{qty} filled at {fav_price}¢ (ceiling {max_fav}¢) — selling back {sell_qty} dogs')
+                print(f'🚫 PHANTOM CEILING (PARTIAL): {bot_id} fav {_ceil_fav_filled}/{qty} filled at {fav_price}¢ (ceiling {max_fav_hold}¢) — selling back {sell_qty} dogs')
                 bot['quantity'] = sell_qty
                 _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
                 bot['quantity'] = qty
             else:
-                print(f'🚫 PHANTOM CEILING: {bot_id} fav {current_fav_price}¢ hit ceiling {max_fav}¢ — selling dog back')
+                print(f'🚫 PHANTOM CEILING 99+: {bot_id} fav_bid={current_fav_bid}¢ > max_hold={max_fav_hold}¢ — selling dog back')
                 _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
             return
 
-        # Determine action priority
-        needs_drop = current_fav_price > walk_target
-        snap_ready = (dog_price + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
+        # ── Bid-follow: always snap to bid, no walk intervals ──
+        # Phantom follows the bid every cycle. No 20s crawl, no +1¢ steps.
+        # Up: bid above us → snap to bid. Down: bid below us → snap to bid.
+        # At bid: hold position. Cap at 98-dog (hold for fill at ceiling).
+        new_fav_price = walk_target
+        if new_fav_price == current_fav_price:
+            return  # already at bid, nothing to do
 
-        # Queue position: track fav bid stability
-        _ph_prev_bid = bot.get('_fav_bid_seen', 0)
-        if current_fav_bid != _ph_prev_bid:
-            bot['_fav_bid_stable_since'] = now
-            bot['_fav_bid_seen'] = current_fav_bid
-        _ph_bid_stable_s = now - bot.get('_fav_bid_stable_since', now)
-        _ph_at_bid = current_fav_price > 0 and current_fav_price == walk_target
-        _ph_queue_grace = _ph_at_bid and _ph_bid_stable_s >= 10 and not snap_ready and not needs_drop
-
-        # Interval: instant drop, 3s stabilized snap, 20s normal walk
-        walk_interval = 0 if needs_drop else 3 if snap_ready else WALK_INTERVAL_S
-        if _ph_queue_grace:
-            walk_interval = max(walk_interval, 30)
-        bot['_walk_interval'] = walk_interval
-        fav_last_walk = bot.get('fav_last_walk_at') or bot.get('fav_posted_at') or now
-        since_last_walk = now - fav_last_walk
-
-        if since_last_walk >= walk_interval:
-            new_fav_price = None
-            walk_type = None
-
-            # PRIORITY 1: Profit snap — jump to bid when profitable (combined <= snap ceiling)
-            if snap_ready and walk_target != current_fav_price:
-                new_fav_price = walk_target
-                walk_type = 'profit_snap'
-
-            # PRIORITY 2: Drop to bid — if we're above bid, snap down immediately
-            elif needs_drop:
-                new_fav_price = walk_target
-                walk_type = 'drop_to_bid'
-
-            # PRIORITY 3: Walk +1¢ toward bid — only if bid is above us
-            elif walk_target > current_fav_price:
-                new_fav_price = current_fav_price + 1  # crawl +1¢, never jump
-                walk_type = 'walk_up'
-
-            if new_fav_price is None or new_fav_price == current_fav_price:
-                bot['fav_last_walk_at'] = now
-                return
-
-            # Check ceiling one more time
-            combined = dog_price + new_fav_price
-            if combined > WALK_CEILING:
-                bot['fav_last_walk_at'] = now
-                return
+        walk_type = 'snap_to_bid'
+        combined = dog_price + new_fav_price
+        if combined > WALK_CEILING:
+            return  # would exceed ceiling
 
             # Amend fav order (shared lock with WS instant drop to prevent race)
             try:

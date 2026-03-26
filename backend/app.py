@@ -7036,10 +7036,12 @@ def _execute_apex_completion(bot_id):
             return
 
         # ── Guard: don't complete with 0 rungs if there are filled positions ──
+        # But allow completion if the hedge is fully filled (consolidated pair is done)
         filled_side_for_guard = bot.get('first_fill_side', 'yes')
         filled_rungs_count = sum(1 for r in bot.get('rungs', [])
                                  if r.get(f'{filled_side_for_guard}_fill_qty', 0) > 0)
-        if bot.get('completed_rungs_count', 0) == 0 and filled_rungs_count > 0:
+        _hedge_done = bot.get('_hedge_fill_count', 0) >= bot.get('hedge_qty', 0) and bot.get('hedge_qty', 0) > 0
+        if bot.get('completed_rungs_count', 0) == 0 and filled_rungs_count > 0 and not _hedge_done:
             print(f'🚨 APEX ABORT COMPLETION: {bot_id} has {filled_rungs_count} filled rungs but 0 completions recorded — NOT completing')
             bot_log('ERROR', bot_id, {'step': 'apex_completion_aborted',
                                       'reason': '0_rungs_with_fills',

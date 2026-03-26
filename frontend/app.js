@@ -5507,6 +5507,70 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const status = bot.status || 'dog_anchor_posted';
     const isLadder = bot.bot_category === 'anchor_ladder';
     const rungs = bot.rungs || [];
+
+    // ── COMPLETED/STOPPED SUMMARY CARD (early return) ──
+    if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement') {
+        const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
+        const _runs = (bot.repeats_done || 0) + 1;
+        const _crossQty = bot._cross_settled_qty || bot.awaiting_qty_dog || 0;
+        const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
+        const _isAwaiting = status === 'awaiting_settlement' || (_isCross && _crossQty > 0);
+        const _isSmart = bot._smart_stopped;
+        const _col = _isAwaiting ? '#818cf8' : _isSmart ? '#00e5ff' : '#00ff88';
+        const _label = _isAwaiting ? '⏳ SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
+        const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
+        const dogSide = bot.dog_side || 'no';
+        const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
+        let liveScoreHtml = '';
+        if (gameScores) {
+            const parts = (bot.ticker || '').split('-');
+            const gk = parts.length >= 2 ? parts[1] : parts[0];
+            const gs = gameScores[gk] || null;
+            if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
+        }
+        const item = document.createElement('div');
+        item.style.cssText = `background:#0f1419;border:1px solid ${_col}33;border-left:3px solid ${_col};border-radius:12px;padding:14px;margin-bottom:10px;`;
+        item.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;">PHANTOM</span>
+                    <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
+                    <span style="background:${_col}22;color:${_col};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${_label}</span>
+                    ${liveScoreHtml}
+                    ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
+                    ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs · ${bot.consecutive_losses || 0}L</span>` : bot.repeat_count > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${_runs}/${(bot.repeat_count||0)+1}</span>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    ${bot.smart_mode && _isSmart ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                    ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                    <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+                </div>
+            </div>
+            <div style="background:#060a14;border:1px solid ${_col}33;border-radius:8px;padding:14px;">
+                ${_isCross && _crossQty > 0 ? `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
+                    <div style="text-align:center;padding:8px;background:${_col}11;border-radius:6px;">
+                        <div style="color:#ffaa00;font-size:9px;font-weight:700;margin-bottom:4px;">DOG · ${dogSide.toUpperCase()}</div>
+                        <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
+                        <div style="color:#555;font-size:9px;">${(bot.ticker || '').split('-').pop()}</div>
+                    </div>
+                    <div style="text-align:center;padding:8px;background:${_col}11;border-radius:6px;">
+                        <div style="color:#00aaff;font-size:9px;font-weight:700;margin-bottom:4px;">FAV · ${favSide.toUpperCase()}</div>
+                        <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
+                        <div style="color:#555;font-size:9px;">${(bot.hedge_ticker || '').split('-').pop()}</div>
+                    </div>
+                </div>` : ''}
+                <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
+                    <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
+                    <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
+                    ${bot._last_result ? `<span>Last: <strong style="color:${bot._last_result === 'win' ? '#00ff88' : '#ff4444'};">${bot._last_result === 'win' ? 'Win' : 'Loss'} ${bot._last_pnl != null ? (bot._last_pnl >= 0 ? '+' : '') + bot._last_pnl + '¢' : ''}</strong></span>` : ''}
+                </div>
+            </div>
+            <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        `;
+        container.appendChild(item);
+        return;
+    }
     const dogSide = bot.dog_side || 'no';
     const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
     const qty = bot.quantity || 1;
@@ -5670,44 +5734,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
-        ${_isCompletedSummary ? (() => {
-            const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
-            const _runs = bot.repeats_done || 0;
-            const _crossQty = bot._cross_settled_qty || bot.awaiting_qty_dog || 0;
-            const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
-            const _summaryColor = _isAwaitingSettlement ? '#818cf8' : _isSmartStopped ? '#00e5ff' : '#00ff88';
-            const _summaryLabel = _isAwaitingSettlement ? 'Awaiting Settlement' : _isSmartStopped ? 'Smart Stopped' : 'Completed';
-            return `
-        <div style="background:#060a14;border:1px solid ${_summaryColor}33;border-radius:8px;padding:14px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <span style="color:${_summaryColor};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${_summaryLabel}</span>
-                ${bot.awaiting_since ? `<span style="color:#555;font-size:10px;">${Math.round((nowSec - bot.awaiting_since) / 60)}m</span>` : ''}
-            </div>
-            ${_isCross && _crossQty > 0 ? `
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
-                <div style="text-align:center;padding:8px;background:${_summaryColor}11;border-radius:6px;">
-                    <div style="color:#ffaa00;font-size:9px;font-weight:700;margin-bottom:4px;">DOG · ${dogSide.toUpperCase()}</div>
-                    <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
-                    <div style="color:#555;font-size:9px;margin-top:2px;">${(bot.ticker || '').split('-').pop()}</div>
-                </div>
-                <div style="text-align:center;padding:8px;background:${_summaryColor}11;border-radius:6px;">
-                    <div style="color:#00aaff;font-size:9px;font-weight:700;margin-bottom:4px;">FAV · ${favSide.toUpperCase()}</div>
-                    <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
-                    <div style="color:#555;font-size:9px;margin-top:2px;">${(bot.hedge_ticker || '').split('-').pop()}</div>
-                </div>
-            </div>` : ''}
-            <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
-                <span>Runs: <strong style="color:#fff;">${_runs + 1}</strong></span>
-                <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
-                ${bot.smart_mode ? `<span style="color:#00e5ff;">Smart · ${bot.consecutive_losses || 0}L</span>` : ''}
-                ${bot._last_result ? `<span>Last: <strong style="color:${bot._last_result === 'win' ? '#00ff88' : '#ff4444'};">${bot._last_result === 'win' ? 'Win' : 'Loss'} ${bot._last_pnl != null ? (bot._last_pnl >= 0 ? '+' : '') + bot._last_pnl + '¢' : ''}</strong></span>` : ''}
-            </div>
-        </div>`;
-        })() : `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             <div style="background:#060a14;border:1px solid #ffaa0033;border-radius:8px;padding:10px;">
-                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>`}
+                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`}</div>
                 ${isLadder && dogFillQty === 0 ? '<div style="color:#ffaa00;font-size:10px;">Waiting for fill</div>' : ''}
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
@@ -6904,12 +6934,11 @@ async function loadBots() {
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
-            const cat = bots[id].bot_category || '';
             // Awaiting settlement bots shown inline
             if (s === 'awaiting_settlement') return true;
-            // Phantom bots always stay visible (summary cards after completion)
-            if (cat === 'anchor_dog' || cat === 'anchor_ladder') return true;
-            // Keep completed/stopped non-phantom bots visible for 3 seconds
+            // Smart-stopped bots stay visible
+            if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
+            // Keep completed/stopped bots visible for 3 seconds
             if (s === 'completed' || s === 'stopped') {
                 const finishedAt = (window._botCompletedAt || {})[id];
                 return finishedAt && (now - finishedAt < 3000);

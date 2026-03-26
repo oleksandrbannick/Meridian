@@ -11989,7 +11989,9 @@ def _handle_apex(bot_id, bot, actions):
                         if filled >= rung.get('quantity', qty_per) and not rung.get(f'{side}_filled_at'):
                             rung[f'{side}_filled_at'] = now
                         # Update bot-level hedge fill count from API poll
-                        if oid in bot.get('_all_hedge_order_ids', []):
+                        # Only count fills from the CURRENT hedge order, not old completed ones
+                        _current_hedge = bot.get('hedge_order_id')
+                        if _current_hedge and oid == _current_hedge:
                             bot['_hedge_fill_count'] = max(bot.get('_hedge_fill_count', 0), filled)
                         if filled > old_fk_posted:
                             bot_log('LADDER_ARB_REST_FILL_POSTED', bot_id, {

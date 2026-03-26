@@ -9519,9 +9519,10 @@ def _handle_phantom(bot_id, bot, actions):
                     # No bid — market might be dead, just wait
                     return
 
-                # Dead market guard: bid at 1c = market is settled/dead, stop bot
-                if current_dog_bid <= 1:
-                    print(f'🛑 PHANTOM DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ — cancelling')
+                # Dead market guard: bid too low for depth floor, or bid at 1c
+                _min_viable_bid = bot.get('anchor_depth', 5) + 1  # need at least depth+1 for a 1¢ order
+                if current_dog_bid <= 1 or current_dog_bid < _min_viable_bid:
+                    print(f'🛑 PHANTOM DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ (need ≥{_min_viable_bid}¢) — cancelling')
                     _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
                     for _dm_key in ('fav_order_id', 'hedge_order_id'):
                         _dm_oid = bot.get(_dm_key)

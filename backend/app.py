@@ -10821,11 +10821,14 @@ def _handle_apex(bot_id, bot, actions):
                         save_state()
                         return
 
-                    # Drift guard
-                    if abs(fresh_yes_bid - fresh_no_bid) > 15:
-                        bot['status'] = 'drift_cancelled'
-                        bot['completed_at'] = now
-                        save_state()
+                    # Drift guard: don't repost if game has drifted into blowout — but don't kill, just wait
+                    price_lean = abs(fresh_yes_bid - fresh_no_bid)
+                    if price_lean > 30:
+                        bot_log('APEX_REPEAT_DRIFT_SKIP', bot_id, {
+                            'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid,
+                            'price_lean': price_lean, 'reason': 'blowout_drift',
+                        })
+                        print(f'⏳ APEX DRIFT WAIT: {bot_id} lean={price_lean} — waiting for market to balance')
                         return
 
                     valid_specs = []

@@ -9509,6 +9509,13 @@ def _handle_phantom(bot_id, bot, actions):
                 if current_dog_bid <= 1:
                     print(f'🛑 PHANTOM DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ — cancelling')
                     _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
+                    for _dm_key in ('fav_order_id', 'hedge_order_id'):
+                        _dm_oid = bot.get(_dm_key)
+                        if _dm_oid:
+                            _safe_cancel(_dm_oid, f'phantom dead market {_dm_key} {bot_id}')
+                    for _dm_oid in bot.get('_all_dog_order_ids', []):
+                        if _dm_oid and _dm_oid != dog_order_id:
+                            _safe_cancel(_dm_oid, f'phantom dead market old dog {bot_id}')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     bot['repeat_count'] = 0
@@ -9522,7 +9529,15 @@ def _handle_phantom(bot_id, bot, actions):
                 # has moved too far — this isn't a dog anymore, cancel
                 if current_dog_bid > 50:
                     print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — no longer underdog, cancelling')
+                    # Cancel ALL tracked orders — dog, fav, and any old repost IDs
                     _safe_cancel(dog_order_id, f'phantom drift cancel {bot_id}')
+                    for _drift_key in ('fav_order_id', 'hedge_order_id'):
+                        _drift_oid = bot.get(_drift_key)
+                        if _drift_oid:
+                            _safe_cancel(_drift_oid, f'phantom drift cancel {_drift_key} {bot_id}')
+                    for _drift_oid in bot.get('_all_dog_order_ids', []):
+                        if _drift_oid and _drift_oid != dog_order_id:
+                            _safe_cancel(_drift_oid, f'phantom drift cancel old dog {bot_id}')
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     actions.append({'bot_id': bot_id, 'action': 'anchor_drift_cancel', 'dog_bid': current_dog_bid})

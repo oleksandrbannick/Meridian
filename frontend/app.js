@@ -7051,6 +7051,10 @@ async function loadBots() {
                     const groupIsLive = groupIds.some(id => bots[id].game_phase === 'live');
                     const groupPhase = groupIsLive ? '🔴 LIVE' : '⏳ PRE';
                     const escapedGk = gk.replace(/'/g, "\\'");
+                    const groupPnlTotal = groupIds.reduce((sum, id) => {
+                        const b = bots[id];
+                        return sum + (b.lifetime_pnl ?? b.net_pnl_cents ?? 0);
+                    }, 0);
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
@@ -7061,6 +7065,7 @@ async function loadBots() {
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span style="color:#555;font-size:10px;">${groupIds.length} bot${groupIds.length > 1 ? 's' : ''}</span>
+                            <span style="color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
                             <button onclick="emergencyExitGame('${escapedGk}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;">🚨 Exit</button>
                         </div>`;
                     dogList.appendChild(header);

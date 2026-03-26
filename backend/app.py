@@ -4405,13 +4405,25 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         _audit('LADDER_SELLBACK_REPEAT', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total})
         _audit_position_check(bot_id, ticker, dog_side, 'entering_sellback_repeat')
     else:
-        bot['status'] = 'stopped'
-        bot['stopped_at'] = now
-        bot_log('PHANTOM_LADDER_SELLBACK_STOPPED', bot_id, {
-            'profit_cents': profit_cents, 'loss_cents': loss_cents,
-            'sell_price': sell_price, 'avg_price': avg_price,
-            'total_fill_qty': total_fill_qty,
-        })
+        _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        if _is_cross:
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = now
+            print(f'⏳ PHANTOM AWAITING SETTLEMENT (sellback): {bot_id} holding {ticker} + {bot["hedge_ticker"]}')
+            bot_log('PHANTOM_LADDER_SELLBACK_AWAITING', bot_id, {
+                'profit_cents': profit_cents, 'loss_cents': loss_cents,
+                'sell_price': sell_price, 'avg_price': avg_price,
+                'total_fill_qty': total_fill_qty,
+                'ticker': ticker, 'hedge_ticker': bot.get('hedge_ticker'),
+            })
+        else:
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = now
+            bot_log('PHANTOM_LADDER_SELLBACK_STOPPED', bot_id, {
+                'profit_cents': profit_cents, 'loss_cents': loss_cents,
+                'sell_price': sell_price, 'avg_price': avg_price,
+                'total_fill_qty': total_fill_qty,
+            })
 
     filled_rungs_detail = [
         {'price': r['price'], 'qty': r.get('fill_qty', 0)}
@@ -13267,8 +13279,18 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} {_label} — re-anchoring')
     else:
-        bot['status'] = 'stopped'
-        bot['stopped_at'] = now
+        _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        if _is_cross:
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = now
+            print(f'⏳ PHANTOM AWAITING SETTLEMENT (sellback): {bot_id} holding {ticker} + {bot["hedge_ticker"]}')
+            bot_log('PHANTOM_SELLBACK_AWAITING', bot_id, {
+                'ticker': ticker, 'hedge_ticker': bot.get('hedge_ticker'),
+                'loss_cents': loss_cents,
+            })
+        else:
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = now
 
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'anchor_sellback', 'loss_cents': loss_cents})

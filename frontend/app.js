@@ -7462,12 +7462,17 @@ async function loadBots() {
 
             // ── Ladder-Arb Bots ───────────────────────────────────────
             if (bot.bot_category === 'ladder_arb') {
-                _renderLadderArbCard(bot, botId, botsList, gameScores, gameKey);
+                try {
+                    _renderLadderArbCard(bot, botId, botsList, gameScores, gameKey);
+                } catch(e) {
+                    console.error('APEX RENDER ERROR:', e, 'bot:', botId, 'status:', bot.status);
+                    const errDiv = document.createElement('div');
+                    errDiv.style.cssText = 'background:#ff000022;border:1px solid #ff4444;border-radius:8px;padding:10px;margin-bottom:10px;color:#ff4444;font-size:11px;';
+                    errDiv.textContent = `Apex render error: ${e.message} (${botId})`;
+                    botsList.appendChild(errDiv);
+                }
                 activeBotCount++;
-                const totalExpected = (bot.rungs || []).reduce((s, r) => s + (r.quantity || bot.quantity || 1), 0);
-                if ((bot.yes_fill_qty || 0) >= totalExpected) filledLegs++;
-                if ((bot.no_fill_qty || 0) >= totalExpected) filledLegs++;
-                if (bot.status === 'ladder_arb_yes_filled' || bot.status === 'ladder_arb_no_filled') anchoredCount++;
+                if (bot.status === 'ladder_arb_active') anchoredCount++;
                 return;
             }
 

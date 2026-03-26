@@ -3758,9 +3758,6 @@ function initAnchorDogPrices() {
 
 function addAnchorRung() {
     if (_anchorRungs.length >= 3) { showNotification('Max 3 rungs'); return; }
-    // Clear input focus so renderAnchorRungs doesn't skip the re-render
-    window._anchorInputFocused = false;
-    if (document.activeElement?.tagName === 'INPUT') document.activeElement.blur();
     // Default offset: 2c deeper than the deepest existing rung
     const maxOffset = _anchorRungs.length > 0
         ? Math.max(..._anchorRungs.map(r => r.offset || 5))
@@ -3774,10 +3771,8 @@ function addAnchorRung() {
         const baseQty = _anchorRungs[0].qty;
         _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
     }
-    // Recalculate all rung offsets with depth-floor-on-rung-0 logic
-    initAnchorDogPrices();
-    // Force render — bypass focus guard since this is an explicit user action
     renderAnchorRungs(true);
+    updateAnchorPreview();
 }
 
 function removeAnchorRung(idx) {

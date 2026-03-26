@@ -8303,29 +8303,27 @@ async function stopSmart(botId) {
 }
 
 function smartExitMenu(botId) {
-    // Show menu with options: Sell Now or Set Price Trigger
-    const existing = document.getElementById('smart-exit-menu-' + botId);
+    // Show modal overlay — body-level so loadBots() can't destroy it
+    const existing = document.getElementById('smart-exit-overlay');
     if (existing) { existing.remove(); window._smartExitMenuOpen = false; return; }
-    // Remove any other open menus
-    document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
-    const btn = document.querySelector(`button[onclick*="smartExitMenu('${botId}')"]`);
-    if (!btn) return;
-    // Pause bot list refresh while menu is open
     window._smartExitMenuOpen = true;
-    const menu = document.createElement('div');
-    menu.id = 'smart-exit-menu-' + botId;
-    menu.style.cssText = 'position:absolute;right:0;top:100%;background:#0d1117;border:1px solid #64ffda44;border-radius:8px;padding:10px;z-index:999;min-width:200px;box-shadow:0 4px 12px rgba(0,0,0,.5);';
-    menu.innerHTML = `
-        <div style="color:#64ffda;font-size:10px;font-weight:700;margin-bottom:8px;">SMART EXIT</div>
-        <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;font-weight:700;margin-bottom:6px;">Sell Loser Now</button>
-        <div style="color:#8892a6;font-size:9px;margin-bottom:6px;">Or auto-sell when loser bid drops to:</div>
-        <div style="display:flex;gap:4px;margin-bottom:6px;">
-            ${[3, 5, 8, 10, 15].map(p => `<button onclick="setSmartExitTrigger('${botId}', ${p})" style="flex:1;background:#1a2540;color:#fff;border:1px solid #333;border-radius:4px;padding:4px;font-size:10px;cursor:pointer;font-weight:600;">${p}¢</button>`).join('')}
+    const overlay = document.createElement('div');
+    overlay.id = 'smart-exit-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+        <div style="background:#0d1117;border:1px solid #64ffda44;border-radius:12px;padding:20px;min-width:260px;max-width:320px;box-shadow:0 8px 24px rgba(0,0,0,.7);">
+            <div style="color:#64ffda;font-size:12px;font-weight:700;margin-bottom:12px;text-align:center;">SMART EXIT</div>
+            <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:700;margin-bottom:10px;">Sell Loser Now</button>
+            <div style="color:#8892a6;font-size:10px;margin-bottom:8px;text-align:center;">Or auto-sell when loser bid drops to:</div>
+            <div style="display:flex;gap:6px;margin-bottom:12px;">
+                ${[3, 5, 8, 10, 15].map(p => `<button onclick="setSmartExitTrigger('${botId}', ${p})" style="flex:1;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer;font-weight:600;">${p}¢</button>`).join('')}
+            </div>
+            <button onclick="document.getElementById('smart-exit-overlay').remove(); window._smartExitMenuOpen=false;" style="display:block;width:100%;background:transparent;color:#555;border:1px solid #333;border-radius:8px;padding:8px;font-size:11px;cursor:pointer;">Cancel</button>
         </div>
-        <button onclick="document.getElementById('smart-exit-menu-${botId}').remove(); window._smartExitMenuOpen=false;" style="display:block;width:100%;background:transparent;color:#555;border:1px solid #333;border-radius:6px;padding:4px;font-size:10px;cursor:pointer;">Cancel</button>
     `;
-    btn.parentElement.style.position = 'relative';
-    btn.parentElement.appendChild(menu);
+    // Click backdrop to close
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); window._smartExitMenuOpen = false; } });
+    document.body.appendChild(overlay);
 }
 
 async function smartExitNow(botId) {

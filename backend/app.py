@@ -7563,40 +7563,8 @@ def _execute_apex_completion(bot_id):
             bot_log('APEX_ORPHAN_CHECK_FAIL', bot_id, {'error': str(_pe)[:200]}, level='ERROR')
 
         if _orphan_qty > 0 and _orphan_side:
-            # Hedge the orphans: buy the opposite side to close out
-            _hedge_orphan_side = 'no' if _orphan_side == 'yes' else 'yes'
-            _orphan_bid = (fresh_no_bid if _hedge_orphan_side == 'no' else fresh_yes_bid) if 'fresh_no_bid' in dir() else 0
-            if _orphan_bid <= 0:
-                try:
-                    api_read_limiter.wait()
-                    _ob = kalshi_client.get_market_orderbook(_ticker_for_pos)
-                    _orphan_bid = _best_bid(_ob, _hedge_orphan_side)
-                except Exception:
-                    _orphan_bid = 50  # fallback
-            _orphan_price = max(1, _orphan_bid)
-            try:
-                print(f'🔧 APEX ORPHAN HEDGE: {bot_id} placing {_hedge_orphan_side.upper()} {_orphan_qty}x @{_orphan_price}¢ to close orphans')
-                _orph_resp, _orph_actual = create_order_maker(
-                    ticker=_ticker_for_pos, side=_hedge_orphan_side, action='buy',
-                    count=_orphan_qty, price=_orphan_price, priority=True,
-                    skip_rate_limit=True,
-                )
-                _orph_oid = _orph_resp['order']['order_id']
-                bot_log('APEX_ORPHAN_HEDGE_PLACED', bot_id, {
-                    'side': _hedge_orphan_side, 'qty': _orphan_qty,
-                    'price': _orph_actual, 'order_id': _orph_oid,
-                })
-                print(f'   ✅ Orphan hedge placed: {_hedge_orphan_side.upper()} {_orphan_qty}x @{_orph_actual}¢ | {_orph_oid[:12]}')
-                # Track it so the monitor can walk it
-                bot['_orphan_hedge_oid'] = _orph_oid
-                bot['_orphan_hedge_qty'] = _orphan_qty
-                bot['_orphan_hedge_side'] = _hedge_orphan_side
-            except Exception as _oe:
-                print(f'⚠ APEX ORPHAN HEDGE FAILED: {bot_id}: {_oe}')
-                bot_log('APEX_ORPHAN_HEDGE_FAIL', bot_id, {
-                    'side': _hedge_orphan_side, 'qty': _orphan_qty,
-                    'price': _orphan_price, 'error': str(_oe)[:200],
-                }, level='ERROR')
+            # Log orphans for visibility — user handles these manually
+            print(f'⚠ APEX ORPHAN DETECTED: {bot_id} {_orphan_qty}x {_orphan_side.upper()} on {_ticker_for_pos} — user must handle manually')
 
         # Repeat logic — repeat_count = number of ADDITIONAL runs after the first
         repeats_done_now = bot.get('repeats_done', 0) + 1

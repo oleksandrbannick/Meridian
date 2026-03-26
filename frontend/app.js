@@ -3758,6 +3758,9 @@ function initAnchorDogPrices() {
 
 function addAnchorRung() {
     if (_anchorRungs.length >= 3) { showNotification('Max 3 rungs'); return; }
+    // Clear input focus so renderAnchorRungs doesn't skip the re-render
+    window._anchorInputFocused = false;
+    if (document.activeElement?.tagName === 'INPUT') document.activeElement.blur();
     // Default offset: 2c deeper than the deepest existing rung
     const maxOffset = _anchorRungs.length > 0
         ? Math.max(..._anchorRungs.map(r => r.offset || 5))

@@ -12745,6 +12745,31 @@ def _handle_apex(bot_id, bot, actions):
                                                 bot['_hedge_fill_count'] = _pre_fills
                                             if _pre_status == 'executed':
                                                 bot['_hedge_verified'] = True
+                                                # Check if partially filled — repost remaining at new price
+                                                _remaining_qty = max(0, rq - bot.get('_hedge_fill_count', 0))
+                                                if _remaining_qty > 0:
+                                                    try:
+                                                        _rp_resp, _rp_actual = create_order_maker(
+                                                            ticker=ticker, side=unfilled_side, action='buy',
+                                                            count=_remaining_qty, price=new_price,
+                                                        )
+                                                        _rp_oid = _rp_resp['order']['order_id']
+                                                        bot['hedge_order_id'] = _rp_oid
+                                                        bot['hedge_price'] = _rp_actual
+                                                        _all_ids = bot.get('_all_hedge_order_ids', [])
+                                                        _all_ids.append(_rp_oid)
+                                                        bot['_all_hedge_order_ids'] = _all_ids
+                                                        bot['_hedge_verified'] = False
+                                                        bot['walk_count'] = bot.get('walk_count', 0) + 1
+                                                        bot['last_walk_at'] = now
+                                                        print(f'🔄 APEX REPOST (executed partial): {bot_id} {unfilled_side} {_remaining_qty}× @ {_rp_actual}¢ (fills={_pre_fills}/{rq})')
+                                                        bot_log('APEX_WALK_REPOST_EXECUTED', bot_id, {
+                                                            'new_oid': _rp_oid[:12], 'qty': _remaining_qty,
+                                                            'price': _rp_actual, 'fills': _pre_fills, 'total': rq,
+                                                        })
+                                                        save_state()
+                                                    except Exception as _rp_err:
+                                                        print(f'⚠ APEX REPOST (executed) FAIL: {bot_id}: {_rp_err}')
                                                 _late_anchor_amend_lock.release()
                                                 return
                                             # Canceled with no/partial fills — repost at walk target

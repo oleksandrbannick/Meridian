@@ -13256,6 +13256,7 @@ def _run_monitor():
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
                       and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
+                      and b.get('bot_category', '') not in ('anchor_dog', 'anchor_ladder')  # phantom bots stay as summary cards
                       ]
         if _purge_ids:
             for _pid in _purge_ids:

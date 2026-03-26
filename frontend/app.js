@@ -5519,6 +5519,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
 
     const _isSmartStopped = bot._smart_stopped;
     const _isAwaitingSettlement = status === 'awaiting_settlement' || (status === 'completed' && bot.cross_market && !bot._positions_cleared);
+    const _isCompletedSummary = (status === 'completed' || status === 'stopped') || _isAwaitingSettlement;
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
@@ -5665,35 +5666,44 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
-                ${bot.smart_mode && bot._smart_stopped ? `<button onclick="addRuns('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${bot.smart_mode && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
-        ${_isAwaitingSettlement ? `
-        <div style="background:#060a14;border:1px solid #818cf833;border-radius:8px;padding:14px;">
+        ${_isCompletedSummary ? (() => {
+            const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
+            const _runs = bot.repeats_done || 0;
+            const _crossQty = bot._cross_settled_qty || bot.awaiting_qty_dog || 0;
+            const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
+            const _summaryColor = _isAwaitingSettlement ? '#818cf8' : _isSmartStopped ? '#00e5ff' : '#00ff88';
+            const _summaryLabel = _isAwaitingSettlement ? 'Awaiting Settlement' : _isSmartStopped ? 'Smart Stopped' : 'Completed';
+            return `
+        <div style="background:#060a14;border:1px solid ${_summaryColor}33;border-radius:8px;padding:14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <span style="color:#818cf8;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Game Over — Awaiting Settlement</span>
-                <span style="color:#818cf8;font-size:10px;">${bot.awaiting_since ? Math.round((nowSec - bot.awaiting_since) / 60) + 'm' : ''}</span>
+                <span style="color:${_summaryColor};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${_summaryLabel}</span>
+                ${bot.awaiting_since ? `<span style="color:#555;font-size:10px;">${Math.round((nowSec - bot.awaiting_since) / 60)}m</span>` : ''}
             </div>
+            ${_isCross && _crossQty > 0 ? `
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
-                <div style="text-align:center;padding:8px;background:#818cf811;border-radius:6px;">
+                <div style="text-align:center;padding:8px;background:${_summaryColor}11;border-radius:6px;">
                     <div style="color:#ffaa00;font-size:9px;font-weight:700;margin-bottom:4px;">DOG · ${dogSide.toUpperCase()}</div>
-                    <div style="color:#fff;font-size:18px;font-weight:800;">${bot.awaiting_qty_dog || bot._cross_settled_qty || '?'}x</div>
+                    <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
                     <div style="color:#555;font-size:9px;margin-top:2px;">${(bot.ticker || '').split('-').pop()}</div>
                 </div>
-                <div style="text-align:center;padding:8px;background:#818cf811;border-radius:6px;">
+                <div style="text-align:center;padding:8px;background:${_summaryColor}11;border-radius:6px;">
                     <div style="color:#00aaff;font-size:9px;font-weight:700;margin-bottom:4px;">FAV · ${favSide.toUpperCase()}</div>
-                    <div style="color:#fff;font-size:18px;font-weight:800;">${bot.awaiting_qty_fav || bot._cross_settled_qty || '?'}x</div>
+                    <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
                     <div style="color:#555;font-size:9px;margin-top:2px;">${(bot.hedge_ticker || '').split('-').pop()}</div>
                 </div>
+            </div>` : ''}
+            <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
+                <span>Runs: <strong style="color:#fff;">${_runs + 1}</strong></span>
+                <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
+                ${bot.smart_mode ? `<span style="color:#00e5ff;">Smart · ${bot.consecutive_losses || 0}L</span>` : ''}
+                ${bot._last_result ? `<span>Last: <strong style="color:${bot._last_result === 'win' ? '#00ff88' : '#ff4444'};">${bot._last_result === 'win' ? 'Win' : 'Loss'} ${bot._last_pnl != null ? (bot._last_pnl >= 0 ? '+' : '') + bot._last_pnl + '¢' : ''}</strong></span>` : ''}
             </div>
-            <div style="display:flex;gap:12px;font-size:10px;color:#8892a6;justify-content:center;">
-                <span>Runs: <strong style="color:#fff;">${bot.repeats_done || 0}</strong></span>
-                <span>P&L: <strong style="color:${(bot.lifetime_pnl || 0) >= 0 ? '#00ff88' : '#ff4444'};">${(bot.lifetime_pnl || 0) >= 0 ? '+' : ''}${bot.lifetime_pnl || 0}¢</strong></span>
-                ${bot.smart_mode ? `<span style="color:#00e5ff;">Smart</span>` : ''}
-            </div>
-        </div>
-        ` : `
+        </div>`;
+        })() : `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             <div style="background:#060a14;border:1px solid #ffaa0033;border-radius:8px;padding:10px;">
@@ -5780,7 +5790,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             }
             return '';
         })()}
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isAwaitingSettlement ? 'display:none;' : ''}">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
             <span style="color:#ffaa00;">Width: ${targetWidth}¢</span>
             <span style="color:#8892a6;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
@@ -6919,11 +6929,12 @@ async function loadBots() {
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
+            const cat = bots[id].bot_category || '';
             // Awaiting settlement bots shown inline
             if (s === 'awaiting_settlement') return true;
-            // Smart-stopped bots stay visible
-            if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
-            // Keep completed/stopped bots visible for 3 seconds
+            // Phantom bots always stay visible (summary cards after completion)
+            if (cat === 'anchor_dog' || cat === 'anchor_ladder') return true;
+            // Keep completed/stopped non-phantom bots visible for 3 seconds
             if (s === 'completed' || s === 'stopped') {
                 const finishedAt = (window._botCompletedAt || {})[id];
                 return finishedAt && (now - finishedAt < 3000);
@@ -8247,7 +8258,7 @@ async function showBotDetail(botId) {
     }
 }
 
-// Add runs to a bot
+// Add runs to a non-smart bot (prompts for count)
 async function addRuns(botId) {
     const countStr = prompt('How many runs to add?', '3');
     if (!countStr) return;
@@ -8261,11 +8272,7 @@ async function addRuns(botId) {
         });
         const data = await resp.json();
         if (data.success) {
-            if (data.mode === 'smart_restart') {
-                showToast(`Smart mode restarted`, 'success');
-            } else {
-                showToast(`+${count} runs added (${data.new_repeat_count - data.repeats_done} remaining)`, 'success');
-            }
+            showToast(`+${count} runs added (${data.new_repeat_count - data.repeats_done} remaining)`, 'success');
         } else {
             showToast(data.error || 'Failed to add runs', 'error');
         }
@@ -8275,6 +8282,25 @@ async function addRuns(botId) {
 }
 
 // Cancel bot
+// Restart a smart-mode bot (no prompt, just restart)
+async function restartSmart(botId) {
+    try {
+        const resp = await fetch(`${API_BASE}/bot/add-runs/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ count: 0 }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast('Smart mode restarted', 'success');
+        } else {
+            showToast(data.error || 'Failed to restart', 'error');
+        }
+    } catch (e) {
+        showToast('Failed to restart: ' + e.message, 'error');
+    }
+}
+
 async function cancelBot(botId) {
     if (!confirm('Cancel this bot? Filled positions will be sold at market.')) return;
     

@@ -3649,15 +3649,9 @@ function initAnchorDogPrices() {
     _anchorIsBrokenSpread = spread > 1;
     const anchorBase = _anchorIsBrokenSpread ? dogAsk : _anchorDogBid;
 
-    // Calculate smart price using current depth setting
+    // Calculate smart price using depth floor slider directly
     const depthSlider = document.getElementById('anchor-depth');
-    const widthSlider = document.getElementById('anchor-target-width');
-    const targetWidth = parseInt(widthSlider?.value) || 3;
-    let anchorDepth = parseInt(depthSlider?.value) || 0;
-    const isAutoDepth = anchorDepth <= 0;
-    if (isAutoDepth) {
-        anchorDepth = targetWidth <= 1 ? 3 : targetWidth <= 3 ? 5 : Math.max(5, targetWidth);
-    }
+    const anchorDepth = parseInt(depthSlider?.value) || 5;
     const smartPrice = Math.max(1, anchorBase - anchorDepth);
 
     // Populate display
@@ -3736,11 +3730,9 @@ function initAnchorDogPrices() {
         const favBidElNew = document.getElementById('anchor-auto-fav-bid');
         if (favBidElNew) favBidElNew.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#00aaff;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
     }
-    // Sync displays
-    if (widthSlider) {
-        const d = document.getElementById('anchor-width-display');
-        if (d) d.textContent = `${widthSlider.value}¢`;
-    }
+    // Sync depth display
+    const depthDisplaySync = document.getElementById('anchor-depth-display');
+    if (depthDisplaySync) depthDisplaySync.textContent = `${anchorDepth}¢`;
     // Auto-add a default rung with smart pricing
     if (_anchorRungs.length === 0 && anchorBase > 5) {
         _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
@@ -3903,37 +3895,13 @@ function renderAnchorRungs() {
 }
 
 function updateAnchorPreview() {
-    const targetWidth = parseInt(document.getElementById('anchor-target-width')?.value) || 3;
-    const widthDisplay = document.getElementById('anchor-width-display');
-    if (widthDisplay) widthDisplay.textContent = `${targetWidth}¢`;
-
-    // Anchor depth: 0 = auto (80/20 split)
-    let anchorDepth = parseInt(document.getElementById('anchor-depth')?.value) || 0;
+    // Read depth floor directly from slider
+    const anchorDepth = parseInt(document.getElementById('anchor-depth')?.value) || 5;
     const depthDisplay = document.getElementById('anchor-depth-display');
+    if (depthDisplay) depthDisplay.textContent = `${anchorDepth}¢`;
     const shaveInfo = document.getElementById('anchor-shave-info');
-    let fav_shave = 0;
-    if (anchorDepth <= 0) {
-        if (targetWidth <= 1) {
-            anchorDepth = 3;
-            fav_shave = 0;
-        } else if (targetWidth <= 3) {
-            anchorDepth = 5;
-            fav_shave = 0;
-        } else {
-            anchorDepth = Math.max(5, targetWidth);
-            fav_shave = Math.max(0, targetWidth - anchorDepth);
-        }
-        if (depthDisplay) depthDisplay.textContent = `auto (${anchorDepth}¢)`;
-    } else {
-        fav_shave = Math.max(0, targetWidth - anchorDepth);
-        if (depthDisplay) depthDisplay.textContent = `${anchorDepth}¢`;
-    }
     if (shaveInfo) {
-        if (fav_shave > 0) {
-            shaveInfo.innerHTML = `<span style="color:#ffaa00;">Dog depth: ${anchorDepth}¢</span> · <span style="color:#00aaff;">Fav shave: ${fav_shave}¢ below bid</span> · Walk-up +1¢/20s to fill`;
-        } else {
-            shaveInfo.innerHTML = `<span style="color:#ffaa00;">Dog: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Fav: posts at bid</span> · Walk-up +1¢/20s if slow`;
-        }
+        shaveInfo.innerHTML = `<span style="color:#ffaa00;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>`;
     }
 
     const previewEl = document.getElementById('anchor-preview-content');
@@ -4016,37 +3984,12 @@ function updateAnchorPreview() {
             ? `<span style="color:#ff8800;">Wide spread ${spreadC}¢ — priced off ask</span>`
             : (spreadC > 0 ? `<span style="color:#00ff88;">Tight spread ${spreadC}¢</span>` : '');
         html += `<div style="margin-top:6px;color:#555;font-size:9px;text-align:center;">
-            ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge on fill · walk-up to ceiling if slow
+            ${spreadLabel ? spreadLabel + ' · ' : ''}Instant hedge at bid on fill
         </div>`;
     }
     previewEl.innerHTML = html;
 
-    // Phantom width recommendation pills — show fill likelihood for each width
-    const recoEl = document.getElementById('phantom-width-reco');
-    if (recoEl && _anchorRungs.length > 0 && _anchorFavBid > 0) {
-        const widthOptions = [2, 3, 4, 5, 6, 8, 10];
-        let recoHtml = '';
-        for (const w of widthOptions) {
-            const hedgePrice = 100 - avgPrice - w;
-            if (hedgePrice < 1) continue;
-            const gapFromBid = _anchorFavBid - hedgePrice;
-            let fillZone, color, icon;
-            if (gapFromBid <= 0) {
-                fillZone = 'instant'; color = '#00ff88'; icon = '\u26A1';
-            } else if (gapFromBid <= 2) {
-                fillZone = 'fast'; color = '#4ade80'; icon = '\u{1F7E2}';
-            } else if (gapFromBid <= 5) {
-                fillZone = 'walk'; color = '#ffaa00'; icon = '\u{1F7E1}';
-            } else {
-                fillZone = 'slow'; color = '#ff4444'; icon = '\u{1F534}';
-            }
-            const isActive = w === targetWidth;
-            recoHtml += `<span style="display:inline-block;padding:2px 6px;margin:1px;border:1px solid ${color}${isActive ? '' : '44'};border-radius:4px;font-size:10px;color:${color};cursor:pointer;${isActive ? 'background:' + color + '22;font-weight:800;' : 'opacity:0.8;'}" onclick="document.getElementById('anchor-target-width').value=${w};initAnchorDogPrices()" title="Width ${w}¢: hedge at ${hedgePrice}¢ (fav bid ${_anchorFavBid}¢, ${gapFromBid <= 0 ? 'at bid' : gapFromBid + '¢ below'}) — ${fillZone} fill">${icon}${w}¢</span>`;
-        }
-        recoEl.innerHTML = `<div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;"><span style="color:#6a7488;font-size:9px;margin-right:2px;">HEDGE FILL:</span>${recoHtml}</div>`;
-    } else if (recoEl) {
-        recoEl.innerHTML = '';
-    }
+    // Width reco removed — phantom always hedges at fav bid
 
     // Update deploy button text
     const btn = document.getElementById('anchor-deploy-btn');
@@ -4098,11 +4041,9 @@ async function deployAnchorBot() {
     if (_anchorRungs.length === 0) { alert('Add at least one rung'); return; }
     if (_anchorDogBid < 1) { alert('No dog bid detected — select a market first'); return; }
 
-    const targetWidth  = parseInt(document.getElementById('anchor-target-width')?.value) || 3;
-    const hedgeTimeout = parseInt(document.getElementById('anchor-hedge-timeout')?.value) || 120;
+    const anchorDepth  = parseInt(document.getElementById('anchor-depth')?.value) || 5;
     const repeatCount  = parseInt(document.getElementById('anchor-repeat-count')?.value) || 0;
     const smartMode    = !!document.getElementById('anchor-smart-mode')?.checked;
-    const anchorDepth  = parseInt(document.getElementById('anchor-depth')?.value) || 0;  // 0 = auto
 
     // Validate rungs
     for (const r of _anchorRungs) {
@@ -4114,8 +4055,8 @@ async function deployAnchorBot() {
 
     const totalQty = _anchorRungs.reduce((s, r) => s + r.qty, 0);
     const avgPrice = Math.round(_anchorRungs.reduce((s, r) => s + r.price * r.qty, 0) / totalQty);
-    const favCeiling = 100 - avgPrice - targetWidth;
-    if (favCeiling < 1) { alert('Fav ceiling too low. Reduce rung prices or target width.'); return; }
+    const favCeiling = 98 - avgPrice;
+    if (favCeiling < 1) { alert('Fav ceiling too low — avg dog price too high for 98¢ ceiling.'); return; }
 
     const isCrossMode = !!_anchorCrossMarketTicker && document.getElementById('anchor-cross-market')?.checked;
     const isLadder = _anchorRungs.length > 1;
@@ -4124,7 +4065,7 @@ async function deployAnchorBot() {
     const crossLine = isCrossMode ? `\nCross-market: hedge on ${_anchorCrossMarketTicker}` : '';
 
     const repeatLine = smartMode ? '\nMode: Smart (repeat on wins, stop after 2 losses)' : repeatCount > 0 ? `\nRepeat: ${repeatCount}× (${repeatCount + 1} total runs)` : '\nRepeat: single shot';
-    if (!confirm(`${isLadder ? '👻 Deploy Phantom Ladder' : '👻 Deploy Phantom Bot'}${isCrossMode ? ' (Cross-Market)' : ''} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nTarget width: +${targetWidth}¢\nFav ceiling: ≤${favCeiling}¢\nHedge timeout: ${hedgeTimeout}s${crossLine}${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
+    if (!confirm(`${isLadder ? '👻 Deploy Phantom Ladder' : '👻 Deploy Phantom Bot'}${isCrossMode ? ' (Cross-Market)' : ''} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nDepth floor: ${anchorDepth}¢\nMax hedge: ≤${favCeiling}¢${crossLine}${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
         const endpoint = isLadder ? 'bot/ladder' : 'bot/anchor';
@@ -4132,8 +4073,7 @@ async function deployAnchorBot() {
             ? {
                 ticker: currentArbMarket.ticker,
                 rungs: _anchorRungs.map(r => ({ price: r.price, qty: r.qty })),
-                target_width: targetWidth,
-                hedge_timeout_s: hedgeTimeout,
+                target_width: 5,
                 dog_side: _anchorDogSide,
                 repeat_count: smartMode ? 0 : repeatCount,
                 smart_mode: smartMode,
@@ -4142,9 +4082,8 @@ async function deployAnchorBot() {
             : {
                 ticker: currentArbMarket.ticker,
                 dog_price: _anchorRungs[0].price,
-                target_width: targetWidth,
+                target_width: 5,
                 quantity: _anchorRungs[0].qty,
-                hedge_timeout_s: hedgeTimeout,
                 dog_side: _anchorDogSide,
                 repeat_count: smartMode ? 0 : repeatCount,
                 smart_mode: smartMode,
@@ -4172,7 +4111,7 @@ async function deployAnchorBot() {
         if (data.success) {
             const msg = isLadder
                 ? `👻 Phantom deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢${isCrossMode ? ' (cross-market)' : ''}`
-                : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · target +${targetWidth}¢${isCrossMode ? ' (cross-market)' : ''}`;
+                : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · depth ${anchorDepth}¢${isCrossMode ? ' (cross-market)' : ''}`;
             showNotification(msg);
             closeModal();
             loadBots();
@@ -5541,8 +5480,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs · ${bot.consecutive_losses || 0}L</span>` : bot.repeat_count > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${_runs}/${(bot.repeat_count||0)+1}</span>` : ''}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
+                    ${bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                     ${bot.smart_mode && _isSmart ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                     ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                    ${_isCross && _isAwaiting && _crossQty > 0 ? `<button onclick="smartExit('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
                     <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
                 </div>
             </div>
@@ -5560,11 +5501,24 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <div style="color:#555;font-size:9px;">${(bot.hedge_ticker || '').split('-').pop()}</div>
                     </div>
                 </div>` : ''}
+                ${(bot._run_history || []).length > 0 ? `
+                <div style="margin-bottom:8px;">
+                    ${(bot._run_history || []).map((r, i) => `
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
+                            <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
+                            <span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span>
+                            <span style="color:#8892a6;">×${r.qty || 1}</span>
+                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
+                        </div>
+                    `).join('')}
+                </div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
                     <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
                     <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
                     ${bot._last_result ? `<span>Last: <strong style="color:${bot._last_result === 'win' ? '#00ff88' : '#ff4444'};">${bot._last_result === 'win' ? 'Win' : 'Loss'} ${bot._last_pnl != null ? (bot._last_pnl >= 0 ? '+' : '') + bot._last_pnl + '¢' : ''}</strong></span>` : ''}
                 </div>
+                ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Exited ${(bot._smart_exit_sold.ticker || '').split('-').pop()} @ ${bot._smart_exit_sold.price || '?'}¢ · holding ${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()} for settlement</div>` : ''}
+                ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}
             </div>
             <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
         `;
@@ -5726,9 +5680,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
                 ${dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● 20s walk</span>' : ''}
                 ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
-                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (2L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
+                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_stop_reason === 'manual' ? 'stopped' : '2L'})` : bot._smart_stop_pending ? `Stopping after this run · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
+                ${bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                 ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 ${bot.smart_mode && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
@@ -8302,6 +8257,45 @@ async function restartSmart(botId) {
         }
     } catch (e) {
         showToast('Failed to restart: ' + e.message, 'error');
+    }
+}
+
+async function stopSmart(botId) {
+    if (!confirm('Stop smart mode? If dog is already filled, current cycle will finish first.')) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/stop-smart/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message || 'Smart mode stopping', 'success');
+        } else {
+            showToast(data.error || 'Failed to stop', 'error');
+        }
+        loadBots();
+    } catch (e) {
+        showToast('Failed to stop: ' + e.message, 'error');
+    }
+}
+
+async function smartExit(botId) {
+    try {
+        // First fetch current state to show confirmation
+        const resp = await fetch(`${API_BASE}/bot/smart-exit/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await resp.json();
+        if (data.success) {
+            const loser = (data.loser_ticker || '').split('-').pop();
+            showToast(`Sold ${data.qty}x ${loser} @ ${data.sell_price}¢ — holding winner for settlement`, 'success');
+        } else {
+            showToast(data.error || 'Smart exit failed', 'error');
+        }
+        loadBots();
+    } catch (e) {
+        showToast('Smart exit failed: ' + e.message, 'error');
     }
 }
 

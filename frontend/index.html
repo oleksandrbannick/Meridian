@@ -1369,38 +1369,22 @@
                             <button onclick="clearAnchorRungs()" style="padding:8px 14px;background:#1e2740;border:1px solid #2a3550;border-radius:6px;color:#8892a6;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
                         </div>
                     </div>
-                    <!-- Target Width -->
+                    <!-- Depth Floor -->
                     <div style="margin-bottom:12px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                            <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;">TARGET WIDTH (min profit)</label>
-                            <span id="anchor-width-display" style="color:#00ff88;font-weight:800;font-size:13px;">3¢</span>
+                            <label style="color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;">DEPTH FLOOR (anchor below bid)</label>
+                            <span id="anchor-depth-display" style="color:#ffaa00;font-weight:800;font-size:13px;">5¢</span>
                         </div>
-                        <input type="range" id="anchor-target-width" min="1" max="20" value="3" step="1" oninput="initAnchorDogPrices()"
-                            style="width:100%;accent-color:#00ff88;">
+                        <input type="range" id="anchor-depth" min="3" max="20" value="5" step="1" oninput="initAnchorDogPrices()"
+                            style="width:100%;accent-color:#ffaa00;">
                         <div style="display:flex;gap:4px;margin-top:4px;">
-                            <button onclick="document.getElementById('anchor-target-width').value=2;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">2¢</button>
-                            <button onclick="document.getElementById('anchor-target-width').value=3;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">3¢</button>
-                            <button onclick="document.getElementById('anchor-target-width').value=5;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">5¢</button>
-                            <button onclick="document.getElementById('anchor-target-width').value=8;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">8¢</button>
-                            <button onclick="document.getElementById('anchor-target-width').value=10;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">10¢</button>
+                            <button onclick="document.getElementById('anchor-depth').value=3;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">3¢</button>
+                            <button onclick="document.getElementById('anchor-depth').value=5;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">5¢</button>
+                            <button onclick="document.getElementById('anchor-depth').value=8;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">8¢</button>
+                            <button onclick="document.getElementById('anchor-depth').value=10;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">10¢</button>
+                            <button onclick="document.getElementById('anchor-depth').value=15;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">15¢</button>
                         </div>
-                        <div id="phantom-width-reco" style="margin-top:4px;"></div>
-                    </div>
-                    <!-- Anchor Depth — Auto only -->
-                    <div style="margin-bottom:12px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;">
-                            <label style="color:#ffaa00;font-weight:700;font-size:11px;letter-spacing:.05em;">ANCHOR DEPTH</label>
-                            <span id="anchor-depth-display" style="color:#ffaa00;font-weight:800;font-size:13px;">Auto</span>
-                        </div>
-                        <input type="hidden" id="anchor-depth" value="0">
                         <div id="anchor-shave-info" style="color:#555;font-size:9px;margin-top:3px;"></div>
-                    </div>
-                    <!-- Hedge timeout -->
-                    <div style="margin-bottom:12px;">
-                        <label style="display:block;color:#8892a6;font-size:10px;font-weight:600;margin-bottom:3px;">Fav Hedge Timeout (sec)</label>
-                        <input type="number" id="anchor-hedge-timeout" min="30" max="600" value="120"
-                            style="width:100%;padding:7px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
-                        <div style="color:#555;font-size:9px;margin-top:3px;">Walk-up bumps fav +1¢/20s toward bid. If still no fill after this timeout, sells dog back</div>
                     </div>
                     <!-- Repeat / Smart Mode -->
                     <div style="margin-bottom:12px;">

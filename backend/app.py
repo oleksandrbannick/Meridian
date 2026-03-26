@@ -1971,6 +1971,8 @@ def _smart_mode_should_repeat(bot, cycle_pnl):
     Smart mode: repeat on wins, stop after 2 consecutive losses."""
     if not bot.get('smart_mode'):
         return None, ''  # not smart mode, use normal repeat logic
+    if bot.get('_smart_stopped'):
+        return False, 'manual_stop'
     losses = bot.get('consecutive_losses', 0)
     if cycle_pnl < 0:
         losses += 1
@@ -9971,6 +9973,16 @@ def _handle_phantom(bot_id, bot, actions):
             if _is_cross:
                 _cycle_qty = bot.get('dog_fill_qty', 0) or qty
                 bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_qty
+            # Record run history before resetting fills
+            bot.setdefault('_run_history', []).append({
+                'run': repeats_done_now,
+                'pnl': net_pnl,
+                'result': 'win' if net_pnl >= 0 else 'loss',
+                'dog_price': dog_price,
+                'fav_price': actual_fav_price,
+                'qty': qty,
+                'ts': time.time(),
+            })
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
@@ -11318,6 +11330,16 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             if _is_cross:
                 _cycle_qty = bot.get('total_dog_fill_qty', 0) or hedge_qty
                 bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_qty
+            # Record run history before resetting fills
+            bot.setdefault('_run_history', []).append({
+                'run': repeats_done_now,
+                'pnl': net_pnl,
+                'result': 'win' if net_pnl >= 0 else 'loss',
+                'dog_price': avg_dog,
+                'fav_price': actual_fav_price,
+                'qty': hedge_qty,
+                'ts': time.time(),
+            })
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
@@ -16523,7 +16545,7 @@ def add_runs(bot_id):
         # Smart mode bot that was stopped — restart it by resetting loss counter
         bot['_smart_stopped'] = False
         bot['consecutive_losses'] = 0
-        if bot.get('status') in ('completed', 'stopped'):
+        if bot.get('status') in ('completed', 'stopped', 'awaiting_settlement'):
             bot['status'] = 'waiting_repeat'
             bot['waiting_repeat_since'] = time.time()
             bot.pop('completed_at', None)
@@ -16532,8 +16554,8 @@ def add_runs(bot_id):
         return jsonify({'success': True, 'mode': 'smart_restart'})
 
     bot['repeat_count'] = bot.get('repeat_count', 0) + count
-    # Restart completed/stopped bots
-    if bot.get('status') in ('completed', 'stopped'):
+    # Restart completed/stopped/awaiting bots
+    if bot.get('status') in ('completed', 'stopped', 'awaiting_settlement'):
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = time.time()
         bot.pop('completed_at', None)
@@ -16541,6 +16563,146 @@ def add_runs(bot_id):
     save_state()
     bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
     return jsonify({'success': True, 'new_repeat_count': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
+
+
+@app.route('/api/bot/stop-smart/<bot_id>', methods=['POST'])
+def stop_smart(bot_id):
+    """Stop a smart-mode bot. If dog not filled yet, stops immediately.
+    If mid-cycle (dog filled, hedging), lets current cycle finish then stops."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if not bot.get('smart_mode'):
+        return jsonify({'error': 'Not a smart mode bot'}), 400
+    if bot.get('_smart_stopped'):
+        return jsonify({'error': 'Already stopped'}), 400
+
+    status = bot.get('status', '')
+    bot['_smart_stopped'] = True
+    bot['_smart_stop_reason'] = 'manual'
+
+    # If dog hasn't filled yet, stop immediately by cancelling orders
+    if status in ('dog_anchor_posted', 'ladder_posted', 'waiting_repeat'):
+        # Cancel any resting dog orders
+        for oid_key in ('dog_order_id', 'fav_order_id'):
+            oid = bot.get(oid_key)
+            if oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(oid)
+                except Exception:
+                    pass
+        # Cancel ladder rung orders
+        for rung in bot.get('rungs', []):
+            oid = rung.get('order_id')
+            if oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(oid)
+                except Exception:
+                    pass
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = time.time()
+        bot_log('SMART_STOP_MANUAL_IMMEDIATE', bot_id, {'prev_status': status})
+        save_state()
+        return jsonify({'success': True, 'mode': 'immediate', 'message': 'Stopped immediately — no fills to finish'})
+    else:
+        # Mid-cycle: let current cycle complete, then _smart_mode_should_repeat will return False
+        bot['_smart_stop_pending'] = True
+        bot_log('SMART_STOP_MANUAL_PENDING', bot_id, {'prev_status': status})
+        save_state()
+        return jsonify({'success': True, 'mode': 'pending', 'message': 'Will stop after current cycle completes'})
+
+
+@app.route('/api/bot/smart-exit/<bot_id>', methods=['POST'])
+def smart_exit(bot_id):
+    """Smart exit for cross-market phantoms awaiting settlement.
+    Sells the losing leg at market bid to free capital. Holds the winning leg for settlement."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if not bot.get('cross_market') or not bot.get('hedge_ticker') or bot.get('hedge_ticker') == bot.get('ticker'):
+        return jsonify({'error': 'Not a cross-market bot'}), 400
+    if bot.get('status') not in ('awaiting_settlement', 'completed', 'stopped'):
+        return jsonify({'error': 'Bot must be awaiting settlement or completed'}), 400
+
+    ticker = bot['ticker']
+    hedge_ticker = bot['hedge_ticker']
+    dog_side = bot.get('dog_side', 'no')
+    fav_side = bot.get('fav_side', dog_side)
+    cross_qty = bot.get('_cross_settled_qty', 0)
+    if cross_qty <= 0:
+        return jsonify({'error': 'No positions to exit'}), 400
+
+    # Get current bids for both legs
+    dog_bid = 0
+    fav_bid = 0
+    try:
+        if ws_manager:
+            _ws_dog = ws_manager.get_price(ticker)
+            if _ws_dog:
+                dog_bid = _ws_dog.get(f'{dog_side}_bid', 0)
+            _ws_fav = ws_manager.get_price(hedge_ticker)
+            if _ws_fav:
+                fav_bid = _ws_fav.get(f'{fav_side}_bid', 0)
+    except Exception:
+        pass
+    # Fallback: fetch from API if WS not available
+    if dog_bid <= 0:
+        try:
+            api_read_limiter.wait()
+            _ob = kalshi_client.get_orderbook(ticker)
+            dog_bid = (_ob.get(f'{dog_side}_bid', 0) or 0) if isinstance(_ob, dict) else 0
+        except Exception:
+            pass
+    if fav_bid <= 0:
+        try:
+            api_read_limiter.wait()
+            _ob = kalshi_client.get_orderbook(hedge_ticker)
+            fav_bid = (_ob.get(f'{fav_side}_bid', 0) or 0) if isinstance(_ob, dict) else 0
+        except Exception:
+            pass
+
+    # Determine which is the loser (low bid) and which is the winner (high bid)
+    loser_ticker = ticker if dog_bid <= fav_bid else hedge_ticker
+    loser_side = dog_side if dog_bid <= fav_bid else fav_side
+    loser_bid = min(dog_bid, fav_bid)
+    winner_ticker = hedge_ticker if dog_bid <= fav_bid else ticker
+    winner_side = fav_side if dog_bid <= fav_bid else dog_side
+    winner_bid = max(dog_bid, fav_bid)
+
+    result = {
+        'loser_ticker': loser_ticker, 'loser_side': loser_side, 'loser_bid': loser_bid,
+        'winner_ticker': winner_ticker, 'winner_side': winner_side, 'winner_bid': winner_bid,
+        'qty': cross_qty,
+    }
+
+    # Sell the losing leg at market
+    try:
+        _sold, _sell_info = execute_sell(loser_ticker, loser_side, cross_qty,
+                                         reason=f'smart_exit_{bot_id}')
+        sell_price = _sell_info.get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+        sell_revenue = sell_price * cross_qty
+        result['sold'] = True
+        result['sell_price'] = sell_price
+        result['sell_revenue_cents'] = sell_revenue
+        bot['_smart_exit_sold'] = {
+            'ticker': loser_ticker, 'side': loser_side,
+            'qty': cross_qty, 'price': sell_price,
+            'winner_ticker': winner_ticker, 'winner_side': winner_side,
+        }
+        bot_log('SMART_EXIT_SELL', bot_id, {
+            'loser': loser_ticker, 'side': loser_side, 'qty': cross_qty,
+            'sell_price': sell_price, 'winner': winner_ticker,
+            'dog_bid': dog_bid, 'fav_bid': fav_bid,
+        })
+    except Exception as e:
+        result['sold'] = False
+        result['error'] = str(e)[:200]
+        bot_log('SMART_EXIT_FAIL', bot_id, {'error': str(e)[:300]}, level='ERROR')
+
+    save_state()
+    return jsonify({'success': result.get('sold', False), **result})
 
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])

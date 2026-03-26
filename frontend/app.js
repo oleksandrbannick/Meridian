@@ -5065,15 +5065,7 @@ function closeOrderbookModal() {
 const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
-// ── Width-based quantity scaling (matches backend WIDTH_QTY_TIERS) ──
-function getWidthQtyMultiplier(width) {
-    if (width >= 13) return 3;
-    if (width >= 9)  return 2;
-    return 1;
-}
-function scaleQtyForWidth(baseQty, width) {
-    return Math.max(1, Math.floor(baseQty * getWidthQtyMultiplier(width)));
-}
+// Width scaling removed in Apex 2.0 — all rungs use same quantity
 
 // ── Multi-width selector state ──
 let _selectedWidths = new Set();
@@ -5142,8 +5134,6 @@ function updateAllWidthsPreview() {
         return;
     }
     const baseQty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const useScaling = selectedArr.length >= 2;
-
     let rows = '';
     let totalCost = 0;
     let totalProfit = 0;
@@ -5156,7 +5146,7 @@ function updateAllWidthsPreview() {
         const noPrice  = arb.targetNo;
         const profit = 100 - yesPrice - noPrice;
         const blocked = profit <= 0;
-        const rungQty = useScaling ? scaleQtyForWidth(baseQty, w) : baseQty;
+        const rungQty = baseQty;
         const cost = blocked ? 0 : (yesPrice + noPrice) * rungQty;
         const profitTotal = blocked ? 0 : profit * rungQty;
         if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; totalContracts += rungQty; }
@@ -5165,7 +5155,7 @@ function updateAllWidthsPreview() {
         const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
         const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
         const qtyLabel = blocked ? '—' : `${rungQty}×`;
-        const qtyColor = (useScaling && !blocked && rungQty > baseQty) ? '#818cf8' : '#8892a6';
+        const qtyColor = '#8892a6';
         rows += `<div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
             <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
             <span style="color:${qtyColor};font-size:10px;font-weight:700;text-align:center;">${qtyLabel}</span>
@@ -5179,7 +5169,7 @@ function updateAllWidthsPreview() {
 
     const totalDollars  = (totalCost / 100).toFixed(2);
     const profitDollars = (totalProfit / 100).toFixed(2);
-    const qtyDesc = useScaling ? `${totalContracts} contracts (scaled)` : `${baseQty}× each`;
+    const qtyDesc = `${baseQty}× each`;
     preview.innerHTML = `
         <div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
             <span style="color:#555;font-size:9px;">W</span>
@@ -5355,11 +5345,9 @@ async function placeSelectedWidthsBots() {
     }
 
     // ── Pre-scan: build detailed confirmation ──────────────────────────────────
-    const useScaling = selectedArr.length >= 2;
     const validWidths = [];
     const skipReasons = [];
     let totalCostCents = 0;
-    let totalScaledQty = 0;
 
     for (const w of selectedArr) {
         const arb      = calculateArbPrices(currentArbMarket, w);
@@ -5369,10 +5357,8 @@ async function placeSelectedWidthsBots() {
         if (profit <= 0) {
             skipReasons.push(`  ⛔  ${w}¢ width — no profit`);
         } else {
-            const rungQty = useScaling ? scaleQtyForWidth(qty, w) : qty;
-            validWidths.push({ w, arb, yesPrice, noPrice, profit, rungQty });
-            totalCostCents += (yesPrice + noPrice) * rungQty;
-            totalScaledQty += rungQty;
+            validWidths.push({ w, arb, yesPrice, noPrice, profit, rungQty: qty });
+            totalCostCents += (yesPrice + noPrice) * qty;
         }
     }
 
@@ -5388,19 +5374,14 @@ async function placeSelectedWidthsBots() {
     orderLines.push('  ────────────────────────────────────────');
     for (const { w, arb, yesPrice, noPrice, profit, rungQty } of validWidths) {
         const costDollars = ((yesPrice + noPrice) * rungQty / 100).toFixed(2);
-        const qtyStr = useScaling && rungQty > qty ? `${rungQty}×` : `${rungQty}×`;
-        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(qtyStr,4)}  ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
+        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(rungQty+'×',4)}  ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
     }
     if (skipReasons.length > 0) {
         orderLines.push('');
         orderLines.push(...skipReasons);
     }
     orderLines.push('');
-    if (useScaling) {
-        orderLines.push(`  ${validWidths.length} widths · ${totalScaledQty} total contracts (base ${qty}×, scaled by width)`);
-    } else {
-        orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
-    }
+    orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
     orderLines.push(`  Total entry cost: $${(totalCostCents / 100).toFixed(2)}`);
     orderLines.push('');
     orderLines.push('Place these orders?');
@@ -5429,15 +5410,13 @@ async function placeSelectedWidthsBots() {
             ticker: deployTicker,
             widths: validWidths.map(v => v.w),
             quantity: qty,
-            width_scaling: useScaling,
             repeat_count: repeatCount,
             hard_ceiling: hardCeiling,
             game_phase: gamePhase,
         }),
     }).then(r => r.json()).then(data => {
         if (data.bot_id) {
-            const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
-            showNotification(`△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`);
+            showNotification(`△ Apex 2.0 deployed: ${data.rungs} rungs × ${qty}`);
         } else {
             showNotification(`❌ Apex failed: ${data.error || 'Unknown error'}`);
         }
@@ -5888,13 +5867,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const status = bot.status || 'ladder_arb_posted';
     const rungs = bot.rungs || [];
     const qtyPer = bot.quantity || 1;
+    const phase = bot.game_phase || 'pregame';
+    // Legacy compat
     const totalExpected = rungs.reduce((s, r) => s + (r.quantity || qtyPer), 0);
     const totalYesFill = bot.filled_yes_qty || bot.yes_fill_qty || 0;
     const totalNoFill = bot.filled_no_qty || bot.no_fill_qty || 0;
     const avgYes = bot.avg_yes_price || 0;
     const avgNo = bot.avg_no_price || 0;
     const walkCount = bot.walk_count || 0;
-    const phase = bot.game_phase || 'pregame';
 
     const statusMap = {
         'ladder_arb_posted': '⚡ BOTH LIVE',
@@ -5986,7 +5966,77 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const ceilingDist = isFilled ? (98 - combined) : 0;
 
     let rungsHTML;
-    if (isFilled && (isConsolidated || completedRungs > 0)) {
+    if (status === 'ladder_arb_active') {
+        // ── APEX 2.0: per-rung rows with time-stage badges and countdowns ──
+        rungsHTML = rungs.map((r, i) => {
+            const rQty = r.quantity || qtyPer;
+            const rs = r.status || 'posted';
+            const width = r.width;
+            if (rs === 'posted') {
+                const yFill = r.yes_fill_qty || 0;
+                const nFill = r.no_fill_qty || 0;
+                return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;opacity:0.4;">
+                    <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
+                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                            <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFill >= rQty ? '#00ff88' : '#333'};border-radius:2px;"></div>
+                        </div>
+                        <span style="color:#555;font-size:9px;">${yFill}/${rQty}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="color:#ff4444;font-size:9px;width:24px;">N${r.no_price}</span>
+                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                            <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFill >= rQty ? '#ff4444' : '#333'};border-radius:2px;"></div>
+                        </div>
+                        <span style="color:#555;font-size:9px;">${nFill}/${rQty}</span>
+                    </div>
+                </div>`;
+            }
+            if (rs === 'completed' || r._profit_recorded) {
+                const aS = r.anchor_side || 'yes';
+                const aP = r[`${aS}_price`] || 0;
+                const hP = r.hedge_price || 0;
+                const comb = aP + hP;
+                const prof = comb > 0 ? 100 - comb : 0;
+                const pCol = prof > 2 ? '#00ff88' : prof > 0 ? '#00aaff' : '#ff4444';
+                return `<div style="display:flex;align-items:center;gap:8px;font-size:10px;padding:4px 0;opacity:0.35;border-bottom:1px solid #1e274015;">
+                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
+                    <span style="color:#555;">${aS.toUpperCase()} ${aP}¢ + ${hP}¢</span>
+                    <span style="color:${pCol};font-weight:700;">${prof > 0 ? '+' : ''}${prof}¢</span>
+                    <span style="background:#00ff8822;color:#00ff88;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;">DONE</span>
+                </div>`;
+            }
+            // Active rung — time-stage with countdown
+            const aS = r.anchor_side || 'yes';
+            const aP = r[`${aS}_price`] || 0;
+            const hP = r.hedge_price || 0;
+            const hFill = r.hedge_fill_qty || 0;
+            const elapsed = Math.floor(nowSec - (r.anchor_fill_at || nowSec));
+            const ts = r.time_stage || 'profit';
+            const aCol = aS === 'yes' ? '#00ff88' : '#ff4444';
+            const sm = { profit: { l:'PROFIT', c:'#00ff88', lim:15 }, scratch: { l:'SCRATCH', c:'#ffaa00', lim:30 }, panic: { l:'PANIC', c:'#ff4444', lim:60 } };
+            const st = sm[ts] || sm.profit;
+            const cdStr = ts === 'profit' ? `${Math.max(0,15-elapsed)}s` : ts === 'scratch' ? `${Math.max(0,30-elapsed)}s` : `${elapsed}s`;
+            let hStr, hCol;
+            if (hFill >= rQty && hP > 0) { hStr = `${hP}¢ FILLED`; hCol = '#00ff88'; }
+            else if (hP > 0) { hStr = `${hP}¢ (${hFill}/${rQty})`; hCol = '#ffaa00'; }
+            else { hStr = rs === 'anchor_filled' ? 'posting...' : 'pending'; hCol = '#555'; }
+            const tPct = Math.min(100, (elapsed / st.lim) * 100);
+            return `<div style="padding:4px 0;border-bottom:1px solid #1e274022;">
+                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
+                    <span style="color:${aCol};font-weight:700;font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
+                    <span style="background:${st.c}22;color:${st.c};font-size:8px;font-weight:800;padding:1px 6px;border-radius:3px;">${st.l}</span>
+                    <span style="color:${st.c};font-family:monospace;font-weight:700;font-size:12px;">${cdStr}</span>
+                    <span style="color:${hCol};font-size:9px;margin-left:auto;">hedge ${hStr}</span>
+                </div>
+                <div style="height:3px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;">
+                    <div style="width:${tPct}%;height:100%;background:${st.c}88;border-radius:2px;transition:width 1s;"></div>
+                </div>
+            </div>`;
+        }).join('');
+    } else if (isFilled && (isConsolidated || completedRungs > 0)) {
         // ── CONSOLIDATED VIEW: anchor summary + per-rung breakdown + hedge detail ──
         const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
 

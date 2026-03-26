@@ -5,6 +5,7 @@ Flask server providing API endpoints for the trading bot
 
 from flask import Flask, jsonify, request, send_from_directory, make_response, Response, stream_with_context
 from flask_cors import CORS
+from flask_compress import Compress
 from kalshi_api import KalshiAPI
 import os
 import sys
@@ -30,6 +31,7 @@ _screenshot_store = {'data': None, 'event': threading.Event()}
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
+Compress(app)
 
 # Global variables
 kalshi_client: Optional[KalshiAPI] = None

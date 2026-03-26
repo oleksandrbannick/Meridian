@@ -3864,8 +3864,9 @@ def _execute_phantom_ladder_hedge(bot_id):
         _is_cross = hedge_ticker != ticker
         _fav_bid = 0
         _fav_ask = 0
-        if _is_cross and ws_manager:
-            _ws_h = ws_manager.get_price(hedge_ticker)
+        _ws_ticker = hedge_ticker if _is_cross else ticker
+        if ws_manager:
+            _ws_h = ws_manager.get_price(_ws_ticker)
             if _ws_h:
                 _fav_bid = _ws_h.get(f'{fav_side}_bid', 0)
                 _fav_ask = _ws_h.get(f'{fav_side}_ask', 0)
@@ -3878,14 +3879,10 @@ def _execute_phantom_ladder_hedge(bot_id):
             if _fav_ask <= 0:
                 _opp_bid = bot.get(f'{_ppfx}{"no" if fav_side == "yes" else "yes"}_bid', 0)
                 _fav_ask = (100 - _opp_bid) if _opp_bid > 0 else 0
-        _fav_spread = (_fav_ask - _fav_bid) if _fav_ask > 0 and _fav_bid > 0 else 0
 
         if _fav_bid > 0:
-            # Bid+1 only if spread >= 2 AND bid+1 < ask (never cross the ask)
-            if _fav_spread >= 2 and _fav_bid + 1 < _fav_ask:
-                hedge_price = _fav_bid + 1
-            else:
-                hedge_price = _fav_bid
+            # Always post at bid — phantom needs ceiling margin, walk follows bid
+            hedge_price = _fav_bid
         else:
             # No WS bid — fall back to precalc hedge price
             precalc_hedges = bot.get('_precalc_hedge_prices', {})
@@ -8021,16 +8018,17 @@ def create_anchor_bot():
             if dog_side not in ('yes', 'no'):
                 dog_side = 'no'
 
-        # Dynamic anchor depth: 80/20 shave split for wider widths
-        # Width ≤ 3: all depth on dog, fav at market
-        # Width > 3: 80% dog depth, 20% fav shave
+        # Anchor depth: all depth shaved off dog, fav posts at bid
+        # Floor: 3¢ for 1¢ width, 5¢ for 2-3¢ width, width itself for wider
         anchor_depth = int(data.get('anchor_depth', 0))  # 0 = auto-calculate
         if anchor_depth <= 0:
-            if target_width <= 3:
-                anchor_depth = 5  # default 5c below for tight widths
+            if target_width <= 1:
+                anchor_depth = 3
+            elif target_width <= 3:
+                anchor_depth = 5
             else:
-                anchor_depth = max(5, round(target_width * 0.8))
-        fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
+                anchor_depth = max(5, target_width)
+        fav_shave = 0  # fav always posts at bid, no shave needed
 
         # Smart pricing: anchor_depth below bid if tight spread (≤2c), below ask if broken spread
         if live_dog_bid > 0:
@@ -8196,14 +8194,16 @@ def create_ladder_bot():
         current_dog_bid = _best_bid(ob, dog_side)
         current_dog_ask = _best_ask(ob, dog_side)
 
-        # Dynamic anchor depth for ladder — same 80/20 logic as single anchor
+        # Anchor depth: all depth shaved off dog, fav posts at bid
         anchor_depth = int(data.get('anchor_depth', 0))
         if anchor_depth <= 0:
-            if target_width <= 3:
+            if target_width <= 1:
+                anchor_depth = 3
+            elif target_width <= 3:
                 anchor_depth = 5
             else:
-                anchor_depth = max(5, round(target_width * 0.8))
-        fav_shave = max(0, target_width - anchor_depth) if target_width > 3 else 0
+                anchor_depth = max(5, target_width)
+        fav_shave = 0
 
         # Smart pricing: adjust all rungs relative to live price at order creation time
         # Depth floor anchors to rung 0 (first rung) — all rungs sit at or below anchor_depth
@@ -11353,125 +11353,25 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Walk target: bid+1 in gapped markets (>= 2¢ spread), bid in tight markets
-        fav_spread = (current_fav_ask - current_fav_bid) if current_fav_ask > 0 else 0
-        if fav_spread >= 2 and current_fav_ask > current_fav_bid:
-            walk_target = min(current_fav_bid + 1, current_fav_ask - 1)
-        else:
-            walk_target = current_fav_bid
+        # Walk target: always bid — phantom needs ceiling margin, walk follows bid
+        walk_target = current_fav_bid
 
-        # Hard ceiling: phantom NEVER exceeds WALK_CEILING combined (dog + fav)
+        # Hard ceiling: 98¢ combined = hold for fill, timeout handles exit
         max_fav = WALK_CEILING - avg_dog
         walk_target = min(walk_target, max_fav)
 
         if walk_target <= 0:
             return
 
-        # ── Ceiling sellback: at breakeven (98¢ combined), exit immediately ──
-        # Phantom's edge is instant fills. Walking to ceiling = trade failed.
-        if max_fav > 0 and current_fav_price >= max_fav and walk_target >= current_fav_price:
-            _ceil_fav_filled = bot.get('fav_fill_qty', 0)
-            try:
-                api_read_limiter.wait()
-                _ceil_fav_ord = kalshi_client.get_order(fav_order_id)
-                _ceil_fav_filled = max(_ceil_fav_filled, _parse_fill_count(_ceil_fav_ord.get('order', _ceil_fav_ord)))
-                bot['fav_fill_qty'] = _ceil_fav_filled
-            except Exception:
-                pass
-            if _ceil_fav_filled >= hedge_qty:
-                return
-            bot_log('PHANTOM_LADDER_CEILING_SELLBACK', bot_id, {
-                'avg_dog': avg_dog, 'fav_price': current_fav_price,
-                'max_fav': max_fav, 'ceiling': WALK_CEILING,
-                'fav_bid': current_fav_bid, 'fav_filled': _ceil_fav_filled,
-                'hedge_qty': hedge_qty, 'wait_s': round(wait_s, 1),
-            })
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_order_id)
-            except Exception:
-                pass
-            if _ceil_fav_filled > 0 and _ceil_fav_filled < hedge_qty:
-                sell_qty = hedge_qty - _ceil_fav_filled
-                fav_price = current_fav_price
-                profit_per = 100 - avg_dog - fav_price
-                est_fee = kalshi_fee_cents(
-                    avg_dog if dog_side == 'yes' else fav_price,
-                    avg_dog if dog_side == 'no' else fav_price,
-                    _ceil_fav_filled
-                )
-                net_profit = max(0, profit_per * _ceil_fav_filled - est_fee)
-                session_pnl['gross_profit_cents'] += net_profit
-                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
-                _record_trade({
-                    'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': avg_dog if dog_side == 'yes' else fav_price,
-                    'no_price': avg_dog if dog_side == 'no' else fav_price,
-                    'quantity': _ceil_fav_filled, 'profit_cents': net_profit, 'loss_cents': 0,
-                    'fee_cents': est_fee, 'result': 'partial_arb',
-                    'exit_via': 'ladder_ceiling_sellback_partial',
-                    'timestamp': now, 'placed_at': bot.get('created_at', now),
-                    'arb_width': bot.get('target_width', 0),
-                    'fill_source': 'anchor_ladder', 'bot_category': 'anchor_ladder',
-                }, bot)
-                print(f'🚫 PHANTOM LADDER CEILING (PARTIAL): {bot_id} fav {_ceil_fav_filled}/{hedge_qty} at {fav_price}¢ (ceiling {max_fav}¢) — selling back {sell_qty}')
-                bot['hedge_qty'] = sell_qty
-                bot['_partial_fav_completed'] = _ceil_fav_filled
-                _phantom_ladder_sell_back(bot_id, bot, avg_dog, current_fav_price, 999, actions)
-            else:
-                print(f'🚫 PHANTOM LADDER CEILING: {bot_id} fav {current_fav_price}¢ hit ceiling {max_fav}¢ — selling back')
-                _phantom_ladder_sell_back(bot_id, bot, avg_dog, current_fav_price, 999, actions)
+        # ── Bid-follow: always snap to bid, no walk intervals ──
+        new_fav_price = walk_target
+        if new_fav_price == current_fav_price:
+            return  # already at bid
+
+        walk_type = 'snap_to_bid'
+        combined = avg_dog + new_fav_price
+        if combined > WALK_CEILING:
             return
-
-        # Determine action priority
-        needs_drop = current_fav_price > walk_target
-        snap_ready = (avg_dog + walk_target) <= SNAP_CEILING_CENTS and walk_target != current_fav_price
-
-        # Queue position: track fav bid stability
-        _phl_prev_bid = bot.get('_fav_bid_seen', 0)
-        if current_fav_bid != _phl_prev_bid:
-            bot['_fav_bid_stable_since'] = now
-            bot['_fav_bid_seen'] = current_fav_bid
-        _phl_bid_stable_s = now - bot.get('_fav_bid_stable_since', now)
-        _phl_at_bid = current_fav_price > 0 and current_fav_price == walk_target
-        _phl_queue_grace = _phl_at_bid and _phl_bid_stable_s >= 10 and not snap_ready and not needs_drop
-
-        # Interval: instant drop, 3s stabilized snap, 20s normal walk
-        _phl_combined = avg_dog + current_fav_price
-        walk_interval = 0 if needs_drop else 3 if snap_ready else WALK_INTERVAL_S
-        if _phl_queue_grace:
-            walk_interval = max(walk_interval, 30)
-        bot['_walk_interval'] = walk_interval
-        fav_last_walk = bot.get('fav_last_walk_at') or fav_posted_at or now
-        since_last_walk = now - fav_last_walk
-
-        if since_last_walk >= walk_interval:
-            new_fav_price = None
-            walk_type = None
-
-            # PRIORITY 1: Profit snap — jump to bid when profitable (combined <= snap ceiling)
-            if snap_ready and walk_target != current_fav_price:
-                new_fav_price = walk_target
-                walk_type = 'profit_snap'
-
-            # PRIORITY 2: Drop to bid — if we're above bid, snap down immediately
-            elif needs_drop:
-                new_fav_price = walk_target
-                walk_type = 'drop_to_bid'
-
-            # PRIORITY 3: Walk +1¢ toward bid — only if bid is above us
-            elif walk_target > current_fav_price:
-                new_fav_price = current_fav_price + 1  # crawl +1¢, never jump
-                walk_type = 'walk_up'
-
-            if new_fav_price is None or new_fav_price == current_fav_price:
-                bot['fav_last_walk_at'] = now
-                return
-
-            combined = avg_dog + new_fav_price
-            if combined > WALK_CEILING:
-                bot['fav_last_walk_at'] = now
-                return
 
             try:
                 # Acquire shared lock — prevents race with WS instant drop on same order

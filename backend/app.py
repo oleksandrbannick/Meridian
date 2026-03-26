@@ -9534,6 +9534,8 @@ def _handle_phantom(bot_id, bot, actions):
 
                 # Dead market guard: bid too low for depth floor, or bid at 1c
                 _min_viable_bid = bot.get('anchor_depth', 5) + 1  # need at least depth+1 for a 1¢ order
+                _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                _has_settled_positions = _is_cross and bot.get('_cross_settled_qty', 0) > 0
                 if current_dog_bid <= 1 or current_dog_bid < _min_viable_bid:
                     print(f'🛑 PHANTOM DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ (need ≥{_min_viable_bid}¢) — cancelling')
                     _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
@@ -9544,18 +9546,27 @@ def _handle_phantom(bot_id, bot, actions):
                     for _dm_oid in bot.get('_all_dog_order_ids', []):
                         if _dm_oid and _dm_oid != dog_order_id:
                             _safe_cancel(_dm_oid, f'phantom dead market old dog {bot_id}')
-                    # Preserve repeats — dead market is temporary, don't count as a cycle
-                    _repeat_count = bot.get('repeat_count', 0)
-                    _repeats_done = bot.get('repeats_done', 0)
-                    if _repeat_count > 0 and _repeats_done < _repeat_count:
-                        bot['status'] = 'waiting_repeat'
-                        bot['waiting_repeat_since'] = time.time()
-                        print(f'🔄 DEAD MARKET REPEAT: {bot_id} — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
+                    # Cross-market with accumulated positions → awaiting settlement
+                    if _has_settled_positions:
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty', 0)
+                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty', 0)
+                        print(f'⏳ PHANTOM GAME OVER: {bot_id} holding {bot["_cross_settled_qty"]}x cross-market — awaiting settlement')
+                        bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot['_cross_settled_qty'], 'trigger': 'dead_market'})
                     else:
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        bot['repeat_count'] = 0
-                    bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'will_repeat': bot['status'] == 'waiting_repeat'})
+                        # Preserve repeats — dead market is temporary, don't count as a cycle
+                        _repeat_count = bot.get('repeat_count', 0)
+                        _repeats_done = bot.get('repeats_done', 0)
+                        if _repeat_count > 0 and _repeats_done < _repeat_count:
+                            bot['status'] = 'waiting_repeat'
+                            bot['waiting_repeat_since'] = time.time()
+                            print(f'🔄 DEAD MARKET REPEAT: {bot_id} — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
+                        else:
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            bot['repeat_count'] = 0
+                    bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'will_repeat': bot['status'] == 'waiting_repeat', 'awaiting': bot['status'] == 'awaiting_settlement'})
                     _audit('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
                     actions.append({'bot_id': bot_id, 'action': 'anchor_dead_market_cancel'})
                     save_state()
@@ -9565,7 +9576,6 @@ def _handle_phantom(bot_id, bot, actions):
                 # has moved too far — this isn't a dog anymore, cancel
                 if current_dog_bid > 50:
                     print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — no longer underdog, cancelling')
-                    # Cancel ALL tracked orders — dog, fav, and any old repost IDs
                     _safe_cancel(dog_order_id, f'phantom drift cancel {bot_id}')
                     for _drift_key in ('fav_order_id', 'hedge_order_id'):
                         _drift_oid = bot.get(_drift_key)
@@ -9574,8 +9584,17 @@ def _handle_phantom(bot_id, bot, actions):
                     for _drift_oid in bot.get('_all_dog_order_ids', []):
                         if _drift_oid and _drift_oid != dog_order_id:
                             _safe_cancel(_drift_oid, f'phantom drift cancel old dog {bot_id}')
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
+                    # Cross-market with accumulated positions → awaiting settlement
+                    if _has_settled_positions:
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty', 0)
+                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty', 0)
+                        print(f'⏳ PHANTOM GAME OVER: {bot_id} holding {bot["_cross_settled_qty"]}x cross-market — awaiting settlement')
+                        bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot['_cross_settled_qty'], 'trigger': 'drift'})
+                    else:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
                     actions.append({'bot_id': bot_id, 'action': 'anchor_drift_cancel', 'dog_bid': current_dog_bid})
                     save_state()
                     return

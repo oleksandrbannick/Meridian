@@ -1,6 +1,4 @@
 // Meridian — Sports Trading Terminal
-window.onerror = function(msg, url, line, col, err) { console.error('🔴 GLOBAL ERROR:', msg, 'at', url, 'line', line, col, err); document.title = 'JS ERR: ' + msg; };
-window.addEventListener('unhandledrejection', function(e) { console.error('🔴 UNHANDLED PROMISE:', e.reason); });
 /** Return local YYYY-MM-DD string (avoids UTC date-shift bug) */
 function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
 
@@ -575,7 +573,6 @@ function filterBySport(sport) {
 
 function applyFilters() {
     try {
-    console.log('🔍 applyFilters called, allMarkets:', allMarkets.length);
     const query = (document.getElementById('search-box')?.value || '').toLowerCase();
     let filtered = allMarkets;
 
@@ -633,9 +630,8 @@ function applyFilters() {
     }
 
     window._lastFilteredMarkets = filtered;
-    console.log('🔍 applyFilters displaying', filtered.length, 'markets');
     displayMarkets(filtered);
-    } catch(e) { console.error('🔴 applyFilters ERROR:', e); document.getElementById('markets-grid').innerHTML = `<p style="color:red;grid-column:1/-1;">applyFilters error: ${e.message}<br><pre>${e.stack}</pre></p>`; }
+    } catch(e) { console.error('applyFilters error:', e); }
 }
 
 // ─── LIVE BADGE on game event rows ────────────────────────────────────────────
@@ -1209,9 +1205,9 @@ async function autoLogin() {
             await loadBalance();
             startBalancePoll();  // live balance updates every 15s via WS cache
             await loadBots();
-            await loadPnL();
+            loadPnL();
             loadOpeningLines(); // fire-and-forget, non-blocking
-            await loadMarkets();
+            loadMarkets(); // non-blocking — don't let slow markets delay page
 
             // Auto-resume monitoring if bots exist
             await autoResumeMonitor();
@@ -1248,25 +1244,17 @@ async function loadMarkets() {
     grid.innerHTML = '<p style="color: #00ff88; grid-column: 1 / -1;">Loading sports markets...</p>';
 
     try {
-        // Build URL with sport filter for backend
-        // Use higher limit — NCAAB alone can have 2000+ markets (spreads, totals, props)
-        // 'live' filter is client-side only, fetch all
         const isAllOrLive = !currentSportFilter || currentSportFilter === 'all' || currentSportFilter === 'live';
         const fetchLimit = isAllOrLive ? 2000 : 3000;
         let url = `${API_BASE}/markets?status=open&limit=${fetchLimit}`;
         if (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live') {
             url += `&sport=${currentSportFilter}`;
         }
-
-        // Backend queries Kalshi by sports series (KXNBAGAME, KXNBASPREAD, etc.)
-        // Retry up to 2 times with 30s timeout per attempt
         let response, data;
         for (let _attempt = 0; _attempt < 3; _attempt++) {
             try {
-                // Fresh AbortController per attempt so a prior timeout doesn't poison retries
                 const attemptAbort = new AbortController();
                 const timeoutId = setTimeout(() => attemptAbort.abort(), 30000);
-                // Also abort if superseded by a newer loadMarkets() call
                 if (myAbort !== _marketsAbort) return;
                 response = await fetch(url, { signal: attemptAbort.signal });
                 clearTimeout(timeoutId);
@@ -1274,7 +1262,6 @@ async function loadMarkets() {
                 if (!data.error) break;
             } catch (_retryErr) {
                 if (myAbort !== _marketsAbort) {
-                    // Superseded by a newer loadMarkets() call — silently exit
                     return;
                 }
                 if (_attempt < 2) {
@@ -1438,7 +1425,6 @@ async function refreshVisiblePrices() {
 
 // Display markets using trading floor layout (compact event rows)
 function displayMarkets(markets) {
-    console.log('🖥 displayMarkets called with', markets?.length, 'markets');
     try {
     const grid = document.getElementById('markets-grid');
 
@@ -1514,7 +1500,7 @@ function displayMarkets(markets) {
     Object.values(events).forEach(eventData => {
         displayEventRow(eventData, grid);
     });
-    } catch(e) { console.error('🔴 displayMarkets ERROR:', e); document.getElementById('markets-grid').innerHTML = `<p style="color:red;grid-column:1/-1;">displayMarkets error: ${e.message}<br><pre>${e.stack}</pre></p>`; }
+    } catch(e) { console.error('displayMarkets error:', e); }
 }
 
 // Group markets by GAME - extracts game ID from event_ticker

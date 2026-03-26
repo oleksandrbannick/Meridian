@@ -12,7 +12,7 @@ Meridian is a sports arbitrage trading terminal for Kalshi binary options. It ru
 ## Bot Types (user-facing → internal)
 | Name | `type` | `bot_category` | Description |
 |------|--------|----------------|-------------|
-| Apex | arb | ladder_arb | Multi-width arb ladder, consolidates hedge on first fill |
+| Apex 2.0 | arb | ladder_arb | Multi-width arb ladder, per-rung independent hedging with time-decay |
 | Phantom | — | anchor_dog | Posts dog leg only, instant hedge on fill |
 | Phantom Ladder | — | anchor_ladder | Multi-rung dog with instant hedges |
 | Scout | watch | bet | Stop-loss / take-profit on a position |
@@ -25,11 +25,19 @@ Meridian is a sports arbitrage trading terminal for Kalshi binary options. It ru
 - **WS Fill Handler**: `_ws_realtime_fill_handler()` — instant hedge on WS fill events
 - **Precalc System**: `_precalc_phantom_hedge()` / `_precalc_phantom_ladder_hedges()` — zero-compute on hot path
 
+## Apex 2.0 — Per-Rung Siloed Arbiter
+Apex uses independent per-rung hedging (no consolidation). Each rung:
+- Posts YES+NO limit orders independently
+- On anchor fill → spawns daemon thread to post per-rung hedge
+- Time-decay stages: **profit** (0-15s, target price) → **scratch** (15-30s, breakeven) → **panic** (30s+, stop-loss/taker)
+- Bot statuses: `ladder_arb_posted` → `ladder_arb_active` → `waiting_repeat` / `completed`
+- Rung statuses: `posted` → `anchor_filled` → `profit_window` → `scratch_window` → `panic_window` → `completed`
+- Key functions: `_apex_post_rung_hedge()`, `_apex_time_decay_tick()`, `_apex_record_rung_pnl()`, `_apex_stop_loss_threshold()`
+- **No consolidation, no walk system, no sell-back** — replaced by time-decay stages
+- All rungs use same quantity (no width scaling)
+
 ## Critical Rules
 - **No fee calculations in bot logic** — only in P&L tracking. 98¢ combined = breakeven
-- **Walk-to-bid ceiling is intentional** — NEVER cap or limit it
-- **Snap threshold = 98¢** (2¢ min profit), same as walk ceiling
-- **Rubberband = dog-side snap-down on whale dumps**, not fav snap-up
 - **Never modify phantom/anchor bot code without explicit permission**
 - **Never revert code without user explicitly telling you to**
 

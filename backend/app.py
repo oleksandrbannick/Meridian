@@ -13286,13 +13286,68 @@ def _run_monitor():
         # Auto-reset P&L if the date has changed
         auto_reset_daily_pnl()
 
+        # ── Cross-market awaiting settlement: fix qty + auto smart exit ──
+        _cross_fixed = 0
+        for _bid, _b in list(active_bots.items()):
+            _ht = _b.get('hedge_ticker')
+            _is_cross = _ht and _ht != _b.get('ticker')
+            if not _is_cross or _b.get('status') != 'awaiting_settlement':
+                continue
+            # Fix settled qty: reconstruct from bot data if missing
+            if _b.get('_cross_settled_qty', 0) <= 0:
+                _runs = (_b.get('repeats_done', 0) or 0) + 1
+                _qty_per = _b.get('quantity', 1) or 1
+                if _b.get('rungs'):
+                    _qty_per = sum(r.get('qty', 1) for r in _b.get('rungs', []))
+                _b['_cross_settled_qty'] = _runs * _qty_per
+                _cross_fixed += 1
+            # Auto smart exit: check price trigger
+            _trigger = _b.get('_smart_exit_trigger')
+            if _trigger and not _b.get('_smart_exit_sold'):
+                _trigger_price = _trigger.get('price', 0)
+                if _trigger_price > 0 and ws_manager:
+                    _dog_side = _b.get('dog_side', 'no')
+                    _fav_side = _b.get('fav_side', _dog_side)
+                    _ws_dog = ws_manager.get_price(_b['ticker'])
+                    _ws_fav = ws_manager.get_price(_ht)
+                    _dog_bid = (_ws_dog or {}).get(f'{_dog_side}_bid', 0)
+                    _fav_bid = (_ws_fav or {}).get(f'{_fav_side}_bid', 0)
+                    _loser_bid = min(_dog_bid, _fav_bid) if _dog_bid > 0 and _fav_bid > 0 else 0
+                    if _loser_bid > 0 and _loser_bid <= _trigger_price:
+                        _loser_ticker = _b['ticker'] if _dog_bid <= _fav_bid else _ht
+                        _loser_side = _dog_side if _dog_bid <= _fav_bid else _fav_side
+                        _winner_ticker = _ht if _dog_bid <= _fav_bid else _b['ticker']
+                        _exit_qty = _b.get('_cross_settled_qty', 0)
+                        if _exit_qty > 0:
+                            try:
+                                _sold, _sell_info = execute_sell(_loser_ticker, _loser_side, _exit_qty,
+                                                                reason=f'auto_smart_exit_{_bid}')
+                                _sell_price = _sell_info.get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+                                _b['_smart_exit_sold'] = {
+                                    'ticker': _loser_ticker, 'side': _loser_side,
+                                    'qty': _exit_qty, 'price': _sell_price,
+                                    'winner_ticker': _winner_ticker, 'auto': True,
+                                }
+                                bot_log('AUTO_SMART_EXIT', _bid, {
+                                    'trigger_price': _trigger_price, 'loser': _loser_ticker,
+                                    'loser_bid': _loser_bid, 'sell_price': _sell_price, 'qty': _exit_qty,
+                                })
+                                print(f'🎯 Auto smart exit: {_bid[:40]} sold {_loser_ticker.split("-")[-1]} @ {_sell_price}¢')
+                                _cross_fixed += 1
+                            except Exception as _se:
+                                print(f'⚠ Auto smart exit failed: {_bid[:40]}: {_se}')
+        if _cross_fixed > 0:
+            save_state()
+
         # ── Purge stale completed/stopped bots from active_bots ──
         # Keep them for 60s so the frontend sees the final state, then remove.
+        # NEVER purge cross-market bots — they hold positions until settlement.
         _purge_cutoff = time.time() - 60
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
                       and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
+                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
                       ]
         if _purge_ids:
             for _pid in _purge_ids:
@@ -16647,6 +16702,14 @@ def smart_exit(bot_id):
     fav_side = bot.get('fav_side', dog_side)
     cross_qty = bot.get('_cross_settled_qty', 0)
     if cross_qty <= 0:
+        # Reconstruct from bot data
+        _runs = (bot.get('repeats_done', 0) or 0) + 1
+        _qty_per = bot.get('quantity', 1) or 1
+        if bot.get('rungs'):
+            _qty_per = sum(r.get('qty', 1) for r in bot.get('rungs', []))
+        cross_qty = _runs * _qty_per
+        bot['_cross_settled_qty'] = cross_qty
+    if cross_qty <= 0:
         return jsonify({'error': 'No positions to exit'}), 400
 
     # Get current bids for both legs
@@ -16718,6 +16781,34 @@ def smart_exit(bot_id):
 
     save_state()
     return jsonify({'success': result.get('sold', False), **result})
+
+
+@app.route('/api/bot/smart-exit-trigger/<bot_id>', methods=['POST'])
+def set_smart_exit_trigger(bot_id):
+    """Set a price trigger for auto smart exit. When the losing side's bid drops
+    to or below trigger_price, auto-sell it and hold the winner for settlement."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    _ht = bot.get('hedge_ticker')
+    if not _ht or _ht == bot.get('ticker'):
+        return jsonify({'error': 'Not a cross-market bot'}), 400
+
+    data = request.json or {}
+    trigger_price = int(data.get('trigger_price', 0))
+    if trigger_price <= 0:
+        # Clear trigger
+        bot.pop('_smart_exit_trigger', None)
+        save_state()
+        return jsonify({'success': True, 'cleared': True})
+
+    bot['_smart_exit_trigger'] = {
+        'price': trigger_price,
+        'set_at': time.time(),
+    }
+    save_state()
+    bot_log('SMART_EXIT_TRIGGER_SET', bot_id, {'trigger_price': trigger_price})
+    return jsonify({'success': True, 'trigger_price': trigger_price})
 
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])
@@ -18695,13 +18786,20 @@ def get_orphaned_positions():
     try:
         managed_tickers = set()
         for b in active_bots.values():
-            # Cross-market bots hold positions on BOTH tickers until settlement,
-            # even after completion. Always include both to avoid false orphans.
+            _st = b.get('status', '')
             _ht = b.get('hedge_ticker')
-            if _ht and _ht != b.get('ticker'):
+            _is_cross = _ht and _ht != b.get('ticker')
+            # Cross-market bots hold positions on BOTH tickers until settlement.
+            # Always include both regardless of bot status.
+            if _is_cross:
                 managed_tickers.add(_ht)
                 if b.get('ticker'): managed_tickers.add(b['ticker'])
-            if b.get('status') in ('completed', 'stopped', 'cancelled'):
+            # Awaiting settlement bots are still managing positions
+            if _st == 'awaiting_settlement':
+                if b.get('ticker'): managed_tickers.add(b['ticker'])
+                if _ht: managed_tickers.add(_ht)
+                continue
+            if _st in ('completed', 'stopped', 'cancelled'):
                 continue
             if b.get('ticker'): managed_tickers.add(b['ticker'])
             if b.get('ticker_a'): managed_tickers.add(b['ticker_a'])

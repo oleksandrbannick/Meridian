@@ -5454,12 +5454,14 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement') {
         const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
         const _runs = (bot.repeats_done || 0) + 1;
-        const _crossQty = bot._cross_settled_qty || bot.awaiting_qty_dog || 0;
         const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
-        const _isAwaiting = status === 'awaiting_settlement' || (_isCross && _crossQty > 0);
+        const _isAwaiting = status === 'awaiting_settlement' || _isCross;
+        // Total contracts: from tracked qty, or reconstruct from runs × quantity
+        const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
+        const _crossQty = bot._cross_settled_qty || (_runs * _qtyPer);
         const _isSmart = bot._smart_stopped;
         const _col = _isAwaiting ? '#818cf8' : _isSmart ? '#00e5ff' : '#00ff88';
-        const _label = _isAwaiting ? '⏳ SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
+        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
         const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
         const dogSide = bot.dog_side || 'no';
         const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
@@ -5470,6 +5472,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             const gs = gameScores[gk] || null;
             if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
         }
+        // Smart exit trigger status
+        const _trigger = bot._smart_exit_trigger;
+        const _triggerActive = _trigger && _trigger.price > 0 && !bot._smart_exit_sold;
         const item = document.createElement('div');
         item.style.cssText = `background:#0f1419;border:1px solid ${_col}33;border-left:3px solid ${_col};border-radius:12px;padding:14px;margin-bottom:10px;`;
         item.innerHTML = `
@@ -5479,29 +5484,38 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                     <span style="background:${_col}22;color:${_col};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${_label}</span>
                     ${liveScoreHtml}
-                    ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
-                    ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs · ${bot.consecutive_losses || 0}L</span>` : bot.repeat_count > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${_runs}/${(bot.repeat_count||0)+1}</span>` : ''}
+                    ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">CROSS</span>' : ''}
+                    ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs</span>` : _runs > 1 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_runs} runs</span>` : ''}
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    ${bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                    ${bot.smart_mode && _isSmart ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                    ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
-                    ${_isCross && _isAwaiting && _crossQty > 0 ? `<button onclick="smartExit('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    ${bot.smart_mode && _isAwaiting ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                    ${!bot.smart_mode && _isAwaiting ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                    ${_isCross && _isAwaiting && !bot._smart_exit_sold ? `<button onclick="smartExitMenu('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
                     <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
                 </div>
             </div>
             <div style="background:#060a14;border:1px solid ${_col}33;border-radius:8px;padding:14px;">
-                ${_isCross && _crossQty > 0 ? `
+                ${_isCross ? `
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
-                    <div style="text-align:center;padding:8px;background:${_col}11;border-radius:6px;">
-                        <div style="color:#ffaa00;font-size:9px;font-weight:700;margin-bottom:4px;">DOG · ${dogSide.toUpperCase()}</div>
-                        <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
-                        <div style="color:#555;font-size:9px;">${(bot.ticker || '').split('-').pop()}</div>
+                    <div style="padding:8px;background:${_col}11;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <span style="color:#ffaa00;font-size:9px;font-weight:700;">DOG · ${dogSide.toUpperCase()}</span>
+                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQty}x</span>
+                        </div>
+                        <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
+                            <div style="background:#ffaa00;height:100%;width:100%;border-radius:3px;"></div>
+                        </div>
+                        <div style="color:#555;font-size:9px;margin-top:3px;">${(bot.ticker || '').split('-').pop()} · filled</div>
                     </div>
-                    <div style="text-align:center;padding:8px;background:${_col}11;border-radius:6px;">
-                        <div style="color:#00aaff;font-size:9px;font-weight:700;margin-bottom:4px;">FAV · ${favSide.toUpperCase()}</div>
-                        <div style="color:#fff;font-size:18px;font-weight:800;">${_crossQty}x</div>
-                        <div style="color:#555;font-size:9px;">${(bot.hedge_ticker || '').split('-').pop()}</div>
+                    <div style="padding:8px;background:${_col}11;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <span style="color:#00aaff;font-size:9px;font-weight:700;">FAV · ${favSide.toUpperCase()}</span>
+                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQty}x</span>
+                        </div>
+                        <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
+                            <div style="background:#00aaff;height:100%;width:100%;border-radius:3px;"></div>
+                        </div>
+                        <div style="color:#555;font-size:9px;margin-top:3px;">${(bot.hedge_ticker || '').split('-').pop()} · filled</div>
                     </div>
                 </div>` : ''}
                 ${(bot._run_history || []).length > 0 ? `
@@ -5510,16 +5524,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
                             <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
                             <span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span>
-                            <span style="color:#8892a6;">×${r.qty || 1}</span>
+                            <span style="color:#8892a6;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
                         </div>
                     `).join('')}
-                </div>` : ''}
+                </div>` : _runs > 1 ? `
+                <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
                     <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
+                    <span>Holding: <strong style="color:#fff;">${_crossQty}x</strong> each side</span>
                     <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
-                    ${bot._last_result ? `<span>Last: <strong style="color:${bot._last_result === 'win' ? '#00ff88' : '#ff4444'};">${bot._last_result === 'win' ? 'Win' : 'Loss'} ${bot._last_pnl != null ? (bot._last_pnl >= 0 ? '+' : '') + bot._last_pnl + '¢' : ''}</strong></span>` : ''}
                 </div>
+                ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit trigger: sell loser when bid ≤ ${_trigger.price}¢</div>` : ''}
                 ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Exited ${(bot._smart_exit_sold.ticker || '').split('-').pop()} @ ${bot._smart_exit_sold.price || '?'}¢ · holding ${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()} for settlement</div>` : ''}
                 ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}
             </div>
@@ -6896,6 +6912,8 @@ async function loadBots() {
             if (s === 'awaiting_settlement') return true;
             // Smart-stopped bots stay visible
             if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
+            // Cross-market bots ALWAYS stay visible (awaiting settlement)
+            if ((s === 'completed' || s === 'stopped') && bots[id].cross_market && bots[id].hedge_ticker && bots[id].hedge_ticker !== bots[id].ticker) return true;
             // Keep completed/stopped bots visible for 3 seconds
             if (s === 'completed' || s === 'stopped') {
                 const finishedAt = (window._botCompletedAt || {})[id];
@@ -8282,9 +8300,34 @@ async function stopSmart(botId) {
     }
 }
 
-async function smartExit(botId) {
+function smartExitMenu(botId) {
+    // Show menu with options: Sell Now or Set Price Trigger
+    const existing = document.getElementById('smart-exit-menu-' + botId);
+    if (existing) { existing.remove(); return; }
+    // Remove any other open menus
+    document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
+    const btn = document.querySelector(`button[onclick*="smartExitMenu('${botId}')"]`);
+    if (!btn) return;
+    const menu = document.createElement('div');
+    menu.id = 'smart-exit-menu-' + botId;
+    menu.style.cssText = 'position:absolute;right:0;top:100%;background:#0d1117;border:1px solid #64ffda44;border-radius:8px;padding:10px;z-index:999;min-width:200px;box-shadow:0 4px 12px rgba(0,0,0,.5);';
+    menu.innerHTML = `
+        <div style="color:#64ffda;font-size:10px;font-weight:700;margin-bottom:8px;">SMART EXIT</div>
+        <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;font-weight:700;margin-bottom:6px;">Sell Loser Now</button>
+        <div style="color:#8892a6;font-size:9px;margin-bottom:6px;">Or auto-sell when loser bid drops to:</div>
+        <div style="display:flex;gap:4px;margin-bottom:6px;">
+            ${[3, 5, 8, 10, 15].map(p => `<button onclick="setSmartExitTrigger('${botId}', ${p})" style="flex:1;background:#1a2540;color:#fff;border:1px solid #333;border-radius:4px;padding:4px;font-size:10px;cursor:pointer;font-weight:600;">${p}¢</button>`).join('')}
+        </div>
+        <button onclick="document.getElementById('smart-exit-menu-${botId}').remove()" style="display:block;width:100%;background:transparent;color:#555;border:1px solid #333;border-radius:6px;padding:4px;font-size:10px;cursor:pointer;">Cancel</button>
+    `;
+    btn.parentElement.style.position = 'relative';
+    btn.parentElement.appendChild(menu);
+}
+
+async function smartExitNow(botId) {
+    document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
+    if (!confirm('Sell the losing side at market now?')) return;
     try {
-        // First fetch current state to show confirmation
         const resp = await fetch(`${API_BASE}/bot/smart-exit/${botId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -8299,6 +8342,26 @@ async function smartExit(botId) {
         loadBots();
     } catch (e) {
         showToast('Smart exit failed: ' + e.message, 'error');
+    }
+}
+
+async function setSmartExitTrigger(botId, price) {
+    document.querySelectorAll('[id^="smart-exit-menu-"]').forEach(el => el.remove());
+    try {
+        const resp = await fetch(`${API_BASE}/bot/smart-exit-trigger/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trigger_price: price }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(`Auto exit set: sell loser when bid ≤ ${price}¢`, 'success');
+        } else {
+            showToast(data.error || 'Failed to set trigger', 'error');
+        }
+        loadBots();
+    } catch (e) {
+        showToast('Failed: ' + e.message, 'error');
     }
 }
 

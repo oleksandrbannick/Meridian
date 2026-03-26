@@ -12836,8 +12836,35 @@ def _handle_apex(bot_id, bot, actions):
                                                 bot['_hedge_fill_count'] = _pre_fills
                                             if _pre_status == 'executed':
                                                 bot['_hedge_verified'] = True
+                                                _late_anchor_amend_lock.release()
+                                                return
+                                            # Canceled with no/partial fills — repost at walk target
+                                            if _pre_status in ('canceled', 'cancelled'):
+                                                _repost_qty = max(1, rq - bot.get('_hedge_fill_count', 0))
+                                                if _repost_qty > 0:
+                                                    try:
+                                                        _rp_resp, _rp_actual = create_order_maker(
+                                                            ticker=ticker, side=unfilled_side, action='buy',
+                                                            count=_repost_qty, price=new_price,
+                                                        )
+                                                        _rp_oid = _rp_resp['order']['order_id']
+                                                        bot['hedge_order_id'] = _rp_oid
+                                                        bot['hedge_price'] = _rp_actual
+                                                        bot['hedge_qty'] = _repost_qty
+                                                        _all_ids = bot.get('_all_hedge_order_ids', [])
+                                                        _all_ids.append(_rp_oid)
+                                                        bot['_all_hedge_order_ids'] = _all_ids
+                                                        bot['walk_count'] = 0
+                                                        print(f'🔄 APEX WALK REPOST (pre-check): {bot_id} {unfilled_side} {_repost_qty}× @ {_rp_actual}¢ (old was {_pre_status})')
+                                                        bot_log('APEX_WALK_REPOST_PRECHECK', bot_id, {
+                                                            'new_oid': _rp_oid[:12], 'qty': _repost_qty,
+                                                            'price': _rp_actual, 'old_status': _pre_status,
+                                                        })
+                                                        save_state()
+                                                    except Exception as _rp_err:
+                                                        print(f'⚠ APEX WALK REPOST FAIL: {bot_id}: {_rp_err}')
                                             _late_anchor_amend_lock.release()
-                                            return  # Don't try to amend a non-resting order
+                                            return
                                     except Exception as _pc_err:
                                         print(f'⚠ APEX WALK PRE-CHECK failed: {bot_id}: {_pc_err}')
                                     api_rate_limiter.wait()

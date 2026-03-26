@@ -9607,14 +9607,15 @@ def _handle_phantom(bot_id, bot, actions):
                     for _drift_oid in bot.get('_all_dog_order_ids', []):
                         if _drift_oid and _drift_oid != dog_order_id:
                             _safe_cancel(_drift_oid, f'phantom drift cancel old dog {bot_id}')
-                    # Cross-market with accumulated positions → awaiting settlement
-                    if _has_settled_positions:
+                    # Cross-market → awaiting settlement (positions held on both tickers)
+                    _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                    if _has_settled_positions or _is_cross:
                         bot['status'] = 'awaiting_settlement'
                         bot['awaiting_since'] = now
                         bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty', 0)
                         bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty', 0)
-                        print(f'⏳ PHANTOM GAME OVER: {bot_id} holding {bot["_cross_settled_qty"]}x cross-market — awaiting settlement')
-                        bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot['_cross_settled_qty'], 'trigger': 'drift'})
+                        print(f'⏳ PHANTOM DRIFT → AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot.get("hedge_ticker")}')
+                        bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot.get('_cross_settled_qty', 0), 'trigger': 'drift'})
                     else:
                         bot['status'] = 'completed'
                         bot['completed_at'] = now
@@ -10902,10 +10903,17 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         for rung in bot.get('rungs', []):
                             if rung.get('order_id'):
                                 _safe_cancel(rung['order_id'], f'phantom drift {bot_id}')
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
+                    _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                    if _is_cross:
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        print(f'⏳ PHANTOM DRIFT → AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot["hedge_ticker"]}')
+                    else:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
                     bot_log('PHANTOM_LADDER_DRIFT_CANCEL', bot_id, {
                         'dog_bid': rp_dog_bid, 'dog_side': dog_side,
+                        'cross_market': _is_cross,
                     })
                     _audit('PHANTOM_LADDER_DRIFT_CANCEL', bot_id, {'ticker': ticker, 'dog_bid': rp_dog_bid})
                     actions.append({'bot_id': bot_id, 'action': 'phantom_ladder_drift_cancel', 'dog_bid': rp_dog_bid})

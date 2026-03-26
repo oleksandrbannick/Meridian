@@ -5669,10 +5669,35 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
+        ${_isAwaitingSettlement ? `
+        <div style="background:#060a14;border:1px solid #818cf833;border-radius:8px;padding:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <span style="color:#818cf8;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Game Over — Awaiting Settlement</span>
+                <span style="color:#818cf8;font-size:10px;">${bot.awaiting_since ? Math.round((nowSec - bot.awaiting_since) / 60) + 'm' : ''}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
+                <div style="text-align:center;padding:8px;background:#818cf811;border-radius:6px;">
+                    <div style="color:#ffaa00;font-size:9px;font-weight:700;margin-bottom:4px;">DOG · ${dogSide.toUpperCase()}</div>
+                    <div style="color:#fff;font-size:18px;font-weight:800;">${bot.awaiting_qty_dog || bot._cross_settled_qty || '?'}x</div>
+                    <div style="color:#555;font-size:9px;margin-top:2px;">${(bot.ticker || '').split('-').pop()}</div>
+                </div>
+                <div style="text-align:center;padding:8px;background:#818cf811;border-radius:6px;">
+                    <div style="color:#00aaff;font-size:9px;font-weight:700;margin-bottom:4px;">FAV · ${favSide.toUpperCase()}</div>
+                    <div style="color:#fff;font-size:18px;font-weight:800;">${bot.awaiting_qty_fav || bot._cross_settled_qty || '?'}x</div>
+                    <div style="color:#555;font-size:9px;margin-top:2px;">${(bot.hedge_ticker || '').split('-').pop()}</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:12px;font-size:10px;color:#8892a6;justify-content:center;">
+                <span>Runs: <strong style="color:#fff;">${bot.repeats_done || 0}</strong></span>
+                <span>P&L: <strong style="color:${(bot.lifetime_pnl || 0) >= 0 ? '#00ff88' : '#ff4444'};">${(bot.lifetime_pnl || 0) >= 0 ? '+' : ''}${bot.lifetime_pnl || 0}¢</strong></span>
+                ${bot.smart_mode ? `<span style="color:#00e5ff;">Smart</span>` : ''}
+            </div>
+        </div>
+        ` : `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             <div style="background:#060a14;border:1px solid #ffaa0033;border-radius:8px;padding:10px;">
-                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
+                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>`}
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`}</div>
                 ${isLadder && dogFillQty === 0 ? '<div style="color:#ffaa00;font-size:10px;">Waiting for fill</div>' : ''}
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
@@ -5755,7 +5780,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             }
             return '';
         })()}
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isAwaitingSettlement ? 'display:none;' : ''}">
             <span style="color:#ffaa00;">Width: ${targetWidth}¢</span>
             <span style="color:#8892a6;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}

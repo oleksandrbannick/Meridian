@@ -18422,8 +18422,9 @@ def get_active_positions():
                 _parts = ticker.split('-')
                 _kalshi_title = mkt.get('title', '').strip()
                 if _kalshi_title and _kalshi_title != ticker:
-                    # Use Kalshi's market title (includes spread info like "+13")
-                    _display_title = f'{_kalshi_title} — {side.upper()}'
+                    # Use Kalshi's market title + team code from ticker end
+                    _team_code = re.match(r'^([A-Z]+)', _parts[-1]).group(1) if len(_parts) >= 3 and re.match(r'^[A-Z]+', _parts[-1]) else ''
+                    _display_title = f'{_kalshi_title} — {_team_code} {side.upper()}' if _team_code else f'{_kalshi_title} — {side.upper()}'
                 elif len(_parts) >= 3:
                     # Fallback: parse from ticker
                     _teams_raw = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', _parts[1])

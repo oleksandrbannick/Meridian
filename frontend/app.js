@@ -572,7 +572,6 @@ function filterBySport(sport) {
 }
 
 function applyFilters() {
-    try {
     const query = (document.getElementById('search-box')?.value || '').toLowerCase();
     let filtered = allMarkets;
 
@@ -631,7 +630,6 @@ function applyFilters() {
 
     window._lastFilteredMarkets = filtered;
     displayMarkets(filtered);
-    } catch(e) { console.error('applyFilters error:', e); }
 }
 
 // ─── LIVE BADGE on game event rows ────────────────────────────────────────────
@@ -1244,17 +1242,25 @@ async function loadMarkets() {
     grid.innerHTML = '<p style="color: #00ff88; grid-column: 1 / -1;">Loading sports markets...</p>';
 
     try {
+        // Build URL with sport filter for backend
+        // Use higher limit — NCAAB alone can have 2000+ markets (spreads, totals, props)
+        // 'live' filter is client-side only, fetch all
         const isAllOrLive = !currentSportFilter || currentSportFilter === 'all' || currentSportFilter === 'live';
         const fetchLimit = isAllOrLive ? 2000 : 3000;
         let url = `${API_BASE}/markets?status=open&limit=${fetchLimit}`;
         if (currentSportFilter && currentSportFilter !== 'all' && currentSportFilter !== 'live') {
             url += `&sport=${currentSportFilter}`;
         }
+
+        // Backend queries Kalshi by sports series (KXNBAGAME, KXNBASPREAD, etc.)
+        // Retry up to 2 times with 30s timeout per attempt
         let response, data;
         for (let _attempt = 0; _attempt < 3; _attempt++) {
             try {
+                // Fresh AbortController per attempt so a prior timeout doesn't poison retries
                 const attemptAbort = new AbortController();
                 const timeoutId = setTimeout(() => attemptAbort.abort(), 30000);
+                // Also abort if superseded by a newer loadMarkets() call
                 if (myAbort !== _marketsAbort) return;
                 response = await fetch(url, { signal: attemptAbort.signal });
                 clearTimeout(timeoutId);
@@ -1262,6 +1268,7 @@ async function loadMarkets() {
                 if (!data.error) break;
             } catch (_retryErr) {
                 if (myAbort !== _marketsAbort) {
+                    // Superseded by a newer loadMarkets() call — silently exit
                     return;
                 }
                 if (_attempt < 2) {
@@ -1425,9 +1432,8 @@ async function refreshVisiblePrices() {
 
 // Display markets using trading floor layout (compact event rows)
 function displayMarkets(markets) {
-    try {
     const grid = document.getElementById('markets-grid');
-
+    
     if (!markets ||markets.length === 0) {
         grid.innerHTML = '<p style="color: #8892a6; grid-column: 1 / -1;">No markets to display.</p>';
         return;
@@ -1500,7 +1506,6 @@ function displayMarkets(markets) {
     Object.values(events).forEach(eventData => {
         displayEventRow(eventData, grid);
     });
-    } catch(e) { console.error('displayMarkets error:', e); }
 }
 
 // Group markets by GAME - extracts game ID from event_ticker
@@ -5060,7 +5065,15 @@ function closeOrderbookModal() {
 const ALL_PRESET_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
-// Width scaling removed in Apex 2.0 — all rungs use same quantity
+// ── Width-based quantity scaling (matches backend WIDTH_QTY_TIERS) ──
+function getWidthQtyMultiplier(width) {
+    if (width >= 13) return 3;
+    if (width >= 9)  return 2;
+    return 1;
+}
+function scaleQtyForWidth(baseQty, width) {
+    return Math.max(1, Math.floor(baseQty * getWidthQtyMultiplier(width)));
+}
 
 // ── Multi-width selector state ──
 let _selectedWidths = new Set();
@@ -5129,6 +5142,7 @@ function updateAllWidthsPreview() {
         return;
     }
     const baseQty = parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const useScaling = selectedArr.length >= 2;
 
     let rows = '';
     let totalCost = 0;
@@ -5142,7 +5156,7 @@ function updateAllWidthsPreview() {
         const noPrice  = arb.targetNo;
         const profit = 100 - yesPrice - noPrice;
         const blocked = profit <= 0;
-        const rungQty = baseQty;
+        const rungQty = useScaling ? scaleQtyForWidth(baseQty, w) : baseQty;
         const cost = blocked ? 0 : (yesPrice + noPrice) * rungQty;
         const profitTotal = blocked ? 0 : profit * rungQty;
         if (!blocked) { totalCost += cost; totalProfit += profitTotal; validCount++; totalContracts += rungQty; }
@@ -5151,7 +5165,7 @@ function updateAllWidthsPreview() {
         const statusText  = blocked ? '⛔ no arb' : `✓ Y${yesPrice}¢ N${noPrice}¢`;
         const rowBg = blocked ? 'rgba(255,68,68,0.04)' : 'rgba(0,255,136,0.03)';
         const qtyLabel = blocked ? '—' : `${rungQty}×`;
-        const qtyColor = '#8892a6';
+        const qtyColor = (useScaling && !blocked && rungQty > baseQty) ? '#818cf8' : '#8892a6';
         rows += `<div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;align-items:center;padding:4px 6px;background:${rowBg};border-radius:4px;margin-bottom:2px;">
             <span style="color:#8892a6;font-weight:700;font-size:10px;">${w}¢</span>
             <span style="color:${qtyColor};font-size:10px;font-weight:700;text-align:center;">${qtyLabel}</span>
@@ -5165,7 +5179,7 @@ function updateAllWidthsPreview() {
 
     const totalDollars  = (totalCost / 100).toFixed(2);
     const profitDollars = (totalProfit / 100).toFixed(2);
-    const qtyDesc = `${baseQty}× each`;
+    const qtyDesc = useScaling ? `${totalContracts} contracts (scaled)` : `${baseQty}× each`;
     preview.innerHTML = `
         <div style="display:grid;grid-template-columns:28px 30px 1fr 38px 34px 60px 50px;gap:3px;padding:2px 6px;margin-bottom:4px;">
             <span style="color:#555;font-size:9px;">W</span>
@@ -5341,9 +5355,11 @@ async function placeSelectedWidthsBots() {
     }
 
     // ── Pre-scan: build detailed confirmation ──────────────────────────────────
+    const useScaling = selectedArr.length >= 2;
     const validWidths = [];
     const skipReasons = [];
     let totalCostCents = 0;
+    let totalScaledQty = 0;
 
     for (const w of selectedArr) {
         const arb      = calculateArbPrices(currentArbMarket, w);
@@ -5353,8 +5369,10 @@ async function placeSelectedWidthsBots() {
         if (profit <= 0) {
             skipReasons.push(`  ⛔  ${w}¢ width — no profit`);
         } else {
-            validWidths.push({ w, arb, yesPrice, noPrice, profit, rungQty: qty });
-            totalCostCents += (yesPrice + noPrice) * qty;
+            const rungQty = useScaling ? scaleQtyForWidth(qty, w) : qty;
+            validWidths.push({ w, arb, yesPrice, noPrice, profit, rungQty });
+            totalCostCents += (yesPrice + noPrice) * rungQty;
+            totalScaledQty += rungQty;
         }
     }
 
@@ -5370,14 +5388,19 @@ async function placeSelectedWidthsBots() {
     orderLines.push('  ────────────────────────────────────────');
     for (const { w, arb, yesPrice, noPrice, profit, rungQty } of validWidths) {
         const costDollars = ((yesPrice + noPrice) * rungQty / 100).toFixed(2);
-        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(rungQty+'×',4)}  ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
+        const qtyStr = useScaling && rungQty > qty ? `${rungQty}×` : `${rungQty}×`;
+        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(qtyStr,4)}  ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
     }
     if (skipReasons.length > 0) {
         orderLines.push('');
         orderLines.push(...skipReasons);
     }
     orderLines.push('');
-    orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
+    if (useScaling) {
+        orderLines.push(`  ${validWidths.length} widths · ${totalScaledQty} total contracts (base ${qty}×, scaled by width)`);
+    } else {
+        orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
+    }
     orderLines.push(`  Total entry cost: $${(totalCostCents / 100).toFixed(2)}`);
     orderLines.push('');
     orderLines.push('Place these orders?');
@@ -5406,13 +5429,15 @@ async function placeSelectedWidthsBots() {
             ticker: deployTicker,
             widths: validWidths.map(v => v.w),
             quantity: qty,
+            width_scaling: useScaling,
             repeat_count: repeatCount,
             hard_ceiling: hardCeiling,
             game_phase: gamePhase,
         }),
     }).then(r => r.json()).then(data => {
         if (data.bot_id) {
-            showNotification(`△ Apex 2.0 deployed: ${data.rungs} rungs × ${qty}`);
+            const qtyDesc = data.width_scaling ? `${data.total_qty} contracts (scaled)` : `${data.rungs} rungs × ${qty}×`;
+            showNotification(`△ Apex deployed: ${data.rungs} rungs · ${qtyDesc}`);
         } else {
             showNotification(`❌ Apex failed: ${data.error || 'Unknown error'}`);
         }
@@ -5863,25 +5888,33 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const status = bot.status || 'ladder_arb_posted';
     const rungs = bot.rungs || [];
     const qtyPer = bot.quantity || 1;
+    const totalExpected = rungs.reduce((s, r) => s + (r.quantity || qtyPer), 0);
+    const totalYesFill = bot.filled_yes_qty || bot.yes_fill_qty || 0;
+    const totalNoFill = bot.filled_no_qty || bot.no_fill_qty || 0;
+    const avgYes = bot.avg_yes_price || 0;
+    const avgNo = bot.avg_no_price || 0;
+    const walkCount = bot.walk_count || 0;
     const phase = bot.game_phase || 'pregame';
 
     const statusMap = {
         'ladder_arb_posted': '⚡ BOTH LIVE',
         'ladder_arb_active': '🔥 ACTIVE',
+        'ladder_arb_yes_filled': '✓ YES FILLED',
+        'ladder_arb_no_filled': '✓ NO FILLED',
         'waiting_repeat': '🔄 REPEATING',
         'drift_cancelled': '🚫 DRIFT GUARD',
         'completed': '✅ COMPLETE',
         'stopped': '🛑 STOPPED',
-        'awaiting_settlement': '⏳ SETTLEMENT',
     };
     const borderMap = {
         'ladder_arb_posted': '#00aaff',
         'ladder_arb_active': '#ffaa00',
+        'ladder_arb_yes_filled': '#00ff88',
+        'ladder_arb_no_filled': '#ff4444',
         'waiting_repeat': '#aa66ff',
         'drift_cancelled': '#ff8800',
         'completed': '#00ff88',
         'stopped': '#ff4444',
-        'awaiting_settlement': '#00e5ff',
     };
     const borderCol = borderMap[status] || '#00aaff';
     const statusLabel = statusMap[status] || status;
@@ -5896,140 +5929,232 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         }
     }
 
-    // Repeat + cumulative P&L
-    const repeatCount = bot.repeat_count || 0;
-    const repeatsDone = bot.repeats_done || 0;
+    // P&L color — when consolidated, use actual hedge price for accurate P&L
+    const hedgePriceForPnl = bot.hedge_price || 0;
+    const combinedAvg = (status === 'ladder_arb_yes_filled' || status === 'ladder_arb_no_filled') && hedgePriceForPnl > 0
+        ? (status === 'ladder_arb_yes_filled' ? avgYes : avgNo) + hedgePriceForPnl  // anchor avg + actual hedge
+        : avgYes + avgNo;
+    const estFeePerContract = combinedAvg > 0 ? kalshiFeeCents(avgYes || Math.round(combinedAvg / 2), avgNo || Math.round(combinedAvg / 2), 1) : 0;
+    const effectiveProfit = combinedAvg > 0 ? (100 - combinedAvg - estFeePerContract) : 0;
+    const pnlColor = effectiveProfit > 2 ? '#00ff88' : effectiveProfit > 0 ? '#00aaff' : '#ff4444';
+
+    // Rungs table — show consolidated hedge when one side is filled
+    const isConsolidated = bot._consolidated;
+    const filledSideForRungs = status === 'ladder_arb_yes_filled' ? 'yes' : status === 'ladder_arb_no_filled' ? 'no' : null;
+    const hedgePrice = bot.hedge_price || 0;
+    const hedgeQty = bot.hedge_qty || 0;
+    const hedgeSide = filledSideForRungs === 'yes' ? 'no' : 'yes';
+
+    // Hedge history (completed hedge generations)
+    const hedgeHistory = bot.hedge_history || [];
+    const completedRungs = bot.completed_rungs_count || 0;
     const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.cumulative_pnl || 0);
-    let cycleInfo = '';
-    if (repeatCount > 0) {
-        const totalRuns = repeatCount + 1;
-        const currentCycle = repeatsDone + 1;
-        cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
-    }
 
-    // Count rung states for summary
-    const activeRungStates = ['anchor_filled', 'profit_window', 'scratch_window', 'panic_window'];
-    const activeRungCount = rungs.filter(r => activeRungStates.includes(r.status)).length;
-    const completedRungCount = rungs.filter(r => r.status === 'completed' || r._profit_recorded).length;
-    const postedRungCount = rungs.filter(r => !r.status || r.status === 'posted').length;
+    // Shared fill-state variables
+    const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes'
+        : status === 'ladder_arb_no_filled' ? 'no'
+        : status === 'apex_selling_back' ? (bot.first_fill_side || 'yes')
+        : status === 'awaiting_settlement' ? (bot.first_fill_side || 'yes')
+        : null;
+    const isFilled = !!filledSideKey;
+    const filledSideLabel = filledSideKey === 'yes' ? 'YES' : filledSideKey === 'no' ? 'NO' : '';
+    const unfilledSideLabel = filledSideLabel === 'YES' ? 'NO' : 'YES';
+    const filledColor = filledSideKey === 'yes' ? '#00ff88' : '#ff4444';
+    const hedgeColorSide = hedgeSide === 'yes' ? '#00ff88' : '#ff4444';
+    const avgFilled = isFilled ? (filledSideKey === 'yes' ? avgYes : avgNo) : 0;
+    const filledQty = isFilled ? (filledSideKey === 'yes' ? totalYesFill : totalNoFill) : 0;
+    const unfilledBid = isFilled ? (unfilledSideLabel === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0)) : 0;
+    const unfilledAsk = isFilled ? (unfilledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
+    const filledBid = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0)) : 0;
+    const filledAsk = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
+    const currentHedgePrice = hedgePrice || 0;
+    const combined = avgFilled + currentHedgePrice;
+    const _botCeiling = bot.hard_ceiling || 98;
+    const firstFillAt = bot.first_fill_at || 0;
+    const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
+    const atCeiling = combined >= _botCeiling;
+    const gameUrgency = bot._game_urgency || 'normal';
+    const walkInterval = bot._walk_interval != null ? bot._walk_interval : (atCeiling ? 3 : 20);
+    const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(walkInterval - (nowSec - lastWalkAt))) : walkInterval;
+    const urgencyBadge = gameUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
+        : gameUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>'
+        : gameUrgency === 'halftime' ? '<span style="color:#818cf8;font-weight:700;font-size:9px;background:#818cf822;padding:1px 4px;border-radius:3px;">⏸ HALF</span>'
+        : '<span style="color:#8892a6;font-weight:600;font-size:9px;background:#8892a612;padding:1px 4px;border-radius:3px;">NORMAL</span>';
+    const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
+    const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
+    // Ceiling distance
+    const ceilingDist = isFilled ? (98 - combined) : 0;
 
-    // ── Per-rung display ──
     let rungsHTML;
-    if (status === 'ladder_arb_active') {
-        // Apex 2.0: per-rung rows with time-stage badges and countdowns
-        rungsHTML = rungs.map((r, i) => {
-            const rQty = r.quantity || qtyPer;
-            const rs = r.status || 'posted';
-            const width = r.width;
+    if (isFilled && (isConsolidated || completedRungs > 0)) {
+        // ── CONSOLIDATED VIEW: anchor summary + per-rung breakdown + hedge detail ──
+        const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
 
-            // Still waiting for fill — show both sides dimmed
-            if (rs === 'posted') {
-                const yFill = r.yes_fill_qty || 0;
-                const nFill = r.no_fill_qty || 0;
-                return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;opacity:0.4;">
-                    <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
-                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                            <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFill >= rQty ? '#00ff88' : '#333'};border-radius:2px;"></div>
-                        </div>
-                        <span style="color:#555;font-size:9px;">${yFill}/${rQty}</span>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <span style="color:#ff4444;font-size:9px;width:24px;">N${r.no_price}</span>
-                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                            <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFill >= rQty ? '#ff4444' : '#333'};border-radius:2px;"></div>
-                        </div>
-                        <span style="color:#555;font-size:9px;">${nFill}/${rQty}</span>
-                    </div>
-                </div>`;
-            }
+        // Split rungs into filled (consolidated) and unfilled (show individually)
+        const filledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) > 0);
+        const unfilledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) === 0 && !r.completed && !r.cancelled);
 
-            // Completed rung — dimmed result
-            if (rs === 'completed' || r._profit_recorded) {
-                const anchorSide = r.anchor_side || 'yes';
-                const anchorPrice = r[`${anchorSide}_price`] || 0;
-                const hedgePrice = r.hedge_price || 0;
-                const combined = anchorPrice + hedgePrice;
-                const profit = combined > 0 ? 100 - combined : 0;
-                const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#00aaff' : '#ff4444';
-                return `<div style="display:flex;align-items:center;gap:8px;font-size:10px;padding:4px 0;opacity:0.35;border-bottom:1px solid #1e274015;">
-                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
-                    <span style="color:#555;">${anchorSide.toUpperCase()} ${anchorPrice}¢ + ${hedgePrice}¢</span>
-                    <span style="color:${profitCol};font-weight:700;">${profit > 0 ? '+' : ''}${profit}¢</span>
-                    <span style="background:#00ff8822;color:#00ff88;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;">DONE</span>
-                </div>`;
-            }
+        // Cleanup generation: split anchors into completed (hedged) vs cleanup (unhedged)
+        const hasCleanup = hedgeHistory.length > 0 && hedgeQty > 0 && currentHedgePrice > 0;
+        const historyHedgedQty = hedgeHistory.reduce((s, h) => s + (h.fill_qty || h.qty || 0), 0);
+        const cleanupQty = hasCleanup ? Math.max(0, filledQty - historyHedgedQty) : 0;
+        const completedQty = hasCleanup ? historyHedgedQty : 0;
 
-            // Active rung — time-stage with countdown
-            const anchorSide = r.anchor_side || 'yes';
-            const anchorPrice = r[`${anchorSide}_price`] || 0;
-            const hedgePrice = r.hedge_price || 0;
-            const hedgeFill = r.hedge_fill_qty || 0;
-            const anchorFillAt = r.anchor_fill_at || nowSec;
-            const elapsed = Math.floor(nowSec - anchorFillAt);
-            const timeStage = r.time_stage || 'profit';
-            const anchorCol = anchorSide === 'yes' ? '#00ff88' : '#ff4444';
-
-            // Stage config
-            const stageMap = {
-                'profit':  { label: 'PROFIT',  color: '#00ff88', limit: 15 },
-                'scratch': { label: 'SCRATCH', color: '#ffaa00', limit: 30 },
-                'panic':   { label: 'PANIC',   color: '#ff4444', limit: 60 },
-            };
-            const stage = stageMap[timeStage] || stageMap['profit'];
-
-            // Countdown text
-            let countdownStr;
-            if (timeStage === 'profit') {
-                const rem = Math.max(0, 15 - elapsed);
-                countdownStr = `${rem}s`;
-            } else if (timeStage === 'scratch') {
-                const rem = Math.max(0, 30 - elapsed);
-                countdownStr = `${rem}s`;
-            } else {
-                countdownStr = `${elapsed}s`;
-            }
-
-            // Hedge status
-            let hedgeStr, hedgeCol;
-            if (hedgeFill >= rQty && hedgePrice > 0) {
-                hedgeStr = `${hedgePrice}¢ FILLED`; hedgeCol = '#00ff88';
-            } else if (hedgePrice > 0) {
-                hedgeStr = `${hedgePrice}¢ (${hedgeFill}/${rQty})`; hedgeCol = '#ffaa00';
-            } else if (rs === 'anchor_filled') {
-                hedgeStr = 'posting...'; hedgeCol = '#555';
-            } else {
-                hedgeStr = 'pending'; hedgeCol = '#555';
-            }
-
-            // Time progress bar
-            const timePct = Math.min(100, (elapsed / stage.limit) * 100);
-
-            return `<div style="padding:4px 0;border-bottom:1px solid #1e274022;">
-                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
-                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
-                    <span style="color:${anchorCol};font-weight:700;font-size:9px;">${anchorSide.toUpperCase()} ${anchorPrice}¢</span>
-                    <span style="background:${stage.color}22;color:${stage.color};font-size:8px;font-weight:800;padding:1px 6px;border-radius:3px;letter-spacing:.05em;">${stage.label}</span>
-                    <span style="color:${stage.color};font-family:monospace;font-weight:700;font-size:12px;">${countdownStr}</span>
-                    <span style="color:${hedgeCol};font-size:9px;margin-left:auto;">hedge ${hedgeStr}</span>
+        // Anchor summary block — split into COMPLETED + CLEANUP if cleanup generation active
+        let anchorSummary;
+        if (hasCleanup && completedQty > 0) {
+            anchorSummary = `
+                <div style="color:#556;font-size:8px;font-weight:700;letter-spacing:.08em;margin-bottom:4px;">── COMPLETED ──</div>
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}22;border-radius:6px;margin-bottom:4px;opacity:0.35;">
+                    <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+                    <span style="color:${filledColor};font-size:11px;font-weight:700;">${completedQty} contracts · HEDGED</span>
                 </div>
-                <div style="height:3px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;">
-                    <div style="width:${timePct}%;height:100%;background:${stage.color}88;border-radius:2px;transition:width 1s;"></div>
+                ${cleanupQty > 0 ? `
+                <div style="color:#ffaa00;font-size:8px;font-weight:700;letter-spacing:.08em;margin:8px 0 4px;">── CLEANUP ──</div>
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
+                    <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+                    <span style="color:${filledColor};font-size:11px;font-weight:700;">${cleanupQty} contracts @ avg ${avgFilled}¢</span>
+                    <span style="color:#ffaa00;font-size:8px;">cancel-race fills</span>
+                </div>` : ''}`;
+        } else {
+            anchorSummary = `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
+                <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
+                <span style="color:${filledColor};font-size:11px;font-weight:700;">${filledQty} contracts @ avg ${avgFilled}¢</span>
+                <span style="color:#555;font-size:9px;">bid ${filledBid}¢ · ask ${filledAsk}¢</span>
+            </div>`;
+        }
+
+        // Unfilled anchors — show individually so user can see where limit orders sit
+        const unfilledRows = unfilledRungs.map(r => {
+            const anchorPrice = r[`${filledSideKey}_price`] || 0;
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:1px 0;opacity:0.4;">
+                <span style="color:#ffaa00;font-weight:700;width:22px;">${r.width}¢</span>
+                <span style="color:${filledColor};width:30px;">${filledSideLabel[0]}${anchorPrice}</span>
+                <div style="flex:1;height:3px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                    <div style="width:0%;height:100%;background:#333;border-radius:2px;"></div>
+                </div>
+                <span style="color:#555;width:20px;text-align:right;">0/${r.quantity || qtyPer}</span>
+                <span style="color:#335;font-size:8px;">LIVE</span>
+            </div>`;
+        }).join('');
+
+        const rungRows = (unfilledRungs.length > 0)
+            ? `<div style="padding:2px 8px;margin-top:4px;border-top:1px solid #1e274022;">
+                <div style="color:#556;font-size:8px;font-weight:600;margin-bottom:2px;">PENDING ANCHORS (${unfilledRungs.length})</div>
+                ${unfilledRows}
+               </div>`
+            : '';
+
+        // Hedge detail block
+        let hedgeBlock = '';
+        const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
+        const historyFills = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
+        const rawActiveHedgeFill = Math.max(0, hedgeFill - historyFills);
+        const activeHedgeFill = Math.min(rawActiveHedgeFill, hedgeQty); // cap at hedge qty for display
+        const overflowFills = Math.max(0, rawActiveHedgeFill - hedgeQty); // extra fills needing new hedge
+
+        // Completed hedge history
+        const historyHTML = hedgeHistory.map(h => {
+            const hLabel = (h.side === 'yes' ? 'YES' : 'NO');
+            const hColor = h.side === 'yes' ? '#00ff88' : '#ff4444';
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:2px 0;opacity:0.35;">
+                <span style="color:${hColor};font-weight:700;">HEDGE</span>
+                <span style="color:${hColor};">${hLabel} @${h.price}¢ × ${h.qty}</span>
+                <span style="color:#00ff8888;font-size:8px;">DONE</span>
+            </div>`;
+        }).join('');
+
+        // Active hedge
+        if (currentHedgePrice > 0 && hedgeQty > 0) {
+            const hedgeFilled = activeHedgeFill >= hedgeQty;
+            const hedgeCol = hedgeFilled ? hedgeColorSide : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
+            const hedgePct = hedgeQty > 0 ? Math.round((activeHedgeFill / hedgeQty) * 100) : 0;
+            const gapToBid = unfilledBid - currentHedgePrice;
+            const gapToAsk = unfilledAsk - currentHedgePrice;
+            const gapCol = gapToBid === 0 ? '#00ff88' : gapToBid <= 2 ? '#00ff88' : gapToBid <= 5 ? '#ffaa00' : gapToBid <= 10 ? '#ff8800' : '#ff4444';
+            const gapStr = gapToBid > 0 ? `+${gapToBid}¢ to bid` : gapToBid === 0 ? '= bid' : '';
+            // System state
+            const maxHedge = bot._max_hedge || 0;
+            const snapReady = bot._snap_ready || false;
+            const spread = unfilledAsk > 0 ? unfilledAsk - unfilledBid : 0;
+            // State label — 3 zones: snap (≤96), walk (97), ceiling (≥98)
+            let stateLabel, stateColor;
+            if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
+            else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
+            else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
+            else if (combined >= _botCeiling) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
+            else { stateLabel = 'WALKING'; stateColor = '#00aaff'; }
+            hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                    <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
+                    <span style="color:${hedgeColorSide};font-size:11px;font-weight:700;">${hedgeQty}× @ ${currentHedgePrice}¢</span>
+                    <span style="color:#555;font-size:9px;">bid ${unfilledBid}¢ · ask ${unfilledAsk}¢${spread > 1 ? ` · gap ${spread}¢` : ''}</span>
+                    <span style="background:${stateColor}22;color:${stateColor};font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;">${stateLabel}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                    <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;transition:width 0.3s;"></div>
+                    </div>
+                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
+                </div>
+                <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
+                    <span>ceiling: <strong style="color:${_botCeiling <= 96 ? '#00ff88' : _botCeiling <= 97 ? '#ffaa00' : '#ff4444'};">${_botCeiling}¢</strong></span>
+                    <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
+                    ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
+                    ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
+                </div>
+            </div>`;
+        }
+
+        // Overflow: extra anchor fills that arrived after hedge was placed (cancel race)
+        const overflowBlock = overflowFills > 0 ? `<div style="margin-top:4px;padding:4px 8px;background:#ffaa0011;border:1px dashed #ffaa0044;border-radius:4px;font-size:10px;">
+            <span style="color:#ffaa00;font-weight:700;">⚡ +${overflowFills} late fill${overflowFills > 1 ? 's' : ''}</span>
+            <span style="color:#8892a6;"> — extra anchor${overflowFills > 1 ? 's' : ''} filled during cancel, awaiting new hedge</span>
+        </div>` : '';
+
+        rungsHTML = anchorSummary
+            + rungRows
+            + (historyHTML ? `<div style="padding:2px 8px;border-top:1px solid #1e274033;">${historyHTML}</div>` : '')
+            + hedgeBlock
+            + overflowBlock;
+    } else if (isFilled) {
+        // Filled but not yet consolidated — show per-rung with fills (hide cancelled rungs)
+        const filledLabel = filledSideKey === 'yes' ? 'YES' : 'NO';
+        rungsHTML = rungs.filter(r => {
+            // Only show rungs that have fills on the anchor side
+            return (r[`${filledSideKey}_fill_qty`] || 0) > 0;
+        }).map((r, i) => {
+            const fill = r[`${filledSideKey}_fill_qty`] || 0;
+            const rQty = r.quantity || qtyPer;
+            const filled = fill >= rQty;
+            const col = filled ? filledColor : fill > 0 ? '#ffaa00' : '#333';
+            const pct = rQty > 0 ? Math.round((fill / rQty) * 100) : 0;
+            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:${filledColor};font-size:9px;width:24px;">${filledLabel[0]}${r[`${filledSideKey}_price`]}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty}</span>
                 </div>
             </div>`;
         }).join('');
-    } else if (status === 'ladder_arb_posted') {
-        // Both sides posted: show YES + NO per rung
+    } else {
+        // Normal: show both sides per rung — dim completed ones
         rungsHTML = rungs.map((r, i) => {
             const yFill = r.yes_fill_qty || 0;
             const nFill = r.no_fill_qty || 0;
             const rQty = r.quantity || qtyPer;
-            const yCol = yFill >= rQty ? '#00ff88' : yFill > 0 ? '#ffaa00' : '#333';
-            const nCol = nFill >= rQty ? '#ff4444' : nFill > 0 ? '#ffaa00' : '#333';
+            const yFilled = yFill >= rQty;
+            const nFilled = nFill >= rQty;
+            const isCompleted = r.completed;
+            const dimStyle = isCompleted ? 'opacity:0.3;' : '';
+            const yCol = yFilled ? '#00ff88' : yFill > 0 ? '#ffaa00' : '#333';
+            const nCol = nFilled ? '#00ff88' : nFill > 0 ? '#ffaa00' : '#333';
             const yPct = rQty > 0 ? Math.round((yFill / rQty) * 100) : 0;
             const nPct = rQty > 0 ? Math.round((nFill / rQty) * 100) : 0;
-            return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
+            return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;${dimStyle}">
                 <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
                 <div style="display:flex;align-items:center;gap:4px;">
                     <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
@@ -6047,54 +6172,233 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 </div>
             </div>`;
         }).join('');
-    } else {
-        // Completed / stopped / waiting_repeat — show summary per rung
-        rungsHTML = rungs.map((r, i) => {
-            const anchorSide = r.anchor_side || 'yes';
-            const anchorPrice = r[`${anchorSide}_price`] || 0;
-            const hedgePrice = r.hedge_price || 0;
-            const combined = anchorPrice + hedgePrice;
-            const profit = combined > 0 ? 100 - combined : 0;
-            return `<div style="display:flex;align-items:center;gap:8px;font-size:10px;padding:2px 0;opacity:0.5;">
-                <span style="color:#ffaa00;font-weight:700;width:28px;">${r.width}¢</span>
-                ${anchorPrice > 0 ? `<span style="color:#555;">${anchorSide.toUpperCase()} ${anchorPrice}¢${hedgePrice > 0 ? ` + ${hedgePrice}¢ = ${combined}¢` : ''}</span>` : '<span style="color:#333;">no fill</span>'}
-                ${profit > 0 && hedgePrice > 0 ? `<span style="color:#00ff88;font-weight:700;">+${profit}¢</span>` : ''}
-            </div>`;
-        }).join('');
     }
 
-    // ── Status info bar ──
-    let statusInfo = '';
-    if (status === 'ladder_arb_active') {
-        statusInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                <span style="font-weight:700;">🔥 ${activeRungCount} rung${activeRungCount !== 1 ? 's' : ''} active</span>
-                ${completedRungCount > 0 ? `<span style="color:#00ff88;">✅ ${completedRungCount} done</span>` : ''}
-                ${postedRungCount > 0 ? `<span style="color:#555;">⏳ ${postedRungCount} waiting</span>` : ''}
+    // Walk info — detailed status bar
+    let walkInfo = '';
+    if (status === 'awaiting_settlement') {
+        walkInfo = `<div style="background:#00e5ff11;border:1px solid #00e5ff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00e5ff;margin-top:6px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-weight:700;">⏳ <strong>AWAITING SETTLEMENT</strong></span>
+                <span style="color:#8892a6;">Market closed — waiting for Kalshi to settle</span>
+            </div>
+            <div style="color:#8892a6;font-size:9px;margin-top:3px;">
+                Position held · P&L calculated on settlement result · anchor ${avgFilled}¢ × ${filledQty}
             </div>
         </div>`;
+    } else if (status === 'apex_selling_back') {
+        // ── SELL-BACK STATE — full exit visibility (must be before isFilled check) ──
+        const sbPrice = bot._sellback_price || 0;
+        const sbStarted = bot._sellback_started_at || 0;
+        const sbElapsed = sbStarted > 0 ? Math.floor(nowSec - sbStarted) : 0;
+        const sbWalks = bot._sellback_walk_count || 0;
+        const sbUrgency = bot._game_urgency || 'normal';
+        const sbTimeout = sbUrgency === 'critical' ? 30 : 300;
+        const sbTimeLeft = Math.max(0, sbTimeout - sbElapsed);
+        const sbPct = sbTimeout > 0 ? Math.min(100, (sbElapsed / sbTimeout) * 100) : 0;
+        const sbTimerCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#ffaa00';
+        const sbMinLeft = Math.floor(sbTimeLeft / 60);
+        const sbSecLeft = Math.floor(sbTimeLeft % 60);
+        const sbAnchorSide = bot.first_fill_side === 'yes' ? 'YES' : 'NO';
+        const sbAvgAnchor = bot._sellback_avg_anchor || avgFilled || 0;
+        const sbFillQty = bot._sellback_fill_qty || 0;
+        const sbQty = bot._sellback_qty || bot.hedge_qty || 1;
+        const sbFillPct = sbQty > 0 ? Math.round((sbFillQty / sbQty) * 100) : 0;
+        const sbTimeoutNote = sbUrgency === 'critical' ? 'Emergency cross in'
+            : sbTimeLeft <= 30 ? 'Taker cross in' : 'Timeout cross in';
+        const sbBid = bot._sellback_bid || 0;
+        const sbAsk = bot._sellback_ask || 0;
+        const sbWalkTarget = bot._sellback_walk_target || sbBid;
+        const sbAtBid = sbPrice > 0 && sbBid > 0 && sbPrice <= sbBid + 1;
+        walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                <span style="font-weight:700;">🔙 <strong>MAKER SELL-BACK</strong></span>
+                ${urgencyBadge}
+                ${sbAtBid ? '<span style="color:#00ff88;font-weight:700;font-size:9px;background:#00ff8818;padding:1px 4px;border-radius:3px;">AT BID</span>' : ''}
+            </div>
+            <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:4px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
+                    <span style="color:#ff8800;font-weight:700;">${sbAnchorSide} sell @ ${sbPrice}¢ × ${sbQty}</span>
+                    <span style="color:#8892a6;">bid ${sbBid}¢ · ask ${sbAsk}¢${sbWalkTarget > 0 ? ` · target ${sbWalkTarget}¢` : ''}</span>
+                </div>
+            </div>
+            ${sbFillQty > 0 ? `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                <div style="flex:1;height:6px;background:#1e2740;border-radius:3px;overflow:hidden;">
+                    <div style="width:${sbFillPct}%;height:100%;background:#ff8800;border-radius:3px;transition:width 0.3s;"></div>
+                </div>
+                <span style="color:#ff8800;font-weight:700;font-size:10px;">${sbFillQty}/${sbQty} sold</span>
+            </div>` : ''}
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:18px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
+                <div style="flex:1;height:4px;background:#1e2740;border-radius:2px;overflow:hidden;">
+                    <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
+            </div>
+            <div style="color:#8892a6;font-size:9px;">
+                anchor avg ${sbAvgAnchor}¢ · step #${sbWalks} · ${sbTimeoutNote} · taker cross if timeout
+            </div>
+        </div>`;
+    } else if (isFilled) {
+        const isHalftime = ((gameScores && gameKey && (gameScores[gameKey] || {}).status_detail) || '').toLowerCase().includes('half');
+        const walkLabel = walkCount > 0 ? `walked +${walkCount}` : '';
+        const ceilingStr = ceilingDist <= 3 ? `<span style="color:${ceilingDist <= 0 ? '#ff4444' : '#ff8800'};font-weight:700;">${ceilingDist}¢ to ceiling</span>` : '';
+
+        if (isHalftime) {
+            walkInfo = `<div style="background:#818cf822;border:1px solid #818cf833;border-radius:5px;padding:6px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>⏸ <strong>HALFTIME PAUSE</strong></span>
+                    <span style="color:#8892a6;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = ${combined}¢ · ${unfilledSideLabel} bid ${unfilledBid}¢</span>
+                </div>
+            </div>`;
+        } else if (atCeiling && currentHedgePrice > 0) {
+            // ── AT CEILING — combined ≥ 98¢ (breakeven), waiting for fill or sell-back timer ──
+            const bidGap = bot._bid_gap || 0;
+            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ bid ${bidGap}¢ from hedge — ${gameUrgency === 'critical' ? 'drift exit at 5¢' : gameUrgency === 'late' ? 'drift exit at 10¢' : 'watching'}</div>` : '';
+            const sbTimeLeft = bot._sellback_time_left;
+            const sbGrace = bot._sellback_grace_s || 0;
+            const sbTimerHtml = (() => {
+                if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
+                    const sbMin = Math.floor(sbTimeLeft / 60);
+                    const sbSec = Math.floor(sbTimeLeft % 60);
+                    const sbCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#818cf8';
+                    return `<span style="color:${sbCol};font-size:9px;font-weight:700;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
+                } else if (sbGrace >= 9999) {
+                    return '<span style="color:#818cf8;font-size:9px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
+                } else if (sbTimeLeft != null && sbTimeLeft <= 0 && bot._apex_sellback_attempted) {
+                    return '<span style="color:#ffaa00;font-size:9px;font-weight:700;background:#ffaa0018;padding:1px 5px;border-radius:3px;">⏱ completing cheaper — waiting for fill</span>';
+                } else if (sbTimeLeft != null && sbTimeLeft <= 0) {
+                    const decision = bot._sellback_decision;
+                    const hp = bot.hedge_price || currentHedgePrice || '?';
+                    if (decision === 'selling_back') {
+                        const sbp = bot._sellback_price || '?';
+                        return `<span style="color:#ff8800;font-size:9px;font-weight:700;background:#ff880018;padding:1px 5px;border-radius:3px;">🔙 SELLING BACK @ ${sbp}¢</span>`;
+                    } else if (decision === 'crossing_to_bid') {
+                        return `<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">💀 CROSSING @ ${hp}¢ — waiting for fill</span>`;
+                    }
+                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back evaluating...</span>';
+                }
+                return '';
+            })();
+            // Show live countdown in exit rule instead of static grace period
+            const exitRule = (() => {
+                if (gameUrgency === 'halftime') return 'Exit: paused until game resumes';
+                if (sbTimeLeft != null && sbTimeLeft > 0) {
+                    const m = Math.floor(sbTimeLeft / 60);
+                    const s = Math.floor(sbTimeLeft % 60);
+                    return `Exit: sell-back in ${m > 0 ? m + 'm ' : ''}${s}s`;
+                }
+                if (sbTimeLeft != null && sbTimeLeft <= 0) {
+                    const d = bot._sellback_decision;
+                    if (d === 'selling_back') return `Exit: selling back @ ${bot._sellback_price || '?'}¢`;
+                    if (d === 'crossing_to_bid') return `Exit: crossing @ ${bot.hedge_price || '?'}¢ — waiting for fill`;
+                    return 'Exit: sell-back timer expired — evaluating';
+                }
+                const grace = gameUrgency === 'critical' ? '10s' : gameUrgency === 'late' ? '60s' : '180s';
+                return `Exit: sell-back · ${grace}`;
+            })();
+            walkInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                    <span style="font-weight:700;">🔴 <strong>AT CEILING ${combined}¢</strong></span>
+                    ${urgencyBadge}
+                    ${sbTimerHtml}
+                </div>
+                <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:3px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
+                        <span style="color:#fff;">${unfilledSideLabel} hedge @ ${currentHedgePrice}¢</span>
+                        <span style="color:#8892a6;">anchor ${avgFilled}¢ · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
+                    </div>
+                </div>
+                <div style="color:#8892a6;font-size:9px;">filled ${fillAgeStr} ago · step #${walkCount} · <span style="color:#ffaa00;">${exitRule}</span></div>
+                ${bidGapWarn}
+            </div>`;
+        } else if (walkCount > 0 && currentHedgePrice > 0) {
+            const atBid = currentHedgePrice >= unfilledBid;
+            const walkStartPrice = bot.walk_start_price || currentHedgePrice;
+            const prevPrice = walkCount > 1 ? currentHedgePrice - 1 : walkStartPrice;
+            const nextPrice = atBid ? currentHedgePrice : currentHedgePrice + 1;
+            const walkPct = Math.min(100, ((walkInterval - nextWalkIn) / walkInterval) * 100);
+            const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '📈';
+            const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atBid ? 'AT BID' : 'WALKING';
+            const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
+            // Exit rules line
+            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
+                : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
+                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
+                : 'Exit: sell-back if >96¢ · 5min timeout';
+            walkInfo = `<div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
+                    <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${unfilledSideLabel} hedge</span>
+                    <span style="color:#666;font-size:9px;">start ${walkStartPrice}¢</span>
+                    <span style="color:#888;">prev ${prevPrice}¢ →</span>
+                    <span style="color:#00ff88;font-weight:700;font-size:12px;">${currentHedgePrice}¢</span>
+                    <span style="color:#888;">→ next ${nextPrice}¢</span>
+                    <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
+                      <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
+                        <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
+                        <circle cx="10" cy="10" r="8" fill="none" stroke="${statusCol}" stroke-width="2"
+                          stroke-dasharray="${2*Math.PI*8}" stroke-dashoffset="${2*Math.PI*8*(1-walkPct/100)}"
+                          stroke-linecap="round"/>
+                      </svg>
+                      <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${nextWalkIn}</span>
+                    </span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
+                    <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>
+                    ${urgencyBadge} ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
+                    ${(() => {
+                        const sbTimeLeft = bot._sellback_time_left;
+                        const sbGrace = bot._sellback_grace_s || 0;
+                        if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
+                            const sbMin = Math.floor(sbTimeLeft / 60);
+                            const sbSec = Math.floor(sbTimeLeft % 60);
+                            const sbCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#818cf8';
+                            return `<span style="color:${sbCol};font-size:8px;font-weight:600;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
+                        } else if (sbGrace >= 9999) {
+                            return '<span style="color:#818cf8;font-size:8px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
+                        }
+                        return '';
+                    })()}
+                    <span style="color:#ffaa00;font-size:8px;">${exitRule}</span>
+                </div>
+            </div>`;
+        } else if (currentHedgePrice > 0 && currentHedgePrice >= unfilledBid) {
+            walkInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:6px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>🎯 <strong>${unfilledSideLabel} AT BID</strong> — @${currentHedgePrice}¢ × ${hedgeQty} — waiting for fill</span>
+                    <span style="color:#8892a6;">${combined}¢ combined · ${fillAgeStr}</span>
+                </div>
+            </div>`;
+        } else {
+            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span>⏳ <strong>${filledSideLabel} FILLED</strong> (avg ${avgFilled}¢ × ${filledQty}) — posting ${unfilledSideLabel} hedge</span>
+                    <span style="color:#8892a6;">${unfilledSideLabel} bid ${unfilledBid}¢ · ask ${unfilledAsk}¢ · next walk ${nextWalkIn}s</span>
+                </div>
+            </div>`;
+        }
     } else if (status === 'ladder_arb_posted') {
         const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
         const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
         const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
         const nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
-        statusInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00aaff;margin-top:6px;">
+        walkInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00aaff;margin-top:6px;">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                 <span>⚡ All ${rungs.length} rungs live — YES+NO posted</span>
                 <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${yBid}/${yAsk}¢</strong> · N <strong style="color:#ff4444;">${nBid}/${nAsk}¢</strong></span>
             </div>
         </div>`;
-    } else if (status === 'waiting_repeat') {
-        statusInfo = `<div style="background:#aa66ff11;border:1px solid #aa66ff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#aa66ff;margin-top:6px;">
-            <span style="font-weight:700;">🔄 Cycle ${repeatsDone + 1}/${repeatCount + 1} complete — reposting in ~10s</span>
-        </div>`;
-    } else if (status === 'awaiting_settlement') {
-        statusInfo = `<div style="background:#00e5ff11;border:1px solid #00e5ff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00e5ff;margin-top:6px;">
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-weight:700;">⏳ <strong>AWAITING SETTLEMENT</strong></span>
-                <span style="color:#8892a6;">Market closed — waiting for Kalshi to settle</span>
-            </div>
-        </div>`;
+    }
+
+    // Repeat + ceiling info
+    const repeatCount = bot.repeat_count || 0;
+    const repeatsDone = bot.repeats_done || 0;
+    let cycleInfo = '';
+    if (repeatCount > 0) {
+        const totalRuns = repeatCount + 1;
+        const currentCycle = repeatsDone + 1;
+        cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
+    }
+    if (_botCeiling < 98) {
+        cycleInfo += ` <span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>`;
     }
 
     const item = document.createElement('div');
@@ -6104,28 +6408,55 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                 <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #00aaff66);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>
-                <span style="color:#00aaff;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">APEX 2.0</span>
+                <span style="color:#00aaff;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">APEX</span>
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 <span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">🪜 ${rungs.length} RUNGS</span>
                 ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
                 ${liveScoreHtml}
                 ${cycleInfo}
+                ${(() => {
+                    const gu = bot._game_urgency || '';
+                    const wi = bot._walk_interval || 20;
+                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s</span>';
+                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s</span>`;
+                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALF</span>';
+                    if (isFilled) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● ${wi}s walk</span>`;
+                    return '';
+                })()}
+                ${isFilled ? (() => {
+                    const sbGrace = bot._sellback_grace_s || 0;
+                    const sbLeft = bot._sellback_time_left != null ? bot._sellback_time_left : sbGrace;
+                    if (sbGrace <= 0 || sbGrace >= 9999) return '';
+                    const sbMin = Math.floor(sbLeft / 60);
+                    const sbSec = Math.floor(sbLeft % 60);
+                    const sbPct = sbGrace > 0 ? Math.round(((sbGrace - sbLeft) / sbGrace) * 100) : 0;
+                    const sbCol = sbLeft <= 30 ? '#ff4444' : sbLeft <= 60 ? '#ff8800' : '#00aaff';
+                    return `<span style="background:${sbCol}22;color:${sbCol};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;font-family:monospace;">⏱ ${sbMin}:${String(sbSec).padStart(2,'0')}</span>`;
+                })() : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
         <div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:10px;">
-            ${status === 'ladder_arb_posted' ? `
+            ${isFilled && (isConsolidated || completedRungs > 0) ? '' : `
             <div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;font-size:9px;font-weight:800;color:#555;text-transform:uppercase;padding-bottom:4px;border-bottom:1px solid #1e2740;margin-bottom:4px;">
                 <span>W</span>
                 <span>YES ${bot.live_yes_bid != null ? `<span style="font-weight:400;color:#00ff8866;text-transform:none;">bid ${bot.live_yes_bid} · ask ${bot.live_yes_ask || '?'}</span>` : ''}</span>
                 <span>NO ${bot.live_no_bid != null ? `<span style="font-weight:400;color:#ff444466;text-transform:none;">bid ${bot.live_no_bid} · ask ${bot.live_no_ask || '?'}</span>` : ''}</span>
-            </div>` : ''}
+            </div>`}
             ${rungsHTML}
         </div>
-        ${statusInfo}
+        ${avgYes > 0 || avgNo > 0 ? `
+        <div style="display:flex;gap:16px;margin-top:8px;padding:6px 10px;background:#060a14;border-radius:6px;font-size:11px;flex-wrap:wrap;">
+            ${avgYes > 0 ? `<span style="color:#00ff88;">Avg YES: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_no_filled' ? hedgePriceForPnl : avgYes}¢</strong> (${totalYesFill}/${totalExpected})</span>` : ''}
+            ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
+            ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
+            ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
+            ${(() => { const hedged = !!bot.fav_order_id || bot._consolidated || (bot.dog_fill_qty || 0) > 0; const lat = hedged ? bot.hedge_latency_ms : null; const raw = hedged ? bot.raw_hedge_ms : null; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
+        </div>` : ''}
+        ${walkInfo}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#ffaa00;">Widths: ${rungs.map(r => r.width + '¢').join(', ')}</span>
             <span style="color:#8892a6;">×${qtyPer} each</span>
@@ -6914,7 +7245,7 @@ async function loadBots() {
                 const totalExpected = (bot.rungs || []).reduce((s, r) => s + (r.quantity || bot.quantity || 1), 0);
                 if ((bot.yes_fill_qty || 0) >= totalExpected) filledLegs++;
                 if ((bot.no_fill_qty || 0) >= totalExpected) filledLegs++;
-                if (bot.status === 'ladder_arb_active') anchoredCount++;
+                if (bot.status === 'ladder_arb_yes_filled' || bot.status === 'ladder_arb_no_filled') anchoredCount++;
                 return;
             }
 
@@ -6954,6 +7285,8 @@ async function loadBots() {
                 ladder_filled_no_fav: '⚡ LADDER FILLED',
                 ladder_arb_posted:      '⚡ BOTH LIVE',
                 ladder_arb_active:      '🔥 ACTIVE',
+                ladder_arb_yes_filled:  '✓ YES FILLED',
+                ladder_arb_no_filled:   '✓ NO FILLED',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
@@ -6974,6 +7307,8 @@ async function loadBots() {
                 ladder_filled_no_fav: 'leg1_filled',
                 ladder_arb_posted:      'monitoring',
                 ladder_arb_active:      'leg1_filled',
+                ladder_arb_yes_filled:  'leg1_filled',
+                ladder_arb_no_filled:   'leg1_filled',
             }[bot.status] || 'monitoring';
 
             activeBotCount++;
@@ -7656,8 +7991,8 @@ async function showBotDetail(botId) {
         const typeName = typeMap[cat] || cat;
         const color = colorMap[cat] || '#00d4ff';
         const statusDisplayMap = {
-            ladder_arb_posted: 'Both Live', ladder_arb_active: 'Active',
-            awaiting_settlement: '⏳ Settlement',
+            ladder_arb_posted: 'Both Live', ladder_arb_active: 'Active', ladder_arb_yes_filled: 'YES Filled',
+            ladder_arb_no_filled: 'NO Filled', apex_selling_back: 'Selling Back', awaiting_settlement: '⏳ Settlement',
             completed: 'Completed', stopped: 'Stopped', waiting_repeat: 'Waiting Repeat',
             anchor_posted: 'Anchor Posted', anchor_filled: 'Anchor Filled',
             hedge_posted: 'Hedge Posted', hedge_filled: 'Hedge Filled',

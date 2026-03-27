@@ -7237,8 +7237,8 @@ async function loadBots() {
             const s = bots[id].status;
             // Awaiting settlement bots shown inline
             if (s === 'awaiting_settlement') return true;
-            // Smart-stopped bots stay visible
-            if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
+            // Smart Apex bots stay visible when completed (so user can restart)
+            if ((s === 'completed' || s === 'stopped') && bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
             // Keep completed/stopped bots visible — phantom stays 5min, others 3s
             if (s === 'completed' || s === 'stopped') {
                 const finishedAt = (window._botCompletedAt || {})[id];

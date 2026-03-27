@@ -9669,6 +9669,21 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
     # ── STATE: waiting_repeat — repost ladder rungs fresh ──
     if status == 'waiting_repeat':
+        # Check if smart stop was requested — go back to awaiting_settlement if cross-market
+        if bot.get('_smart_stop_pending') or bot.get('_smart_stopped'):
+            _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if _is_cross and bot.get('_cross_settled_qty', 0) > 0:
+                bot['status'] = 'awaiting_settlement'
+                bot['awaiting_since'] = now
+                bot['_smart_stopped'] = True
+                print(f'⏹ SMART STOP → AWAITING: {bot_id} returning to settlement (cross-market positions held)')
+            else:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                print(f'⏹ SMART STOP → COMPLETED: {bot_id}')
+            save_state()
+            return
+
         wait_since = bot.get('waiting_repeat_since', now)
         if now - wait_since < 10:  # 10s cooldown
             return
@@ -9684,6 +9699,37 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             ob = kalshi_client.get_market_orderbook(ticker)
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
+
+            # ── Dog flip detection: if dog side > 50¢, it's now the fav ──
+            if current_dog_bid > 50:
+                _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                if _is_cross:
+                    # Cross-market: swap ticker and hedge_ticker (dog is now the other side)
+                    old_ticker = ticker
+                    bot['ticker'] = bot['hedge_ticker']
+                    bot['hedge_ticker'] = old_ticker
+                    ticker = bot['ticker']
+                    hedge_ticker = bot['hedge_ticker']
+                    print(f'🔄 DOG FLIP: {bot_id} swapping tickers: anchor={ticker} hedge={old_ticker} (dog was {current_dog_bid}¢)')
+                    bot_log('PHANTOM_DOG_FLIP', bot_id, {'old_ticker': old_ticker, 'new_ticker': ticker, 'old_dog_bid': current_dog_bid})
+                    # Re-fetch orderbook for new ticker
+                    api_read_limiter.wait()
+                    ob = kalshi_client.get_market_orderbook(ticker)
+                    current_dog_bid = _best_bid(ob, dog_side)
+                    current_dog_ask = _best_ask(ob, dog_side)
+                    # Subscribe WS to new ticker
+                    if ws_manager and ws_manager.connected:
+                        ws_manager.add_ticker(ticker)
+                else:
+                    # Same-market: swap dog_side
+                    old_dog = dog_side
+                    dog_side = 'yes' if dog_side == 'no' else 'no'
+                    bot['dog_side'] = dog_side
+                    bot['fav_side'] = old_dog
+                    print(f'🔄 DOG FLIP: {bot_id} swapping sides: dog={dog_side} (was {old_dog}, bid was {current_dog_bid}¢)')
+                    bot_log('PHANTOM_DOG_FLIP', bot_id, {'old_side': old_dog, 'new_side': dog_side, 'old_dog_bid': current_dog_bid})
+                    current_dog_bid = _best_bid(ob, dog_side)
+                    current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 # No bids at all — market is completely dead, stop the bot
                 bot['status'] = 'completed'

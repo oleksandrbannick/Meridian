@@ -6342,8 +6342,13 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
             else:
                 profit_cents = 0
                 loss_cents = abs(spread) * qty + total_fees
-            yes_price = rung.get('yes_price', 0)
-            no_price = rung.get('no_price', 0)
+            # Show ACTUAL fill prices, not original posted prices
+            if anchor_side == 'yes':
+                yes_price = anchor_price
+                no_price = hedge_fill_price
+            else:
+                yes_price = hedge_fill_price
+                no_price = anchor_price
             result_type = 'apex_rung'
 
     # Store net P&L on the rung for frontend display

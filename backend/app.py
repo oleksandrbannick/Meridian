@@ -9132,7 +9132,11 @@ def _handle_phantom(bot_id, bot, actions):
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
             if _is_cross:
                 _cycle_dog = bot.get('dog_fill_qty', 0) or qty
-                _cycle_fav = bot.get('fav_fill_qty', 0) or qty
+                # Ladder fav fills are per-rung, not bot-level — sum from rungs
+                _cycle_fav = bot.get('fav_fill_qty', 0)
+                if not _cycle_fav and bot.get('rungs'):
+                    _cycle_fav = sum(r.get('fav_fill_qty', r.get('fill_qty', 0)) for r in bot.get('rungs', []) if isinstance(r, dict) and r.get('_profit_recorded'))
+                _cycle_fav = _cycle_fav or _cycle_dog  # fallback to dog count if still 0
                 bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog
                 bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog
                 bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav

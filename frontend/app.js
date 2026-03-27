@@ -7216,9 +7216,20 @@ async function loadBots() {
         const middleList = document.getElementById('middle-bots-list');
         const dogList    = document.getElementById('dog-bots-list');
 
-        // Backend handles purge timing — show everything it sends
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
-        const activeBots = botIds;
+        const activeBots = botIds.filter(id => {
+            const s = bots[id].status;
+            // Active/in-progress statuses always show
+            if (s !== 'completed' && s !== 'stopped' && s !== 'cancelled') return true;
+            // Awaiting settlement always shows
+            if (s === 'awaiting_settlement') return true;
+            // Smart Apex: keep for restart button
+            if (bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
+            // Completed: show for 10s using backend timestamp
+            const fin = bots[id].completed_at || bots[id].stopped_at;
+            if (!fin) return false;  // no timestamp + completed = old bot, hide
+            return (now - fin * 1000) < 10000;
+        });
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');
         const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle' && bots[id].type !== 'watch' && !['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));

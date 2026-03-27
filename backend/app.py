@@ -3996,6 +3996,10 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
+        if bot.get('raw_hedge_ms') is not None:
+            bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
+        if bot.get('hedge_latency_ms') is not None:
+            bot['_last_hedge_latency_ms'] = bot['hedge_latency_ms']
         bot['raw_hedge_ms'] = None
         bot['hedge_latency_ms'] = None
         bot['fav_order_id'] = None
@@ -11331,6 +11335,10 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
         bot['dog_filled_at'] = None
+        if bot.get('raw_hedge_ms') is not None:
+            bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
+        if bot.get('hedge_latency_ms') is not None:
+            bot['_last_hedge_latency_ms'] = bot['hedge_latency_ms']
         bot['raw_hedge_ms'] = None
         bot['hedge_latency_ms'] = None
         bot['fav_order_id'] = None

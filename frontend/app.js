@@ -5785,7 +5785,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (2L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
             <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
-            ${(() => { const hedged = !!bot.fav_order_id || bot._hedge_fired; const lat = hedged ? bot.hedge_latency_ms : null; const raw = hedged ? bot.raw_hedge_ms : null; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
+            ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const lat = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostCt = bot.dog_repost_count || 0;

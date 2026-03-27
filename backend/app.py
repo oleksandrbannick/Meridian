@@ -14798,11 +14798,20 @@ def stop_smart(bot_id):
                     kalshi_client.cancel_order(oid)
                 except Exception:
                     pass
-        bot['status'] = 'stopped'
-        bot['stopped_at'] = time.time()
-        bot_log('SMART_STOP_MANUAL_IMMEDIATE', bot_id, {'prev_status': status})
+        # Cross-market with held positions → awaiting_settlement (keep tracking positions)
+        _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != bot.get('ticker')
+        _has_positions = bot.get('_cross_settled_qty', 0) > 0
+        if _is_cross and _has_positions:
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
+            bot_log('SMART_STOP_MANUAL_AWAITING', bot_id, {'prev_status': status, 'held_qty': bot.get('_cross_settled_qty', 0)})
+            print(f'⏹ SMART STOP → AWAITING: {bot_id} cross-market positions held')
+        else:
+            bot['status'] = 'completed'
+            bot['completed_at'] = time.time()
+            bot_log('SMART_STOP_MANUAL_IMMEDIATE', bot_id, {'prev_status': status})
         save_state()
-        return jsonify({'success': True, 'mode': 'immediate', 'message': 'Stopped immediately — no fills to finish'})
+        return jsonify({'success': True, 'mode': 'immediate', 'message': 'Stopped — no fills to finish'})
     else:
         # Mid-cycle: let current cycle complete, then _smart_mode_should_repeat will return False
         bot['_smart_stop_pending'] = True

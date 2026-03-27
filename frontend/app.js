@@ -7233,9 +7233,21 @@ async function loadBots() {
 
         // Split into arb, middle, dog, and awaiting-settlement bots
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
-        // Backend controls bot lifecycle — if it's in active_bots, show it.
-        // Completed bots stay until game is over (backend purges after game ends + 5min).
-        const activeBots = botIds;
+        const activeBots = botIds.filter(id => {
+            const s = bots[id].status;
+            if (s === 'awaiting_settlement') return true;
+            // Smart Apex bots stay visible when completed (so user can restart)
+            if ((s === 'completed' || s === 'stopped') && bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
+            // Keep completed/stopped bots visible — phantom stays 5min, others 3s
+            if (s === 'completed' || s === 'stopped') {
+                const finishedAt = (window._botCompletedAt || {})[id];
+                if (!finishedAt) return false;
+                const isPhantom = ['anchor_dog', 'anchor_ladder'].includes(bots[id].bot_category);
+                const visibleMs = isPhantom ? 300000 : 3000;  // 5min for phantom, 3s for others
+                return (now - finishedAt < visibleMs);
+            }
+            return true;
+        });
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');
         const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle' && bots[id].type !== 'watch' && !['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));

@@ -11531,25 +11531,15 @@ def _run_monitor():
             save_state()
 
         # ── Purge stale completed/stopped bots from active_bots ──
-        # Keep bots visible until game is over, then purge after 5 min grace period.
+        # Keep them for 5min so the frontend sees the final state, then remove.
         # awaiting_settlement bots are never purged (they hold positions until Kalshi settles).
-        _purge_grace = time.time() - 300  # 5 min grace after game ends
-        _purge_ids = []
-        for bid, b in active_bots.items():
-            if b.get('status') not in ('completed', 'stopped', 'cancelled'):
-                continue
-            if b.get('repeat_count', 0) > b.get('repeats_done', 0):
-                continue  # keep if repeats pending
-            if b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'):
-                continue  # never purge cross-market
-            # Keep bot visible while game is still going
-            ticker_for_check = b.get('ticker', '')
-            if ticker_for_check and not _is_game_over_cached(ticker_for_check):
-                continue  # game still live or pregame — keep visible
-            # Game is over — purge after grace period
-            finished_at = b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0)))
-            if finished_at < _purge_grace:
-                _purge_ids.append(bid)
+        _purge_cutoff = time.time() - 300  # 5 min
+        _purge_ids = [bid for bid, b in active_bots.items()
+                      if b.get('status') in ('completed', 'stopped', 'cancelled')
+                      and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
+                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
+                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
+                      ]
         if _purge_ids:
             for _pid in _purge_ids:
                 del active_bots[_pid]

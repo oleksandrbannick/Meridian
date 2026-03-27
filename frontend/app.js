@@ -5984,20 +5984,23 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const anchorPrice = r[anchorSide + '_price'] || 0;
             const elapsed = r.anchor_fill_at ? Math.round((Date.now()/1000) - r.anchor_fill_at) : 0;
             const midDist = r._midpoint_dist || 0;
-            const snapReason = r._snap_reason || '';
+            const snapTimer = r._snap_timer || 60;
+            const driftStarted = r._drift_started_at;
+            const driftElapsed = driftStarted ? Math.round((Date.now()/1000) - driftStarted) : 0;
+            const driftCountdown = driftStarted ? Math.max(0, snapTimer - driftElapsed) : 0;
             const combined = anchorPrice + hedgePrice;
             const profEst = combined > 0 ? (100 - combined) : 0;
             const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
 
-            // Stage display with midpoint guard info
+            // Stage display: breathing / drifting with timer / snapped
             let stageHTML;
             if (rStage === 'pending_profit') {
-                if (midDist <= 3) {
+                if (midDist <= 5) {
                     stageHTML = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟢 ${midDist}¢</span>`;
-                } else if (midDist <= 5) {
-                    stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟡 ${midDist}¢</span>`;
+                } else if (driftStarted) {
+                    stageHTML = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 ${midDist}¢ ${driftCountdown}s</span>`;
                 } else {
-                    stageHTML = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 ${midDist}¢</span>`;
+                    stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟡 ${midDist}¢</span>`;
                 }
             } else if (rStage === 'snapped') {
                 stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ AT BID</span>`;
@@ -6036,7 +6039,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 </div>
                 <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
                     ${rStage === 'pending_profit'
-                        ? `<span style="color:${midDist <= 3 ? '#00ff88' : midDist <= 5 ? '#ffaa00' : '#ff4444'};font-size:8px;font-weight:700;">${midDist <= 3 ? '🟢' : midDist <= 5 ? '🟡' : '🔴'}${midDist}¢</span>`
+                        ? `<span style="color:${midDist <= 5 ? '#00ff88' : '#ff4444'};font-size:8px;font-weight:700;">${midDist <= 5 ? '🟢' : '🔴'}${midDist}¢${driftStarted ? ' ' + driftCountdown + 's' : ''}</span>`
                         : rStage === 'snapped'
                         ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡BID</span>`
                         : ''}

@@ -6208,14 +6208,14 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     profit_cap = max(1, 98 - anchor_price)  # only used during target window
 
-    # ── Midpoint Guard: distance-based exit, not timer-based ──
-    # The market "breathes" — a price spike for 90s then settles back.
-    # Only snap when the market has ACTUALLY moved against us, not just because time passed.
+    # ── Midpoint Guard + Game-Clock Timer ──
+    # Market "breathes" — sit indefinitely while within 5¢ of target.
+    # Timer only starts when drift >5¢, resets if market comes back.
     hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
     current_hedge_price = rung.get('hedge_price', 0)
     target_hedge = rung.get('target_hedge_price', current_hedge_price)
 
-    # Midpoint = how far the market is from our hedge order
+    # Distance from our hedge order to market bid
     midpoint_dist = abs(hedge_bid - target_hedge) if hedge_bid > 0 else 0
     rung['_midpoint_dist'] = midpoint_dist  # expose to frontend
 
@@ -6226,26 +6226,36 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         return
 
     if current_stage == 'pending_profit':
-        # ── BREATHE: market within 3¢ of our target → stay, let it fill ──
-        if midpoint_dist <= 3:
+        if midpoint_dist <= 5:
+            # ── WITHIN 5¢: sit indefinitely, reset drift timer if it was running ──
+            if rung.get('_drift_started_at'):
+                rung['_drift_started_at'] = None  # reset timer — market came back
             rung['_snap_reason'] = 'breathing'
-            return  # Market is close — give it time
+            return
 
-        # ── Timer check: market drifted 4-5¢ but timer hasn't expired → wait ──
-        if midpoint_dist <= 5 and elapsed < snap_timer:
-            rung['_snap_reason'] = 'drifting'
-            return  # Mild drift, still within timer
+        # ── DRIFTED >5¢: start game-clock timer (or check if it expired) ──
+        if not rung.get('_drift_started_at'):
+            rung['_drift_started_at'] = now  # start timer NOW
+            rung['_snap_reason'] = f'drifting_{midpoint_dist}c'
+            print(f'🟡 APEX DRIFT: {bot_id} rung#{rung_idx} ({width}c) {midpoint_dist}¢ away → timer started ({snap_timer}s)')
+            return
 
-        # ── SNAP TRIGGER: market moved >5¢ away OR timer expired with >3¢ drift ──
+        drift_elapsed = now - rung['_drift_started_at']
+        rung['_snap_reason'] = f'drifting_{midpoint_dist}c_{drift_elapsed:.0f}s/{snap_timer}s'
+
+        if drift_elapsed < snap_timer:
+            return  # Timer still running — wait
+
+        # ── TIMER EXPIRED while >5¢ away → SNAP ──
         rung['time_stage'] = 'snapped'
         rung['status'] = 'snapped'
         rung['_snap_at'] = now
         current_stage = 'snapped'
-        _reason = f'midpoint_drift_{midpoint_dist}c' if midpoint_dist > 5 else f'timer_{elapsed:.0f}s_drift_{midpoint_dist}c'
+        _reason = f'drift_{midpoint_dist}c_timer_{drift_elapsed:.0f}s'
         rung['_snap_reason'] = _reason
         bot_log('APEX_SNAP_TO_MARKET', bot_id, {
-            'rung_idx': rung_idx, 'width': width, 'elapsed': round(elapsed, 1),
-            'midpoint_dist': midpoint_dist, 'reason': _reason,
+            'rung_idx': rung_idx, 'width': width, 'drift_elapsed': round(drift_elapsed, 1),
+            'midpoint_dist': midpoint_dist, 'snap_timer': snap_timer, 'reason': _reason,
         })
         print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {_reason} → snap to bid')
 

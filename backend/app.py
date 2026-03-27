@@ -3191,33 +3191,19 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 'old_fill': old_fill, 'new_fill': rung[fill_key],
             })
 
-            # Is this the anchor fill? (other side has no fills on this rung)
-            rung_status = rung.get('status', 'posted')
-            if rung_status == 'posted' and other_fill == 0 and rung[fill_key] > 0:
-                # First fill on this rung — this is the anchor
-                rung['anchor_side'] = matched_side
-                rung['anchor_fill_at'] = time.time()
-                rung['status'] = 'anchor_filled'
+            # Both sides filled on this rung → completed
+            if other_fill >= qty_per and rung[fill_key] >= qty_per and not rung.get('completed'):
+                rung['status'] = 'completed'
+                rung['completed'] = True
+                rung['completed_at'] = time.time()
+                bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
+                print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
+                _apex_record_rung_pnl(bot_id, matched_rung)
+            elif rung[fill_key] >= qty_per:
+                # One side filled — just update status, leave orders alone
                 if not bot.get('first_fill_at'):
                     bot['first_fill_at'] = time.time()
                 bot['status'] = 'ladder_arb_active'
-                # Spawn per-rung hedge thread
-                threading.Thread(
-                    target=_apex_post_rung_hedge,
-                    args=(bot_id, matched_rung),
-                    daemon=True
-                ).start()
-                print(f'⚡ APEX ANCHOR: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} → hedge thread spawned')
-
-            # Cancel-race: both sides filled on same rung (opposite filled during cancel)
-            elif other_fill >= qty_per and rung[fill_key] >= qty_per and not rung.get('completed'):
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                rung['hedge_fill_qty'] = qty_per
-                rung['hedge_fill_at'] = time.time()
-                bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-                print(f'✅ APEX CANCEL-RACE: {bot_id} rung#{matched_rung} both sides filled!')
-                _apex_record_rung_pnl(bot_id, matched_rung)
 
         # Check if ALL rungs are resolved → bot completion
         all_resolved = all(

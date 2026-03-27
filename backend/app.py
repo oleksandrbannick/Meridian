@@ -1362,11 +1362,6 @@ def get_batch_prices():
         # Cap at 60 tickers per batch — rate limiter handles throttling
         tickers = tickers[:60]
 
-        # Auto-subscribe requested tickers to WS for live updates
-        if ws_manager and ws_manager.connected:
-            for ticker in tickers:
-                ws_manager.add_ticker(ticker)
-
         prices = {}
         for ticker in tickers:
             # 1. Try WS cache first (fastest, real-time for subscribed tickers)
@@ -10943,7 +10938,10 @@ def _handle_apex(bot_id, bot, actions):
                 elif rs == 'panic_window':
                     rung['status'] = 'snapped'
                     rung['time_stage'] = 'snapped'
-                _apex_time_decay_tick(bot_id, bot, rung, idx)
+                try:
+                    _apex_time_decay_tick(bot_id, bot, rung, idx)
+                except Exception as _tde:
+                    print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
 
         # Check if all filled rungs are resolved → bot completion
         if all_filled_resolved and any_filled:

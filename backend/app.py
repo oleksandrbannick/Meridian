@@ -6285,9 +6285,12 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
             return
         rung['_profit_recorded'] = True
 
-        anchor_side = rung.get('anchor_side', 'yes')
+        anchor_side = rung.get('anchor_side') or 'yes'  # None → 'yes' fallback
         hedge_side = 'no' if anchor_side == 'yes' else 'yes'
         anchor_price = rung.get(f'{anchor_side}_price', 0)
+        if not anchor_price:
+            # Fallback: use yes/no prices directly (both-sides-fill case)
+            anchor_price = rung.get('yes_price', 0) if anchor_side == 'yes' else rung.get('no_price', 0)
         width = rung.get('width', 5)
         qty = rung.get('quantity', bot.get('quantity', 1))
         ticker = bot['ticker']
@@ -6346,12 +6349,16 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
         session_pnl['gross_loss_cents'] += loss_cents
     bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents - loss_cents
 
+    combined_price = yes_price + no_price
+    net_pnl = profit_cents - loss_cents
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker,
         'yes_price': yes_price, 'no_price': no_price,
+        'combined_price': combined_price,
         'quantity': qty,
         'profit_cents': profit_cents,
         'loss_cents': loss_cents,
+        'net_pnl': net_pnl,
         'fee_cents': total_fees,
         'result': result_type,
         'exit_via': exit_type,
@@ -6360,7 +6367,9 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
         'anchor_side': anchor_side,
         'anchor_price': anchor_price,
         'hedge_price': rung.get('hedge_price', 0),
+        'target_hedge_price': rung.get('target_hedge_price', 0),
         'time_stage': rung.get('time_stage'),
+        'snapped': rung.get('time_stage') == 'snapped',
         'timestamp': now,
         'placed_at': bot.get('created_at', now),
         'game_phase': bot.get('game_phase', 'live'),
@@ -6368,12 +6377,13 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
         'fill_source': 'apex2_rung',
         'bot_category': 'ladder_arb',
     }, bot)
+    print(f'💰 APEX RUNG P&L: {bot_id} rung#{rung_idx} ({width}c) Y{yes_price}+N{no_price}={combined_price}¢ net={net_pnl}c {"(snapped)" if rung.get("time_stage") == "snapped" else "(target)"}')
 
-    pnl_str = f'+{profit_cents}c' if profit_cents > 0 else f'-{loss_cents}c'
-    print(f'💰 APEX RUNG P&L: {bot_id} rung#{rung_idx} ({width}c) {result_type}: {pnl_str}')
     bot_log('APEX_RUNG_PNL', bot_id, {
         'rung_idx': rung_idx, 'width': width, 'profit_cents': profit_cents,
-        'loss_cents': loss_cents, 'fee_cents': total_fees, 'exit_type': exit_type,
+        'loss_cents': loss_cents, 'net_pnl': net_pnl, 'fee_cents': total_fees,
+        'combined': combined_price, 'snapped': rung.get('time_stage') == 'snapped',
+        'exit_type': exit_type,
     })
     save_state()
 

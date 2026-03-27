@@ -11613,11 +11613,12 @@ async function loadTradeHistoryList() {
                     return parts.join(' · ');
                 })();
                 const rungRows = rungsInfo.map(r => {
-                    const rPnl = (r.profit_cents || 0) - (r.loss_cents || 0);
+                    const rPnl = r.net_pnl != null ? r.net_pnl : ((r.profit_cents || 0) - (r.loss_cents || 0));
                     const rCol = rPnl > 0 ? '#00ff88' : rPnl < 0 ? '#ff4444' : '#555';
                     const w = r.rung_width || r.arb_width || '?';
-                    const rq = r.quantity || '?';
-                    return `<span style="color:${rCol};font-size:9px;">${w}¢×${rq}: ${rPnl >= 0 ? '+' : ''}${rPnl}¢</span>`;
+                    const rComb = r.combined_price || ((r.yes_price || 0) + (r.no_price || 0));
+                    const wasSnapped = r.snapped ? '⚡' : '🎯';
+                    return `<span style="color:${rCol};font-size:9px;">${wasSnapped}${w}¢ ${rComb}¢ → ${rPnl >= 0 ? '+' : ''}${rPnl}¢</span>`;
                 }).join(' · ');
                 return `
                 <div style="background:#0f1419;border:1px solid ${pnl >= 0 ? '#00ff8822' : '#ff444422'};border-left:3px solid ${pnlCol};border-radius:8px;padding:12px;">

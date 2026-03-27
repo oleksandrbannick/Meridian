@@ -1331,11 +1331,15 @@ def _safe_cancel(order_id, context=''):
 
 @app.route('/api/orderbook/<ticker>', methods=['GET'])
 def get_orderbook(ticker):
-    """Get orderbook for a market"""
+    """Get orderbook for a market. Also subscribes ticker to WS for live price updates."""
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
-        
+
+        # Subscribe to WS for live updates on this specific market
+        if ws_manager and ws_manager.connected:
+            ws_manager.add_ticker(ticker)
+
         raw = kalshi_client.get_market_orderbook(ticker)
         return jsonify(_normalize_orderbook(raw))
     

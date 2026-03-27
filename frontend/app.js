@@ -6125,6 +6125,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 ${isSmart && status !== 'completed' && status !== 'stopped' ? `<button onclick="event.stopPropagation();smartStopApex('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">⏹ Stop</button>` : ''}
+                ${isSmart && (status === 'completed' || status === 'stopped') ? `<button onclick="event.stopPropagation();restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">🔄 Restart</button>` : ''}
                 ${!isSmart && repeatCount > 0 && status !== 'completed' ? `<button onclick="event.stopPropagation();addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>

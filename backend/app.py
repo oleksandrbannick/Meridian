@@ -4103,6 +4103,9 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         'bot_category': 'anchor_ladder',
         'cross_market': bot.get('cross_market', False),
         'hedge_ticker': bot.get('hedge_ticker', ''),
+        'repeat_cycle': (bot.get('repeats_done', 0) or 0) + 1,
+        'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
+        'smart_mode': bot.get('smart_mode', False),
     }, bot)
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'ladder_sellback', 'loss_cents': loss_cents})
@@ -4318,6 +4321,9 @@ def _execute_ws_completion(bot_id):
                 'game_context': _get_game_context(ticker),
                 'repeats_done': repeats_done_now,
                 'repeat_count': repeat_total,
+                'repeat_cycle': repeats_done_now,
+                'repeat_total': repeat_total + 1,
+                'smart_mode': bot.get('smart_mode', False),
                 'fill_source': 'ws_realtime',
             }, bot)
             bot['_trade_recorded'] = True  # Prevent monitor from double-recording
@@ -6532,6 +6538,11 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
         'game_context': _get_game_context(ticker),
         'fill_source': 'apex2_rung',
         'bot_category': 'ladder_arb',
+        'repeat_cycle': (bot.get('repeats_done', 0) or 0) + 1,
+        'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
+        'smart_mode': bot.get('smart_mode', False),
+        'hedge_latency_ms': rung.get('hedge_latency_ms'),
+        'raw_hedge_ms': rung.get('raw_hedge_ms'),
     }, bot)
     print(f'💰 APEX RUNG P&L: {bot_id} rung#{rung_idx} ({width}c) Y{yes_price}+N{no_price}={combined_price}¢ net={net_pnl}c {"(snapped)" if rung.get("time_stage") == "snapped" else "(target)"}')
 

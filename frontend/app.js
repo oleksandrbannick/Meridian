@@ -11619,6 +11619,7 @@ async function loadTradeHistoryList() {
                 _net_pnl: netPnl,
                 _run_number: rungTrades[0].repeat_cycle || null,
                 _repeat_total: rungTrades[0].repeat_total || null,
+                _smart_mode: rungTrades[0].smart_mode || false,
                 _hard_ceiling: rungTrades[0].hard_ceiling || null,
             });
         }
@@ -11691,7 +11692,7 @@ async function loadTradeHistoryList() {
                             <span style="background:#00aaff22;color:#00aaff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">△ APEX</span>
                             <span style="background:${isSellback ? '#ff880022' : pnl >= 0 ? '#00ff8822' : '#ff444422'};color:${isSellback ? '#ff8800' : pnlCol};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${resultLabel}</span>
                             <span style="background:#ffaa0022;color:#ffaa00;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t._rungs_completed}/${t._rungs_total} rungs</span>
-                            ${t._run_number ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">Run ${t._run_number}${t._repeat_total ? '/' + t._repeat_total : ''}</span>` : ''}
+                            ${t._run_number ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t._smart_mode ? 'Smart ' : ''}Run ${t._run_number}${t._repeat_total ? '/' + t._repeat_total : ''}</span>` : ''}
                             ${t._hard_ceiling && t._hard_ceiling < 98 ? `<span style="background:${t._hard_ceiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${t._hard_ceiling <= 96 ? '#00ff88' : '#ffaa00'};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">⬆ ${t._hard_ceiling}¢</span>` : ''}
                             ${t._width_range ? `<span style="color:#555;font-size:9px;">Widths: ${t._width_range}</span>` : ''}
                         </div>
@@ -12601,6 +12602,7 @@ async function loadDogHistory() {
                         ${t.cross_market ? '<span style="background:#00ddff18;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;border:1px solid #00ddff44;">✕ CROSS</span>' : '<span style="background:#8892a612;color:#8892a6;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;">SAME MKT</span>'}
                         ${phaseBadge}
                         ${widthBadge}
+                        ${t.repeat_cycle && t.repeat_total > 1 ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t.smart_mode ? 'Smart ' : ''}Run ${t.repeat_cycle}/${t.repeat_total}</span>` : ''}
                     </div>
                     <div style="text-align:right;">
                         <div style="color:${netCol};font-weight:800;font-size:16px;">${net>=0?'+':''}${net}¢</div>

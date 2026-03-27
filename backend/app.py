@@ -6094,48 +6094,32 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
         save_state()
         return
 
-    # Cancel opposite-side order
-    if opp_oid:
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order(opp_oid)
-        except Exception as e:
-            if '404' not in str(e):
-                print(f'⚠ APEX RUNG CANCEL OPP: {bot_id} rung#{rung_idx}: {e}')
+    # The opposite-side order IS the hedge — it was posted at creation at the target width.
+    # Don't cancel it, don't post a new one. Just track it and start the snap timer.
+    hedge_oid = opp_oid
+    actual_hedge = rung.get(f'{hedge_side}_price', 0)
 
-    # Post the per-rung hedge
-    hedge_oid = None
-    actual_hedge = None
-    _api_start = time.time()
-    try:
-        hedge_resp, actual_hedge = create_order_maker(
-            ticker=ticker, side=hedge_side, action='buy',
-            count=qty, price=hedge_price, priority=True,
-            skip_rate_limit=True,
-        )
-        hedge_oid = hedge_resp['order']['order_id']
-        _api_ms = (time.time() - _api_start) * 1000
-        _fill_at = rung.get('anchor_fill_at', now)
-        _rt_ms = (time.time() - _fill_at) * 1000
-        _record_latency('fill_to_hedge_apex', _rt_ms, {
-            'bot_id': bot_id, 'type': 'apex_rung', 'rung_idx': rung_idx,
-            'hedge_price': actual_hedge, 'anchor_price': anchor_price, 'width': width,
-        })
-        print(f'🎯 APEX RUNG HEDGE: {bot_id} rung#{rung_idx} ({width}c) {anchor_side}@{anchor_price}c → {hedge_side}@{actual_hedge}c x{qty} | rt={_rt_ms:.0f}ms')
-    except Exception as e:
-        print(f'❌ APEX RUNG HEDGE FAIL: {bot_id} rung#{rung_idx}: {e}')
-        bot_log('APEX_RUNG_HEDGE_FAILED', bot_id, {
-            'rung_idx': rung_idx, 'error': str(e)[:200],
-            'hedge_price': hedge_price, 'width': width,
-        })
-        # Mark as snapped — monitor will try cancel+replace at bid+1
-        with ws_fill_lock:
-            rung = active_bots.get(bot_id, {}).get('rungs', [{}] * (rung_idx + 1))[rung_idx]
-            rung['status'] = 'snapped'
-            rung['time_stage'] = 'snapped'
-            rung['stage_entered_at'] = now
-        save_state()
-        return
+    if not hedge_oid:
+        # No opposite order (maybe cancelled externally) — post fresh
+        try:
+            hedge_resp, actual_hedge = create_order_maker(
+                ticker=ticker, side=hedge_side, action='buy',
+                count=qty, price=hedge_price, priority=True,
+                skip_rate_limit=True,
+            )
+            hedge_oid = hedge_resp['order']['order_id']
+            print(f'🆕 APEX RUNG HEDGE (fresh): {bot_id} rung#{rung_idx} ({width}c) → {hedge_side}@{actual_hedge}c x{qty}')
+        except Exception as e:
+            print(f'❌ APEX RUNG HEDGE FAIL: {bot_id} rung#{rung_idx}: {e}')
+            with ws_fill_lock:
+                rung = active_bots.get(bot_id, {}).get('rungs', [{}] * (rung_idx + 1))[rung_idx]
+                rung['status'] = 'snapped'
+                rung['time_stage'] = 'snapped'
+                rung['stage_entered_at'] = now
+            save_state()
+            return
+    else:
+        print(f'🎯 APEX RUNG HEDGE: {bot_id} rung#{rung_idx} ({width}c) {anchor_side}@{anchor_price}c → existing {hedge_side}@{actual_hedge}c (oid={hedge_oid[:12]})')
 
     # Store hedge info in rung state
     with ws_fill_lock:

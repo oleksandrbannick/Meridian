@@ -9530,6 +9530,25 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
     # ── STATE: awaiting_settlement — cross-market arb complete, holding until settlement ──
     if status == 'awaiting_settlement':
+        # Keep live prices updated for the card display (both tickers)
+        try:
+            if ws_manager:
+                _ws_p = ws_manager.get_price(ticker)
+                if _ws_p:
+                    bot['live_yes_bid'] = _ws_p.get('yes_bid', 0)
+                    bot['live_no_bid'] = _ws_p.get('no_bid', 0)
+                    bot['live_yes_ask'] = _ws_p.get('yes_ask', 0)
+                    bot['live_no_ask'] = _ws_p.get('no_ask', 0)
+                _ht = bot.get('hedge_ticker')
+                if _ht and _ht != ticker:
+                    _ws_h = ws_manager.get_price(_ht)
+                    if _ws_h:
+                        bot['live_hedge_yes_bid'] = _ws_h.get('yes_bid', 0)
+                        bot['live_hedge_no_bid'] = _ws_h.get('no_bid', 0)
+                        bot['live_hedge_yes_ask'] = _ws_h.get('yes_ask', 0)
+                        bot['live_hedge_no_ask'] = _ws_h.get('no_ask', 0)
+        except Exception:
+            pass
         # Check positions every 60s — when both clear, mark completed
         if now - bot.get('_last_settlement_check', 0) < 60:
             return

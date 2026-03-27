@@ -5500,7 +5500,23 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
                     <span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? `${_crossQtyDog}x each` : `${_crossQtyDog}x / ${_crossQtyFav}x`}</strong></span>
                     <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
+                    ${bot.smart_mode ? `<span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>` : ''}
                 </div>
+                ${(bot.live_yes_bid != null || bot.live_no_bid != null) ? `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;font-size:10px;">
+                    <div style="background:#060a14;border:1px solid #00ff8822;border-radius:6px;padding:6px 8px;text-align:center;">
+                        <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.ticker || '').split('-').pop()} · YES/NO</div>
+                        <span style="color:#00ff88;font-weight:700;">${bot.live_yes_bid ?? '?'}¢</span>
+                        <span style="color:#555;"> / </span>
+                        <span style="color:#ff4444;font-weight:700;">${bot.live_no_bid ?? '?'}¢</span>
+                    </div>
+                    <div style="background:#060a14;border:1px solid #f7816622;border-radius:6px;padding:6px 8px;text-align:center;">
+                        <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.hedge_ticker || '').split('-').pop()} · YES/NO</div>
+                        <span style="color:#00ff88;font-weight:700;">${bot.live_hedge_yes_bid ?? '?'}¢</span>
+                        <span style="color:#555;"> / </span>
+                        <span style="color:#ff4444;font-weight:700;">${bot.live_hedge_no_bid ?? '?'}¢</span>
+                    </div>
+                </div>` : ''}
                 ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit trigger: sell loser when bid ≤ ${_trigger.price}¢</div>` : ''}
                 ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Exited ${(bot._smart_exit_sold.ticker || '').split('-').pop()} @ ${bot._smart_exit_sold.price || '?'}¢ · holding ${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()} for settlement</div>` : ''}
                 ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}

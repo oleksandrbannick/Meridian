@@ -9173,8 +9173,10 @@ def _handle_phantom(bot_id, bot, actions):
         # The normal hedge timeout handles exits if the fill never comes.
         # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
 
-        # ── Check if bid has gone past ceiling — sell back ──
-        if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold:
+        # ── Check if bid has gone past ceiling — sell back (SAME-MARKET ONLY) ──
+        # Cross-market: NEVER sell back — both positions settle separately, one will pay 100¢
+        _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold and not _is_cross:
             # Bid is above ceiling AND we're already at ceiling — can't profit, sell back
             try:
                 api_rate_limiter.wait()
@@ -9191,6 +9193,10 @@ def _handle_phantom(bot_id, bot, actions):
             })
             _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
             return
+        elif current_fav_bid > max_fav_hold and _is_cross:
+            # Cross-market: just hold at ceiling, waiting for fill — don't sell
+            print(f'📌 PHANTOM CROSS CEILING HOLD: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ — holding (cross-market)')
+            return
 
         # ── Bid-follow: always snap to bid, no walk intervals ──
         new_fav_price = walk_target
@@ -9200,20 +9206,27 @@ def _handle_phantom(bot_id, bot, actions):
         walk_type = 'snap_to_bid'
         combined = dog_price + new_fav_price
         if combined > WALK_CEILING:
-            # Bid is above ceiling — sell back, can't hedge profitably
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_order_id)
-            except Exception:
-                pass
-            bot['fav_order_id'] = None
-            print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ would make combined={combined}¢ > {WALK_CEILING}¢ — selling back')
-            bot_log('PHANTOM_CEILING_EXIT', bot_id, {
-                'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                'combined': combined, 'ceiling': WALK_CEILING,
-            })
-            _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-            return
+            if _is_cross:
+                # Cross-market: hold at ceiling, don't sell — one side pays 100¢ on settlement
+                new_fav_price = max_fav_hold
+                if new_fav_price == current_fav_price:
+                    return
+                # Fall through to amend at ceiling price
+            else:
+                # Same-market: sell back, can't hedge profitably
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(fav_order_id)
+                except Exception:
+                    pass
+                bot['fav_order_id'] = None
+                print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ would make combined={combined}¢ > {WALK_CEILING}¢ — selling back')
+                bot_log('PHANTOM_CEILING_EXIT', bot_id, {
+                    'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                    'combined': combined, 'ceiling': WALK_CEILING,
+                })
+                _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
+                return
 
         # Amend fav order (shared lock with WS instant drop to prevent race)
         try:
@@ -10445,8 +10458,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         if walk_target <= 0:
             return
 
-        # ── Ceiling exit: bid above max and we're already at max ──
+        # ── Ceiling exit: bid above max and we're already at max (SAME-MARKET ONLY) ──
+        _is_cross_lad = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
         if current_fav_bid > max_fav and current_fav_price >= max_fav:
+            if _is_cross_lad:
+                # Cross-market: hold at ceiling — don't sell, positions settle separately
+                print(f'📌 PHANTOM LADDER CROSS CEILING HOLD: {bot_id} bid={current_fav_bid}¢ > max={max_fav}¢ — holding')
+                return
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(fav_order_id)

@@ -6704,8 +6704,11 @@ def _execute_apex_completion(bot_id):
             if rung.get('completed') and not rung.get('_profit_recorded'):
                 _apex_record_rung_pnl(bot_id, idx)
 
-        # Total P&L for this cycle
-        total_pnl = bot.get('net_pnl_cents', 0)
+        # Total P&L for this cycle — calculate from rungs directly (not net_pnl_cents
+        # which may be stale if some rung P&Ls were recorded by WS before completion handler)
+        total_pnl = sum(r.get('_net_pnl', 0) or 0 for r in bot.get('rungs', []) if r.get('_profit_recorded'))
+        if total_pnl == 0:
+            total_pnl = bot.get('net_pnl_cents', 0)  # fallback to bot-level if rungs don't have _net_pnl
         completed_count = sum(1 for r in bot.get('rungs', []) if r.get('completed'))
         bot['completed_rungs_count'] = completed_count
         bot['_bot_completed'] = True

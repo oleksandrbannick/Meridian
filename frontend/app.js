@@ -2131,15 +2131,20 @@ function displayEventRow(eventData, container) {
     card.appendChild(header);
 
     // ── Scoreboard widget (live score / pregame time / final score) ──
-    if (gameScore) {
+    if (gameScore && !(gameScore.state === 'pre' && kalshiLive)) {
+        // Show scoreboard unless ESPN says pregame but Kalshi market is already live
         const scoreboard = buildScoreboard(gameScore);
         if (scoreboard) card.appendChild(scoreboard);
     } else if (kalshiLive) {
-        // No ESPN data but Kalshi says it's live — show simple LIVE indicator
+        // No ESPN data (or ESPN still says pregame) but Kalshi says it's live
         const liveBanner = document.createElement('div');
         liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
         liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">Score unavailable</span>`;
         card.appendChild(liveBanner);
+    } else if (gameScore) {
+        // Pregame scoreboard (no Kalshi activity)
+        const scoreboard = buildScoreboard(gameScore);
+        if (scoreboard) card.appendChild(scoreboard);
     }
     
     // Markets grid (compact button layout)

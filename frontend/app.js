@@ -3432,7 +3432,11 @@ function setTradeMode(mode) {
             crossToggle.checked = false;
             crossToggle.dispatchEvent(new Event('change'));
         }
+        // Fresh start: clear old rungs so auto-add fires, clear stuck focus flag
+        _anchorRungs = [];
+        window._anchorInputFocused = false;
         initAnchorDogPrices();
+        renderAnchorRungs(true);  // Force initial render (non-force can skip on mobile)
     } else {
         // arb
         if (arbSection) arbSection.style.display = 'block';
@@ -5874,11 +5878,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // Repeat info
     const repeatCount = bot.repeat_count || 0;
     const repeatsDone = bot.repeats_done || 0;
-    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.cumulative_pnl || 0);
+    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.net_pnl_cents || bot.cumulative_pnl || 0);
     let cycleInfo = '';
     if (repeatCount > 0) {
         cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>`;
     }
+
+    // Live bid/ask for market context
+    const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : null;
+    const nBid = bot.live_no_bid != null ? bot.live_no_bid : null;
 
     // ── Per-rung rendering — each rung is its own independent scalp ──
     let rungTotalPnl = 0;
@@ -5926,17 +5934,22 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const nFull = nFill >= rQty;
         const _sl = _apexStopLossThreshold(width);
         const _slC = _sl <= 8 ? '#00ff8855' : _sl <= 12 ? '#ffaa0055' : '#ff444455';
+        // Distance from bid: how close is our order to getting filled?
+        const yDist = (yBid != null && r.yes_price) ? (yBid - r.yes_price) : null;
+        const nDist = (nBid != null && r.no_price) ? (nBid - r.no_price) : null;
+        const yDistLabel = yFull ? '' : (yDist != null ? `<span style="color:${yDist <= 1 ? '#ffaa00' : yDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${yDist > 0 ? '+' : ''}${yDist}</span>` : '');
+        const nDistLabel = nFull ? '' : (nDist != null ? `<span style="color:${nDist <= 1 ? '#ffaa00' : nDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${nDist > 0 ? '+' : ''}${nDist}</span>` : '');
         return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;">
             <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slC};font-size:7px;">SL${_sl}</span></span>
             <div style="display:flex;align-items:center;gap:4px;">
-                <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>
+                <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>${yDistLabel}
                 <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                     <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFull ? '#00ff88' : '#335'};border-radius:2px;"></div>
                 </div>
                 <span style="color:${yFull ? '#00ff88' : '#555'};font-size:8px;">${yFull ? '✓' : yFill + '/' + rQty}</span>
             </div>
             <div style="display:flex;align-items:center;gap:4px;">
-                <span style="color:#ff4444;font-size:9px;width:26px;">N${r.no_price}</span>
+                <span style="color:#ff4444;font-size:9px;width:26px;">N${r.no_price}</span>${nDistLabel}
                 <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                     <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFull ? '#ff4444' : '#335'};border-radius:2px;"></div>
                 </div>
@@ -5949,20 +5962,22 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // ── Status summary bar ──
     let statusInfo = '';
     if (status === 'ladder_arb_active') {
+        const _mktLine = (yBid != null && nBid != null) ? `<span style="color:#8892a6;font-size:9px;">mkt: Y${yBid}/N${nBid}</span>` : '';
         statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#0a0e1a;border-radius:5px;margin-top:6px;">
             ${activeCount > 0 ? `<span style="color:#ffaa00;font-weight:700;">🔥 ${activeCount} active</span>` : ''}
             ${doneCount > 0 ? `<span style="color:#00ff88;">✅ ${doneCount} done</span>` : ''}
             ${postedCount > 0 ? `<span style="color:#555;">⏳ ${postedCount} waiting</span>` : ''}
+            ${_mktLine}
             ${rungTotalPnl !== 0 ? `<span style="color:${rungTotalPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;margin-left:auto;">Total: ${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</span>` : ''}
         </div>`;
     } else if (status === 'ladder_arb_posted') {
-        const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
-        const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
-        const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-        const nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
+        const _yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
+        const _yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
+        const _nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
+        const _nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
         statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#00aaff08;border:1px solid #00aaff22;border-radius:5px;margin-top:6px;">
             <span style="color:#00aaff;">⚡ ${rungs.length} rungs live</span>
-            <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${yBid}/${yAsk}¢</strong> · N <strong style="color:#ff4444;">${nBid}/${nAsk}¢</strong></span>
+            <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${_yBid}/${_yAsk}¢</strong> · N <strong style="color:#ff4444;">${_nBid}/${_nAsk}¢</strong></span>
         </div>`;
     } else if (status === 'waiting_repeat') {
         statusInfo = `<div style="padding:6px 8px;background:#aa66ff08;border:1px solid #aa66ff22;border-radius:5px;margin-top:6px;font-size:10px;color:#aa66ff;">
@@ -6035,7 +6050,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     // Hedge history (completed hedge generations)
     const hedgeHistory = bot.hedge_history || [];
     const completedRungs = bot.completed_rungs_count || 0;
-    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.cumulative_pnl || 0);
+    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.net_pnl_cents || bot.cumulative_pnl || 0);
 
     // Shared fill-state variables
     const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes'

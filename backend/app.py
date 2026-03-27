@@ -5981,7 +5981,13 @@ def _apex_snap_timer(ticker):
     Early game: 60s patience. Mid game: 25s standard. End game: 5s flash exit."""
     gc = _get_game_context(ticker)
     if not gc or not gc.get('period'):
-        return 30  # no game data — default 30s
+        # No game clock data — use sport-specific defaults
+        series = ticker.split('-')[0].upper() if ticker else ''
+        if series.startswith('KXATP') or series.startswith('KXWTA'):
+            return 60  # Tennis: long matches, 60s patience
+        if series.startswith('KXPGA'):
+            return 60  # Golf: slow, 60s
+        return 45  # Unknown sport — lean patient
 
     # Detect sport from ticker prefix
     series = ticker.split('-')[0].upper() if ticker else ''
@@ -6229,7 +6235,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         bot_log('APEX_SNAP_TO_MARKET', bot_id, {
             'rung_idx': rung_idx, 'width': width, 'elapsed': round(elapsed, 1),
         })
-        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {elapsed:.0f}s → snap to bid')
+        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {elapsed:.0f}s/{snap_timer}s → snap to bid')
 
     # ── Step 2: SNAPPED — cancel old hedge, post new at bid+1 ──
     # NO CAP — snap goes to bid wherever it is, even for a loss, to EXIT the position

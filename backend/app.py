@@ -2333,7 +2333,9 @@ def load_state():
             if not t.get('exit_via'):
                 t['exit_via'] = 'timeout_amend'
         # Rung completions are separate trades per rung — never dedup them
-        if t.get('exit_via') == 'ladder_arb_rung_complete':
+        if t.get('exit_via') in ('ladder_arb_rung_complete', 'arb_complete'):
+            continue
+        if t.get('fill_source') == 'apex2_rung':
             continue
         if bid in _seen_bots and abs(ts - _seen_bots[bid]) < 60:
             _remove_idx.add(i)

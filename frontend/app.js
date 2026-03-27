@@ -5902,9 +5902,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             doneCount++;
             const yP = r.yes_price || 0;
             const nP = r.no_price || 0;
-            const comb = yP + nP;
-            const prof = comb > 0 ? 100 - comb : 0;
-            rungTotalPnl += prof * rQty;
+            // Use backend net P&L (includes fees) if available, else raw spread * qty
+            const prof = r._net_pnl != null ? r._net_pnl : ((yP + nP) > 0 ? (100 - yP - nP) * rQty : 0);
+            rungTotalPnl += prof;
             const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
             return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.4;">
                 <span style="color:#ffaa00;font-weight:700;">${width}¢</span>

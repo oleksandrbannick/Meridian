@@ -6346,6 +6346,10 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
             no_price = rung.get('no_price', 0)
             result_type = 'apex_rung'
 
+    # Store net P&L on the rung for frontend display
+    rung['_net_pnl'] = profit_cents - loss_cents
+    rung['_fee_cents'] = total_fees
+
     if profit_cents > 0:
         session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + profit_cents
     if loss_cents > 0:

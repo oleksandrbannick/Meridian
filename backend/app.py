@@ -16654,9 +16654,11 @@ def get_active_positions():
                     _no_f = _si(b.get('no_fill_qty', 0))
                     _has_net_fills = _yes_f != _no_f  # one-sided = position exists on Kalshi
                 elif _bcat == 'ladder_arb':
-                    _yes_f = _si(b.get('filled_yes_qty', 0))
-                    _no_f = _si(b.get('filled_no_qty', 0))
-                    _has_net_fills = _yes_f != _no_f
+                    _yes_f = sum(_si(r.get('yes_fill_qty', 0)) for r in b.get('rungs', []))
+                    _no_f = sum(_si(r.get('no_fill_qty', 0)) for r in b.get('rungs', []))
+                    _hf_yes = sum(_si(r.get('hedge_fill_qty', 0)) for r in b.get('rungs', []) if r.get('anchor_side') == 'no')
+                    _hf_no = sum(_si(r.get('hedge_fill_qty', 0)) for r in b.get('rungs', []) if r.get('anchor_side') == 'yes')
+                    _has_net_fills = (_yes_f + _hf_yes) != (_no_f + _hf_no)
                 if not _has_net_fills:
                     continue  # balanced fills → net position is 0, skip
             t = b.get('ticker', '')
@@ -16701,9 +16703,21 @@ def get_active_positions():
                     if _total_fav > 0:
                         _add(_fav_ticker, fav_side, 'phantom', _total_fav)
             elif cat == 'ladder_arb':
-                # Kalshi instantly settles matching YES+NO - only NET imbalance is real
-                _apex_yes = _si(b.get('filled_yes_qty'))
-                _apex_no = _si(b.get('filled_no_qty'))
+                # Sum fills across all rungs (per-rung siloed system)
+                _apex_yes = sum(_si(r.get('yes_fill_qty', 0)) for r in b.get('rungs', []) if not r.get('completed'))
+                _apex_no = sum(_si(r.get('no_fill_qty', 0)) for r in b.get('rungs', []) if not r.get('completed'))
+                # Also count hedge fills on the hedge side
+                for r in b.get('rungs', []):
+                    if r.get('completed'):
+                        continue  # completed rungs = settled on Kalshi, net 0
+                    hfq = _si(r.get('hedge_fill_qty', 0))
+                    if hfq > 0:
+                        hs = 'no' if r.get('anchor_side') == 'yes' else 'yes'
+                        if hs == 'yes':
+                            _apex_yes += hfq
+                        else:
+                            _apex_no += hfq
+                # Net position (Kalshi settles matching YES+NO instantly)
                 if _apex_yes > _apex_no:
                     _add(t, 'yes', 'apex', _apex_yes - _apex_no)
                 elif _apex_no > _apex_yes:

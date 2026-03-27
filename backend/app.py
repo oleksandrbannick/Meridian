@@ -5037,6 +5037,53 @@ def _is_game_live(ticker: str) -> bool:
     return False
 
 
+def _is_game_over_cached(ticker: str) -> bool:
+    """Lightweight check if game is over using only cached data (no API calls).
+    Returns True if game is confirmed over, False if still going or unknown."""
+    if not ticker:
+        return True
+    # Tennis: check milestones cache
+    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+    if is_tennis:
+        parts = ticker.split('-')
+        if len(parts) >= 2:
+            event_ticker = '-'.join(parts[:2])
+            info = _milestones_cache.get('data', {}).get(event_ticker)
+            if info:
+                status = info.get('status', '')
+                if status in ('ended', 'settled', 'finalized'):
+                    return True
+                if _is_milestone_live(info):
+                    return False
+                # not_started → not over
+                return False
+        # No milestone data — check date (if ticker date is in the past, game is likely over)
+
+    # ESPN sports: check cache
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL'))
+    if is_sports:
+        info = _espn_cache.get('data', {})
+        if info:
+            candidates = _get_all_ticker_team_candidates(ticker)
+            if not candidates:
+                t1, t2 = _parse_ticker_teams(ticker)
+                candidates = [c for c in [t1, t2] if c]
+            for code in candidates:
+                espn_code = _KALSHI_TO_ESPN.get(code, code)
+                entry = info.get(code) or info.get(espn_code)
+                if entry:
+                    if entry.get('live'):
+                        return False  # game is live, not over
+                    # ESPN has data but game isn't live — could be pre or post
+                    if entry.get('status') == 'post':
+                        return True
+                    if entry.get('status') == 'pre':
+                        return False
+            # ESPN has no data for this game — assume not over if today's game
+    # Unknown — default to not over (err on side of keeping bots visible)
+    return False
+
+
 def _get_game_context(ticker: str) -> dict:
     """Get live game context (quarter, score diff, clock) for blocking decisions.
     Always force-refreshes ESPN cache (bypasses TTL) so blocking uses fresh data.
@@ -11484,15 +11531,25 @@ def _run_monitor():
             save_state()
 
         # ── Purge stale completed/stopped bots from active_bots ──
-        # Keep them for 60s so the frontend sees the final state, then remove.
+        # Keep bots visible until game is over, then purge after 5 min grace period.
         # awaiting_settlement bots are never purged (they hold positions until Kalshi settles).
-        _purge_cutoff = time.time() - 300  # 5 min — gives user time to restart
-        _purge_ids = [bid for bid, b in active_bots.items()
-                      if b.get('status') in ('completed', 'stopped', 'cancelled')
-                      and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
-                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
-                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
-                      ]
+        _purge_grace = time.time() - 300  # 5 min grace after game ends
+        _purge_ids = []
+        for bid, b in active_bots.items():
+            if b.get('status') not in ('completed', 'stopped', 'cancelled'):
+                continue
+            if b.get('repeat_count', 0) > b.get('repeats_done', 0):
+                continue  # keep if repeats pending
+            if b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'):
+                continue  # never purge cross-market
+            # Keep bot visible while game is still going
+            ticker_for_check = b.get('ticker', '')
+            if ticker_for_check and not _is_game_over_cached(ticker_for_check):
+                continue  # game still live or pregame — keep visible
+            # Game is over — purge after grace period
+            finished_at = b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0)))
+            if finished_at < _purge_grace:
+                _purge_ids.append(bid)
         if _purge_ids:
             for _pid in _purge_ids:
                 del active_bots[_pid]

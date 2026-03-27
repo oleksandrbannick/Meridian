@@ -7216,24 +7216,9 @@ async function loadBots() {
         const middleList = document.getElementById('middle-bots-list');
         const dogList    = document.getElementById('dog-bots-list');
 
-        // Split into arb, middle, dog, and awaiting-settlement bots
+        // Backend handles purge timing — show everything it sends
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
-        const activeBots = botIds.filter(id => {
-            const s = bots[id].status;
-            if (s === 'awaiting_settlement') return true;
-            if (s === 'completed' || s === 'stopped') {
-                // Smart Apex bots stay visible (restart button)
-                if (bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
-                // Use backend completed_at for visibility timer
-                const finishedAt = bots[id].completed_at || bots[id].stopped_at;
-                if (!finishedAt) return true;  // no timestamp = just completed, show it
-                const ageMs = now - finishedAt * 1000;  // backend is seconds, frontend is ms
-                const isPhantom = ['anchor_dog', 'anchor_ladder'].includes(bots[id].bot_category);
-                const visibleMs = isPhantom ? 300000 : 10000;  // 5min for phantom, 10s for others
-                return ageMs < visibleMs;
-            }
-            return true;
-        });
+        const activeBots = botIds;
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');
         const arbBotIds    = activeBots.filter(id => bots[id].type !== 'middle' && bots[id].type !== 'watch' && !['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));

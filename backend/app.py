@@ -6205,6 +6205,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         # Cancel + replace if price changed or no hedge order exists
         needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 10)
         if needs_snap:
+            print(f'🔄 SNAP CHECK: {bot_id} rung#{rung_idx} hp={current_hedge_price}→{snap_price} bid={hedge_bid} ask={hedge_ask} spread={spread} oid={str(hedge_oid)[:12] if hedge_oid else "None"}')
             rung['_last_snap'] = now
             _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, snap_price)
 

@@ -6208,47 +6208,64 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     profit_cap = max(1, 98 - anchor_price)  # only used during target window
 
-    # ── Step 1: PENDING_PROFIT — sit at target width for dynamic timer ──
-    if current_stage == 'pending_profit':
-        if elapsed < snap_timer:
-            # Hedge order lost? Repost at target price
-            if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty:
-                target_price = rung.get('hedge_price') or rung.get('target_hedge_price') or max(1, 100 - anchor_price - width)
-                target_price = min(target_price, profit_cap)
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_price)
-            return  # Still in profit window — wait for fill
+    # ── Midpoint Guard: distance-based exit, not timer-based ──
+    # The market "breathes" — a price spike for 90s then settles back.
+    # Only snap when the market has ACTUALLY moved against us, not just because time passed.
+    hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
+    current_hedge_price = rung.get('hedge_price', 0)
+    target_hedge = rung.get('target_hedge_price', current_hedge_price)
 
-        # Timer expired → snap to market
+    # Midpoint = how far the market is from our hedge order
+    midpoint_dist = abs(hedge_bid - target_hedge) if hedge_bid > 0 else 0
+    rung['_midpoint_dist'] = midpoint_dist  # expose to frontend
+
+    # Hedge order lost? Repost at current target
+    if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty:
+        repost_price = current_hedge_price or target_hedge or max(1, 100 - anchor_price - width)
+        _apex_snap_hedge(bot_id, bot, rung, rung_idx, repost_price)
+        return
+
+    if current_stage == 'pending_profit':
+        # ── BREATHE: market within 3¢ of our target → stay, let it fill ──
+        if midpoint_dist <= 3:
+            rung['_snap_reason'] = 'breathing'
+            return  # Market is close — give it time
+
+        # ── Timer check: market drifted 4-5¢ but timer hasn't expired → wait ──
+        if midpoint_dist <= 5 and elapsed < snap_timer:
+            rung['_snap_reason'] = 'drifting'
+            return  # Mild drift, still within timer
+
+        # ── SNAP TRIGGER: market moved >5¢ away OR timer expired with >3¢ drift ──
         rung['time_stage'] = 'snapped'
         rung['status'] = 'snapped'
         rung['_snap_at'] = now
         current_stage = 'snapped'
+        _reason = f'midpoint_drift_{midpoint_dist}c' if midpoint_dist > 5 else f'timer_{elapsed:.0f}s_drift_{midpoint_dist}c'
+        rung['_snap_reason'] = _reason
         bot_log('APEX_SNAP_TO_MARKET', bot_id, {
             'rung_idx': rung_idx, 'width': width, 'elapsed': round(elapsed, 1),
+            'midpoint_dist': midpoint_dist, 'reason': _reason,
         })
-        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {elapsed:.0f}s/{snap_timer}s → snap to bid')
+        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {_reason} → snap to bid')
 
-    # ── Step 2: SNAPPED — cancel old hedge, post new at bid+1 ──
-    # NO CAP — snap goes to bid wherever it is, even for a loss, to EXIT the position
+    # ── SNAPPED: amend to bid to exit ──
     if current_stage == 'snapped':
         if rung.get('hedge_fill_qty', 0) >= qty:
             return  # Already filled
 
         if hedge_bid <= 0:
-            return  # No market data yet — wait for WS
+            return  # No market data yet
 
         # Gapped market (spread > 1): bid+1 for queue priority (maker)
         # Tight market (spread ≤ 1): bid (already at front, bid+1 would cross to ask)
-        hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
         spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
         snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
         snap_price = max(1, snap_price)
-        current_hedge_price = rung.get('hedge_price', 0)
 
-        # Cancel + replace if price changed or no hedge order exists
+        # Amend if price changed or no order exists
         needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 10)
         if needs_snap:
-            print(f'🔄 SNAP CHECK: {bot_id} rung#{rung_idx} hp={current_hedge_price}→{snap_price} bid={hedge_bid} ask={hedge_ask} spread={spread} oid={str(hedge_oid)[:12] if hedge_oid else "None"}')
             rung['_last_snap'] = now
             _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
 

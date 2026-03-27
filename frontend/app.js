@@ -5853,6 +5853,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         'stopped': '🛑 STOPPED',
         'awaiting_settlement': '⏳ SETTLE',
     };
+    // Smart mode info
+    const isSmart = bot.smart_mode;
+    const smartWins = bot._smart_wins || 0;
+    const smartLosses = bot._smart_losses || 0;
     const borderMap = {
         'ladder_arb_posted': '#00aaff',
         'ladder_arb_active': '#ffaa00',
@@ -5930,17 +5934,23 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         postedCount++;
         const yFill = r.yes_fill_qty || 0;
         const nFill = r.no_fill_qty || 0;
+        const hFill = r.hedge_fill_qty || 0;
         const yFull = yFill >= rQty;
         const nFull = nFill >= rQty;
-        const _sl = _apexStopLossThreshold(width);
-        const _slC = _sl <= 8 ? '#00ff8855' : _sl <= 12 ? '#ffaa0055' : '#ff444455';
+        const isAnchored = !!r.anchor_side;
+        const rStage = r.time_stage || 'posted';
+        const stageLabel = rStage === 'pending_profit' ? '<span style="color:#00aaff;font-size:7px;">TARGET</span>'
+            : rStage === 'snapped' ? '<span style="color:#ffaa00;font-size:7px;">SNAPPED</span>'
+            : '';
         // Distance from bid: how close is our order to getting filled?
         const yDist = (yBid != null && r.yes_price) ? (yBid - r.yes_price) : null;
         const nDist = (nBid != null && r.no_price) ? (nBid - r.no_price) : null;
         const yDistLabel = yFull ? '' : (yDist != null ? `<span style="color:${yDist <= 1 ? '#ffaa00' : yDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${yDist > 0 ? '+' : ''}${yDist}</span>` : '');
         const nDistLabel = nFull ? '' : (nDist != null ? `<span style="color:${nDist <= 1 ? '#ffaa00' : nDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${nDist > 0 ? '+' : ''}${nDist}</span>` : '');
+        // Snap button: show for anchored rungs that haven't snapped yet
+        const snapBtn = (isAnchored && rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0022;color:#ffaa00;border:1px solid #ffaa0044;border-radius:3px;padding:1px 5px;font-size:8px;cursor:pointer;font-weight:700;">SNAP</button>` : '';
         return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;">
-            <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slC};font-size:7px;">SL${_sl}</span></span>
+            <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> ${stageLabel}</span>
             <div style="display:flex;align-items:center;gap:4px;">
                 <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>${yDistLabel}
                 <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
@@ -5955,7 +5965,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 </div>
                 <span style="color:${nFull ? '#ff4444' : '#555'};font-size:8px;">${nFull ? '✓' : nFill + '/' + rQty}</span>
             </div>
-            <span style="color:#333;font-size:9px;text-align:right;">—</span>
+            <span style="text-align:right;">${snapBtn || '<span style="color:#333;font-size:9px;">—</span>'}</span>
         </div>`;
     }).join('');
 
@@ -6007,8 +6017,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
                 ${liveScoreHtml}
                 ${cycleInfo}
+                ${isSmart ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart ${smartWins}W/${smartLosses}L</span>` : ''}
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                ${isSmart && status !== 'completed' && status !== 'stopped' ? `<button onclick="event.stopPropagation();smartStopApex('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">⏹ Stop</button>` : ''}
+                ${!isSmart && repeatCount > 0 && status !== 'completed' ? `<button onclick="event.stopPropagation();addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
@@ -8465,6 +8478,32 @@ async function showBotDetail(botId) {
         content.innerHTML = html;
     } catch (e) {
         content.innerHTML = `<div style="color:#ff4444;padding:20px;">Error: ${e.message}</div>`;
+    }
+}
+
+// Smart stop for Apex: stop after current cycle completes
+async function smartStopApex(botId) {
+    if (!confirm('Stop smart mode after this cycle completes?')) return;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/smart-stop/${botId}`, { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) showNotification('⏹ Smart stop queued — will stop after this cycle');
+        else showNotification(`Error: ${data.error}`, 'error');
+    } catch (e) { showNotification(`Error: ${e.message}`, 'error'); }
+}
+
+// Manual snap: cancel hedge and repost at bid+1 for immediate fill
+async function snapRung(botId, rungIdx) {
+    try {
+        const resp = await fetch(`${API_BASE}/bot/snap/${botId}/${rungIdx}`, { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(`⚡ Snapped rung #${rungIdx + 1} → ${data.snap_price}¢`);
+        } else {
+            showNotification(`Snap failed: ${data.error}`, 'error');
+        }
+    } catch (e) {
+        showNotification(`Snap error: ${e.message}`, 'error');
     }
 }
 

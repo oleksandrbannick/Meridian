@@ -31,9 +31,10 @@ Apex uses independent per-rung hedging (no consolidation). Each rung:
 - On anchor fill → spawns daemon thread to post per-rung hedge
 - Time-decay stages: **profit** (0-15s, target price) → **scratch** (15-30s, breakeven) → **panic** (30s+, stop-loss/taker)
 - Bot statuses: `ladder_arb_posted` → `ladder_arb_active` → `waiting_repeat` / `completed`
-- Rung statuses: `posted` → `anchor_filled` → `profit_window` → `scratch_window` → `panic_window` → `completed`
-- Key functions: `_apex_post_rung_hedge()`, `_apex_time_decay_tick()`, `_apex_record_rung_pnl()`, `_apex_stop_loss_threshold()`
-- **No consolidation, no walk system, no sell-back** — replaced by time-decay stages
+- Rung statuses: `posted` → `anchor_filled` → `pending_profit` → `snapped` → `completed`
+- **Two-Step Protocol**: Step 1 (pending_profit, 0-30s) hedge at target width. Step 2 (snapped, 30s+) cancel+replace at bid+1.
+- Cancel+replace (never amend) — avoids 400 errors and orphans
+- Key functions: `_apex_post_rung_hedge()`, `_apex_time_decay_tick()`, `_apex_cancel_replace_hedge()`, `_apex_record_rung_pnl()`
 - All rungs use same quantity (no width scaling)
 
 ## Critical Rules

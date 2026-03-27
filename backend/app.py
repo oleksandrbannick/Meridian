@@ -14684,21 +14684,33 @@ def add_runs(bot_id):
         # Smart mode bot that was stopped — restart it by resetting loss counter
         bot['_smart_stopped'] = False
         bot['consecutive_losses'] = 0
+        # Cancel any active smart exit trigger to prevent orphans
+        if bot.get('_smart_exit_trigger'):
+            print(f'🔄 SMART RESTART: {bot_id} clearing smart exit trigger (was: {bot["_smart_exit_trigger"]})')
+            bot['_smart_exit_trigger'] = None
+        bot['_smart_exit_sold'] = None
         if bot.get('status') in ('completed', 'stopped', 'awaiting_settlement'):
             bot['status'] = 'waiting_repeat'
             bot['waiting_repeat_since'] = time.time()
             bot.pop('completed_at', None)
             bot.pop('stopped_at', None)
+            bot.pop('awaiting_since', None)
         save_state()
+        print(f'🔄 SMART RESTART: {bot_id} → waiting_repeat')
         return jsonify({'success': True, 'mode': 'smart_restart'})
 
     bot['repeat_count'] = bot.get('repeat_count', 0) + count
+    # Cancel any active smart exit trigger
+    if bot.get('_smart_exit_trigger'):
+        bot['_smart_exit_trigger'] = None
+        bot['_smart_exit_sold'] = None
     # Restart completed/stopped/awaiting bots
     if bot.get('status') in ('completed', 'stopped', 'awaiting_settlement'):
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = time.time()
         bot.pop('completed_at', None)
         bot.pop('stopped_at', None)
+        bot.pop('awaiting_since', None)
     save_state()
     bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
     return jsonify({'success': True, 'new_repeat_count': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})

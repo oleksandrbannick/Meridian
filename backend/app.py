@@ -1362,6 +1362,11 @@ def get_batch_prices():
         # Cap at 60 tickers per batch — rate limiter handles throttling
         tickers = tickers[:60]
 
+        # Auto-subscribe requested tickers to WS for live updates
+        if ws_manager and ws_manager.connected:
+            for ticker in tickers:
+                ws_manager.add_ticker(ticker)
+
         prices = {}
         for ticker in tickers:
             # 1. Try WS cache first (fastest, real-time for subscribed tickers)

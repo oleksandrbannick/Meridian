@@ -5906,32 +5906,44 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const rs = r.status || 'posted';
         const width = r.width;
 
-        // ── COMPLETED: shaded, show result + P&L ──
+        // ── COMPLETED: show actual fill prices with fill bars ──
         if (rs === 'completed' || r._profit_recorded) {
             doneCount++;
-            const yP = r.yes_price || 0;
-            const nP = r.no_price || 0;
+            // Use actual prices: anchor side = original, hedge side = hedge_price (may differ after snap)
+            const ancSide = r.anchor_side;
+            const hedgeP = r.hedge_price || 0;
+            let yP, nP;
+            if (ancSide === 'yes') {
+                yP = r.yes_price || 0;  // anchor = original
+                nP = hedgeP || r.no_price || 0;  // hedge = actual fill price
+            } else if (ancSide === 'no') {
+                yP = hedgeP || r.yes_price || 0;
+                nP = r.no_price || 0;
+            } else {
+                yP = r.yes_price || 0;
+                nP = r.no_price || 0;
+            }
+            const combined = yP + nP;
+            const wasSnapped = r.time_stage === 'snapped';
             // Use backend net P&L (includes fees) if available, else raw spread * qty
-            const prof = r._net_pnl != null ? r._net_pnl : ((yP + nP) > 0 ? (100 - yP - nP) * rQty : 0);
+            const prof = r._net_pnl != null ? r._net_pnl : (combined > 0 ? (100 - combined) * rQty : 0);
             rungTotalPnl += prof;
             const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
-            return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.4;">
+            return `<div style="display:grid;grid-template-columns:40px 1fr 1fr 55px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.5;">
                 <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
                 <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#00ff88;font-size:9px;width:26px;">Y${yP}</span>
+                    <span style="color:#00ff88;font-size:9px;width:28px;">Y${yP}</span>
                     <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                         <div style="width:100%;height:100%;background:#00ff88;border-radius:2px;"></div>
                     </div>
-                    <span style="color:#00ff88;font-size:8px;">✓</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#ff4444;font-size:9px;width:26px;">N${nP}</span>
+                    <span style="color:#ff4444;font-size:9px;width:28px;">N${nP}</span>
                     <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                         <div style="width:100%;height:100%;background:#ff4444;border-radius:2px;"></div>
                     </div>
-                    <span style="color:#ff4444;font-size:8px;">✓</span>
                 </div>
-                <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${prof > 0 ? '+' : ''}${prof}¢</span>
+                <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${wasSnapped ? '⚡' : '🎯'}${prof > 0 ? '+' : ''}${prof}¢</span>
             </div>`;
         }
 

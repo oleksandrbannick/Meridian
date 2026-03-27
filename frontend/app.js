@@ -7095,10 +7095,13 @@ async function loadBots() {
             if (s === 'awaiting_settlement') return true;
             // Smart-stopped bots stay visible
             if ((s === 'completed' || s === 'stopped') && bots[id]._smart_stopped) return true;
-            // Keep completed/stopped bots visible for 3 seconds
+            // Keep completed/stopped bots visible — phantom stays 5min, others 3s
             if (s === 'completed' || s === 'stopped') {
                 const finishedAt = (window._botCompletedAt || {})[id];
-                return finishedAt && (now - finishedAt < 3000);
+                if (!finishedAt) return false;
+                const isPhantom = ['anchor_dog', 'anchor_ladder'].includes(bots[id].bot_category);
+                const visibleMs = isPhantom ? 300000 : 3000;  // 5min for phantom, 3s for others
+                return (now - finishedAt < visibleMs);
             }
             return true;
         });

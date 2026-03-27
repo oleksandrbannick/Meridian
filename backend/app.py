@@ -15816,6 +15816,7 @@ PNL_LOSS_RESULTS = (
     'ladder_sellback',  # ladder: sold dog rungs back when fav hedge failed/timed out
     'ladder_arb_sellback',  # ladder arb: sold filled leg back
     'apex_sellback',  # apex: sold anchor back when hedge couldn't fill profitably
+    'apex_stop',  # apex: panic taker stop-loss
     'stop_loss_watch',  # straight bet stop-loss triggered
     'arb_loss',  # anchor-ladder/dog: completed with negative P&L (fees exceeded spread)
     'rebalancer_scrape',  # meridian rebalancer sold a filled leg back
@@ -15825,6 +15826,7 @@ PNL_WIN_RESULTS = (
     'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
     'middle_hit', 'arb_win',  # middle bot results
     'take_profit_watch',  # straight bet take-profit hit
+    'apex_rung',  # Apex 2.0 per-rung arb completion
 )
 
 def _compute_pnl_bucket(trades, category=None):

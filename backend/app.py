@@ -15488,9 +15488,9 @@ def _sweep_orphaned_orders():
             oid = bot.get(key)
             if oid:
                 known_ids.add(oid)
-        # Ladder rungs
+        # Ladder rungs (including per-rung hedge orders from Apex 2.0)
         for rung in bot.get('rungs', []):
-            for key in ('yes_order_id', 'no_order_id', 'order_id'):
+            for key in ('yes_order_id', 'no_order_id', 'order_id', 'hedge_order_id'):
                 oid = rung.get(key)
                 if oid:
                     known_ids.add(oid)

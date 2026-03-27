@@ -6259,7 +6259,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         })
         print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {_reason} → snap to bid')
 
-    # ── SNAPPED: amend to bid to exit ──
+    # ── SNAPPED: amend to bid to exit — BUT revert if market comes back ──
     if current_stage == 'snapped':
         if rung.get('hedge_fill_qty', 0) >= qty:
             return  # Already filled
@@ -6267,8 +6267,17 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         if hedge_bid <= 0:
             return  # No market data yet
 
-        # Gapped market (spread > 1): bid+1 for queue priority (maker)
-        # Tight market (spread ≤ 1): bid (already at front, bid+1 would cross to ask)
+        # Market came back within 5¢ of target? REVERT to target price for full profit
+        if midpoint_dist <= 5 and target_hedge > 0:
+            rung['time_stage'] = 'pending_profit'
+            rung['status'] = 'pending_profit'
+            rung['_drift_started_at'] = None
+            rung['_snap_reason'] = 'reverted'
+            print(f'🟢 APEX REVERT: {bot_id} rung#{rung_idx} ({width}c) market back within {midpoint_dist}¢ → reverting to target @{target_hedge}c')
+            _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_hedge)
+            return
+
+        # Still drifted — follow bid
         spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
         snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
         snap_price = max(1, snap_price)

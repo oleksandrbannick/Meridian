@@ -6121,7 +6121,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
                 ${liveScoreHtml}
                 ${cycleInfo}
-                ${isSmart ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart ${smartWins}W/${smartLosses}L</span>` : ''}
+                ${isSmart ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart ${smartWins}W/${smartLosses}L${bot.consecutive_losses ? ` · ${bot.consecutive_losses}L streak` : ''}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 ${isSmart && status !== 'completed' && status !== 'stopped' ? `<button onclick="event.stopPropagation();smartStopApex('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">⏹ Stop</button>` : ''}

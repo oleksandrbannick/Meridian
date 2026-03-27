@@ -6172,6 +6172,16 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
     else:
         print(f'🎯 APEX RUNG HEDGE: {bot_id} rung#{rung_idx} ({width}c) {anchor_side}@{anchor_price}c → existing {hedge_side}@{actual_hedge}c (oid={hedge_oid[:12]})')
 
+    # Record hedge latency
+    _hedge_posted_at = time.time()
+    _anchor_fill_at = rung.get('anchor_fill_at')
+    _raw_ms = None
+    _rt_ms = None
+    if _anchor_fill_at:
+        _rt_ms = (_hedge_posted_at - _anchor_fill_at) * 1000
+        _record_latency('fill_to_hedge_apex', _rt_ms, {'bot_id': bot_id, 'rung': rung_idx, 'width': width})
+        _raw_ms = _rt_ms  # for apex, raw ≈ rt (hedge is the existing opposite order, not a new API call)
+
     # Store hedge info in rung state
     with ws_fill_lock:
         bot = active_bots.get(bot_id)
@@ -6186,6 +6196,11 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
         rung['stage_entered_at'] = now
         rung['hedge_fill_qty'] = 0
         rung[f'{hedge_side}_order_id'] = None  # clear old opposite order ref
+        if _rt_ms is not None:
+            rung['hedge_latency_ms'] = round(_rt_ms, 1)
+            rung['raw_hedge_ms'] = round(_raw_ms, 1) if _raw_ms else None
+            bot['hedge_latency_ms'] = round(_rt_ms, 1)
+            bot['raw_hedge_ms'] = round(_raw_ms, 1) if _raw_ms else None
 
     bot_log('APEX_RUNG_HEDGE_POSTED', bot_id, {
         'rung_idx': rung_idx, 'width': width, 'anchor_side': anchor_side,
@@ -11536,7 +11551,7 @@ def _run_monitor():
         _purge_cutoff = time.time() - 300  # 5 min
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
-                      and b.get('completed_at', b.get('stopped_at', b.get('cancelled_at', 0))) < _purge_cutoff
+                      and (b.get('completed_at') or b.get('stopped_at') or b.get('cancelled_at') or 0) < _purge_cutoff
                       and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
                       and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
                       ]

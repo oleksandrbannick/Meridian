@@ -876,8 +876,13 @@ function getGameSignal(gameId, sport, markets) {
 
     const liq = bestLiq || { tier: 'medium', tierLabel: 'MEDIUM', tierColor: '#60a5fa', avgSpread: 99, arbEdge: 99, yesBid: 0, noBid: 0, yesAsk: 0, noAsk: 0 };
 
-    // No live game data — pregame
+    // No live game data — check if market activity suggests live
     if (!gameData || !gameData.state || gameData.state === 'pre') {
+        // If both sides have bids and spread is reasonable, game is likely live even without score data
+        if (liq.yesBid > 5 && liq.noBid > 5 && liq.bidSum >= 70) {
+            return { type: 'early', label: '⚪ LIVE (no score)', color: '#8892a6',
+                glowAnim: '', description: 'Market active but no score data', liq };
+        }
         return { type: 'pregame', label: '⏳ PREGAME', color: '#8892a6',
             glowAnim: '', description: 'Waiting for game to start', liq };
     }

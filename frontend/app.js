@@ -5982,17 +5982,33 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     </div>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;font-size:10px;">
-                    <div style="background:#00ff8808;border:1px solid #00ff8822;border-radius:4px;padding:3px 6px;text-align:center;">
-                        <div style="color:#555;font-size:8px;margin-bottom:1px;">FILLED</div>
-                        <span style="color:#00ff88;font-weight:700;">${anchorSide.toUpperCase()} ${anchorPrice}¢</span>
-                        <span style="color:#00ff88;font-size:8px;"> ✓</span>
-                    </div>
-                    <span style="color:#555;font-size:12px;">→</span>
-                    <div style="background:${rStage === 'snapped' ? '#ffaa0008' : '#00aaff08'};border:1px solid ${rStage === 'snapped' ? '#ffaa0022' : '#00aaff22'};border-radius:4px;padding:3px 6px;text-align:center;">
-                        <div style="color:#555;font-size:8px;margin-bottom:1px;">MY ORDER${hedgeBid != null ? ` · bid ${hedgeBid}¢` : ''}</div>
-                        <span style="color:${rStage === 'snapped' ? '#ffaa00' : '#00aaff'};font-weight:700;">${hedgeSide.toUpperCase()} ${hedgePrice}¢</span>
-                        ${hedgeBid != null && hedgePrice ? (hedgePrice >= hedgeBid ? `<span style="color:#00ff88;font-size:8px;"> AT BID</span>` : `<span style="color:#ff8800;font-size:8px;"> ${hedgeBid - hedgePrice} below</span>`) : ''}
-                    </div>
+                    ${(() => {
+                        const yesIsAnchor = anchorSide === 'yes';
+                        const yesPrice = yesIsAnchor ? anchorPrice : hedgePrice;
+                        const noPrice = yesIsAnchor ? hedgePrice : anchorPrice;
+                        const hedgeCol = rStage === 'snapped' ? '#ffaa00' : '#00aaff';
+                        const hedgeBg = rStage === 'snapped' ? '#ffaa0008' : '#00aaff08';
+                        const hedgeBorder = rStage === 'snapped' ? '#ffaa0022' : '#00aaff22';
+                        const bidLabel = hedgeBid != null ? ` · bid ${hedgeBid}¢` : '';
+                        const distLabel = hedgeBid != null && hedgePrice ? (hedgePrice >= hedgeBid ? '<span style="color:#00ff88;font-size:8px;"> AT BID</span>' : `<span style="color:#ff8800;font-size:8px;"> ${hedgeBid - hedgePrice} below</span>`) : '';
+                        // YES box (left)
+                        const yesBox = yesIsAnchor
+                            ? `<div style="background:#00ff8808;border:1px solid #00ff8822;border-radius:4px;padding:3px 6px;text-align:center;">
+                                <div style="color:#555;font-size:8px;margin-bottom:1px;">YES · FILLED</div>
+                                <span style="color:#00ff88;font-weight:700;">${yesPrice}¢ ✓</span></div>`
+                            : `<div style="background:${hedgeBg};border:1px solid ${hedgeBorder};border-radius:4px;padding:3px 6px;text-align:center;">
+                                <div style="color:#555;font-size:8px;margin-bottom:1px;">YES · ORDER${bidLabel}</div>
+                                <span style="color:${hedgeCol};font-weight:700;">${yesPrice}¢</span>${distLabel}</div>`;
+                        // NO box (right)
+                        const noBox = !yesIsAnchor
+                            ? `<div style="background:#00ff8808;border:1px solid #00ff8822;border-radius:4px;padding:3px 6px;text-align:center;">
+                                <div style="color:#555;font-size:8px;margin-bottom:1px;">NO · FILLED</div>
+                                <span style="color:#00ff88;font-weight:700;">${noPrice}¢ ✓</span></div>`
+                            : `<div style="background:${hedgeBg};border:1px solid ${hedgeBorder};border-radius:4px;padding:3px 6px;text-align:center;">
+                                <div style="color:#555;font-size:8px;margin-bottom:1px;">NO · ORDER${bidLabel}</div>
+                                <span style="color:${hedgeCol};font-weight:700;">${noPrice}¢</span>${distLabel}</div>`;
+                        return yesBox + '<span style="color:#555;font-size:12px;">·</span>' + noBox;
+                    })()}
                 </div>
             </div>`;
         }

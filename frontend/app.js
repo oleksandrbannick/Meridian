@@ -7205,27 +7205,7 @@ async function loadBots() {
         const bots = data.bots || {};
         window._lastBotsData = bots;  // used by emergencyExitGame
 
-        // Track when bots first transition to completed/stopped so we can show them for 3s
-        // _botPrevStatus tracks what status each bot had last render — only mark completion
-        // for bots that TRANSITION during this session, not ones already completed on page load
-        if (!window._botCompletedAt) window._botCompletedAt = {};
-        if (!window._botPrevStatus) window._botPrevStatus = {};
         const now = Date.now();
-        for (const id of Object.keys(bots)) {
-            const s = bots[id].status;
-            const prev = window._botPrevStatus[id];
-            // Only track transition: bot was previously active, now completed/stopped
-            if ((s === 'completed' || s === 'stopped') && prev && prev !== 'completed' && prev !== 'stopped' && !window._botCompletedAt[id]) {
-                window._botCompletedAt[id] = now;
-            }
-            window._botPrevStatus[id] = s;
-        }
-        // Clean up old entries
-        for (const id of Object.keys(window._botCompletedAt)) {
-            if (!bots[id] || now - window._botCompletedAt[id] > 10000) {
-                delete window._botCompletedAt[id];
-            }
-        }
         const gameScores = data.game_scores || {};
         const botIds = Object.keys(bots);
 
@@ -7241,15 +7221,16 @@ async function loadBots() {
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
             if (s === 'awaiting_settlement') return true;
-            // Smart Apex bots stay visible when completed (so user can restart)
-            if ((s === 'completed' || s === 'stopped') && bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
-            // Keep completed/stopped bots visible — phantom stays 5min, others 3s
             if (s === 'completed' || s === 'stopped') {
-                const finishedAt = (window._botCompletedAt || {})[id];
-                if (!finishedAt) return false;
+                // Smart Apex bots stay visible (restart button)
+                if (bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
+                // Use backend completed_at for visibility timer
+                const finishedAt = bots[id].completed_at || bots[id].stopped_at;
+                if (!finishedAt) return true;  // no timestamp = just completed, show it
+                const ageMs = now - finishedAt * 1000;  // backend is seconds, frontend is ms
                 const isPhantom = ['anchor_dog', 'anchor_ladder'].includes(bots[id].bot_category);
-                const visibleMs = isPhantom ? 300000 : 3000;  // 5min for phantom, 3s for others
-                return (now - finishedAt < visibleMs);
+                const visibleMs = isPhantom ? 300000 : 10000;  // 5min for phantom, 10s for others
+                return ageMs < visibleMs;
             }
             return true;
         });

@@ -5948,40 +5948,51 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const hedgeSide = anchorSide === 'yes' ? 'no' : 'yes';
         const hedgeBid = hedgeSide === 'yes' ? yBid : nBid;
 
-        // ── ANCHORED RUNG: show anchor ✓, hedge order tracking, stage + timer ──
+        // ── ANCHORED RUNG: one side filled, hedge order live ──
         if (isAnchored) {
             activeCount++;
             const anchorPrice = r[anchorSide + '_price'] || 0;
             const elapsed = r.anchor_fill_at ? Math.round((Date.now()/1000) - r.anchor_fill_at) : 0;
             const countdown = Math.max(0, 30 - elapsed);
-            const hedgeDist = (hedgeBid != null && hedgePrice) ? (hedgeBid - hedgePrice) : null;
-            const hedgeDistColor = hedgeDist != null ? (hedgeDist <= 0 ? '#00ff88' : hedgeDist <= 2 ? '#ffaa00' : '#ff4444') : '#555';
             const combined = anchorPrice + hedgePrice;
             const profEst = combined > 0 ? (100 - combined) : 0;
             const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
 
-            // Stage label with timer
-            let stageBadge;
+            // Stage display
+            let stageHTML;
             if (rStage === 'pending_profit') {
-                stageBadge = `<span style="color:#00aaff;font-size:8px;font-weight:700;">🎯 ${countdown}s</span>`;
+                stageHTML = `<span style="background:#00aaff22;color:#00aaff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🎯 TARGET ${countdown}s</span>`;
             } else if (rStage === 'snapped') {
-                stageBadge = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡ SNAP</span>`;
+                stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ AT BID</span>`;
             } else {
-                stageBadge = `<span style="color:#555;font-size:8px;">${rStage}</span>`;
+                stageHTML = `<span style="color:#555;font-size:9px;">${rStage}</span>`;
             }
 
-            const snapBtn = (rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0022;color:#ffaa00;border:1px solid #ffaa0044;border-radius:3px;padding:1px 5px;font-size:8px;cursor:pointer;font-weight:700;">SNAP</button>` : '';
+            const snapBtn = (rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0011;color:#ffaa00;border:1px solid #ffaa0033;border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-weight:600;">Snap Now</button>` : '';
 
-            return `<div style="padding:4px 0;border-bottom:1px solid #1e274015;">
-                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
-                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
-                    <span style="color:#00ff88;font-size:9px;">${anchorSide.toUpperCase()} ${anchorPrice}¢ ✓</span>
-                    <span style="color:#555;">→</span>
-                    <span style="color:#00aaff;font-size:9px;font-weight:700;">${hedgeSide.toUpperCase()} @${hedgePrice}¢</span>
-                    ${hedgeDist != null ? `<span style="color:${hedgeDistColor};font-size:8px;">(bid ${hedgeBid} ${hedgeDist > 0 ? '+' + hedgeDist : hedgeDist === 0 ? 'AT' : hedgeDist})</span>` : ''}
-                    <span style="color:${profColor};font-size:9px;font-weight:700;margin-left:auto;">${profEst}¢</span>
-                    ${stageBadge}
-                    ${snapBtn}
+            return `<div style="padding:6px 4px;border-bottom:1px solid #1e274022;background:#0a0e1a55;border-radius:4px;margin-bottom:2px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="color:#ffaa00;font-weight:800;font-size:11px;">${width}¢</span>
+                        ${stageHTML}
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="color:${profColor};font-weight:800;font-size:11px;">${profEst > 0 ? '+' : ''}${profEst}¢</span>
+                        ${snapBtn}
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;font-size:10px;">
+                    <div style="background:#00ff8808;border:1px solid #00ff8822;border-radius:4px;padding:3px 6px;text-align:center;">
+                        <div style="color:#555;font-size:8px;margin-bottom:1px;">FILLED</div>
+                        <span style="color:#00ff88;font-weight:700;">${anchorSide.toUpperCase()} ${anchorPrice}¢</span>
+                        <span style="color:#00ff88;font-size:8px;"> ✓</span>
+                    </div>
+                    <span style="color:#555;font-size:12px;">→</span>
+                    <div style="background:${rStage === 'snapped' ? '#ffaa0008' : '#00aaff08'};border:1px solid ${rStage === 'snapped' ? '#ffaa0022' : '#00aaff22'};border-radius:4px;padding:3px 6px;text-align:center;">
+                        <div style="color:#555;font-size:8px;margin-bottom:1px;">MY ORDER${hedgeBid != null ? ` · bid ${hedgeBid}¢` : ''}</div>
+                        <span style="color:${rStage === 'snapped' ? '#ffaa00' : '#00aaff'};font-weight:700;">${hedgeSide.toUpperCase()} ${hedgePrice}¢</span>
+                        ${hedgeBid != null && hedgePrice ? (hedgeBid >= hedgePrice ? `<span style="color:#00ff88;font-size:8px;"> AT BID</span>` : `<span style="color:#ff8800;font-size:8px;"> ${hedgeBid - hedgePrice} away</span>`) : ''}
+                    </div>
                 </div>
             </div>`;
         }
@@ -6067,7 +6078,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
-        <div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:8px 10px;">
+        ${(yBid != null || nBid != null) ? `<div style="display:flex;justify-content:space-around;padding:4px 8px;background:#060a14;border:1px solid #1e274033;border-radius:6px 6px 0 0;font-size:10px;">
+            <span style="color:#8892a6;">MARKET</span>
+            <span>YES <strong style="color:#00ff88;">${yBid ?? '?'}¢</strong><span style="color:#555;"> / ${bot.live_yes_ask ?? '?'}¢</span></span>
+            <span>NO <strong style="color:#ff4444;">${nBid ?? '?'}¢</strong><span style="color:#555;"> / ${bot.live_no_ask ?? '?'}¢</span></span>
+        </div>` : ''}
+        <div style="background:#060a14;border:1px solid #1e274033;${(yBid != null || nBid != null) ? 'border-top:none;border-radius:0 0 8px 8px;' : 'border-radius:8px;'}padding:8px 10px;">
             ${rungsHTML}
         </div>
         ${statusInfo}

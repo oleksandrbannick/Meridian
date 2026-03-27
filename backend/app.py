@@ -6073,11 +6073,11 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
             'rung_idx': rung_idx, 'error': str(e)[:200],
             'hedge_price': hedge_price, 'width': width,
         })
-        # Mark as panic — monitor will handle the stop
+        # Mark as snapped — monitor will try cancel+replace at bid+1
         with ws_fill_lock:
             rung = active_bots.get(bot_id, {}).get('rungs', [{}] * (rung_idx + 1))[rung_idx]
-            rung['status'] = 'panic_window'
-            rung['time_stage'] = 'panic'
+            rung['status'] = 'snapped'
+            rung['time_stage'] = 'snapped'
             rung['stage_entered_at'] = now
         save_state()
         return
@@ -10901,20 +10901,28 @@ def _handle_apex(bot_id, bot, actions):
             any_filled = True
             all_filled_resolved = False
 
-            # Active rung with fill — run time-decay
-            if rs in ('anchor_filled', 'profit_window', 'scratch_window', 'panic_window'):
+            # Active rung with fill — run two-step protocol
+            if rs in ('anchor_filled', 'pending_profit', 'snapped',
+                       'profit_window', 'scratch_window', 'panic_window'):
                 any_active = True
                 # Skip if hedge thread is still running (anchor_filled → waiting for thread)
                 if rs == 'anchor_filled':
                     # Check if hedge thread has completed (status would change)
                     age = now - (rung.get('anchor_fill_at') or now)
                     if age > 10:
-                        # Thread probably failed — push to panic
-                        rung['status'] = 'panic_window'
-                        rung['time_stage'] = 'panic'
+                        # Thread probably failed — set to pending_profit so tick can handle it
+                        rung['status'] = 'pending_profit'
+                        rung['time_stage'] = 'pending_profit'
                         rung['stage_entered_at'] = now
-                        print(f'⚠ APEX STALE ANCHOR: {bot_id} rung#{idx} stuck in anchor_filled for {age:.0f}s → panic')
+                        print(f'⚠ APEX STALE ANCHOR: {bot_id} rung#{idx} stuck in anchor_filled for {age:.0f}s → pending_profit')
                     continue
+                # Migrate old status names to new ones
+                if rs in ('profit_window', 'scratch_window'):
+                    rung['status'] = 'pending_profit'
+                    rung['time_stage'] = 'pending_profit'
+                elif rs == 'panic_window':
+                    rung['status'] = 'snapped'
+                    rung['time_stage'] = 'snapped'
                 _apex_time_decay_tick(bot_id, bot, rung, idx)
 
         # Check if all filled rungs are resolved → bot completion

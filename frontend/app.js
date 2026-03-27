@@ -5991,7 +5991,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="background:${rStage === 'snapped' ? '#ffaa0008' : '#00aaff08'};border:1px solid ${rStage === 'snapped' ? '#ffaa0022' : '#00aaff22'};border-radius:4px;padding:3px 6px;text-align:center;">
                         <div style="color:#555;font-size:8px;margin-bottom:1px;">MY ORDER${hedgeBid != null ? ` · bid ${hedgeBid}¢` : ''}</div>
                         <span style="color:${rStage === 'snapped' ? '#ffaa00' : '#00aaff'};font-weight:700;">${hedgeSide.toUpperCase()} ${hedgePrice}¢</span>
-                        ${hedgeBid != null && hedgePrice ? (hedgeBid >= hedgePrice ? `<span style="color:#00ff88;font-size:8px;"> AT BID</span>` : `<span style="color:#ff8800;font-size:8px;"> ${hedgeBid - hedgePrice} away</span>`) : ''}
+                        ${hedgeBid != null && hedgePrice ? (hedgePrice >= hedgeBid ? `<span style="color:#00ff88;font-size:8px;"> AT BID</span>` : `<span style="color:#ff8800;font-size:8px;"> ${hedgeBid - hedgePrice} below</span>`) : ''}
                     </div>
                 </div>
             </div>`;

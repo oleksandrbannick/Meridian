@@ -6189,7 +6189,11 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         if hedge_bid <= 0:
             return  # No market data yet — wait for WS
 
-        snap_price = min(hedge_bid + 1, max_hedge)
+        # Gapped market (spread > 1): bid+1 for queue priority (maker)
+        # Tight market (spread ≤ 1): bid (already at front, bid+1 would cross to ask)
+        hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
+        spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+        snap_price = min(hedge_bid + 1 if spread > 1 else hedge_bid, max_hedge)
         snap_price = max(1, snap_price)
         current_hedge_price = rung.get('hedge_price', 0)
 
@@ -14823,8 +14827,10 @@ def snap_rung(bot_id, rung_idx):
     hedge_side = 'no' if anchor_side == 'yes' else 'yes'
     anchor_price = rung.get(f'{anchor_side}_price', 0)
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
+    hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
     max_hedge = max(1, 98 - anchor_price)
-    snap_price = min(hedge_bid + 1, max_hedge) if hedge_bid > 0 else max_hedge
+    spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+    snap_price = min(hedge_bid + 1 if spread > 1 else hedge_bid, max_hedge) if hedge_bid > 0 else max_hedge
     snap_price = max(1, snap_price)
     rung['time_stage'] = 'snapped'
     rung['status'] = 'snapped'

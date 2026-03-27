@@ -5982,45 +5982,36 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
             const snapBtn = (rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0011;color:#ffaa00;border:1px solid #ffaa0033;border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-weight:600;">Snap Now</button>` : '';
 
-            return `<div style="padding:6px 4px;border-bottom:1px solid #1e274022;background:#0a0e1a55;border-radius:4px;margin-bottom:2px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="color:#ffaa00;font-weight:800;font-size:11px;">${width}¢</span>
-                        ${stageHTML}
+            // Fill bar layout: YES left, NO right — anchor shows full bar, hedge shows progress
+            const yesIsAnchor = anchorSide === 'yes';
+            const yesPrice = yesIsAnchor ? anchorPrice : hedgePrice;
+            const noPrice = yesIsAnchor ? hedgePrice : anchorPrice;
+            const hfq = r.hedge_fill_qty || 0;
+            const yesFillPct = yesIsAnchor ? 100 : (rQty > 0 ? Math.round((hfq/rQty)*100) : 0);
+            const noFillPct = !yesIsAnchor ? 100 : (rQty > 0 ? Math.round((hfq/rQty)*100) : 0);
+            const yesFilled = yesIsAnchor;
+            const noFilled = !yesIsAnchor;
+            const hedgeDistLabel = hedgeBid != null && hedgePrice ? (hedgePrice >= hedgeBid ? '<span style="color:#00ff88;font-size:7px;"> AT BID</span>' : `<span style="color:#ff8800;font-size:7px;"> ${hedgeBid - hedgePrice}↓</span>`) : '';
+
+            return `<div style="display:grid;grid-template-columns:40px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:5px 2px;border-bottom:1px solid #1e274022;">
+                <div><span style="color:#ffaa00;font-weight:700;">${width}¢</span></div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#00ff88;font-size:9px;width:28px;">Y${yesPrice}</span>${!yesFilled ? hedgeDistLabel : ''}
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${yesFillPct}%;height:100%;background:${yesFilled ? '#00ff88' : '#335'};border-radius:2px;"></div>
                     </div>
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="color:${profColor};font-weight:800;font-size:11px;">${profEst > 0 ? '+' : ''}${profEst}¢</span>
-                        ${snapBtn}
-                    </div>
+                    <span style="color:${yesFilled ? '#00ff88' : '#555'};font-size:8px;">${yesFilled ? '✓' : hfq + '/' + rQty}</span>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;font-size:10px;">
-                    ${(() => {
-                        const yesIsAnchor = anchorSide === 'yes';
-                        const yesPrice = yesIsAnchor ? anchorPrice : hedgePrice;
-                        const noPrice = yesIsAnchor ? hedgePrice : anchorPrice;
-                        const hedgeCol = rStage === 'snapped' ? '#ffaa00' : '#00aaff';
-                        const hedgeBg = rStage === 'snapped' ? '#ffaa0008' : '#00aaff08';
-                        const hedgeBorder = rStage === 'snapped' ? '#ffaa0022' : '#00aaff22';
-                        const bidLabel = hedgeBid != null ? ` · bid ${hedgeBid}¢` : '';
-                        const distLabel = hedgeBid != null && hedgePrice ? (hedgePrice >= hedgeBid ? '<span style="color:#00ff88;font-size:8px;"> AT BID</span>' : `<span style="color:#ff8800;font-size:8px;"> ${hedgeBid - hedgePrice} below</span>`) : '';
-                        // YES box (left)
-                        const yesBox = yesIsAnchor
-                            ? `<div style="background:#00ff8808;border:1px solid #00ff8822;border-radius:4px;padding:3px 6px;text-align:center;">
-                                <div style="color:#555;font-size:8px;margin-bottom:1px;">YES · FILLED</div>
-                                <span style="color:#00ff88;font-weight:700;">${yesPrice}¢ ✓</span></div>`
-                            : `<div style="background:${hedgeBg};border:1px solid ${hedgeBorder};border-radius:4px;padding:3px 6px;text-align:center;">
-                                <div style="color:#555;font-size:8px;margin-bottom:1px;">YES · ORDER${bidLabel}</div>
-                                <span style="color:${hedgeCol};font-weight:700;">${yesPrice}¢</span>${distLabel}</div>`;
-                        // NO box (right)
-                        const noBox = !yesIsAnchor
-                            ? `<div style="background:#00ff8808;border:1px solid #00ff8822;border-radius:4px;padding:3px 6px;text-align:center;">
-                                <div style="color:#555;font-size:8px;margin-bottom:1px;">NO · FILLED</div>
-                                <span style="color:#00ff88;font-weight:700;">${noPrice}¢ ✓</span></div>`
-                            : `<div style="background:${hedgeBg};border:1px solid ${hedgeBorder};border-radius:4px;padding:3px 6px;text-align:center;">
-                                <div style="color:#555;font-size:8px;margin-bottom:1px;">NO · ORDER${bidLabel}</div>
-                                <span style="color:${hedgeCol};font-weight:700;">${noPrice}¢</span>${distLabel}</div>`;
-                        return yesBox + '<span style="color:#555;font-size:12px;">·</span>' + noBox;
-                    })()}
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#ff4444;font-size:9px;width:28px;">N${noPrice}</span>${!noFilled ? hedgeDistLabel : ''}
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:${noFillPct}%;height:100%;background:${noFilled ? '#ff4444' : '#335'};border-radius:2px;"></div>
+                    </div>
+                    <span style="color:${noFilled ? '#ff4444' : '#555'};font-size:8px;">${noFilled ? '✓' : hfq + '/' + rQty}</span>
+                </div>
+                <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
+                    ${rStage === 'pending_profit' ? `<span style="color:#00aaff;font-size:8px;font-weight:700;">🎯${countdown}s</span>` : rStage === 'snapped' ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡BID</span>` : ''}
+                    ${snapBtn ? snapBtn : `<span style="color:${profColor};font-size:9px;font-weight:700;">${profEst > 0 ? '+' : ''}${profEst}¢</span>`}
                 </div>
             </div>`;
         }

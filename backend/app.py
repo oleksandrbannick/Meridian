@@ -6163,7 +6163,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
 
     # Get live market price for hedge side
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
-    max_hedge = max(1, 98 - anchor_price)  # hard ceiling: never exceed 98c combined
+    profit_cap = max(1, 98 - anchor_price)  # only used during target window
 
     # ── Step 1: PENDING_PROFIT (0 - 30s) — sit at target width ──
     if current_stage == 'pending_profit':
@@ -6171,7 +6171,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             # Hedge order lost? Repost at target price
             if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty:
                 target_price = rung.get('hedge_price') or rung.get('target_hedge_price') or max(1, 100 - anchor_price - width)
-                target_price = min(target_price, max_hedge)
+                target_price = min(target_price, profit_cap)
                 _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, target_price)
             return  # Still in profit window — wait for fill
 
@@ -6183,9 +6183,10 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         bot_log('APEX_SNAP_TO_MARKET', bot_id, {
             'rung_idx': rung_idx, 'width': width, 'elapsed': round(elapsed, 1),
         })
-        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {elapsed:.0f}s → snap to bid+1')
+        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {elapsed:.0f}s → snap to bid')
 
     # ── Step 2: SNAPPED — cancel old hedge, post new at bid+1 ──
+    # NO CAP — snap goes to bid wherever it is, even for a loss, to EXIT the position
     if current_stage == 'snapped':
         if rung.get('hedge_fill_qty', 0) >= qty:
             return  # Already filled
@@ -6197,7 +6198,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         # Tight market (spread ≤ 1): bid (already at front, bid+1 would cross to ask)
         hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
         spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-        snap_price = min(hedge_bid + 1 if spread > 1 else hedge_bid, max_hedge)
+        snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
         snap_price = max(1, snap_price)
         current_hedge_price = rung.get('hedge_price', 0)
 
@@ -14846,9 +14847,8 @@ def snap_rung(bot_id, rung_idx):
     anchor_price = rung.get(f'{anchor_side}_price', 0)
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
-    max_hedge = max(1, 98 - anchor_price)
     spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-    snap_price = min(hedge_bid + 1 if spread > 1 else hedge_bid, max_hedge) if hedge_bid > 0 else max_hedge
+    snap_price = (hedge_bid + 1 if spread > 1 else hedge_bid) if hedge_bid > 0 else max(1, 100 - anchor_price)
     snap_price = max(1, snap_price)
     rung['time_stage'] = 'snapped'
     rung['status'] = 'snapped'

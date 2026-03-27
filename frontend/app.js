@@ -3750,6 +3750,8 @@ function initAnchorDogPrices() {
     // Auto-add a default rung with smart pricing
     if (_anchorRungs.length === 0 && anchorBase > 5) {
         _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
+        // Force render immediately — the non-force render below can skip on mobile
+        renderAnchorRungs(true);
     }
     // Auto-adjust existing rungs to track market (and update offsets when depth is auto)
     // Depth floor on rung 0: rung[0] sits at anchorDepth, deeper rungs stagger below

@@ -5981,15 +5981,16 @@ def _calculate_arb_prices_server(yes_bid, no_bid, yes_ask, no_ask, width):
 def _apex_snap_timer(ticker):
     """Dynamic snap timer based on game clock.
     Early game: 60s patience. Mid game: 25s standard. End game: 5s flash exit."""
+    # Sports without game clocks — always use fixed timer
+    series = ticker.split('-')[0].upper() if ticker else ''
+    if series.startswith('KXATP') or series.startswith('KXWTA'):
+        return 60  # Tennis: long matches, no game clock
+    if series.startswith('KXPGA'):
+        return 60  # Golf: slow, no game clock
+
     gc = _get_game_context(ticker)
     if not gc or not gc.get('period'):
-        # No game clock data — use sport-specific defaults
-        series = ticker.split('-')[0].upper() if ticker else ''
-        if series.startswith('KXATP') or series.startswith('KXWTA'):
-            return 60  # Tennis: long matches, 60s patience
-        if series.startswith('KXPGA'):
-            return 60  # Golf: slow, 60s
-        return 45  # Unknown sport — lean patient
+        return 45  # No game data — lean patient
 
     # Detect sport from ticker prefix
     series = ticker.split('-')[0].upper() if ticker else ''

@@ -5974,7 +5974,47 @@ def _calculate_arb_prices_server(yes_bid, no_bid, yes_ask, no_ask, width):
 # No consolidation, no weighted averaging.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-APEX_SNAP_TIMER_S = 30  # seconds at target price before snapping to bid+1
+def _apex_snap_timer(ticker):
+    """Dynamic snap timer based on game clock.
+    Early game: 60s patience. Mid game: 25s standard. End game: 5s flash exit."""
+    gc = _get_game_context(ticker)
+    if not gc or not gc.get('period'):
+        return 30  # no game data — default 30s
+
+    # Detect sport from ticker prefix
+    series = ticker.split('-')[0].upper() if ticker else ''
+    rule = None
+    for prefix, r in _LATE_GAME_RULES.items():
+        if series.startswith(prefix) and (not rule or len(prefix) > len(rule.get('_prefix', ''))):
+            rule = r
+            rule['_prefix'] = prefix
+
+    if not rule:
+        return 30  # unknown sport
+
+    period = gc.get('period', 0)
+    clock_str = gc.get('clock', '')
+    secs = _parse_clock_seconds(clock_str)
+    final_period = rule.get('final', 4)
+
+    # Halftime — pause, don't snap
+    if _is_halftime(ticker):
+        return 120  # long timer during halftime
+
+    # End game: final period, < 2 min remaining → 5s flash
+    if period >= final_period and secs is not None and secs <= 120:
+        return 5
+    # OT → 5s flash
+    if period > final_period:
+        return 5
+    # Late: final period, > 2 min → 15s
+    if period >= final_period:
+        return 15
+    # Mid: second half / later periods → 25s
+    if period >= max(1, final_period // 2):
+        return 25
+    # Early game → 60s patience
+    return 60
 
 def _apex_stop_loss_threshold(width):
     """Width-calibrated stop-loss: wider than entry to absorb market noise."""
@@ -6112,8 +6152,8 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
 
 def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     """Two-Step Apex Protocol. Called from monitor for each active rung.
-    Step 1 (pending_profit, 0-30s): Hedge sits at target width — wait for full profit fill.
-    Step 2 (snapped, 30s+): Cancel + repost at bid+1 — capture whatever's available."""
+    Step 1 (pending_profit): Hedge at target width — dynamic timer based on game clock.
+    Step 2 (snapped): Amend to bid — exit the position."""
     now = time.time()
     ticker = bot['ticker']
     anchor_side = rung.get('anchor_side')
@@ -6127,6 +6167,10 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     current_stage = rung.get('time_stage', 'pending_profit')
     anchor_fill_at = rung.get('anchor_fill_at', now)
     elapsed = now - anchor_fill_at
+
+    # Dynamic timer based on game clock
+    snap_timer = _apex_snap_timer(ticker)
+    rung['_snap_timer'] = snap_timer  # expose to frontend for countdown
 
     # ── Poll hedge fill status (backup for WS misses) ──
     if hedge_oid:
@@ -6165,14 +6209,14 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     profit_cap = max(1, 98 - anchor_price)  # only used during target window
 
-    # ── Step 1: PENDING_PROFIT (0 - 30s) — sit at target width ──
+    # ── Step 1: PENDING_PROFIT — sit at target width for dynamic timer ──
     if current_stage == 'pending_profit':
-        if elapsed < APEX_SNAP_TIMER_S:
+        if elapsed < snap_timer:
             # Hedge order lost? Repost at target price
             if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty:
                 target_price = rung.get('hedge_price') or rung.get('target_hedge_price') or max(1, 100 - anchor_price - width)
                 target_price = min(target_price, profit_cap)
-                _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, target_price)
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_price)
             return  # Still in profit window — wait for fill
 
         # Timer expired → snap to market
@@ -6207,58 +6251,67 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         if needs_snap:
             print(f'🔄 SNAP CHECK: {bot_id} rung#{rung_idx} hp={current_hedge_price}→{snap_price} bid={hedge_bid} ask={hedge_ask} spread={spread} oid={str(hedge_oid)[:12] if hedge_oid else "None"}')
             rung['_last_snap'] = now
-            _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, snap_price)
+            _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
 
 
-def _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, new_price):
-    """Cancel existing hedge and post new one at new_price. No amend — atomic cancel+replace.
-    Handles partial fills: checks fill count on cancel, only posts remaining qty."""
+def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
+    """Amend existing hedge to new_price — same approach as Phantom bid-follow.
+    Same order ID, no orphans, one API call. Falls back to fresh post if no order exists."""
     anchor_side = rung.get('anchor_side', 'yes')
     hedge_side = 'no' if anchor_side == 'yes' else 'yes'
     ticker = bot['ticker']
     total_qty = rung.get('quantity', bot.get('quantity', 1))
-    old_oid = rung.get('hedge_order_id')
+    hedge_oid = rung.get('hedge_order_id')
     already_filled = rung.get('hedge_fill_qty', 0)
-
-    # Cancel old order and check for partial fills
-    if old_oid:
-        try:
-            # Check fill count before cancelling (WS may have missed partials)
-            api_read_limiter.wait()
-            resp = kalshi_client.get_order(old_oid)
-            ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-            filled = _parse_fill_count(ord_data)
-            if filled > already_filled:
-                rung['hedge_fill_qty'] = filled
-                already_filled = filled
-                if not rung.get('hedge_fill_at'):
-                    rung['hedge_fill_at'] = time.time()
-            # Fully filled? Complete the rung
-            if filled >= total_qty:
-                rung['hedge_fill_qty'] = filled
-                rung['hedge_fill_at'] = rung.get('hedge_fill_at') or time.time()
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                print(f'✅ APEX RUNG COMPLETED (pre-cancel check): {bot_id} rung#{rung_idx} hedge already filled')
-                _apex_record_rung_pnl(bot_id, rung_idx)
-                save_state()
-                return
-        except Exception:
-            pass
-        # Now cancel the remaining unfilled portion
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order(old_oid)
-        except Exception:
-            pass  # Already cancelled or fully filled — fine
-        rung['hedge_order_id'] = None
-
-    # Calculate remaining quantity needed
     remaining = total_qty - already_filled
     if remaining <= 0:
-        return  # Fully filled
+        return
 
-    # Post new order at new_price for remaining qty
+    if hedge_oid:
+        # Amend existing order to new price (like Phantom does)
+        try:
+            price_kwargs = {f'{hedge_side}_price': new_price}
+            api_rate_limiter.wait()
+            kalshi_client.amend_order(hedge_oid, ticker=ticker, side=hedge_side,
+                                     count=remaining, action='buy', **price_kwargs)
+            rung['hedge_price'] = new_price
+            print(f'  📌 HEDGE AMEND: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c (oid={str(hedge_oid)[:12]})')
+            save_state()
+            return
+        except Exception as e:
+            err = str(e)
+            if '404' in err:
+                # Order gone — check if it filled
+                try:
+                    api_read_limiter.wait()
+                    resp = kalshi_client.get_order(hedge_oid)
+                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                    filled = _parse_fill_count(ord_data)
+                    if filled >= total_qty:
+                        rung['hedge_fill_qty'] = filled
+                        rung['hedge_fill_at'] = rung.get('hedge_fill_at') or time.time()
+                        rung['status'] = 'completed'
+                        rung['completed'] = True
+                        print(f'✅ APEX RUNG COMPLETED (amend 404): {bot_id} rung#{rung_idx} hedge already filled')
+                        _apex_record_rung_pnl(bot_id, rung_idx)
+                        save_state()
+                        return
+                    elif filled > already_filled:
+                        rung['hedge_fill_qty'] = filled
+                        already_filled = filled
+                        remaining = total_qty - already_filled
+                except Exception:
+                    pass
+                rung['hedge_order_id'] = None
+                hedge_oid = None
+                print(f'  ⚠ HEDGE GONE: {bot_id} rung#{rung_idx} order 404 → posting fresh')
+            else:
+                print(f'  ⚠ HEDGE AMEND FAIL: {bot_id} rung#{rung_idx}: {e}')
+                return  # Don't post fresh on non-404 errors, try again next tick
+
+    # No existing order — post fresh (initial hedge or after 404)
+    if remaining <= 0:
+        return
     try:
         price_kwargs = {f'{hedge_side}_price': new_price}
         api_rate_limiter.wait()
@@ -6270,10 +6323,10 @@ def _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, new_price):
         new_oid = (resp.get('order', resp) if isinstance(resp, dict) else resp).get('order_id', '')
         rung['hedge_order_id'] = new_oid
         rung['hedge_price'] = new_price
-        print(f'  🔄 HEDGE REPLACE: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining} (oid={new_oid[:12]})')
+        print(f'  🆕 HEDGE POST: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining} (oid={new_oid[:12]})')
         save_state()
     except Exception as e:
-        print(f'  ❌ HEDGE REPLACE FAIL: {bot_id} rung#{rung_idx}: {e}')
+        print(f'  ❌ HEDGE POST FAIL: {bot_id} rung#{rung_idx}: {e}')
         rung['hedge_order_id'] = None
         save_state()
 
@@ -14853,7 +14906,7 @@ def snap_rung(bot_id, rung_idx):
     rung['time_stage'] = 'snapped'
     rung['status'] = 'snapped'
     rung['_snap_at'] = time.time()
-    _apex_cancel_replace_hedge(bot_id, bot, rung, rung_idx, snap_price)
+    _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
     print(f'⚡ MANUAL SNAP: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{snap_price}c')
     return jsonify({'success': True, 'snap_price': snap_price})
 

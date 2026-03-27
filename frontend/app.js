@@ -5965,7 +5965,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             activeCount++;
             const anchorPrice = r[anchorSide + '_price'] || 0;
             const elapsed = r.anchor_fill_at ? Math.round((Date.now()/1000) - r.anchor_fill_at) : 0;
-            const countdown = Math.max(0, 30 - elapsed);
+            const snapTimer = r._snap_timer || 30;
+            const countdown = Math.max(0, snapTimer - elapsed);
+            const timerLabel = snapTimer <= 5 ? 'FLASH' : snapTimer <= 15 ? 'LATE' : snapTimer <= 25 ? 'MID' : snapTimer >= 120 ? 'HALF' : 'EARLY';
             const combined = anchorPrice + hedgePrice;
             const profEst = combined > 0 ? (100 - combined) : 0;
             const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
@@ -6010,7 +6012,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:${noFilled ? '#ff4444' : '#555'};font-size:8px;">${noFilled ? '✓' : hfq + '/' + rQty}</span>
                 </div>
                 <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
-                    ${rStage === 'pending_profit' ? `<span style="color:#00aaff;font-size:8px;font-weight:700;">🎯${countdown}s</span>` : rStage === 'snapped' ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡BID</span>` : ''}
+                    ${rStage === 'pending_profit'
+                        ? `<span style="color:${snapTimer <= 5 ? '#ff4444' : snapTimer <= 15 ? '#ffaa00' : '#00aaff'};font-size:8px;font-weight:700;">🎯${countdown}s <span style="font-size:7px;">${timerLabel}</span></span>`
+                        : rStage === 'snapped'
+                        ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡BID</span>`
+                        : ''}
                     ${snapBtn ? snapBtn : `<span style="color:${profColor};font-size:9px;font-weight:700;">${profEst > 0 ? '+' : ''}${profEst}¢</span>`}
                 </div>
             </div>`;

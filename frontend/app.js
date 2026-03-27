@@ -5889,100 +5889,60 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const rs = r.status || 'posted';
         const width = r.width;
 
-        // ── POSTED: waiting for any fill — show both sides ──
-        if (rs === 'posted' || !rs) {
-            postedCount++;
-            const yFill = r.yes_fill_qty || 0;
-            const nFill = r.no_fill_qty || 0;
-            const dimmed = (status === 'ladder_arb_active') ? 'opacity:0.4;' : '';
-            const _sl = _apexStopLossThreshold(width);
-            const _slC = _sl <= 8 ? '#00ff8855' : _sl <= 12 ? '#ffaa0055' : '#ff444455';
-            return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;${dimmed}">
-                <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slC};font-size:7px;">SL${_sl}</span></span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFill >= rQty ? '#00ff88' : '#333'};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:#555;font-size:8px;">${yFill}/${rQty}</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#ff4444;font-size:9px;width:26px;">N${r.no_price}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFill >= rQty ? '#ff4444' : '#333'};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:#555;font-size:8px;">${nFill}/${rQty}</span>
-                </div>
-                <span style="color:#333;font-size:9px;text-align:right;">—</span>
-            </div>`;
-        }
-
         // ── COMPLETED: shaded, show result + P&L ──
         if (rs === 'completed' || r._profit_recorded) {
             doneCount++;
-            const aS = r.anchor_side || 'yes';
-            const aP = r[`${aS}_price`] || 0;
-            const hP = r.hedge_price || 0;
-            const comb = aP + hP;
+            const yP = r.yes_price || 0;
+            const nP = r.no_price || 0;
+            const comb = yP + nP;
             const prof = comb > 0 ? 100 - comb : 0;
             rungTotalPnl += prof * rQty;
             const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
-            const aCol = aS === 'yes' ? '#00ff88' : '#ff4444';
-            return `<div style="display:grid;grid-template-columns:32px 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.3;">
+            return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.4;">
                 <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:${aCol};font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
-                    <span style="color:#444;">→</span>
-                    <span style="color:#555;font-size:9px;">hedge ${hP}¢</span>
-                    <span style="background:#00ff8815;color:#00ff88;font-size:7px;font-weight:700;padding:1px 4px;border-radius:3px;">DONE</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#00ff88;font-size:9px;width:26px;">Y${yP}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:100%;height:100%;background:#00ff88;border-radius:2px;"></div>
+                    </div>
+                    <span style="color:#00ff88;font-size:8px;">✓</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="color:#ff4444;font-size:9px;width:26px;">N${nP}</span>
+                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                        <div style="width:100%;height:100%;background:#ff4444;border-radius:2px;"></div>
+                    </div>
+                    <span style="color:#ff4444;font-size:8px;">✓</span>
                 </div>
                 <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${prof > 0 ? '+' : ''}${prof}¢</span>
             </div>`;
         }
 
-        // ── ACTIVE: anchor filled, running time-decay ──
-        activeCount++;
-        const aS = r.anchor_side || 'yes';
-        const aP = r[`${aS}_price`] || 0;
-        const hP = r.hedge_price || 0;
-        const hFill = r.hedge_fill_qty || 0;
-        const elapsed = Math.floor(nowSec - (r.anchor_fill_at || nowSec));
-        const ts = r.time_stage || 'profit';
-        const aCol = aS === 'yes' ? '#00ff88' : '#ff4444';
-
-        // Stage config
-        const stageMap = { profit: { l:'PROFIT', c:'#00ff88', lim:15 }, scratch: { l:'SCRATCH', c:'#ffaa00', lim:30 }, panic: { l:'PANIC', c:'#ff4444', lim:60 } };
-        const st = stageMap[ts] || stageMap.profit;
-        const cdStr = ts === 'profit' ? `${Math.max(0,15-elapsed)}s` : ts === 'scratch' ? `${Math.max(0,30-elapsed)}s` : `${elapsed}s`;
-
-        // Hedge status
-        let hStr, hCol;
-        if (hFill >= rQty && hP > 0) { hStr = `${hP}¢ ✓`; hCol = '#00ff88'; }
-        else if (hP > 0) { hStr = `${hP}¢ ${hFill}/${rQty}`; hCol = '#ffaa00'; }
-        else { hStr = rs === 'anchor_filled' ? 'posting...' : '—'; hCol = '#555'; }
-
-        // Live P&L estimate
-        const estProf = hP > 0 ? 100 - aP - hP : 0;
-        const estCol = estProf > 0 ? '#00ff88' : estProf < 0 ? '#ff4444' : '#555';
-
-        const tPct = Math.min(100, (elapsed / st.lim) * 100);
-
-        const _slA = r.stop_loss_cents || _apexStopLossThreshold(width);
-        const _slAc = _slA <= 8 ? '#00ff8855' : _slA <= 12 ? '#ffaa0055' : '#ff444455';
-        return `<div style="padding:4px 0;border-bottom:1px solid #1e274022;">
-            <div style="display:grid;grid-template-columns:52px 1fr 50px;gap:4px;align-items:center;font-size:10px;">
-                <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slAc};font-size:7px;">SL${_slA}</span></span>
-                <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
-                    <span style="color:${aCol};font-weight:700;font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
-                    <span style="background:${st.c}22;color:${st.c};font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;">${st.l}</span>
-                    <span style="color:${st.c};font-family:monospace;font-weight:700;font-size:11px;">${cdStr}</span>
-                    <span style="color:${hCol};font-size:9px;">hedge ${hStr}</span>
+        // ── ALL OTHER STATES: show both sides with fill progress ──
+        postedCount++;
+        const yFill = r.yes_fill_qty || 0;
+        const nFill = r.no_fill_qty || 0;
+        const yFull = yFill >= rQty;
+        const nFull = nFill >= rQty;
+        const _sl = _apexStopLossThreshold(width);
+        const _slC = _sl <= 8 ? '#00ff8855' : _sl <= 12 ? '#ffaa0055' : '#ff444455';
+        return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;">
+            <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> <span style="color:${_slC};font-size:7px;">SL${_sl}</span></span>
+            <div style="display:flex;align-items:center;gap:4px;">
+                <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>
+                <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                    <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFull ? '#00ff88' : '#335'};border-radius:2px;"></div>
                 </div>
-                <span style="color:${estCol};font-weight:700;font-size:10px;text-align:right;">${hP > 0 ? (estProf > 0 ? '+' : '') + estProf + '¢' : '—'}</span>
+                <span style="color:${yFull ? '#00ff88' : '#555'};font-size:8px;">${yFull ? '✓' : yFill + '/' + rQty}</span>
             </div>
-            <div style="height:2px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;">
-                <div style="width:${tPct}%;height:100%;background:${st.c}66;border-radius:2px;transition:width 1s;"></div>
+            <div style="display:flex;align-items:center;gap:4px;">
+                <span style="color:#ff4444;font-size:9px;width:26px;">N${r.no_price}</span>
+                <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                    <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFull ? '#ff4444' : '#335'};border-radius:2px;"></div>
+                </div>
+                <span style="color:${nFull ? '#ff4444' : '#555'};font-size:8px;">${nFull ? '✓' : nFill + '/' + rQty}</span>
             </div>
+            <span style="color:#333;font-size:9px;text-align:right;">—</span>
         </div>`;
     }).join('');
 

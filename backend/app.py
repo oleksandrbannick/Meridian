@@ -17143,6 +17143,47 @@ def _run_startup():
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
 
+    # ── Validate bot order IDs against Kalshi — clear stale ones before orphan sweep ──
+    if kalshi_client:
+        try:
+            api_read_limiter.wait()
+            _resting_resp = kalshi_client.get_orders(status='resting')
+            _resting_ids = {o['order_id'] for o in _resting_resp.get('orders', [])}
+            _stale_total = 0
+            for _bid, _bot in active_bots.items():
+                _bst = _bot.get('status', '')
+                if _bst in ('completed', 'stopped', 'cancelled'):
+                    continue
+                _bcat = _bot.get('bot_category', '')
+                if _bcat == 'ladder_arb':
+                    for _rung in _bot.get('rungs', []):
+                        if _rung.get('completed'):
+                            continue
+                        for _ok in ('yes_order_id', 'no_order_id', 'hedge_order_id'):
+                            _oid = _rung.get(_ok)
+                            if _oid and _oid not in _resting_ids:
+                                print(f'🔧 STALE ORDER: {_bid[:30]} rung {_ok}={_oid[:12]} not on Kalshi → cleared')
+                                _rung[_ok] = None
+                                _stale_total += 1
+                elif _bcat in ('anchor_dog', 'anchor_ladder'):
+                    for _rung in _bot.get('rungs', []):
+                        _oid = _rung.get('order_id')
+                        if _oid and _oid not in _resting_ids:
+                            print(f'🔧 STALE ORDER: {_bid[:30]} rung order_id={_oid[:12]} not on Kalshi → cleared')
+                            _rung['order_id'] = None
+                            _stale_total += 1
+                    for _ok in ('fav_order_id', 'dog_order_id'):
+                        _oid = _bot.get(_ok)
+                        if _oid and _oid not in _resting_ids:
+                            print(f'🔧 STALE ORDER: {_bid[:30]} {_ok}={_oid[:12]} not on Kalshi → cleared')
+                            _bot[_ok] = None
+                            _stale_total += 1
+            if _stale_total:
+                print(f'🔧 Cleared {_stale_total} stale order ID(s) on startup')
+                save_state()
+        except Exception as _ve:
+            print(f'⚠ Startup order validation failed: {_ve}')
+
     # ── Orphan cleanup: cancel stale orders, detect unmanaged positions ──
     if kalshi_client:
         try:

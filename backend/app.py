@@ -2791,7 +2791,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         # Cap at ceiling
         dog_price = bot.get('dog_price') or bot.get('avg_fill_price') or 0
         if dog_price > 0:
-            max_fav = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS) - dog_price
+            max_fav = bot.get('fav_walk_ceiling', 100) - dog_price
             drop_target = min(drop_target, max_fav)
 
         if drop_target <= 0 or drop_target >= fav_price:
@@ -3244,8 +3244,8 @@ def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
     """Pre-calculate the hedge price so it's ready to fire instantly on dog fill.
     Returns the ceiling-capped hedge price or 0 if too low.
     This is a FALLBACK when no live bid is available — the WS path uses the actual bid."""
-    # Cap at 98¢ walk ceiling only (profit target determines dog depth, not hedge cap)
-    max_hedge = HARD_CEILING_CENTS - dog_price
+    # Cap at 100¢ combined — only block if literally impossible (>100¢ = guaranteed loss)
+    max_hedge = 100 - dog_price
     if max_hedge < 1:
         return 0
     return max_hedge
@@ -3292,8 +3292,8 @@ def _execute_phantom_hedge(bot_id):
         qty = bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
-        # Ceiling: max we'll ever walk to
-        max_hedge = HARD_CEILING_CENTS - dog_price
+        # Ceiling: only block if combined > 100¢ (guaranteed loss)
+        max_hedge = 100 - dog_price
 
         # Post at fav BID — maker order, first in queue with our speed
         # ALWAYS read from ws_manager first (real-time), fall back to bot cache
@@ -3336,7 +3336,7 @@ def _execute_phantom_hedge(bot_id):
 
         # Ceiling handling: always post at max_hedge if breakeven is possible.
         # Posting at max_hedge (breakeven) is always better than selling back at a loss.
-        if dog_price + hedge_price >= HARD_CEILING_CENTS:
+        if dog_price + hedge_price > 100:
             if max_hedge < 1:
                 # Truly impossible — no viable hedge price
                 print(f'🚫 PHANTOM HEDGE SKIP: {bot_id} max_hedge={max_hedge}¢ < 1 — no viable hedge')
@@ -3499,7 +3499,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
 
         # ── Hedge price: fav BID or bid+1 in gapped markets ──
-        _max_hedge = HARD_CEILING_CENTS - (avg_price or bot.get('dog_price', 0))
+        _max_hedge = 100 - (avg_price or bot.get('dog_price', 0))
         _is_cross = hedge_ticker != ticker
         _fav_bid = 0
         _fav_ask = 0
@@ -3541,8 +3541,8 @@ def _execute_phantom_ladder_hedge(bot_id):
 
         # At ceiling — only sell back if truly over ceiling, not at breakeven
         _ladder_combined = (avg_price or bot.get('dog_price', 0)) + hedge_price
-        if _ladder_combined > HARD_CEILING_CENTS:
-            print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ >= {HARD_CEILING_CENTS}¢ — deferring to sellback')
+        if _ladder_combined > 100:
+            print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ > 100¢ — deferring to sellback')
             bot_log('PHANTOM_LADDER_HEDGE_AT_CEILING', bot_id, {
                 'avg_price': avg_price, 'hedge_price': hedge_price,
                 'combined': _ladder_combined, 'fav_bid': _fav_bid,
@@ -7111,7 +7111,7 @@ def create_anchor_bot():
             'anchor_depth':        anchor_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
-            'fav_walk_ceiling':    HARD_CEILING_CENTS,  # max combined cost for walk-up
+            'fav_walk_ceiling':    100,  # max combined cost — only sell back if > 100¢
             'fav_last_walk_at':    None,
             'market_type':         _detect_market_type(ticker),
             'spread_line':         _extract_spread_line(ticker),
@@ -7325,7 +7325,7 @@ def create_ladder_bot():
             'rung_spacing': rung_spacing,
             'fav_shave': fav_shave,
             'fav_walk_count': 0,
-            'fav_walk_ceiling': HARD_CEILING_CENTS,
+            'fav_walk_ceiling': 100,  # max combined cost — only sell back if > 100¢
             'fav_last_walk_at': None,
             # Pre-calculated hedge prices + avg prices for every fill count (1, 2, 3 rungs)
             '_precalc_hedge_prices': _precalc_h,
@@ -8412,37 +8412,17 @@ def _handle_phantom(bot_id, bot, actions):
                 actions.append({'bot_id': bot_id, 'action': 'dog_filled_no_fav_bid'})
                 return
 
-            # Start fav at max_fav_price (preserves target width), walk-up moves toward bid
-            target_width = bot.get('target_width', 5)
-            max_fav_price = 100 - actual_dog_price - target_width
-            hedge_price = max_fav_price
-            if hedge_price < 1:
-                print(f'⚠ PHANTOM {bot_id}: hedge price {hedge_price}¢ too low — selling dog back')
-                bot_log('PHANTOM_HEDGE_TOO_LOW_SELLBACK', bot_id, {
-                    'hedge_price': hedge_price, 'dog_price': actual_dog_price,
-                    'fav_bid': fav_bid, 'target_width': target_width,
-                })
-                _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, 999, actions)
-                return
-
-            # Hard ceiling check — no fees in bot logic, 98¢ combined = breakeven
+            # Always post at fav bid — same as WS path
+            hedge_price = fav_bid
             total_cost = actual_dog_price + hedge_price
-            if total_cost > HARD_CEILING_CENTS:
-                safe_hedge = HARD_CEILING_CENTS - actual_dog_price
-                if safe_hedge < 1:
-                    print(f'🛑 PHANTOM CEILING: {bot_id} safe_hedge={safe_hedge}¢ too low — selling dog back')
-                    bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
-                        'dog_price': actual_dog_price, 'hedge_price': hedge_price,
-                        'total_cost': total_cost, 'safe_hedge': safe_hedge,
-                    })
-                    _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
-                    return
-                print(f'⚠ PHANTOM CEILING CAP: {bot_id} dog@{actual_dog_price}¢ capped hedge {hedge_price}→{safe_hedge}¢ (was {total_cost}¢)')
-                bot_log('PHANTOM_CEILING_CAP', bot_id, {
-                    'dog_price': actual_dog_price, 'original_hedge': hedge_price,
-                    'capped_hedge': safe_hedge, 'total_was': total_cost,
+            if total_cost > 100:
+                print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
+                bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
+                    'dog_price': actual_dog_price, 'hedge_price': hedge_price,
+                    'fav_bid': fav_bid, 'total_cost': total_cost,
                 })
-                hedge_price = safe_hedge
+                _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
+                return
 
             # Guard: WS handler may have already posted the fav hedge
             if bot.get('_hedge_fired') and bot.get('fav_order_id'):
@@ -8763,27 +8743,21 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         dog_price = bot['dog_price']
-        target_width = bot.get('target_width', 5)
-        fav_shave = bot.get('fav_shave', 0)
-        max_hedge = HARD_CEILING_CENTS - dog_price  # 98¢ ceiling only
-        # Initial hedge: post at bid (or bid - shave), capped only by walk ceiling
-        initial_fav_target = max(1, fav_bid - fav_shave) if fav_shave > 0 else fav_bid
-        hedge_price = min(initial_fav_target, max_hedge)
+        # Always post at fav bid — only sell back if combined > 100¢
+        hedge_price = fav_bid
         if hedge_price < 1:
             _phantom_sell_back(bot_id, bot, dog_price, fav_bid, 999, actions)
             return
 
         total_cost = dog_price + hedge_price
-        if total_cost > HARD_CEILING_CENTS:
-            # Over ceiling — sell back, can't hedge profitably
-            print(f'🚫 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > {HARD_CEILING_CENTS}¢ — selling dog back')
+        if total_cost > 100:
+            print(f'🚫 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
             bot_log('PHANTOM_CEILING_NO_HEDGE', bot_id, {
                 'dog_price': dog_price, 'hedge_price': hedge_price,
                 'fav_bid': fav_bid, 'total_cost': total_cost,
             })
             _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
             return
-        # At exactly breakeven (98¢) — post hedge, breakeven fill beats sellback loss
 
         # Guard: WS handler may have already posted the fav hedge
         if bot.get('_hedge_fired') and bot.get('fav_order_id'):
@@ -9096,8 +9070,8 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         # ── Fav Bid-Follow System ──
-        # Snap to bid every cycle. Hold at 98. Timeout sells back.
-        WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
+        # Snap to bid every cycle. Hold at 100. Timeout sells back.
+        WALK_CEILING = bot.get('fav_walk_ceiling', 100)
         dog_price = bot['dog_price']
 
         # Check absolute timeout — give up after hedge_timeout_s total
@@ -9194,9 +9168,9 @@ def _handle_phantom(bot_id, bot, actions):
         # Walk target: always bid — phantom needs ceiling margin, walk handles the rest
         walk_target = current_fav_bid
 
-        # Hard ceiling: 98¢ = hold for fill, 99¢+ = sellback
-        max_fav_hold = WALK_CEILING - dog_price       # 98 - dog = hold here
-        max_fav_sellback = WALK_CEILING + 1 - dog_price  # 99 - dog = sellback
+        # Hard ceiling: 100¢ combined — only sell back if literally over 100
+        max_fav_hold = WALK_CEILING - dog_price       # 100 - dog = hold here
+        max_fav_sellback = WALK_CEILING + 1 - dog_price  # 101 - dog = sellback
         walk_target = min(walk_target, max_fav_hold)
 
         if walk_target <= 0:
@@ -10452,7 +10426,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
 
         # ── Phantom Ladder Bid-Follow System ──
-        WALK_CEILING = bot.get('fav_walk_ceiling', HARD_CEILING_CENTS)
+        WALK_CEILING = bot.get('fav_walk_ceiling', 100)
         current_fav_price = bot.get('fav_price', 0)
         if current_fav_price <= 0:
             return
@@ -11251,20 +11225,22 @@ def _run_monitor():
             # Fix settled qty: reconstruct from bot data if missing
             # Only reconstruct if the bot actually completed runs (has run_history or repeats_done > 0)
             if _b.get('_cross_settled_qty', 0) <= 0:
-                _has_run_history = len(_b.get('_run_history', [])) > 0
-                _has_fills = (_b.get('dog_fill_qty', 0) > 0) or (_b.get('repeats_done', 0) > 0) or _has_run_history
-                if _has_fills:
-                    _runs = max(1, (_b.get('repeats_done', 0) or 0) + (1 if not _has_run_history else 0))
-                    if _has_run_history:
-                        _runs = len(_b.get('_run_history', []))
-                    _qty_per = _b.get('quantity', 1) or 1
-                    if _b.get('rungs'):
-                        _qty_per = sum(r.get('qty', 1) for r in _b.get('rungs', []))
-                    _b['_cross_settled_qty'] = _runs * _qty_per
+                _run_hist = _b.get('_run_history', [])
+                if _run_hist:
+                    # Use actual qty from each run — don't assume full fills
+                    _b['_cross_settled_qty'] = sum(r.get('qty', 0) for r in _run_hist)
                     if _b.get('_cross_settled_qty_dog', 0) <= 0:
-                        _b['_cross_settled_qty_dog'] = _runs * _qty_per
+                        _b['_cross_settled_qty_dog'] = _b['_cross_settled_qty']
                     if _b.get('_cross_settled_qty_fav', 0) <= 0:
-                        _b['_cross_settled_qty_fav'] = _runs * _qty_per
+                        _b['_cross_settled_qty_fav'] = _b['_cross_settled_qty']
+                elif (_b.get('dog_fill_qty', 0) > 0) or (_b.get('repeats_done', 0) > 0):
+                    # No run history — use current fill qty as best guess
+                    _actual_qty = _b.get('dog_fill_qty', 0) or _b.get('total_dog_fill_qty', 0) or _b.get('quantity', 1)
+                    _b['_cross_settled_qty'] = _actual_qty
+                    if _b.get('_cross_settled_qty_dog', 0) <= 0:
+                        _b['_cross_settled_qty_dog'] = _actual_qty
+                    if _b.get('_cross_settled_qty_fav', 0) <= 0:
+                        _b['_cross_settled_qty_fav'] = _actual_qty
                     _cross_fixed += 1
             # Auto smart exit: check price trigger
             _trigger = _b.get('_smart_exit_trigger')

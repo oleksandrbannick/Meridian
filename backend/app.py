@@ -3191,7 +3191,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 'old_fill': old_fill, 'new_fill': rung[fill_key],
             })
 
-            # Both sides filled on this rung → completed
+            # Both sides filled on this rung → completed (cancel-race or natural)
             if other_fill >= qty_per and rung[fill_key] >= qty_per and not rung.get('completed'):
                 rung['status'] = 'completed'
                 rung['completed'] = True
@@ -3199,8 +3199,22 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
                 print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
                 _apex_record_rung_pnl(bot_id, matched_rung)
+            elif rung[fill_key] >= qty_per and rung.get('status', 'posted') == 'posted' and other_fill == 0:
+                # Anchor fill: one side fully filled, other untouched → spawn per-rung hedge
+                rung['anchor_side'] = matched_side
+                rung['anchor_fill_at'] = time.time()
+                rung['status'] = 'anchor_filled'
+                if not bot.get('first_fill_at'):
+                    bot['first_fill_at'] = time.time()
+                bot['status'] = 'ladder_arb_active'
+                threading.Thread(
+                    target=_apex_post_rung_hedge,
+                    args=(bot_id, matched_rung),
+                    daemon=True
+                ).start()
+                print(f'⚡ APEX ANCHOR: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} → hedge thread spawned')
             elif rung[fill_key] >= qty_per:
-                # One side filled — just update status, leave orders alone
+                # One side filled but other has partial fills — just update status
                 if not bot.get('first_fill_at'):
                     bot['first_fill_at'] = time.time()
                 bot['status'] = 'ladder_arb_active'
@@ -6310,6 +6324,9 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
         else:
             # Normal arb completion: both sides filled
             hedge_price = rung.get('hedge_price', 0)
+            if not hedge_price:
+                # Natural completion (no hedge posted) — use the other side's original price
+                hedge_price = rung.get(f'{hedge_side}_price', 0)
             hedge_fill_price = hedge_price  # Use posted price (maker)
             combined = anchor_price + hedge_fill_price
             spread = 100 - combined
@@ -8440,7 +8457,7 @@ def _handle_phantom(bot_id, bot, actions):
                     'dog_price': actual_dog_price, 'fav_price': actual_fav_price,
                     'fav_order_id': fav_order_id[:12], 'fav_bid': fav_bid,
                     'combined': actual_dog_price + actual_fav_price,
-                    'target_width': target_width, 'path': 'monitor',
+                    'target_width': bot.get('target_width', 5), 'path': 'monitor',
                 })
                 actions.append({'bot_id': bot_id, 'action': 'anchor_fav_posted',
                                 'dog_price': actual_dog_price, 'fav_price': actual_fav_price})
@@ -8771,10 +8788,10 @@ def _handle_phantom(bot_id, bot, actions):
             else:
                 bot['no_price'] = actual_fav_price
                 bot['no_order_id'] = fav_order_id
-            print(f'👻 PHANTOM HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢ (shave={fav_shave}¢)')
+            print(f'👻 PHANTOM HEDGE RETRY: {bot_id} fav posted @{actual_fav_price}¢ (bid={fav_bid}¢)')
             bot_log('PHANTOM_FAV_RETRY_POSTED', bot_id, {
                 'fav_price': actual_fav_price, 'dog_price': dog_price,
-                'fav_bid': fav_bid, 'fav_shave': fav_shave,
+                'fav_bid': fav_bid,
                 'combined': dog_price + actual_fav_price,
                 'fav_order_id': fav_order_id[:12],
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),

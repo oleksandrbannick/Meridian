@@ -5939,23 +5939,60 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         postedCount++;
         const yFill = r.yes_fill_qty || 0;
         const nFill = r.no_fill_qty || 0;
-        const hFill = r.hedge_fill_qty || 0;
         const yFull = yFill >= rQty;
         const nFull = nFill >= rQty;
         const isAnchored = !!r.anchor_side;
         const rStage = r.time_stage || 'posted';
-        const stageLabel = rStage === 'pending_profit' ? '<span style="color:#00aaff;font-size:7px;">TARGET</span>'
-            : rStage === 'snapped' ? '<span style="color:#ffaa00;font-size:7px;">SNAPPED</span>'
-            : '';
-        // Distance from bid: how close is our order to getting filled?
+        const hedgePrice = r.hedge_price || 0;
+        const anchorSide = r.anchor_side;
+        const hedgeSide = anchorSide === 'yes' ? 'no' : 'yes';
+        const hedgeBid = hedgeSide === 'yes' ? yBid : nBid;
+
+        // ── ANCHORED RUNG: show anchor ✓, hedge order tracking, stage + timer ──
+        if (isAnchored) {
+            activeCount++;
+            const anchorPrice = r[anchorSide + '_price'] || 0;
+            const elapsed = r.anchor_fill_at ? Math.round((Date.now()/1000) - r.anchor_fill_at) : 0;
+            const countdown = Math.max(0, 30 - elapsed);
+            const hedgeDist = (hedgeBid != null && hedgePrice) ? (hedgeBid - hedgePrice) : null;
+            const hedgeDistColor = hedgeDist != null ? (hedgeDist <= 0 ? '#00ff88' : hedgeDist <= 2 ? '#ffaa00' : '#ff4444') : '#555';
+            const combined = anchorPrice + hedgePrice;
+            const profEst = combined > 0 ? (100 - combined) : 0;
+            const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
+
+            // Stage label with timer
+            let stageBadge;
+            if (rStage === 'pending_profit') {
+                stageBadge = `<span style="color:#00aaff;font-size:8px;font-weight:700;">🎯 ${countdown}s</span>`;
+            } else if (rStage === 'snapped') {
+                stageBadge = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡ SNAP</span>`;
+            } else {
+                stageBadge = `<span style="color:#555;font-size:8px;">${rStage}</span>`;
+            }
+
+            const snapBtn = (rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0022;color:#ffaa00;border:1px solid #ffaa0044;border-radius:3px;padding:1px 5px;font-size:8px;cursor:pointer;font-weight:700;">SNAP</button>` : '';
+
+            return `<div style="padding:4px 0;border-bottom:1px solid #1e274015;">
+                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
+                    <span style="color:#00ff88;font-size:9px;">${anchorSide.toUpperCase()} ${anchorPrice}¢ ✓</span>
+                    <span style="color:#555;">→</span>
+                    <span style="color:#00aaff;font-size:9px;font-weight:700;">${hedgeSide.toUpperCase()} @${hedgePrice}¢</span>
+                    ${hedgeDist != null ? `<span style="color:${hedgeDistColor};font-size:8px;">(bid ${hedgeBid} ${hedgeDist > 0 ? '+' + hedgeDist : hedgeDist === 0 ? 'AT' : hedgeDist})</span>` : ''}
+                    <span style="color:${profColor};font-size:9px;font-weight:700;margin-left:auto;">${profEst}¢</span>
+                    ${stageBadge}
+                    ${snapBtn}
+                </div>
+            </div>`;
+        }
+
+        // ── POSTED (not yet anchored): show both sides with bid distance ──
         const yDist = (yBid != null && r.yes_price) ? (yBid - r.yes_price) : null;
         const nDist = (nBid != null && r.no_price) ? (nBid - r.no_price) : null;
         const yDistLabel = yFull ? '' : (yDist != null ? `<span style="color:${yDist <= 1 ? '#ffaa00' : yDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${yDist > 0 ? '+' : ''}${yDist}</span>` : '');
         const nDistLabel = nFull ? '' : (nDist != null ? `<span style="color:${nDist <= 1 ? '#ffaa00' : nDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${nDist > 0 ? '+' : ''}${nDist}</span>` : '');
-        // Snap button: show for anchored rungs that haven't snapped yet
-        const snapBtn = (isAnchored && rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0022;color:#ffaa00;border:1px solid #ffaa0044;border-radius:3px;padding:1px 5px;font-size:8px;cursor:pointer;font-weight:700;">SNAP</button>` : '';
-        return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;">
-            <span><span style="color:#ffaa00;font-weight:700;">${width}¢</span> ${stageLabel}</span>
+        return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 30px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;">
+            <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
             <div style="display:flex;align-items:center;gap:4px;">
                 <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>${yDistLabel}
                 <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
@@ -5970,7 +6007,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 </div>
                 <span style="color:${nFull ? '#ff4444' : '#555'};font-size:8px;">${nFull ? '✓' : nFill + '/' + rQty}</span>
             </div>
-            <span style="text-align:right;">${snapBtn || '<span style="color:#333;font-size:9px;">—</span>'}</span>
+            <span style="color:#333;font-size:9px;text-align:right;">—</span>
         </div>`;
     }).join('');
 

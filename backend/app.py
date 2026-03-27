@@ -6733,10 +6733,10 @@ def create_ladder_arb_bot():
         if live_no_bid <= 0:
             return jsonify({'error': 'No NO bids in orderbook — phantom arb'}), 400
 
-        # Drift guard: skip if market is too lopsided (runaway market)
-        market_lean = abs(live_yes_bid - live_no_bid)
-        if market_lean > 15:
-            return jsonify({'error': f'Drift guard: market lean {market_lean}c exceeds 15c'}), 400
+        # Drift guard: skip if market is basically decided (dead market)
+        drift_max = max(live_yes_bid, live_no_bid)
+        if drift_max >= 80:
+            return jsonify({'error': f'Drift guard: max side {drift_max}c — market too decided'}), 400
 
         # Compute prices for each width and validate
         rung_specs = []
@@ -10663,10 +10663,10 @@ def _handle_apex(bot_id, bot, actions):
             fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
             if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
                 return
-            # Drift guard for repeat
-            price_lean = abs(fresh_yes_bid - fresh_no_bid)
-            if price_lean > 15:
-                print(f'⏳ APEX DRIFT WAIT: {bot_id} lean={price_lean} — waiting')
+            # Drift guard for repeat: only block if market is basically decided
+            drift_max = max(fresh_yes_bid, fresh_no_bid)
+            if drift_max >= 80:
+                print(f'⏳ APEX DRIFT WAIT: {bot_id} max_side={drift_max}¢ — market too decided, waiting')
                 return
             valid_specs = []
             for rung in bot.get('rungs', []):
@@ -10801,14 +10801,14 @@ def _handle_apex(bot_id, bot, actions):
                         save_state()
                         return
 
-                    # Drift guard: don't repost if game has drifted into blowout — but don't kill, just wait
-                    price_lean = abs(fresh_yes_bid - fresh_no_bid)
-                    if price_lean > 30:
+                    # Drift guard: don't repost if market is basically decided — but don't kill, just wait
+                    drift_max = max(fresh_yes_bid, fresh_no_bid)
+                    if drift_max >= 80:
                         bot_log('APEX_REPEAT_DRIFT_SKIP', bot_id, {
                             'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid,
-                            'price_lean': price_lean, 'reason': 'blowout_drift',
+                            'drift_max': drift_max, 'reason': 'market_decided',
                         })
-                        print(f'⏳ APEX DRIFT WAIT: {bot_id} lean={price_lean} — waiting for market to balance')
+                        print(f'⏳ APEX DRIFT WAIT: {bot_id} max_side={drift_max}¢ — market too decided, waiting')
                         return
 
                     valid_specs = []

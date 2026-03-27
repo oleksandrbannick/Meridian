@@ -6213,16 +6213,37 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             }
             if (rs === 'completed' || r._profit_recorded) {
                 const aS = r.anchor_side || 'yes';
-                const aP = r[`${aS}_price`] || 0;
                 const hP = r.hedge_price || 0;
-                const comb = aP + hP;
-                const prof = comb > 0 ? 100 - comb : 0;
-                const pCol = prof > 2 ? '#00ff88' : prof > 0 ? '#00aaff' : '#ff4444';
-                return `<div style="display:flex;align-items:center;gap:8px;font-size:10px;padding:4px 0;opacity:0.35;border-bottom:1px solid #1e274015;">
-                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
-                    <span style="color:#555;">${aS.toUpperCase()} ${aP}¢ + ${hP}¢</span>
-                    <span style="color:${pCol};font-weight:700;">${prof > 0 ? '+' : ''}${prof}¢</span>
-                    <span style="background:#00ff8822;color:#00ff88;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;">DONE</span>
+                let yP, nP;
+                if (aS === 'yes') {
+                    yP = r.yes_price || 0;
+                    nP = hP || r.no_price || 0;
+                } else if (aS === 'no') {
+                    yP = hP || r.yes_price || 0;
+                    nP = r.no_price || 0;
+                } else {
+                    yP = r.yes_price || 0;
+                    nP = r.no_price || 0;
+                }
+                const comb = yP + nP;
+                const wasSnapped = r.time_stage === 'snapped';
+                const prof = r._net_pnl != null ? r._net_pnl : (comb > 0 ? (100 - comb) * (r.quantity || qtyPer) : 0);
+                const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
+                return `<div style="display:grid;grid-template-columns:40px 1fr 1fr 55px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.5;">
+                    <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="color:#00ff88;font-size:9px;width:28px;">Y${yP}</span>
+                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                            <div style="width:100%;height:100%;background:#00ff88;border-radius:2px;"></div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="color:#ff4444;font-size:9px;width:28px;">N${nP}</span>
+                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                            <div style="width:100%;height:100%;background:#ff4444;border-radius:2px;"></div>
+                        </div>
+                    </div>
+                    <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${wasSnapped ? '⚡' : '🎯'}${prof > 0 ? '+' : ''}${prof}¢</span>
                 </div>`;
             }
             // Active rung — time-stage with countdown

@@ -1987,12 +1987,14 @@ def _smart_mode_should_repeat(bot, cycle_pnl):
     if cycle_pnl < 0:
         losses += 1
         bot['consecutive_losses'] = losses
+        bot['_smart_losses'] = bot.get('_smart_losses', 0) + 1
         if losses >= 2:
             bot['_smart_stopped'] = True
             return False, f'smart_stop_{losses}L'
         return True, f'smart_loss_{losses}L_continue'
     else:
         bot['consecutive_losses'] = 0
+        bot['_smart_wins'] = bot.get('_smart_wins', 0) + 1
         return True, 'smart_win'
 
 def _apex_snap_check(anchor_price, bid_price, qty=1, snap_ceiling=None):

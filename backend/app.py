@@ -14749,6 +14749,7 @@ def add_runs(bot_id):
     if bot.get('smart_mode'):
         # Smart mode bot that was stopped — restart it by resetting loss counter
         bot['_smart_stopped'] = False
+        bot['_smart_stop_pending'] = False
         bot['consecutive_losses'] = 0
         # Cancel any active smart exit trigger to prevent orphans
         if bot.get('_smart_exit_trigger'):

@@ -6012,9 +6012,9 @@ def _apex_snap_timer(ticker):
     secs = _parse_clock_seconds(clock_str)
     final_period = rule.get('final', 4)
 
-    # Halftime — pause, don't snap
+    # Halftime — completely pause, never snap
     if _is_halftime(ticker):
-        return 120  # long timer during halftime
+        return 999999  # effectively infinite — no snap during halftime
 
     # End game: final period, < 2 min remaining → 5s flash
     if period >= final_period and secs is not None and secs <= 120:
@@ -6025,10 +6025,10 @@ def _apex_snap_timer(ticker):
     # Late: final period, > 2 min → 15s
     if period >= final_period:
         return 15
-    # Mid: second half / later periods → 25s
-    if period >= max(1, final_period // 2):
+    # Mid: second half / later periods (Q3 for NBA, P2 for NHL) → 25s
+    if period > max(1, final_period // 2):
         return 25
-    # Early game → 60s patience
+    # Early game (first half) → 60s patience
     return 60
 
 def _apex_stop_loss_threshold(width):

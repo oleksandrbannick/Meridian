@@ -11069,33 +11069,25 @@ def _handle_apex(bot_id, bot, actions):
                 for r in bot.get('rungs', [])
             )
             if not any_fills:
-                # Cancel all via order group
-                old_group_id = bot.get('_order_group_id')
-                if old_group_id:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order_group(old_group_id)
-                    except Exception as cg_err:
-                        print(f'  ⚠ Group cancel failed ({old_group_id[:8]}): {cg_err}')
-                        for rung in bot.get('rungs', []):
-                            for side in ('yes', 'no'):
-                                oid = rung.get(f'{side}_order_id')
-                                if oid:
-                                    try:
-                                        api_rate_limiter.wait()
-                                        kalshi_client.cancel_order(oid)
-                                    except Exception:
-                                        pass
-                else:
-                    for rung in bot.get('rungs', []):
-                        for side in ('yes', 'no'):
-                            oid = rung.get(f'{side}_order_id')
-                            if oid:
-                                try:
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(oid)
-                                except Exception:
-                                    pass
+                # Cancel per-rung (NOT order-group) to avoid race with incoming fills.
+                # A fill can arrive between the any_fills check and cancel — per-rung
+                # cancel lets us skip rungs that got a fill during the loop.
+                _fill_during_cancel = False
+                for rung in bot.get('rungs', []):
+                    if rung.get('yes_fill_qty', 0) > 0 or rung.get('no_fill_qty', 0) > 0:
+                        _fill_during_cancel = True
+                        continue  # don't cancel — fill arrived
+                    for side in ('yes', 'no'):
+                        oid = rung.get(f'{side}_order_id')
+                        if oid:
+                            _cancel_with_retry(oid)
+                            rung[f'{side}_order_id'] = None
+                if _fill_during_cancel:
+                    # Fill arrived during cancel — abort repost, go to active
+                    bot['status'] = 'ladder_arb_active'
+                    print(f'⚠ APEX REPOST ABORT: {bot_id} fill arrived during cancel — switching to active')
+                    save_state()
+                    return
 
                 # Fetch fresh orderbook and repost
                 try:

@@ -6265,6 +6265,28 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         return
 
     if current_stage == 'pending_profit':
+        # ── GREEDY SNAP: bid 1-2¢ above our order for 15s → snap to bid to capture fill ──
+        greedy_gap = (hedge_bid - current_hedge_price) if (hedge_bid > 0 and current_hedge_price > 0) else 0
+        if 0 < greedy_gap <= 2:
+            if not rung.get('_greedy_snap_at'):
+                rung['_greedy_snap_at'] = now
+            greedy_elapsed = now - rung['_greedy_snap_at']
+            if greedy_elapsed >= 15:
+                snap_price = max(1, hedge_bid)
+                rung['_greedy_snap_at'] = None
+                rung['_snap_reason'] = f'greedy_snap_{greedy_gap}c'
+                bot_log('APEX_GREEDY_SNAP', bot_id, {
+                    'rung_idx': rung_idx, 'width': width, 'gap': greedy_gap,
+                    'elapsed': round(greedy_elapsed, 1), 'snap_price': snap_price,
+                })
+                print(f'💰 APEX GREEDY: {bot_id} rung#{rung_idx} ({width}c) {greedy_gap}¢ away {greedy_elapsed:.0f}s → snap @{snap_price}c')
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+                return
+            rung['_snap_reason'] = f'greedy_{greedy_gap}c_{greedy_elapsed:.0f}s/15s'
+            return
+        else:
+            rung['_greedy_snap_at'] = None  # reset when out of greedy range
+
         if midpoint_dist <= 5:
             # ── WITHIN 5¢: sit indefinitely, reset drift timer if it was running ──
             if rung.get('_drift_started_at'):
@@ -9131,6 +9153,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
+                bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
                 bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
@@ -9482,6 +9505,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_fill_qty'] = 0
             bot['_hedge_fired'] = False  # clear so next fill can hedge
             bot['_trade_recorded'] = False
+            bot['_over_ceiling_since'] = None  # clear so fresh run starts clean
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['fav_walk_count'] = 0
@@ -9823,6 +9847,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
+                bot['_over_ceiling_since'] = None  # clear so next run starts clean
                 bot['_sweep_timer_started'] = False
                 bot['_sellback_attempts'] = 0
                 bot['fav_walk_count'] = 0
@@ -11439,9 +11464,11 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
+        bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0
+        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) - loss_cents
         _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} {_label} — re-anchoring')
     else:
@@ -11457,6 +11484,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         else:
             bot['status'] = 'stopped'
             bot['stopped_at'] = now
+        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) - loss_cents
 
     save_state()
     actions.append({'bot_id': bot_id, 'action': 'anchor_sellback', 'loss_cents': loss_cents})

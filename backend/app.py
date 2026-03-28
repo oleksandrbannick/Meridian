@@ -14872,6 +14872,18 @@ def add_runs(bot_id):
             bot.pop('completed_at', None)
             bot.pop('stopped_at', None)
             bot.pop('awaiting_since', None)
+            # Clear stale fills from previous run so monitor doesn't think legs are filled
+            bot['dog_fill_qty'] = 0
+            bot['fav_fill_qty'] = 0
+            bot['yes_fill_qty'] = 0
+            bot['no_fill_qty'] = 0
+            bot['_hedge_fired'] = False
+            bot['_trade_recorded'] = False
+            bot['_over_ceiling_since'] = None
+            bot['fav_order_id'] = None
+            bot['fav_price'] = None
+            bot['dog_filled_at'] = None
+            bot['_all_dog_order_ids'] = []
         save_state()
         print(f'🔄 SMART RESTART: {bot_id} → waiting_repeat')
         return jsonify({'success': True, 'mode': 'smart_restart'})
@@ -14888,6 +14900,18 @@ def add_runs(bot_id):
         bot.pop('completed_at', None)
         bot.pop('stopped_at', None)
         bot.pop('awaiting_since', None)
+        # Clear stale fills from previous run so monitor doesn't think legs are filled
+        bot['dog_fill_qty'] = 0
+        bot['fav_fill_qty'] = 0
+        bot['yes_fill_qty'] = 0
+        bot['no_fill_qty'] = 0
+        bot['_hedge_fired'] = False
+        bot['_trade_recorded'] = False
+        bot['_over_ceiling_since'] = None
+        bot['fav_order_id'] = None
+        bot['fav_price'] = None
+        bot['dog_filled_at'] = None
+        bot['_all_dog_order_ids'] = []
     save_state()
     bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
     return jsonify({'success': True, 'new_repeat_count': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})

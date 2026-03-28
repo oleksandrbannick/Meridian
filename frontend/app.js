@@ -7430,7 +7430,7 @@ async function loadBots() {
                         </div>`;
                     dogList.appendChild(header);
                     for (const botId of groupIds) {
-                        _renderDogBotCard(bots[botId], botId, dogList, gameScores);
+                        try { _renderDogBotCard(bots[botId], botId, dogList, gameScores); } catch(e) { console.error('Phantom render error:', botId, e); }
                     }
                 });
             }

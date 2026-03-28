@@ -11206,24 +11206,13 @@ def _handle_apex(bot_id, bot, actions):
         any_active = False
         all_resolved = True
         any_filled = False
-
-        # Auto-cancel unfilled posted rungs after 60s from first fill
-        _first_fill = bot.get('first_fill_at')
-        if _first_fill and now - _first_fill > 60:
-            for _pr in bot.get('rungs', []):
-                if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
-                    for _ps in ('yes', 'no'):
-                        _poid = _pr.get(f'{_ps}_order_id')
-                        if _poid:
-                            _cancel_with_retry(_poid)
-                            _pr[f'{_ps}_order_id'] = None
-                    _pr['status'] = 'stopped'
-                    print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (60s since first fill)')
+        has_posted = False
 
         for idx, rung in enumerate(bot.get('rungs', [])):
             rs = rung.get('status', 'posted')
 
             if rs == 'posted':
+                has_posted = True
                 all_resolved = False  # unfilled rung still live — not resolved
                 continue
             if rs in ('completed', 'stopped', 'scratched'):
@@ -11259,6 +11248,26 @@ def _handle_apex(bot_id, bot, actions):
                     _apex_time_decay_tick(bot_id, bot, rung, idx)
                 except Exception as _tde:
                     print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
+
+        # Auto-cancel unfilled posted rungs when:
+        # 1. All filled rungs are done (no active work left), AND
+        # 2. Snap timer has elapsed (give wider rungs time to fill)
+        if has_posted and not any_active and any_filled:
+            _snap_grace = _apex_snap_timer(ticker)
+            _first_fill = bot.get('first_fill_at')
+            if _first_fill and now - _first_fill > _snap_grace:
+                for _pr in bot.get('rungs', []):
+                    if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
+                        for _ps in ('yes', 'no'):
+                            _poid = _pr.get(f'{_ps}_order_id')
+                            if _poid:
+                                _cancel_with_retry(_poid)
+                                _pr[f'{_ps}_order_id'] = None
+                        _pr['status'] = 'stopped'
+                        all_resolved = True  # will be re-checked below
+                        print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (all active done + {_snap_grace}s grace)')
+                # Re-check if all resolved now
+                all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
 
         # Check if ALL rungs are resolved → bot completion
         if all_resolved and any_filled:

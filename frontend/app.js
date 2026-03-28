@@ -7260,10 +7260,10 @@ async function loadBots() {
             if (s === 'awaiting_settlement') return true;
             // Smart Apex: keep for restart button
             if (bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
-            // Completed: show for 10s using backend timestamp
+            // Completed: show for 5min so user can review and restart
             const fin = bots[id].completed_at || bots[id].stopped_at;
             if (!fin) return false;  // no timestamp + completed = old bot, hide
-            return (now - fin * 1000) < 10000;
+            return (now - fin * 1000) < 300000;
         });
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');

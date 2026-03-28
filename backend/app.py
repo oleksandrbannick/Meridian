@@ -11660,7 +11660,7 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and (b.get('completed_at') or b.get('stopped_at') or b.get('cancelled_at') or 0) < _purge_cutoff
-                      and not b.get('repeat_count', 0) > b.get('repeats_done', 0)  # keep if repeats pending
+                      and not (b.get('repeat_count', 0) > b.get('repeats_done', 0) and not b.get('_smart_stopped'))  # keep if repeats pending (not smart-stopped)
                       and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
                       ]
         if _purge_ids:

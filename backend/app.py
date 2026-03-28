@@ -6265,13 +6265,15 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         return
 
     if current_stage == 'pending_profit':
-        # ── GREEDY SNAP: bid 1-2¢ above our order for 15s → snap to bid to capture fill ──
+        # ── GREEDY SNAP: bid 1-4¢ above our order → snap to bid after timer ──
+        # 1-2¢: 15s patience, 3-4¢: 25s patience
         greedy_gap = (hedge_bid - current_hedge_price) if (hedge_bid > 0 and current_hedge_price > 0) else 0
-        if 0 < greedy_gap <= 2:
+        if 0 < greedy_gap <= 4:
+            greedy_timer = 15 if greedy_gap <= 2 else 25
             if not rung.get('_greedy_snap_at'):
                 rung['_greedy_snap_at'] = now
             greedy_elapsed = now - rung['_greedy_snap_at']
-            if greedy_elapsed >= 15:
+            if greedy_elapsed >= greedy_timer:
                 snap_price = max(1, hedge_bid)
                 rung['_greedy_snap_at'] = None
                 rung['_snap_reason'] = f'greedy_snap_{greedy_gap}c'
@@ -6282,7 +6284,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                 print(f'💰 APEX GREEDY: {bot_id} rung#{rung_idx} ({width}c) {greedy_gap}¢ away {greedy_elapsed:.0f}s → snap @{snap_price}c')
                 _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
                 return
-            rung['_snap_reason'] = f'greedy_{greedy_gap}c_{greedy_elapsed:.0f}s/15s'
+            rung['_snap_reason'] = f'greedy_{greedy_gap}c_{greedy_elapsed:.0f}s/{greedy_timer}s'
             return
         else:
             rung['_greedy_snap_at'] = None  # reset when out of greedy range

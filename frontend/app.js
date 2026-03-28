@@ -5422,7 +5422,122 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const rungs = bot.rungs || [];
 
     // ── COMPLETED/STOPPED SUMMARY CARD (early return) ──
-    // No early return — all statuses render through the full card path below
+    if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement') {
+        // Skip completion card for bots that are mid-repeat (transient completed state)
+        const _midRepeat = status === 'completed' && (
+            (bot.smart_mode && !bot._smart_stopped) ||
+            (bot.repeat_count > 0 && (bot.repeats_done || 0) <= bot.repeat_count)
+        );
+        if (!_midRepeat) {
+        const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
+        const _runs = (bot.repeats_done || 0) + 1;
+        const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
+        const _isAwaiting = status === 'awaiting_settlement' || _isCross;
+        const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
+        const _crossQty = bot._cross_settled_qty || (_runs * _qtyPer);
+        const _crossQtyDog = bot._cross_settled_qty_dog || _crossQty;
+        const _crossQtyFav = bot._cross_settled_qty_fav || _crossQty;
+        const _isSmart = bot._smart_stopped;
+        const _col = _isAwaiting ? '#818cf8' : _isSmart ? '#00e5ff' : '#00ff88';
+        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
+        const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
+        const dogSide = bot.dog_side || 'no';
+        const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
+        let liveScoreHtml = '';
+        if (gameScores) {
+            const parts = (bot.ticker || '').split('-');
+            const gk = parts.length >= 2 ? parts[1] : parts[0];
+            const gs = gameScores[gk] || null;
+            if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
+        }
+        const _trigger = bot._smart_exit_trigger;
+        const _triggerActive = _trigger && _trigger.price > 0 && !bot._smart_exit_sold;
+        const item = document.createElement('div');
+        item.style.cssText = `background:#0f1419;border:1px solid ${_col}33;border-left:3px solid ${_col};border-radius:12px;padding:14px;margin-bottom:10px;`;
+        item.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;">PHANTOM</span>
+                    <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
+                    <span style="background:${_col}22;color:${_col};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${_label}</span>
+                    ${liveScoreHtml}
+                    ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">CROSS</span>' : ''}
+                    ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs</span>` : _runs > 1 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_runs} runs</span>` : ''}
+                    ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : ''); })()}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    ${bot.smart_mode && _isAwaiting ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                    ${!bot.smart_mode && _isAwaiting ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                    ${_isCross && _isAwaiting && !bot._smart_exit_sold ? `<button onclick="smartExitMenu('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
+                    <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+                </div>
+            </div>
+            <div style="background:#060a14;border:1px solid ${_col}33;border-radius:8px;padding:14px;">
+                ${_isCross ? `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
+                    <div style="padding:8px;background:${_col}11;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <span style="color:#ffaa00;font-size:9px;font-weight:700;">DOG · ${dogSide.toUpperCase()}</span>
+                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQtyDog}x</span>
+                        </div>
+                        <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
+                            <div style="background:#ffaa00;height:100%;width:100%;border-radius:3px;"></div>
+                        </div>
+                        <div style="color:#555;font-size:9px;margin-top:3px;">${(bot.ticker || '').split('-').pop()} · filled</div>
+                    </div>
+                    <div style="padding:8px;background:${_col}11;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <span style="color:#00aaff;font-size:9px;font-weight:700;">FAV · ${favSide.toUpperCase()}</span>
+                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQtyFav}x</span>
+                        </div>
+                        <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
+                            <div style="background:#00aaff;height:100%;width:100%;border-radius:3px;"></div>
+                        </div>
+                        <div style="color:#555;font-size:9px;margin-top:3px;">${(bot.hedge_ticker || '').split('-').pop()} · filled</div>
+                    </div>
+                </div>` : ''}
+                ${(bot._run_history || []).length > 0 ? `
+                <div style="margin-bottom:8px;">
+                    ${(bot._run_history || []).map((r, i) => `
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
+                            <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
+                            <span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span>
+                            <span style="color:#8892a6;">x${r.qty || 1}</span>
+                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
+                        </div>
+                    `).join('')}
+                </div>` : _runs > 1 ? `
+                <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
+                <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
+                    <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
+                    <span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? `${_crossQtyDog}x each` : `${_crossQtyDog}x / ${_crossQtyFav}x`}</strong></span>
+                    <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
+                    ${bot.smart_mode ? `<span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>` : ''}
+                </div>
+                ${(bot.live_yes_bid != null || bot.live_no_bid != null) ? `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;font-size:10px;">
+                    <div style="background:#060a14;border:1px solid #00ff8822;border-radius:6px;padding:6px 8px;text-align:center;">
+                        <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.ticker || '').split('-').pop()} · YES/NO</div>
+                        <span style="color:#00ff88;font-weight:700;">${bot.live_yes_bid ?? '?'}¢</span>
+                        <span style="color:#555;"> / </span>
+                        <span style="color:#ff4444;font-weight:700;">${bot.live_no_bid ?? '?'}¢</span>
+                    </div>
+                    <div style="background:#060a14;border:1px solid #f7816622;border-radius:6px;padding:6px 8px;text-align:center;">
+                        <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.hedge_ticker || '').split('-').pop()} · YES/NO</div>
+                        <span style="color:#00ff88;font-weight:700;">${bot.live_hedge_yes_bid ?? '?'}¢</span>
+                        <span style="color:#555;"> / </span>
+                        <span style="color:#ff4444;font-weight:700;">${bot.live_hedge_no_bid ?? '?'}¢</span>
+                    </div>
+                </div>` : ''}
+                ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit trigger: sell loser when bid ≤ ${_trigger.price}¢</div>` : ''}
+                ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Exited ${(bot._smart_exit_sold.ticker || '').split('-').pop()} @ ${bot._smart_exit_sold.price || '?'}¢ · holding ${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()} for settlement</div>` : ''}
+                ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}
+            </div>
+            <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        `;
+        container.appendChild(item);
+        return;
+    }}
     const dogSide = bot.dog_side || 'no';
     const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
     const qty = bot.quantity || 1;

@@ -11683,7 +11683,8 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and (b.get('completed_at') or b.get('stopped_at') or b.get('cancelled_at') or 0) < _purge_cutoff
-                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker'))  # never purge cross-market
+                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker')
+                              and (b.get('_cross_settled_qty', 0) > 0 or b.get('_cross_settled_qty_dog', 0) > 0))  # keep cross-market WITH positions
                       ]
         if _purge_ids:
             for _pid in _purge_ids:

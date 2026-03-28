@@ -9238,7 +9238,7 @@ def _handle_phantom(bot_id, bot, actions):
         # Cross-market: NEVER sell back — both positions settle separately, one will pay 100¢
         _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
         combined_check = dog_price + max(current_fav_price, current_fav_bid)
-        if combined_check > 100 and not _is_cross:
+        if combined_check > 100:
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
                 print(f'⏱ PHANTOM OVER CEILING: {bot_id} combined={combined_check}¢ — 20s timer started')
@@ -9307,8 +9307,8 @@ def _handle_phantom(bot_id, bot, actions):
                         _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
                     return
         else:
-            # Under 100¢ or cross-market — clear timer
-            if bot.get('_over_ceiling_since') and not _is_cross:
+            # Under 100¢ — clear timer
+            if bot.get('_over_ceiling_since'):
                 print(f'✅ PHANTOM UNDER CEILING: {bot_id} combined={combined_check}¢ — timer cleared')
                 bot_log('PHANTOM_UNDER_CEILING', bot_id, {
                     'dog_price': dog_price, 'fav_bid': current_fav_bid, 'combined': combined_check,
@@ -10542,7 +10542,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # ── 20s Over-Ceiling Timer ──
         _is_cross_lad = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
         combined_check = avg_dog + max(current_fav_price, current_fav_bid)
-        if combined_check > 100 and not _is_cross_lad:
+        if combined_check > 100:
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
                 print(f'⏱ PHANTOM LADDER OVER CEILING: {bot_id} combined={combined_check}¢ — 20s timer started')
@@ -10606,7 +10606,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     _phantom_ladder_sell_back(bot_id, bot, avg_dog, bot.get('fav_price', 0), 999, actions)
                     return
         else:
-            if bot.get('_over_ceiling_since') and not _is_cross_lad:
+            if bot.get('_over_ceiling_since'):
                 print(f'✅ PHANTOM LADDER UNDER CEILING: {bot_id} combined={combined_check}¢ — timer cleared')
                 bot_log('PHANTOM_LADDER_UNDER_CEILING', bot_id, {
                     'avg_dog': avg_dog, 'fav_bid': current_fav_bid, 'combined': combined_check,

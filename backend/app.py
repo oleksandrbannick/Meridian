@@ -6801,6 +6801,7 @@ def _execute_apex_completion(bot_id):
         _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done <= repeat_total)
         if _will_repeat:
             bot['status'] = 'waiting_repeat'
+            bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
             bot['waiting_repeat_since'] = now
             bot['first_fill_at'] = None
             bot['completed_rungs_count'] = 0
@@ -10981,6 +10982,7 @@ def _handle_apex(bot_id, bot, actions):
                 bot['total_rungs'] = len(new_rungs)
                 bot['posted_at'] = now
                 bot['status'] = 'ladder_arb_posted'
+                bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
                 bot['first_fill_at'] = None
                 bot['completed_rungs_count'] = 0
                 bot['repost_count'] = bot.get('repost_count', 0) + 1
@@ -11205,6 +11207,7 @@ def _handle_apex(bot_id, bot, actions):
             _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done <= repeat_total)
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
+                bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
                 bot['waiting_repeat_since'] = now
                 bot['first_fill_at'] = None
                 bot['completed_rungs_count'] = 0

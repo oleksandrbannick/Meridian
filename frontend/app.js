@@ -5529,7 +5529,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <span style="color:#ff4444;font-weight:700;">${bot.live_hedge_no_bid ?? '?'}¢</span>
                     </div>
                 </div>` : ''}
-                ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit trigger: sell loser when bid ≤ ${_trigger.price}¢</div>` : ''}
+                ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit: sell ${(_trigger.ticker || bot.ticker || '').split('-').pop()} when bid ≤ ${_trigger.price}¢</div>` : ''}
                 ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Exited ${(bot._smart_exit_sold.ticker || '').split('-').pop()} @ ${bot._smart_exit_sold.price || '?'}¢ · holding ${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()} for settlement</div>` : ''}
                 ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}
             </div>
@@ -8717,25 +8717,32 @@ function smartExitMenu(botId) {
     const existing = document.getElementById('smart-exit-overlay');
     if (existing) { existing.remove(); window._smartExitMenuOpen = false; return; }
     window._smartExitMenuOpen = true;
-    const bot = window._lastBots?.[botId] || {};
+    const bot = window._lastBotsData?.[botId] || {};
     const dogTeam = (bot.ticker || '').split('-').pop();
     const favTeam = (bot.hedge_ticker || '').split('-').pop();
     const dogSide = bot.dog_side || 'no';
     const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
+    // For cross-market: determine loser by current bid (lower bid = loser to sell)
+    const dogBidSE = dogSide === 'yes' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0);
+    const favBidSE = favSide === 'yes' ? (bot.live_hedge_yes_bid || bot.live_yes_bid || 0) : (bot.live_hedge_no_bid || bot.live_no_bid || 0);
+    const sellTeam = dogBidSE <= favBidSE ? dogTeam : favTeam;
+    const holdTeam = dogBidSE <= favBidSE ? favTeam : dogTeam;
+    const sellBid = Math.min(dogBidSE, favBidSE);
+    const holdBid = Math.max(dogBidSE, favBidSE);
     const overlay = document.createElement('div');
     overlay.id = 'smart-exit-overlay';
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
     overlay.innerHTML = `
         <div style="background:#0d1117;border:1px solid #64ffda44;border-radius:12px;padding:20px;min-width:260px;max-width:320px;box-shadow:0 8px 24px rgba(0,0,0,.7);">
             <div style="color:#64ffda;font-size:12px;font-weight:700;margin-bottom:8px;text-align:center;">SMART EXIT</div>
-            <div style="display:flex;justify-content:center;gap:12px;margin-bottom:12px;font-size:10px;">
-                <span style="color:#ffaa00;font-weight:700;">🐕 DOG: ${dogTeam} (${dogSide.toUpperCase()}) — SELL</span>
+            <div style="display:flex;justify-content:center;gap:12px;margin-bottom:6px;font-size:11px;">
+                <span style="color:#ff4444;font-weight:700;">📉 SELL: ${sellTeam} · ${sellBid}¢</span>
             </div>
-            <div style="display:flex;justify-content:center;gap:12px;margin-bottom:12px;font-size:10px;">
-                <span style="color:#00aaff;font-weight:700;">⭐ FAV: ${favTeam} (${favSide.toUpperCase()}) — HOLD</span>
+            <div style="display:flex;justify-content:center;gap:12px;margin-bottom:12px;font-size:11px;">
+                <span style="color:#00ff88;font-weight:700;">💎 HOLD: ${holdTeam} · ${holdBid}¢</span>
             </div>
-            <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:700;margin-bottom:10px;">Sell ${dogTeam} Now</button>
-            <div style="color:#8892a6;font-size:10px;margin-bottom:8px;text-align:center;">Or auto-sell ${dogTeam} when loser bid drops to:</div>
+            <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:700;margin-bottom:10px;">Sell ${sellTeam} Now</button>
+            <div style="color:#8892a6;font-size:10px;margin-bottom:8px;text-align:center;">Or auto-sell when loser bid drops to:</div>
             <div style="display:flex;gap:6px;margin-bottom:12px;">
                 ${[3, 5, 8, 10, 15].map(p => `<button onclick="setSmartExitTrigger('${botId}', ${p})" style="flex:1;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer;font-weight:600;">${p}¢</button>`).join('')}
             </div>

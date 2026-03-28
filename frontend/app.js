@@ -5423,6 +5423,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
 
     // ── COMPLETED/STOPPED SUMMARY CARD (early return) ──
     if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement') {
+        // Skip completion card for bots that are mid-repeat (transient completed state)
+        const _midRepeat = status === 'completed' && (
+            (bot.smart_mode && !bot._smart_stopped) ||
+            (bot.repeat_count > 0 && (bot.repeats_done || 0) <= bot.repeat_count)
+        );
+        if (_midRepeat) { /* fall through to normal active card rendering */ }
+        else {
         const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
         const _runs = (bot.repeats_done || 0) + 1;
         const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
@@ -5459,6 +5466,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${liveScoreHtml}
                     ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">CROSS</span>' : ''}
                     ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs</span>` : _runs > 1 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_runs} runs</span>` : ''}
+                    ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : ''); })()}
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                     ${bot.smart_mode && _isAwaiting ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
@@ -5532,7 +5540,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         `;
         container.appendChild(item);
         return;
-    }
+    }} // close else + if
     const dogSide = bot.dog_side || 'no';
     const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
     const qty = bot.quantity || 1;

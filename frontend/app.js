@@ -5435,8 +5435,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         const _isAwaiting = status === 'awaiting_settlement' || _isCross;
         const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
         const _crossQty = bot._cross_settled_qty || (_runs * _qtyPer);
-        const _crossQtyDog = bot._cross_settled_qty_dog || _crossQty;
-        const _crossQtyFav = bot._cross_settled_qty_fav || _crossQty;
+        let _crossQtyDog = bot._cross_settled_qty_dog || _crossQty;
+        let _crossQtyFav = bot._cross_settled_qty_fav || _crossQty;
+        // Subtract smart exit sold qty from the correct side
+        if (bot._smart_exit_sold && bot._smart_exit_sold.qty > 0) {
+            if (bot._smart_exit_sold.ticker === bot.ticker) _crossQtyDog = Math.max(0, _crossQtyDog - bot._smart_exit_sold.qty);
+            else _crossQtyFav = Math.max(0, _crossQtyFav - bot._smart_exit_sold.qty);
+        }
         const _isSmart = bot._smart_stopped;
         const _col = _isAwaiting ? '#818cf8' : _isSmart ? '#00e5ff' : '#00ff88';
         const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';

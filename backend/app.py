@@ -6258,9 +6258,12 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     midpoint_dist = abs(hedge_bid - target_hedge) if hedge_bid > 0 else 0
     rung['_midpoint_dist'] = midpoint_dist  # expose to frontend
 
-    # Hedge order lost? Repost at current target
+    # Hedge order lost? Repost — use live bid in snapped state, target in profit state
     if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty:
-        repost_price = current_hedge_price or target_hedge or max(1, 100 - anchor_price - width)
+        if current_stage == 'snapped' and hedge_bid > 0:
+            repost_price = hedge_bid  # follow market when snapped
+        else:
+            repost_price = current_hedge_price or target_hedge or max(1, 100 - anchor_price - width)
         _apex_snap_hedge(bot_id, bot, rung, rung_idx, repost_price)
         return
 
@@ -9451,10 +9454,16 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['waiting_repeat_since'] = time.time()
                     print(f'🔄 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
                 else:
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
+                    _is_cross_zero = hedge_ticker and hedge_ticker != ticker and (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0)
+                    if _is_cross_zero:
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — awaiting settlement (cross-market)')
+                    else:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
                     bot['repeat_count'] = 0
-                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
                 save_state()
                 return
             # Smart pricing first — need new_dog_price for hedge fill check
@@ -9475,10 +9484,16 @@ def _handle_phantom(bot_id, bot, actions):
                 bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
                     'dog_bid': current_dog_bid, 'reason': 'dog_dead',
                 })
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _is_cross_drift = hedge_ticker and hedge_ticker != ticker and (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0)
+                if _is_cross_drift:
+                    bot['status'] = 'awaiting_settlement'
+                    bot['awaiting_since'] = now
+                    print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, awaiting settlement (cross-market)')
+                else:
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
                 bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
                 save_state()
                 return
         except Exception:
@@ -11564,12 +11579,35 @@ def _run_monitor():
                             try:
                                 _sold, _sell_info = execute_sell(_loser_ticker, _loser_side, _exit_qty,
                                                                 reason=f'auto_smart_exit_{_bid}')
-                                _sell_price = _sell_info.get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+                                _sell_price = (_sell_info or {}).get('actual_fill_price', 0) or (_sell_info or {}).get('avg_price', 0) or (_sell_info or {}).get('sell_price', 0)
+                                if not _sold:
+                                    print(f'⚠ Auto smart exit: sell failed for {_bid[:40]} — not marking as sold')
+                                    continue
                                 _b['_smart_exit_sold'] = {
                                     'ticker': _loser_ticker, 'side': _loser_side,
                                     'qty': _exit_qty, 'price': _sell_price,
                                     'winner_ticker': _winner_ticker, 'auto': True,
                                 }
+                                # Record in P&L
+                                _se_revenue = _sell_price * _exit_qty
+                                _se_fee = _kalshi_taker_side_fee_cents(_sell_price, _exit_qty)
+                                _se_net = _se_revenue - _se_fee
+                                session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _se_net
+                                _record_trade({
+                                    'bot_id': _bid, 'ticker': _loser_ticker,
+                                    'yes_price': _sell_price if _loser_side == 'yes' else 0,
+                                    'no_price': _sell_price if _loser_side == 'no' else 0,
+                                    'quantity': _exit_qty,
+                                    'profit_cents': max(0, _se_net),
+                                    'loss_cents': max(0, -_se_net),
+                                    'fee_cents': _se_fee,
+                                    'result': 'smart_exit',
+                                    'exit_via': 'auto_smart_exit',
+                                    'sell_back_price': _sell_price,
+                                    'timestamp': time.time(),
+                                    'bot_category': 'anchor_dog',
+                                    'cross_market': True,
+                                }, _b)
                                 bot_log('AUTO_SMART_EXIT', _bid, {
                                     'trigger_price': _trigger_price, 'loser': _loser_ticker,
                                     'loser_bid': _loser_bid, 'sell_price': _sell_price, 'qty': _exit_qty,
@@ -13872,7 +13910,9 @@ def _run_monitor():
                                  (_cb.get('fav_fill_qty', 0) or 0) > 0 or
                                  (_cb.get('yes_fill_qty', 0) or 0) > 0 or
                                  (_cb.get('no_fill_qty', 0) or 0) > 0 or
-                                 (_cb.get('fill_qty', 0) or 0) > 0)
+                                 (_cb.get('fill_qty', 0) or 0) > 0 or
+                                 (_cb.get('_cross_settled_qty', 0) or 0) > 0 or
+                                 (_cb.get('_cross_settled_qty_dog', 0) or 0) > 0)
                 if _has_fills:
                     continue  # has positions — keep for settlement tracking
                 # No fills + old → cancel resting orders on Kalshi, then auto-complete

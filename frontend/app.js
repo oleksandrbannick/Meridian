@@ -5744,6 +5744,36 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 return '';
             })()}
         </div>
+        ${(() => {
+            // Run history breakdown (for completed/awaiting/multi-run bots)
+            const _rh = bot._run_history || [];
+            const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
+            const _runs = (bot.repeats_done || 0) + 1;
+            const _ltPnl = (bot.lifetime_pnl || 0) + (bot.net_pnl_cents || 0);
+            const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
+            const _crossQtyDog = bot._cross_settled_qty_dog || bot._cross_settled_qty || 0;
+            const _crossQtyFav = bot._cross_settled_qty_fav || bot._cross_settled_qty || 0;
+            let html = '';
+            if (_rh.length > 0) {
+                html += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;">';
+                html += _rh.map((r, i) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #1a254033;' : '') + 'font-size:10px;">'
+                    + '<span style="color:#555;font-weight:600;">#' + (r.run || i + 1) + '</span>'
+                    + '<span style="color:#8892a6;">' + (r.dog_price || '?') + '¢ / ' + (r.fav_price || '?') + '¢</span>'
+                    + '<span style="color:#8892a6;">x' + (r.qty || 1) + '</span>'
+                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:700;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
+                    + '</div>').join('');
+                html += '</div>';
+            }
+            if ((status === 'awaiting_settlement' || status === 'completed' || status === 'stopped') && _isCross && _crossQtyDog > 0) {
+                html += '<div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">'
+                    + '<span>Runs: <strong style="color:#fff;">' + _runs + '</strong></span>'
+                    + '<span>Holding: <strong style="color:#fff;">' + (_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x') + '</strong></span>'
+                    + '<span>P&L: <strong style="color:' + (_ltPnl >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnl >= 0 ? '+' : '') + _ltPnl + '¢</strong></span>'
+                    + (bot.smart_mode ? '<span>Smart: <strong style="color:#00e5ff;">' + (bot._smart_wins || 0) + 'W / ' + (bot._smart_losses || 0) + 'L</strong></span>' : '')
+                    + '</div>';
+            }
+            return html;
+        })()}
         <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
             <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>

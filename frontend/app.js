@@ -7258,6 +7258,8 @@ async function loadBots() {
             if (s !== 'completed' && s !== 'stopped' && s !== 'cancelled') return true;
             // Awaiting settlement always shows
             if (s === 'awaiting_settlement') return true;
+            // Cross-market bots always show until Kalshi settles (positions held on both tickers)
+            if (bots[id].hedge_ticker && bots[id].hedge_ticker !== bots[id].ticker) return true;
             // Smart Apex: keep for restart button
             if (bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
             // Completed: show for 5min so user can review and restart

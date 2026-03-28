@@ -6289,8 +6289,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         else:
             rung['_greedy_snap_at'] = None  # reset when out of greedy range
 
-        if midpoint_dist <= 5:
-            # ── WITHIN 5¢: sit indefinitely, reset drift timer if it was running ──
+        if midpoint_dist <= width:
+            # ── WITHIN width: sit indefinitely, reset drift timer if it was running ──
             if rung.get('_drift_started_at'):
                 rung['_drift_started_at'] = None  # reset timer — market came back
             rung['_snap_reason'] = 'breathing'
@@ -6330,8 +6330,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         if hedge_bid <= 0:
             return  # No market data yet
 
-        # Market came back within 5¢ of target? REVERT to target price for full profit
-        if midpoint_dist <= 5 and target_hedge > 0:
+        # Market came back within width of target? REVERT to target price for full profit
+        if midpoint_dist <= width and target_hedge > 0:
             rung['time_stage'] = 'pending_profit'
             rung['status'] = 'pending_profit'
             rung['_drift_started_at'] = None

@@ -3491,8 +3491,7 @@ def _execute_phantom_ladder_hedge(bot_id):
                         print(f'⚠ PHANTOM HEDGE position check failed: {_pe}')
                     if not filled_rungs:
                         print(f'👻 PHANTOM HEDGE {bot_id}: no filled rungs confirmed — marking complete')
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = time.time()
+                        _phantom_set_final_status(bot, bot_id)
                         save_state()
                         return
 
@@ -3846,8 +3845,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
 
     if total_fill_qty <= 0:
         bot_log('PHANTOM_LADDER_SELLBACK_ZERO_QTY', bot_id, {'total_fill_qty': 0, 'status': 'completed'})
-        bot['status'] = 'completed'
-        bot['completed_at'] = now
+        _phantom_set_final_status(bot, bot_id)
         save_state()
         return
 
@@ -3903,8 +3901,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
                 'exit_via': 'ghost_complete', 'timestamp': now,
                 'bot_category': 'anchor_ladder',
             }, bot)
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+            _phantom_set_final_status(bot, bot_id)
             bot['_trade_recorded'] = True
             save_state()
             return
@@ -8655,8 +8652,7 @@ def _handle_phantom(bot_id, bot, actions):
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
             print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
             _safe_cancel(dog_order_id, f'phantom ending cancel {bot_id}')
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+            _phantom_set_final_status(bot, bot_id)
             actions.append({'bot_id': bot_id, 'action': 'anchor_game_ending_cancel'})
             save_state()
             return
@@ -9232,8 +9228,7 @@ def _handle_phantom(bot_id, bot, actions):
                         'fill_source': 'anchor_dog', 'bot_category': 'anchor_dog',
                     }, bot)
                     print(f'🏁 PHANTOM GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
+                    _phantom_set_final_status(bot, bot_id)
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return
@@ -9761,8 +9756,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     'fill_source': 'anchor_ladder_settlement',
                     'bot_category': 'anchor_ladder',
                 }, bot)
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+            _phantom_set_final_status(bot, bot_id)
             bot['_trade_recorded'] = True
             _audit('LADDER_SETTLED', bot_id, {'ticker': ticker, 'market_status': mkt_al_status, 'result': mkt_al_result, 'total_fill': total_fill})
             _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_settlement')
@@ -9838,8 +9832,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     current_dog_ask = _best_ask(ob, dog_side)
             if current_dog_bid <= 0:
                 # No bids at all — market is completely dead, stop the bot
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _phantom_set_final_status(bot, bot_id)
                 bot['repeat_count'] = 0
                 print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
                 save_state()
@@ -9860,8 +9853,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
                     'dog_bid': current_dog_bid, 'reason': 'dog_dead',
                 })
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _phantom_set_final_status(bot, bot_id)
                 bot['repeat_count'] = 0
                 print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
                 save_state()
@@ -9878,8 +9870,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _lowest_rung_price = max(1, _first_rung_price - ((_num_rungs - 1) * _rung_spacing)) if _num_rungs > 0 else _first_rung_price
             if _lowest_rung_price <= 3:
                 # All rungs would hit the floor — market too thin, stop
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _phantom_set_final_status(bot, bot_id)
                 bot['repeat_count'] = 0
                 print(f'🛑 PHANTOM REPEAT FLOOR: {bot_id} lowest rung={_lowest_rung_price}¢ (dog_bid={current_dog_bid}¢) — too low, stopping')
                 bot_log('PHANTOM_REPEAT_SKIP_FLOOR', bot_id, {
@@ -9997,8 +9988,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 # DON'T increment repeats_done — this wasn't a real run, just a bad pricing cycle
                 print(f'   ⏳ Dead market but {_repeats_left} repeats left — waiting for conditions to improve')
             else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _phantom_set_final_status(bot, bot_id)
             _audit('PHANTOM_LADDER_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'repeats_left': _repeats_left})
             save_state()
             return
@@ -11313,6 +11303,24 @@ def _handle_apex(bot_id, bot, actions):
         return
 
 
+def _phantom_set_final_status(bot, bot_id=''):
+    """Set bot to 'awaiting_settlement' if cross-market with accumulated positions, else 'completed'.
+    Returns the status string that was set."""
+    now = time.time()
+    _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != bot.get('ticker')
+    _has_pos = (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0
+                or bot.get('dog_fill_qty', 0) > 0 or bot.get('total_dog_fill_qty', 0) > 0)
+    if _is_cross and _has_pos:
+        bot['status'] = 'awaiting_settlement'
+        bot['awaiting_since'] = now
+        print(f'⏳ PHANTOM CROSS → AWAITING: {bot_id} holding positions on {bot.get("ticker")}/{bot.get("hedge_ticker")}')
+        return 'awaiting_settlement'
+    else:
+        bot['status'] = 'completed'
+        bot['completed_at'] = now
+        return 'completed'
+
+
 def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     """Sell the filled dog leg back to recover capital when arb is dead."""
     now = time.time()
@@ -11364,8 +11372,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                     'cross_market': bot.get('cross_market', False),
                     'hedge_ticker': bot.get('hedge_ticker', ''),
                 }, bot)
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
+                _phantom_set_final_status(bot, bot_id)
                 save_state()
                 actions.append({'bot_id': bot_id, 'action': 'sellback_no_fills'})
                 return
@@ -11405,8 +11412,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                 'cross_market': bot.get('cross_market', False),
                 'hedge_ticker': bot.get('hedge_ticker', ''),
             }, bot)
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+            _phantom_set_final_status(bot, bot_id)
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'sellback_position_cleared'})
             return
@@ -11614,8 +11620,25 @@ def _run_monitor():
                     if _b.get('_cross_settled_qty_fav', 0) <= 0:
                         _b['_cross_settled_qty_fav'] = _actual_qty
                     _cross_fixed += 1
-            # Auto smart exit: check price trigger
+            # Dog flip detection: cancel smart exit if dog side flipped
             _trigger = _b.get('_smart_exit_trigger')
+            if _trigger and not _b.get('_smart_exit_sold') and ws_manager:
+                _dog_side_chk = _b.get('dog_side', 'no')
+                _ws_dog_chk = ws_manager.get_price(_b['ticker'])
+                _ws_fav_chk = ws_manager.get_price(_ht)
+                _dog_bid_chk = (_ws_dog_chk or {}).get(f'{_dog_side_chk}_bid', 0)
+                _fav_side_chk = _b.get('fav_side', 'yes' if _dog_side_chk == 'no' else 'no')
+                _fav_bid_chk = (_ws_fav_chk or {}).get(f'{_fav_side_chk}_bid', 0)
+                if _dog_bid_chk > 0 and _fav_bid_chk > 0 and _dog_bid_chk > _fav_bid_chk:
+                    # Dog is now favored — smart exit would sell the wrong side
+                    _b['_smart_exit_trigger'] = None
+                    print(f'🔄 SMART EXIT CANCELLED (dog flip): {_bid[:40]} dog={_dog_bid_chk}¢ > fav={_fav_bid_chk}¢')
+                    bot_log('SMART_EXIT_DOG_FLIP_CANCEL', _bid, {
+                        'dog_bid': _dog_bid_chk, 'fav_bid': _fav_bid_chk,
+                    })
+                    _trigger = None  # skip execution below
+
+            # Auto smart exit: check price trigger
             if _trigger and not _b.get('_smart_exit_sold'):
                 _trigger_price = _trigger.get('price', 0)
                 if _trigger_price > 0 and ws_manager:

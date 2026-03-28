@@ -8723,14 +8723,25 @@ function smartExitMenu(botId) {
     const existing = document.getElementById('smart-exit-overlay');
     if (existing) { existing.remove(); window._smartExitMenuOpen = false; return; }
     window._smartExitMenuOpen = true;
+    const bot = window._lastBots?.[botId] || {};
+    const dogTeam = (bot.ticker || '').split('-').pop();
+    const favTeam = (bot.hedge_ticker || '').split('-').pop();
+    const dogSide = bot.dog_side || 'no';
+    const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
     const overlay = document.createElement('div');
     overlay.id = 'smart-exit-overlay';
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
     overlay.innerHTML = `
         <div style="background:#0d1117;border:1px solid #64ffda44;border-radius:12px;padding:20px;min-width:260px;max-width:320px;box-shadow:0 8px 24px rgba(0,0,0,.7);">
-            <div style="color:#64ffda;font-size:12px;font-weight:700;margin-bottom:12px;text-align:center;">SMART EXIT</div>
-            <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:700;margin-bottom:10px;">Sell Loser Now</button>
-            <div style="color:#8892a6;font-size:10px;margin-bottom:8px;text-align:center;">Or auto-sell when loser bid drops to:</div>
+            <div style="color:#64ffda;font-size:12px;font-weight:700;margin-bottom:8px;text-align:center;">SMART EXIT</div>
+            <div style="display:flex;justify-content:center;gap:12px;margin-bottom:12px;font-size:10px;">
+                <span style="color:#ffaa00;font-weight:700;">🐕 DOG: ${dogTeam} (${dogSide.toUpperCase()}) — SELL</span>
+            </div>
+            <div style="display:flex;justify-content:center;gap:12px;margin-bottom:12px;font-size:10px;">
+                <span style="color:#00aaff;font-weight:700;">⭐ FAV: ${favTeam} (${favSide.toUpperCase()}) — HOLD</span>
+            </div>
+            <button onclick="smartExitNow('${botId}')" style="display:block;width:100%;background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:700;margin-bottom:10px;">Sell ${dogTeam} Now</button>
+            <div style="color:#8892a6;font-size:10px;margin-bottom:8px;text-align:center;">Or auto-sell ${dogTeam} when loser bid drops to:</div>
             <div style="display:flex;gap:6px;margin-bottom:12px;">
                 ${[3, 5, 8, 10, 15].map(p => `<button onclick="setSmartExitTrigger('${botId}', ${p})" style="flex:1;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer;font-weight:600;">${p}¢</button>`).join('')}
             </div>

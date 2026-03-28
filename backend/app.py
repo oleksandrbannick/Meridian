@@ -11427,13 +11427,20 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         api_read_limiter.wait()
         _pos_resp = kalshi_client.get_positions(ticker=ticker)
         _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
-        _leftover = 0
+        _actual_pos = 0
         for _p in _positions:
             if _p.get('ticker') == ticker:
                 # Only count positions on the dog side this bot was trading
                 _pqty = _parse_position_qty(_p)
                 if (dog_side == 'yes' and _pqty > 0) or (dog_side == 'no' and _pqty < 0):
-                    _leftover = abs(_pqty)
+                    _actual_pos = abs(_pqty)
+        # Cross-market: accumulated positions from previous cycles are expected, not leftovers
+        _is_cross_sb = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        if _is_cross_sb:
+            _prev_accumulated = bot.get('_cross_settled_qty_dog', 0)
+            _leftover = max(0, _actual_pos - _prev_accumulated)
+        else:
+            _leftover = _actual_pos
         # Cap at this bot's qty — never sell more than we could own
         _leftover = min(_leftover, qty)
         if _leftover > 0:

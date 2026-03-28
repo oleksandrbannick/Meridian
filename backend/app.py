@@ -6183,6 +6183,7 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
         _rt_ms = (_hedge_posted_at - _anchor_fill_at) * 1000
         _record_latency('fill_to_hedge_apex', _rt_ms, {'bot_id': bot_id, 'rung': rung_idx, 'width': width})
         _raw_ms = _rt_ms  # for apex, raw ≈ rt (hedge is the existing opposite order, not a new API call)
+        _record_latency('raw_hedge_apex', _raw_ms, {'bot_id': bot_id, 'rung': rung_idx, 'width': width})
 
     # Store hedge info in rung state
     with ws_fill_lock:
@@ -6506,6 +6507,8 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
     if loss_cents > 0:
         session_pnl['gross_loss_cents'] += loss_cents
     bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents - loss_cents
+    if not bot.get('_first_rung_completed_at'):
+        bot['_first_rung_completed_at'] = now
 
     combined_price = yes_price + no_price
     net_pnl = profit_cents - loss_cents
@@ -6800,6 +6803,7 @@ def _execute_apex_completion(bot_id):
             bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
             bot['waiting_repeat_since'] = now
             bot['first_fill_at'] = None
+            bot['_first_rung_completed_at'] = None
             bot['completed_rungs_count'] = 0
             bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
             bot['net_pnl_cents'] = 0
@@ -11249,25 +11253,21 @@ def _handle_apex(bot_id, bot, actions):
                 except Exception as _tde:
                     print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
 
-        # Auto-cancel unfilled posted rungs when:
-        # 1. All filled rungs are done (no active work left), AND
-        # 2. Snap timer has elapsed (give wider rungs time to fill)
-        if has_posted and not any_active and any_filled:
-            _snap_grace = _apex_snap_timer(ticker)
-            _first_fill = bot.get('first_fill_at')
-            if _first_fill and now - _first_fill > _snap_grace:
-                for _pr in bot.get('rungs', []):
-                    if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
-                        for _ps in ('yes', 'no'):
-                            _poid = _pr.get(f'{_ps}_order_id')
-                            if _poid:
-                                _cancel_with_retry(_poid)
-                                _pr[f'{_ps}_order_id'] = None
-                        _pr['status'] = 'stopped'
-                        all_resolved = True  # will be re-checked below
-                        print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (all active done + {_snap_grace}s grace)')
-                # Re-check if all resolved now
-                all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
+        # Auto-cancel unfilled posted rungs 2min after first rung completes both sides
+        # (gives wider rungs time to fill, then cleans up and starts next cycle)
+        _first_rung_done_at = bot.get('_first_rung_completed_at')
+        if has_posted and _first_rung_done_at and now - _first_rung_done_at > 120:
+            for _pr in bot.get('rungs', []):
+                if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
+                    for _ps in ('yes', 'no'):
+                        _poid = _pr.get(f'{_ps}_order_id')
+                        if _poid:
+                            _cancel_with_retry(_poid)
+                            _pr[f'{_ps}_order_id'] = None
+                    _pr['status'] = 'stopped'
+                    print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (2min since first rung complete)')
+            # Re-check if all resolved now
+            all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
 
         # Check if ALL rungs are resolved → bot completion
         if all_resolved and any_filled:
@@ -11292,6 +11292,7 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
                 bot['waiting_repeat_since'] = now
                 bot['first_fill_at'] = None
+                bot['_first_rung_completed_at'] = None
                 bot['completed_rungs_count'] = 0
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
                 bot['net_pnl_cents'] = 0

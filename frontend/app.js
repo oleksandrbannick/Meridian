@@ -8729,11 +8729,13 @@ function smartExitMenu(botId) {
     const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
     // For cross-market: determine loser by current bid (lower bid = loser to sell)
     const dogBidSE = dogSide === 'yes' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0);
-    const favBidSE = favSide === 'yes' ? (bot.live_hedge_yes_bid || bot.live_yes_bid || 0) : (bot.live_hedge_no_bid || bot.live_no_bid || 0);
-    const sellTeam = dogBidSE <= favBidSE ? dogTeam : favTeam;
-    const holdTeam = dogBidSE <= favBidSE ? favTeam : dogTeam;
-    const sellBid = Math.min(dogBidSE, favBidSE);
-    const holdBid = Math.max(dogBidSE, favBidSE);
+    const favBidSE = favSide === 'yes' ? (bot.live_hedge_yes_bid || 0) : (bot.live_hedge_no_bid || 0);
+    // Determine loser: lower bid = loser. If one side has no data (0), it's the loser.
+    const dogIsLoser = favBidSE > 0 ? (dogBidSE <= favBidSE) : false;
+    const sellTeam = dogIsLoser ? dogTeam : favTeam;
+    const holdTeam = dogIsLoser ? favTeam : dogTeam;
+    const sellBid = dogIsLoser ? dogBidSE : favBidSE;
+    const holdBid = dogIsLoser ? favBidSE : dogBidSE;
     const overlay = document.createElement('div');
     overlay.id = 'smart-exit-overlay';
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';

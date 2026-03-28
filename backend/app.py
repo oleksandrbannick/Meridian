@@ -10519,9 +10519,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     if _p.get('ticker') == ticker:
                         _actual_pos = abs(_parse_position_qty(_p))
                 # Cross-market: anchor position is expected (held until settlement).
-                # Only sell contracts ABOVE the hedged qty (true late fills).
+                # Only sell contracts ABOVE the TOTAL hedged qty across ALL cycles.
                 if _is_cross_market:
-                    _expected = hedge_qty  # anchor contracts that are part of the arb
+                    _prev_accumulated = bot.get('_cross_settled_qty_dog', 0)
+                    _expected = _prev_accumulated + hedge_qty  # all previous cycles + current
                     _leftover = max(0, _actual_pos - _expected)
                 else:
                     # Same-ticker: YES+NO net to 0, any position is leftover

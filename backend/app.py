@@ -3232,21 +3232,13 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['status'] = 'ladder_arb_active'
 
         # Check if ALL rungs are resolved → bot completion
+        # ALL rungs must be terminal (completed/stopped/scratched) — posted rungs count as unresolved
         all_resolved = all(
             r.get('status') in ('completed', 'stopped', 'scratched')
             for r in bot.get('rungs', [])
-            if r.get('status') != 'posted' or r.get('yes_fill_qty', 0) > 0 or r.get('no_fill_qty', 0) > 0
         )
-        any_filled = any(r.get('status') not in ('posted', None) for r in bot.get('rungs', []))
-        if all_resolved and any_filled and all(
-            r.get('status') in ('completed', 'stopped', 'scratched', 'posted')
-            for r in bot.get('rungs', [])
-        ):
-            # All active rungs resolved — check if any still posted (unfilled)
-            posted_rungs = [r for r in bot.get('rungs', []) if r.get('status') == 'posted']
-            active_rungs = [r for r in bot.get('rungs', []) if r.get('status') not in ('posted', 'completed', 'stopped', 'scratched')]
-            if not active_rungs:  # no in-progress rungs
-                threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
+        if all_resolved:
+            threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
 
         save_state()
         break
@@ -10962,6 +10954,22 @@ def _handle_apex(bot_id, bot, actions):
             return
         if now - wait_since < 10:
             return
+        # Safety: cancel any leftover orders from previous cycle before reposting
+        _old_og = bot.get('_order_group_id')
+        if _old_og:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order_group(_old_og)
+            except Exception:
+                pass
+        for _old_r in bot.get('rungs', []):
+            for _os in ('yes', 'no'):
+                _ooid = _old_r.get(f'{_os}_order_id')
+                if _ooid:
+                    _cancel_with_retry(_ooid)
+            _hooid = _old_r.get('hedge_order_id')
+            if _hooid:
+                _cancel_with_retry(_hooid)
         # Fetch fresh orderbook and repost
         try:
             api_read_limiter.wait()
@@ -11196,20 +11204,34 @@ def _handle_apex(bot_id, bot, actions):
             return
 
         any_active = False
-        all_filled_resolved = True
+        all_resolved = True
         any_filled = False
+
+        # Auto-cancel unfilled posted rungs after 60s from first fill
+        _first_fill = bot.get('first_fill_at')
+        if _first_fill and now - _first_fill > 60:
+            for _pr in bot.get('rungs', []):
+                if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
+                    for _ps in ('yes', 'no'):
+                        _poid = _pr.get(f'{_ps}_order_id')
+                        if _poid:
+                            _cancel_with_retry(_poid)
+                            _pr[f'{_ps}_order_id'] = None
+                    _pr['status'] = 'stopped'
+                    print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (60s since first fill)')
 
         for idx, rung in enumerate(bot.get('rungs', [])):
             rs = rung.get('status', 'posted')
 
             if rs == 'posted':
-                continue  # unfilled rung — ignore
+                all_resolved = False  # unfilled rung still live — not resolved
+                continue
             if rs in ('completed', 'stopped', 'scratched'):
                 any_filled = True
                 continue  # resolved
 
             any_filled = True
-            all_filled_resolved = False
+            all_resolved = False
 
             # Active rung with fill — run two-step protocol
             if rs in ('anchor_filled', 'pending_profit', 'snapped',
@@ -11238,26 +11260,13 @@ def _handle_apex(bot_id, bot, actions):
                 except Exception as _tde:
                     print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
 
-        # Check if all filled rungs are resolved → bot completion
-        if all_filled_resolved and any_filled:
+        # Check if ALL rungs are resolved → bot completion
+        if all_resolved and any_filled:
             # Guard: if _execute_apex_completion already handled this cycle, skip
             if bot.get('_bot_completed'):
                 bot['status'] = 'completed'
                 save_state()
                 return
-
-            # Cancel any remaining posted (unfilled) rung orders
-            for rung in bot.get('rungs', []):
-                if rung.get('status') == 'posted':
-                    for side in ('yes', 'no'):
-                        oid = rung.get(f'{side}_order_id')
-                        if oid:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(oid)
-                            except Exception:
-                                pass
-                            rung[f'{side}_order_id'] = None
 
             # Mark completed first to prevent _execute_apex_completion race
             bot['_bot_completed'] = True

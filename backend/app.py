@@ -1107,6 +1107,10 @@ def diagnose_bots_endpoint():
                         oid = rung.get(f'{side}_order_id')
                         if oid:
                             known_ids.add(oid)
+                    # Apex 2.0 per-rung hedge orders
+                    _h_oid = rung.get('hedge_order_id')
+                    if _h_oid:
+                        known_ids.add(_h_oid)
             resting = kalshi_client.get_orders(status='resting')
             resting_orders = resting.get('orders', [])
             for o in resting_orders:
@@ -10875,8 +10879,53 @@ def _handle_apex(bot_id, bot, actions):
                         kalshi_client.cancel_order_group(og)
                     except Exception:
                         pass
+                # Record P&L for in-progress rungs before completing
+                for _s_idx, _s_rung in enumerate(bot.get('rungs', [])):
+                    _s_rs = _s_rung.get('status', 'posted')
+                    if _s_rs in ('pending_profit', 'snapped', 'anchor_filled'):
+                        _s_rung['status'] = 'stopped'
+                        _s_rung['completed'] = True
+                        _s_anchor = _s_rung.get('anchor_side')
+                        _s_qty = _s_rung.get('quantity', qty_per)
+                        if _s_anchor and mkt_la_result and not _s_rung.get('_profit_recorded'):
+                            _s_rung['_profit_recorded'] = True
+                            _s_ap = _s_rung.get(f'{_s_anchor}_price', 0)
+                            _s_won = (_s_anchor == mkt_la_result)
+                            _s_fee = _kalshi_side_fee_cents(_s_ap, _s_qty)
+                            if _s_won:
+                                _s_net = (100 - _s_ap) * _s_qty - _s_fee
+                            else:
+                                _s_net = -(_s_ap * _s_qty + _s_fee)
+                            _s_rung['_net_pnl'] = _s_net
+                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _s_net
+                            if _s_net >= 0:
+                                session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _s_net
+                            else:
+                                session_pnl['gross_loss_cents'] += abs(_s_net)
+                            _record_trade({
+                                'bot_id': bot_id, 'ticker': ticker,
+                                'yes_price': _s_ap if _s_anchor == 'yes' else 0,
+                                'no_price': _s_ap if _s_anchor == 'no' else 0,
+                                'quantity': _s_qty, 'profit_cents': max(0, _s_net),
+                                'loss_cents': abs(min(0, _s_net)), 'fee_cents': _s_fee,
+                                'result': 'apex_settled_win' if _s_won else 'apex_settled_loss',
+                                'exit_via': 'market_settlement',
+                                'rung_idx': _s_idx, 'rung_width': _s_rung.get('width', 0),
+                                'anchor_side': _s_anchor, 'anchor_price': _s_ap,
+                                'settlement_result': mkt_la_result,
+                                'hedge_status': 'unfilled',
+                                'timestamp': now, 'fill_source': 'apex2_rung',
+                                'bot_category': 'ladder_arb',
+                            }, bot)
+                            print(f'  📊 RUNG#{_s_idx} settled: anchor={_s_anchor}@{_s_ap}c result={mkt_la_result} net={_s_net}c')
+                        elif not _s_rung.get('_profit_recorded'):
+                            _s_rung['_profit_recorded'] = True
+                            print(f'  ⚠ RUNG#{_s_idx} settled: no result yet, marking stopped')
+                    elif _s_rs == 'posted':
+                        _s_rung['status'] = 'stopped'
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
+                bot['_bot_completed'] = True
                 actions.append({'bot_id': bot_id, 'action': 'ladder_arb_settled', 'result': mkt_la_result})
                 print(f'🏁 APEX SETTLED: {bot_id} market={mkt_la_status} result={mkt_la_result}')
                 _audit('APEX_SETTLED', bot_id, {'ticker': ticker, 'market_status': mkt_la_status, 'result': mkt_la_result})
@@ -11115,6 +11164,11 @@ def _handle_apex(bot_id, bot, actions):
                                 pass
 
                     if new_rungs:
+                        _repost_oids = []
+                        for _nr in new_rungs:
+                            if _nr.get('yes_order_id'): _repost_oids.append(_nr['yes_order_id'])
+                            if _nr.get('no_order_id'): _repost_oids.append(_nr['no_order_id'])
+                        bot['_all_placed_order_ids'] = _repost_oids
                         bot['rungs'] = new_rungs
                         bot['total_rungs'] = len(new_rungs)
                         bot['posted_at'] = now
@@ -11186,6 +11240,12 @@ def _handle_apex(bot_id, bot, actions):
 
         # Check if all filled rungs are resolved → bot completion
         if all_filled_resolved and any_filled:
+            # Guard: if _execute_apex_completion already handled this cycle, skip
+            if bot.get('_bot_completed'):
+                bot['status'] = 'completed'
+                save_state()
+                return
+
             # Cancel any remaining posted (unfilled) rung orders
             for rung in bot.get('rungs', []):
                 if rung.get('status') == 'posted':
@@ -11198,6 +11258,9 @@ def _handle_apex(bot_id, bot, actions):
                             except Exception:
                                 pass
                             rung[f'{side}_order_id'] = None
+
+            # Mark completed first to prevent _execute_apex_completion race
+            bot['_bot_completed'] = True
 
             # Check for repeat
             repeats_done = bot.get('repeats_done', 0) + 1

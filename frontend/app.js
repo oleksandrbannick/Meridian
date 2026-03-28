@@ -6752,9 +6752,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         const currentCycle = repeatsDone + 1;
         cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
     }
-    if (_botCeiling < 98) {
-        cycleInfo += ` <span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>`;
-    }
+    // ceiling badge removed — phantom snaps past 100¢ now, no hard ceiling
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;

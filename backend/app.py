@@ -6531,8 +6531,14 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
         try:
             price_kwargs = {f'{hedge_side}_price': new_price}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(hedge_oid, ticker=ticker, side=hedge_side,
+            amend_resp = kalshi_client.amend_order(hedge_oid, ticker=ticker, side=hedge_side,
                                      count=total_qty, action='buy', **price_kwargs)
+            # Capture new order ID if Kalshi reassigned (amend = cancel+repost internally)
+            _amend_ord = amend_resp.get('order', amend_resp) if isinstance(amend_resp, dict) else {}
+            _new_oid = _amend_ord.get('order_id', '')
+            if _new_oid and _new_oid != hedge_oid:
+                rung['hedge_order_id'] = _new_oid
+                hedge_oid = _new_oid
             rung['hedge_price'] = new_price
             print(f'  📌 HEDGE AMEND: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining}rem (oid={str(hedge_oid)[:12]})')
             save_state()

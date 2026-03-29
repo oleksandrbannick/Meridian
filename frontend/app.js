@@ -5437,7 +5437,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     // ── COMPLETED/STOPPED SUMMARY CARD (early return) ──
     if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement') {
         // Skip completion card for bots that are mid-repeat (transient completed state)
-        const _midRepeat = status === 'completed' && (
+        const _midRepeat = status === 'completed' && bot._just_completed && (
             (bot.smart_mode && !bot._smart_stopped) ||
             (bot.repeat_count > 0 && (bot.repeats_done || 0) <= bot.repeat_count)
         );
@@ -5484,8 +5484,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : ''); })()}
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                    ${bot.smart_mode && _isAwaiting ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                    ${!bot.smart_mode && _isAwaiting ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                    ${bot.smart_mode ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                    ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                     ${_isCross && _isAwaiting && !bot._smart_exit_sold ? `<button onclick="smartExitMenu('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
                     <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
                 </div>

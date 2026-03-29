@@ -8849,7 +8849,12 @@ def _handle_phantom(bot_id, bot, actions):
     if status == 'dog_anchor_posted':
         dog_order_id = bot.get('dog_order_id')
         if not dog_order_id:
-            bot_log('PHANTOM_NO_DOG_ORDER', bot_id, {'status': status}, level='WARN')
+            # Lost order ID (e.g. restart during repost) — force transition to waiting_repeat to re-anchor
+            bot_log('PHANTOM_NO_DOG_ORDER_RECOVERY', bot_id, {'status': status, 'dog_price': bot.get('dog_price')}, level='WARN')
+            bot['status'] = 'waiting_repeat'
+            bot['waiting_repeat_since'] = now
+            print(f'🔄 PHANTOM RECOVERY: {bot_id} no dog order ID — re-entering waiting_repeat to repost')
+            save_state()
             return
 
         api_read_limiter.wait()
@@ -15595,13 +15600,31 @@ def set_smart_exit_trigger(bot_id):
         save_state()
         return jsonify({'success': True, 'cleared': True})
 
+    # Determine which side is the loser (lower bid = will be sold)
+    ticker = bot.get('ticker', '')
+    dog_side = bot.get('dog_side', 'no')
+    fav_side = bot.get('fav_side', 'yes' if dog_side == 'no' else 'no')
+    _dog_bid = 0
+    _fav_bid = 0
+    if ws_manager:
+        _ws_d = ws_manager.get_price(ticker)
+        _ws_f = ws_manager.get_price(_ht)
+        _dog_bid = (_ws_d or {}).get(f'{dog_side}_bid', 0)
+        _fav_bid = (_ws_f or {}).get(f'{fav_side}_bid', 0)
+    _dog_is_loser = _fav_bid > 0 and (_dog_bid <= _fav_bid or _dog_bid == 0)
+    _loser_ticker = ticker if _dog_is_loser else _ht
+    _winner_ticker = _ht if _dog_is_loser else ticker
+
     bot['_smart_exit_trigger'] = {
         'price': trigger_price,
         'set_at': time.time(),
+        'ticker': _loser_ticker,
+        'winner_ticker': _winner_ticker,
+        'loser_bid': min(_dog_bid, _fav_bid) if _dog_bid > 0 and _fav_bid > 0 else 0,
     }
     save_state()
-    bot_log('SMART_EXIT_TRIGGER_SET', bot_id, {'trigger_price': trigger_price})
-    return jsonify({'success': True, 'trigger_price': trigger_price})
+    bot_log('SMART_EXIT_TRIGGER_SET', bot_id, {'trigger_price': trigger_price, 'loser': _loser_ticker})
+    return jsonify({'success': True, 'trigger_price': trigger_price, 'loser': _loser_ticker.split('-')[-1]})
 
 
 @app.route('/api/bot/smart-stop/<bot_id>', methods=['POST'])

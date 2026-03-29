@@ -3439,10 +3439,18 @@ function setTradeMode(mode) {
         iconEl.textContent = '🎯';
         titleEl.textContent = 'Phantom Bot';
         subtitleEl.textContent = 'Volatility Capture · Maker Only';
-        // Reset depth to auto (0) each time modal opens
+        // Restore last-used phantom settings from localStorage (or default to 0)
+        let _savedPhantom = null;
+        try { _savedPhantom = JSON.parse(localStorage.getItem('phantom_settings')); } catch (e) {}
         const depthEl = document.getElementById('anchor-depth');
-        if (depthEl) depthEl.value = 0;
-        // Reset cross-market toggle
+        if (depthEl) depthEl.value = _savedPhantom?.depth ?? 0;
+        // Restore repeat count + smart mode
+        const repeatEl = document.getElementById('anchor-repeat-count');
+        if (repeatEl && _savedPhantom?.repeatCount != null) repeatEl.value = _savedPhantom.repeatCount;
+        const smartEl = document.getElementById('anchor-smart-mode');
+        if (smartEl && _savedPhantom?.smartMode != null) smartEl.checked = _savedPhantom.smartMode;
+        if (_savedPhantom?.autoQty != null) _anchorAutoQty = _savedPhantom.autoQty;
+        // Reset cross-market toggle (market-specific, don't persist)
         _anchorCrossMarketTicker = null;
         _anchorCrossMarketSide = 'yes';
         const crossToggle = document.getElementById('anchor-cross-market');
@@ -3455,6 +3463,14 @@ function setTradeMode(mode) {
         window._anchorInputFocused = false;
         initAnchorDogPrices();
         renderAnchorRungs(true);  // Force initial render (non-force can skip on mobile)
+        // Apply saved base qty to first rung after render
+        if (_savedPhantom?.baseQty > 1 && _anchorRungs.length > 0) {
+            _anchorRungs[0].qty = _savedPhantom.baseQty;
+            if (_anchorAutoQty) {
+                _anchorRungs.forEach((r, i) => { r.qty = _savedPhantom.baseQty * (i + 1); });
+            }
+            renderAnchorRungs(true);
+        }
     } else {
         // arb
         if (arbSection) arbSection.style.display = 'block';
@@ -4145,6 +4161,17 @@ async function deployAnchorBot() {
                 ? `👻 Phantom deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢${isCrossMode ? ' (cross-market)' : ''}`
                 : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · depth ${anchorDepth}¢${isCrossMode ? ' (cross-market)' : ''}`;
             showNotification(msg);
+            // Persist phantom settings for next deploy
+            try {
+                localStorage.setItem('phantom_settings', JSON.stringify({
+                    depth: anchorDepth,
+                    baseQty: _anchorRungs[0]?.qty || 1,
+                    rungCount: _anchorRungs.length,
+                    repeatCount: repeatCount,
+                    smartMode: smartMode,
+                    autoQty: _anchorAutoQty,
+                }));
+            } catch (e) {}
             closeModal();
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();

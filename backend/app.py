@@ -3728,14 +3728,19 @@ def _execute_phantom_ladder_hedge(bot_id):
                             _sold, _sell_info = execute_sell(bot.get('ticker',''), dog_side, _extra_needed,
                                                             reason=f'phantom_straggler_{bot_id}')
                             _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
-                            _strag_loss = max(0, new_avg - _sell_p) * _extra_needed if _sell_p else new_avg * _extra_needed
-                            session_pnl['gross_loss_cents'] += _strag_loss
+                            # Straggler P&L: positive = lost money, negative = made money
+                            _strag_loss = (new_avg - _sell_p) * _extra_needed if _sell_p else new_avg * _extra_needed
+                            if _strag_loss > 0:
+                                session_pnl['gross_loss_cents'] += _strag_loss
+                            else:
+                                session_pnl['gross_profit_cents'] += abs(_strag_loss)
                             # Track straggler in bot state for accurate P&L and position tracking
                             bot['_straggler_sold_qty'] = bot.get('_straggler_sold_qty', 0) + _extra_needed
                             bot['_straggler_loss_cents'] = bot.get('_straggler_loss_cents', 0) + _strag_loss
-                            print(f'   🔙 STRAGGLER SOLD: {bot_id} {_extra_needed}× @ {_sell_p}¢ loss={_strag_loss}¢')
+                            _strag_label = f'loss={_strag_loss}¢' if _strag_loss > 0 else f'profit={abs(_strag_loss)}¢'
+                            print(f'   🔙 STRAGGLER SOLD: {bot_id} {_extra_needed}× @ {_sell_p}¢ {_strag_label}')
                             bot_log('PHANTOM_LADDER_STRAGGLER_SOLD', bot_id, {
-                                'qty': _extra_needed, 'sell_price': _sell_p, 'loss': _strag_loss,
+                                'qty': _extra_needed, 'sell_price': _sell_p, 'pnl': -_strag_loss,
                             })
                         except Exception as _se:
                             print(f'   ⚠ STRAGGLER SELLBACK FAIL: {bot_id}: {_se}')
@@ -10712,12 +10717,17 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                                 _sold, _sell_info = execute_sell(bot.get('ticker',''), dog_side, _mon_extra,
                                                                 reason=f'phantom_monitor_straggler_{bot_id}')
                                 _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
-                                _strag_loss = max(0, new_avg - _sell_p) * _mon_extra if _sell_p else new_avg * _mon_extra
-                                session_pnl['gross_loss_cents'] += _strag_loss
+                                # Straggler P&L: positive = lost money, negative = made money
+                                _strag_loss = (new_avg - _sell_p) * _mon_extra if _sell_p else new_avg * _mon_extra
+                                if _strag_loss > 0:
+                                    session_pnl['gross_loss_cents'] += _strag_loss
+                                else:
+                                    session_pnl['gross_profit_cents'] += abs(_strag_loss)
                                 # Track straggler in bot state for accurate P&L and position tracking
                                 bot['_straggler_sold_qty'] = bot.get('_straggler_sold_qty', 0) + _mon_extra
                                 bot['_straggler_loss_cents'] = bot.get('_straggler_loss_cents', 0) + _strag_loss
-                                print(f'🔙 PHANTOM MONITOR STRAGGLER SOLD: {bot_id} {_mon_extra}× @ {_sell_p}¢ loss={_strag_loss}¢')
+                                _strag_label = f'loss={_strag_loss}¢' if _strag_loss > 0 else f'profit={abs(_strag_loss)}¢'
+                                print(f'🔙 PHANTOM MONITOR STRAGGLER SOLD: {bot_id} {_mon_extra}× @ {_sell_p}¢ {_strag_label}')
                             except Exception as _mse:
                                 print(f'⚠ PHANTOM MONITOR STRAGGLER FAIL: {bot_id}: {_mse}')
                         print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} hedge_qty={hedge_qty} verified={verified_total} avg={new_avg}¢ hedge@{amend_p}¢ stragglers={_mon_extra}')

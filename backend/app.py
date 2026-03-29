@@ -10118,7 +10118,20 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 if retreat_triggered and _lad_price_delta < 2:
                     pass  # retreat jitter filter: don't waste API calls on <2¢ moves
                 elif _lad_price_delta > 1 or retreat_triggered:
-                    # Cancel old orders via group (1 call) or individual fallback
+                    # Check if lowest rung would hit floor BEFORE cancelling old orders
+                    _last_rung_idx = len(bot.get('rungs', [])) - 1
+                    _lowest_new_price = max(1, smart_first - (_last_rung_idx * _rung_spacing)) if _last_rung_idx >= 0 else smart_first
+                    if _lowest_new_price <= 3:
+                        bot['posted_at'] = now  # reset timer, don't repost
+                        bot_log('PHANTOM_LADDER_REPOST_SKIP_FLOOR', bot_id, {
+                            'smart_first': smart_first, 'lowest_would_be': _lowest_new_price,
+                            'spacing': _rung_spacing,
+                        })
+                        print(f'⛔ PHANTOM REPOST SKIP: {bot_id} lowest rung would be {_lowest_new_price}¢ — too low')
+                        save_state()
+                        return
+
+                    # Floor check passed — NOW cancel old orders
                     _ph_old_group = bot.get('_order_group_id')
                     if _ph_old_group:
                         try:
@@ -10132,19 +10145,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         for rung in bot.get('rungs', []):
                             if rung.get('order_id') and rung.get('fill_qty', 0) < rung['qty']:
                                 _safe_cancel(rung['order_id'], f'phantom rung repost {bot_id}')
-
-                    # Check if lowest rung would hit floor — skip repost entirely
-                    _last_rung_idx = len(bot.get('rungs', [])) - 1
-                    _lowest_new_price = max(1, smart_first - (_last_rung_idx * _rung_spacing)) if _last_rung_idx >= 0 else smart_first
-                    if _lowest_new_price <= 3:
-                        bot['posted_at'] = now  # reset timer, don't repost
-                        bot_log('PHANTOM_LADDER_REPOST_SKIP_FLOOR', bot_id, {
-                            'smart_first': smart_first, 'lowest_would_be': _lowest_new_price,
-                            'spacing': _rung_spacing,
-                        })
-                        print(f'⛔ PHANTOM REPOST SKIP: {bot_id} lowest rung would be {_lowest_new_price}¢ — too low')
-                        save_state()
-                        return
 
                     # Batch-place new orders for unfilled rungs
                     new_ph_group = _create_order_group()

@@ -5434,9 +5434,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
         const _isAwaiting = status === 'awaiting_settlement' || _isCross;
         const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
-        const _crossQty = bot._cross_settled_qty || (_runs * _qtyPer);
-        let _crossQtyDog = bot._cross_settled_qty_dog || _crossQty;
-        let _crossQtyFav = bot._cross_settled_qty_fav || _crossQty;
+        const _crossQty = bot._cross_settled_qty ?? 0;
+        let _crossQtyDog = bot._cross_settled_qty_dog ?? _crossQty;
+        let _crossQtyFav = bot._cross_settled_qty_fav ?? _crossQty;
         // Subtract smart exit sold qty from the correct side
         if (bot._smart_exit_sold && bot._smart_exit_sold.qty > 0) {
             if (bot._smart_exit_sold.ticker === bot.ticker) _crossQtyDog = Math.max(0, _crossQtyDog - bot._smart_exit_sold.qty);
@@ -5515,7 +5515,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
                     <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
-                    <span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? `${_crossQtyDog}x each` : `${_crossQtyDog}x / ${_crossQtyFav}x`}</strong></span>
+                    ${(_crossQtyDog > 0 || _crossQtyFav > 0) ? `<span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x'}</strong></span>` : ''}
                     <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
                     ${bot.smart_mode ? `<span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>` : ''}
                 </div>
@@ -5687,6 +5687,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
+    try {
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -5799,7 +5800,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (2L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${bot.anchor_depth ? `<span style="color:#555;">Depth: ${bot.anchor_depth}¢</span>` : ''}
-            <span style="color:#555;">Ceiling: ${favCeiling}¢</span>
+            <span style="color:#555;">Hedge tgt: ≤${favCeiling}¢ → snap bid</span>
             ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const lat = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
@@ -5899,6 +5900,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
         </div>
     `;
+    } catch(e) {
+        console.error('Phantom card innerHTML error:', botId, e);
+        item.innerHTML = `<div style="padding:14px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <span style="color:#ffaa00;font-weight:800;font-size:10px;">PHANTOM</span>
+                <span style="color:#fff;font-weight:700;">${teamName || botId.slice(-12)}</span>
+                <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel || status}</span>
+            </div>
+            <div style="color:#ff8800;font-size:11px;">Card render error — bot is still active</div>
+            <div style="color:#555;font-size:9px;margin-top:4px;">${botId}</div>
+        </div>`;
+    }
     container.appendChild(item);
 }
 

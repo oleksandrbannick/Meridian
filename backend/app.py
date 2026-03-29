@@ -6055,15 +6055,14 @@ def _apex_snap_timer(ticker):
     return 60
 
 def _apex_stop_loss_threshold(width):
-    """Width-calibrated stop-loss: wider than entry to absorb market noise."""
+    """Width-calibrated stop-loss: max cents over breakeven before sellback fires.
+    Tighter = fewer tail losses. combined > 100 + threshold triggers exit."""
     if width <= 5:
-        return 8
+        return 6    # combined > 106c → sell back
     elif width <= 8:
-        return 12
-    elif width <= 14:
-        return 20
+        return 8    # combined > 108c → sell back
     else:
-        return 25
+        return 12   # combined > 112c → sell back
 
 
 def _apex_post_rung_hedge(bot_id, rung_idx):
@@ -6259,7 +6258,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     rung['_midpoint_dist'] = midpoint_dist  # expose to frontend
 
     # Hedge order lost? Repost — use live bid in snapped state, target in profit state
-    if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty:
+    # (skip if sellback pending — hedge was intentionally cancelled)
+    if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty and not rung.get('_sellback_pending'):
         if current_stage == 'snapped' and hedge_bid > 0:
             repost_price = hedge_bid  # follow market when snapped
         else:
@@ -6268,11 +6268,25 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         return
 
     if current_stage == 'pending_profit':
+        # ── STOP-LOSS: if combined already past threshold, sell back immediately ──
+        _sl = rung.get('stop_loss_cents', 6)
+        _combined_now = (anchor_price + hedge_bid) if hedge_bid > 0 else 0
+        if _combined_now > 100 + _sl:
+            rung['time_stage'] = 'snapped'
+            rung['status'] = 'snapped'
+            rung['_snap_reason'] = f'stop_loss_{_combined_now}c'
+            print(f'🛑 APEX STOP→SELL: {bot_id} rung#{rung_idx} ({width}c) combined={_combined_now}c > {100+_sl}c → selling back')
+            bot_log('APEX_STOP_LOSS_SNAP', bot_id, {
+                'rung_idx': rung_idx, 'width': width, 'combined': _combined_now, 'threshold': 100 + _sl,
+            })
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
+            return
+
         # ── GREEDY SNAP: bid 1-4¢ above our order → snap to bid after timer ──
         # 1-2¢: 15s patience, 3-4¢: 25s patience
         greedy_gap = (hedge_bid - current_hedge_price) if (hedge_bid > 0 and current_hedge_price > 0) else 0
         if 0 < greedy_gap <= 4:
-            greedy_timer = 15 if greedy_gap <= 2 else 25
+            greedy_timer = 5 if greedy_gap <= 2 else 10
             if not rung.get('_greedy_snap_at'):
                 rung['_greedy_snap_at'] = now
             greedy_elapsed = now - rung['_greedy_snap_at']
@@ -6292,8 +6306,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         else:
             rung['_greedy_snap_at'] = None  # reset when out of greedy range
 
-        if midpoint_dist <= width:
-            # ── WITHIN width: sit indefinitely, reset drift timer if it was running ──
+        if midpoint_dist <= 3:
+            # ── WITHIN 3¢: sit, reset drift timer — market breathing ──
             if rung.get('_drift_started_at'):
                 rung['_drift_started_at'] = None  # reset timer — market came back
             rung['_snap_reason'] = 'breathing'
@@ -6355,6 +6369,24 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             return
 
         rung['_dead_market_at'] = None  # bid is live, clear dead timer
+
+        # ── SELLBACK RETRY: if previous sellback failed, retry ──
+        if rung.get('_sellback_pending'):
+            _combined_now = anchor_price + hedge_bid
+            _sl = rung.get('stop_loss_cents', 6)
+            if _combined_now <= 100 + _sl:
+                rung['_sellback_pending'] = False  # market recovered, abort sellback
+            else:
+                _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
+                return
+
+        # ── STOP-LOSS: if combined past threshold, sell back instead of chasing ──
+        _sl = rung.get('stop_loss_cents', 6)
+        _combined_now = anchor_price + hedge_bid
+        if _combined_now > 100 + _sl:
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
+            return
+
         # Market came back within width of target? REVERT to target price for full profit
         if midpoint_dist <= width and target_hedge > 0:
             rung['time_stage'] = 'pending_profit'
@@ -6454,6 +6486,92 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
         save_state()
 
 
+def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, stop_loss):
+    """Stop-loss exit: cancel hedge, sell anchor back. Cheaper than chasing a runaway hedge.
+    Called when combined price exceeds stop-loss threshold."""
+    anchor_side = rung.get('anchor_side', 'yes')
+    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
+    anchor_price = rung.get(f'{anchor_side}_price', 0)
+    qty = rung.get('quantity', bot.get('quantity', 1))
+    ticker = bot['ticker']
+    hedge_oid = rung.get('hedge_order_id')
+    width = rung.get('width', 5)
+
+    # 1. Cancel hedge order
+    if hedge_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(hedge_oid)
+        except Exception:
+            pass
+        # Check if hedge filled during cancel (race condition)
+        try:
+            api_read_limiter.wait()
+            resp = kalshi_client.get_order(hedge_oid)
+            ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+            filled = _parse_fill_count(ord_data)
+            if filled >= qty:
+                # Hedge fully filled during cancel — complete normally
+                rung['hedge_fill_qty'] = filled
+                rung['hedge_fill_at'] = time.time()
+                rung['status'] = 'completed'
+                rung['completed'] = True
+                rung['_sellback_pending'] = False
+                print(f'✅ APEX RUNG (cancel-race): {bot_id} rung#{rung_idx} hedge filled during sellback cancel')
+                _apex_record_rung_pnl(bot_id, rung_idx)
+                save_state()
+                return
+            if filled > rung.get('hedge_fill_qty', 0):
+                rung['hedge_fill_qty'] = filled
+        except Exception:
+            pass
+        rung['hedge_order_id'] = None
+
+    # 2. Compute qty to sell back (total - already hedged)
+    hedged_qty = rung.get('hedge_fill_qty', 0)
+    sell_qty = qty - hedged_qty
+    if sell_qty <= 0:
+        rung['status'] = 'completed'
+        rung['completed'] = True
+        rung['_sellback_pending'] = False
+        _apex_record_rung_pnl(bot_id, rung_idx)
+        save_state()
+        return
+
+    # 3. Sell anchor position back at market
+    sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
+                                   reason=f'apex_stop_{bot_id}_r{rung_idx}')
+
+    if sold:
+        sell_price = 0
+        if sell_info and isinstance(sell_info, dict):
+            sell_price = sell_info.get('price', 0) or sell_info.get('avg_price', 0)
+        if not sell_price:
+            sell_price = bot.get(f'live_{anchor_side}_bid', 0)
+        rung['_sellback_price'] = sell_price
+        rung['stop_price'] = sell_price
+        rung['status'] = 'completed'
+        rung['completed'] = True
+        rung['_sellback_pending'] = False
+        loss_est = max(0, anchor_price - sell_price) * sell_qty
+        print(f'🛑 APEX STOP-LOSS: {bot_id} rung#{rung_idx} ({width}c) sold {anchor_side}@{sell_price}c (was @{anchor_price}c) loss~{loss_est}c combined_was={combined_now}c')
+        bot_log('APEX_RUNG_STOP_LOSS', bot_id, {
+            'rung_idx': rung_idx, 'width': width,
+            'anchor_side': anchor_side, 'anchor_price': anchor_price,
+            'sell_price': sell_price, 'sell_qty': sell_qty, 'hedged_qty': hedged_qty,
+            'combined': combined_now, 'stop_loss': stop_loss, 'hedge_bid': hedge_bid,
+        })
+        _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback')
+        save_state()
+    else:
+        rung['_sellback_pending'] = True
+        print(f'⚠ APEX STOP-LOSS SELL FAIL: {bot_id} rung#{rung_idx} ({width}c) — will retry')
+        bot_log('APEX_RUNG_STOP_LOSS_FAIL', bot_id, {
+            'rung_idx': rung_idx, 'anchor_side': anchor_side, 'sell_qty': sell_qty,
+        }, level='WARN')
+        save_state()
+
+
 def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
     """Record P&L for a single completed/stopped rung.
     Simple: profit = 100 - anchor_price - hedge_price per contract."""
@@ -6491,6 +6609,29 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
             yes_price = anchor_price if anchor_side == 'yes' else sell_price
             no_price = anchor_price if anchor_side == 'no' else sell_price
             result_type = 'apex_stop'
+        elif exit_type == 'rung_sellback':
+            # Stop-loss sellback: sold anchor back, possibly with partial hedge fills
+            sell_price = rung.get('stop_price', rung.get('_sellback_price', 0))
+            hedged_qty = rung.get('hedge_fill_qty', 0)
+            sell_qty = qty - hedged_qty
+            # Hedged portion P&L (if any partial fills completed before sellback)
+            hedged_pnl = 0
+            if hedged_qty > 0:
+                h_price = rung.get('hedge_price', 0)
+                hedged_pnl = (100 - anchor_price - h_price) * hedged_qty
+            # Sold-back portion loss
+            sellback_loss = max(0, anchor_price - sell_price) * sell_qty if sell_price > 0 else anchor_price * sell_qty
+            # Fees
+            buy_fee = _kalshi_side_fee_cents(anchor_price, qty)
+            hedge_fee = _kalshi_side_fee_cents(rung.get('hedge_price', 0), hedged_qty) if hedged_qty > 0 else 0
+            sell_fee = _kalshi_side_fee_cents(sell_price, sell_qty) if sell_price > 0 else 0
+            total_fees = buy_fee + hedge_fee + sell_fee
+            net = hedged_pnl - sellback_loss - total_fees
+            profit_cents = max(0, net)
+            loss_cents = max(0, -net)
+            yes_price = anchor_price if anchor_side == 'yes' else (sell_price or 0)
+            no_price = anchor_price if anchor_side == 'no' else (sell_price or 0)
+            result_type = 'apex_sellback'
         else:
             # Normal arb completion: both sides filled
             hedge_price = rung.get('hedge_price', 0)
@@ -6861,7 +7002,9 @@ def create_ladder_arb_bot():
         if not widths or len(widths) < 1:
             return jsonify({'error': 'Need at least 1 width'}), 400
 
-        widths = sorted([int(w) for w in widths])
+        widths = sorted([int(w) for w in widths if int(w) <= 8])
+        if not widths:
+            return jsonify({'error': 'All widths exceed 8¢ maximum — wider widths have 75%+ snap rate'}), 400
 
         # Auto-detect game phase
         manual_phase = data.get('game_phase')

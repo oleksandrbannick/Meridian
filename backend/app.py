@@ -4387,6 +4387,7 @@ def _execute_ws_completion(bot_id):
             })
             if will_repeat:
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + profit_cents
+                bot['net_pnl_cents'] = 0  # reset — lifetime_pnl has all history now
             bot_log('ARB_COMPLETED', bot_id, {
                 'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents,
                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
@@ -9542,6 +9543,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
+                bot['net_pnl_cents'] = 0  # reset — lifetime_pnl has all history now
                 # Restore original qty if it was reduced by partial fill
                 if bot.get('_original_qty'):
                     bot['quantity'] = bot['_original_qty']
@@ -12012,6 +12014,18 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     except Exception as _pe:
         print(f'⚠ PHANTOM SELLBACK LEFTOVER CHECK FAIL: {bot_id}: {_pe}')
 
+    # Record run history for sell-back (so it shows on the card)
+    _sb_pnl = profit_cents - loss_cents  # net P&L for this cycle
+    bot.setdefault('_run_history', []).append({
+        'run': bot.get('repeats_done', 0) + 1,
+        'pnl': _sb_pnl,
+        'result': 'sellback',
+        'dog_price': dog_price,
+        'fav_price': sell_price or 0,
+        'qty': qty,
+        'ts': now,
+    })
+
     # Repeat logic — sellback counts as a cycle (always a loss), re-anchor if repeats remain
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
@@ -12050,7 +12064,13 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0
-        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) - loss_cents
+        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _sb_pnl
+        bot['net_pnl_cents'] = 0  # reset — lifetime_pnl has all history now
+        # Restore original qty if reduced by partial fill
+        if bot.get('_original_qty'):
+            bot['quantity'] = bot['_original_qty']
+            bot.pop('_original_qty', None)
+        bot.pop('_partial_hedge_qty', None)
         _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} {_label} — re-anchoring')
     else:

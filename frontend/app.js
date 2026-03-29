@@ -5547,8 +5547,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <span style="color:#ff4444;font-weight:700;">${bot.live_hedge_no_bid ?? '?'}¢</span>
                     </div>
                 </div>` : ''}
-                ${_triggerActive ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Auto exit: sell ${(_trigger.ticker || bot.ticker || '').split('-').pop()} when bid ≤ ${_trigger.price}¢</div>` : ''}
-                ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#64ffda11;border:1px solid #64ffda33;border-radius:6px;font-size:10px;color:#64ffda;">Exited ${(bot._smart_exit_sold.ticker || '').split('-').pop()} @ ${bot._smart_exit_sold.price || '?'}¢ · holding ${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()} for settlement</div>` : ''}
+                ${_triggerActive ? `<div style="text-align:center;margin-top:8px;padding:8px 12px;background:#64ffda22;border:2px solid #64ffda66;border-radius:8px;font-size:12px;color:#64ffda;font-weight:700;">
+                    <div style="margin-bottom:4px;">SMART EXIT ARMED</div>
+                    <div style="font-size:10px;font-weight:400;color:#8892a6;">Sell <strong style="color:#ff4444;">${(_trigger.ticker || bot.ticker || '').split('-').pop()}</strong> when bid drops to <strong style="color:#ffaa00;">${_trigger.price}¢</strong></div>
+                    <div style="font-size:9px;font-weight:400;color:#555;margin-top:2px;">Hold <strong style="color:#00ff88;">${(_trigger.winner_ticker || bot.hedge_ticker || '').split('-').pop()}</strong> for settlement</div>
+                    <button onclick="event.stopPropagation();setSmartExitTrigger('${botId}', 0)" style="margin-top:6px;background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:4px;padding:2px 10px;font-size:9px;cursor:pointer;">Cancel Trigger</button>
+                </div>` : ''}
+                ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:8px;padding:8px 12px;background:#00ff8822;border:2px solid #00ff8866;border-radius:8px;font-size:12px;color:#00ff88;font-weight:700;">
+                    <div style="margin-bottom:4px;">SMART EXIT COMPLETE</div>
+                    <div style="font-size:10px;font-weight:400;color:#8892a6;">Sold <strong style="color:#ff4444;">${(bot._smart_exit_sold.ticker || '').split('-').pop()}</strong> @ ${bot._smart_exit_sold.price || '?'}¢ · holding <strong style="color:#00ff88;">${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()}</strong> for settlement</div>
+                </div>` : ''}
                 ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}
             </div>
             <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>

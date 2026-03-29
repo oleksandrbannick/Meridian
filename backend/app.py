@@ -6370,7 +6370,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
 
         rung['_dead_market_at'] = None  # bid is live, clear dead timer
 
-        # ── SELLBACK RETRY: if previous sellback failed, retry ──
+        # ── SELLBACK RETRY: if previous (pending_profit) sellback failed, retry ──
         if rung.get('_sellback_pending'):
             _combined_now = anchor_price + hedge_bid
             _sl = rung.get('stop_loss_cents', 6)
@@ -6380,12 +6380,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                 _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
                 return
 
-        # ── STOP-LOSS: if combined past threshold, sell back instead of chasing ──
-        _sl = rung.get('stop_loss_cents', 6)
-        _combined_now = anchor_price + hedge_bid
-        if _combined_now >= 100 + _sl:
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
-            return
+        # NOTE: No stop-loss in snapped stage — hedge is already at bid,
+        # selling back costs the same + taker fees. Just let it fill.
 
         # Market came back within width of target? REVERT to target price for full profit
         if midpoint_dist <= width and target_hedge > 0:

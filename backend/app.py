@@ -9239,6 +9239,25 @@ def _handle_phantom(bot_id, bot, actions):
                 anchor_base = current_dog_ask if spread > 2 else current_dog_bid
                 new_dog_price = max(1, anchor_base - anchor_depth)
 
+                # Price floor: don't repost at < 3¢ — no viable edge at that level
+                if new_dog_price < 3:
+                    print(f'🛑 PHANTOM PRICE FLOOR: {bot_id} new_price={new_dog_price}¢ (bid={current_dog_bid}¢ depth={anchor_depth}¢) — too low, cancelling')
+                    _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
+                    _is_cross_pf = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                    _has_fills_pf = (bot.get('_cross_settled_qty', 0) > 0) or (bot.get('dog_fill_qty', 0) > 0)
+                    if _is_cross_pf and _has_fills_pf:
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                    else:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                    bot['repeat_count'] = 0
+                    bot_log('PHANTOM_PRICE_FLOOR_STOP', bot_id, {
+                        'dog_bid': current_dog_bid, 'new_price': new_dog_price, 'depth': anchor_depth,
+                    })
+                    save_state()
+                    return
+
                 # Don't repost if price hasn't changed meaningfully
                 # Retreat also requires ≥2¢ move to avoid jitter (1¢ bid oscillation is noise)
                 _price_delta = abs(new_dog_price - bot['dog_price'])
@@ -10035,20 +10054,21 @@ def _handle_phantom(bot_id, bot, actions):
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             new_dog_price = max(1, anchor_base - anchor_depth)
 
-            # Drift guard: only stop if dog is dead (bid at 1¢) — let normal ceiling/sellback handle the rest
-            if current_dog_bid <= 1:
+            # Drift guard: stop if dog is dead OR new price too low to be viable
+            if current_dog_bid <= 1 or new_dog_price < 3:
                 bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'reason': 'dog_dead',
+                    'dog_bid': current_dog_bid, 'new_dog_price': new_dog_price,
+                    'reason': 'dog_dead' if current_dog_bid <= 1 else f'price_too_low_{new_dog_price}c',
                 })
                 _is_cross_drift = hedge_ticker and hedge_ticker != ticker and (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0)
                 if _is_cross_drift:
                     bot['status'] = 'awaiting_settlement'
                     bot['awaiting_since'] = now
-                    print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, awaiting settlement (cross-market)')
+                    print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — too low, awaiting settlement (cross-market)')
                 else:
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
-                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
+                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — too low, stopping')
                 bot['repeat_count'] = 0
                 save_state()
                 return

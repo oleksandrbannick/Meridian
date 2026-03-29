@@ -7068,6 +7068,24 @@ def _execute_apex_completion(bot_id):
         print(f'🏁 APEX COMPLETE: {bot_id} {completed_count}/{len(bot.get("rungs",[]))} rungs, pnl={total_pnl}c')
         _audit('APEX_COMPLETED', bot_id, {'ticker': ticker, 'pnl': total_pnl, 'rungs': completed_count})
 
+        # Record run history for frontend display (like phantom)
+        _rung_summaries = []
+        for _rr in bot.get('rungs', []):
+            if _rr.get('_profit_recorded'):
+                _anc_side = _rr.get('anchor_side', '')
+                _anc_p = _rr.get(_anc_side + '_price', 0) if _anc_side else _rr.get('yes_price', 0)
+                _hdg_p = _rr.get('hedge_price', 0) or _rr.get(('no' if _anc_side == 'yes' else 'yes') + '_price', 0)
+                _rung_summaries.append(f'{_anc_p}/{_hdg_p}')
+        bot.setdefault('_run_history', []).append({
+            'run': bot.get('repeats_done', 0) + 1,
+            'pnl': total_pnl,
+            'result': 'win' if total_pnl >= 0 else 'loss',
+            'rungs_completed': completed_count,
+            'total_rungs': len(bot.get('rungs', [])),
+            'qty': bot.get('quantity', 1),
+            'ts': now,
+        })
+
         # Handle repeat
         repeats_done = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done
@@ -11996,7 +12014,8 @@ def _run_monitor():
                       if b.get('status') in ('completed', 'stopped', 'cancelled')
                       and (b.get('completed_at') or b.get('stopped_at') or b.get('cancelled_at') or 0) < _purge_cutoff
                       and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker')
-                              and (b.get('_cross_settled_qty', 0) > 0 or b.get('_cross_settled_qty_dog', 0) > 0))  # keep cross-market WITH positions
+                              and (b.get('_cross_settled_qty', 0) > 0 or b.get('_cross_settled_qty_dog', 0) > 0)
+                              and not b.get('_positions_cleared'))  # keep cross-market WITH positions, but allow purge if settled
                       ]
         if _purge_ids:
             for _pid in _purge_ids:

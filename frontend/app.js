@@ -6178,6 +6178,20 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>`;
     }
 
+    // ── Run history (past cycles) ──
+    const _runHist = bot._run_history || [];
+    let runHistoryHtml = '';
+    if (_runHist.length > 0) {
+        runHistoryHtml = `<div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:6px 10px;margin-top:6px;">
+            ${_runHist.map((r, i) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
+                <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
+                <span style="color:#8892a6;">${r.rungs_completed || '?'}/${r.total_rungs || '?'} rungs</span>
+                <span style="color:#8892a6;">x${r.qty || 1}</span>
+                <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
+            </div>`).join('')}
+        </div>`;
+    }
+
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
@@ -6210,6 +6224,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${rungsHTML}
         </div>
         ${statusInfo}
+        ${runHistoryHtml}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#ffaa00;">Widths: ${rungs.map(r => r.width + '¢').join(', ')}</span>
             <span style="color:#8892a6;">×${qtyPer}</span>

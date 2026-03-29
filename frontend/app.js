@@ -1080,6 +1080,13 @@ function getRecommendedPresets(tier, signalType, market) {
     const noBid = getPrice(market, 'no_bid') || 0;
     if (yesBid <= 0 || noBid <= 0) return signalRange;
 
+    // Override signal range for gapped markets — wider widths needed
+    const _yA = getPrice(market, 'yes_ask') || 0;
+    const _nA = getPrice(market, 'no_ask') || 0;
+    const _quickSpread = Math.max(_yA - yesBid, _nA - noBid);
+    if (_quickSpread > 10) signalRange = [10, 11, 12, 13, 14, 15];
+    else if (_quickSpread > 5) signalRange = [8, 9, 10, 11, 12];
+
     // Score ALL widths by fillability (how close orders post to current bids)
     // Spread-aware: skip narrow widths (<8¢) when spread is gapped (>10¢)
     const yesAsk = getPrice(market, 'yes_ask') || 0;
@@ -1089,12 +1096,15 @@ function getRecommendedPresets(tier, signalType, market) {
     for (const w of ALL_PRESET_WIDTHS) {
         // In gapped markets, skip narrow widths — they get adversely selected
         if (maxSpread > 10 && w < 8) continue;
+        if (maxSpread > 5 && w < 6) continue;  // moderate gap: skip very narrow
         const arb = calculateArbPrices(market, w);
         const yesGap = yesBid - arb.targetYes;  // how far below YES bid
         const noGap = noBid - arb.targetNo;      // how far below NO bid
         const worstGap = Math.max(yesGap, noGap);
         if (arb.targetYes <= 1 || arb.targetNo <= 1) continue;
-        if (worstGap > 8) continue;  // skip widths too far from any bid
+        // Scale gap tolerance with spread — wider spreads need wider widths that post deeper
+        const gapLimit = Math.max(8, maxSpread + 2);
+        if (worstGap > gapLimit) continue;
         scored.push({ width: w, worstGap, inSignal: signalRange.includes(w) });
     }
 
@@ -2420,22 +2430,22 @@ function createMarketRow(market, label) {
         const isLiveGame = isKalshiLive(market);
         const ySpr = liq.yesSpread;
         const nSpr = liq.noSpread;
-        const bothBroken = ySpr > 5 && nSpr > 5;
         const aq = liq.apexQuality;
         const spreadVal = Math.min(ySpr, nSpr);
+        const isWideSpread = ySpr > 5 && nSpr > 5;
         const leanLabel = priceLean <= 10 ? 'coin-flip' : priceLean <= 25 ? 'lean game' : 'strong lean';
         const balPct = Math.round((liq.balance || 0) * 100);
-        // Show recommendation if score >= 25 AND not both broken AND reasonable lean
-        if (aq >= 25 && !bothBroken && priceLean <= 40 && bidSum >= 80) {
+        // Show recommendation for any live market with reasonable lean — gapped spreads get WIDE label + wider width recs
+        if (aq >= 15 && priceLean <= 40 && bidSum >= 80) {
             const qualLabel = aq >= 60 ? '🟢' : aq >= 35 ? '🟡' : '🔴';
             const _aqLabelColor = aq >= 60 ? '#00ff88' : aq >= 35 ? '#ffaa00' : '#ff4444';
-            const _wideWarn = spreadVal > 10 ? ' ⚠ WIDE' : '';
             const _spreadColor = spreadVal > 10 ? '#ff4444' : spreadVal > 5 ? '#ffaa00' : '#00ff88';
+            const _widthHint = isWideSpread ? (spreadVal > 10 ? ' 10¢+' : ' 8¢+') : '';
             recoTypes.push({
                 type: 'apex',
-                label: `${qualLabel}${aq} <span style="color:${_spreadColor};font-size:7px;">${spreadVal}¢${_wideWarn}</span>`,
+                label: `${qualLabel}${aq} <span style="color:${_spreadColor};font-size:7px;">${spreadVal}¢${_widthHint}</span>`,
                 labelColor: _aqLabelColor,
-                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${spreadVal}¢${spreadVal > 10 ? ' (WIDE — use 8¢+ widths)' : ''} · balance ${balPct}% · vol ${liq.vol} · ${qualLabel} ${aq}/100`,
+                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${spreadVal}¢${isWideSpread ? ` (use ${spreadVal > 10 ? '10' : '8'}¢+ widths)` : ''} · balance ${balPct}% · vol ${liq.vol} · ${qualLabel} ${aq}/100`,
             });
         }
     }

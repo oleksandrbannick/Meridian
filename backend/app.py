@@ -6270,6 +6270,21 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         _apex_snap_hedge(bot_id, bot, rung, rung_idx, repost_price)
         return
 
+    # ── PROFIT SNAP: if combined ≤ snap ceiling, snap to bid INSTANTLY ──
+    # This fires in ANY stage — profit is locked in, just fill it.
+    if hedge_bid > 0 and anchor_price > 0:
+        _snap_ceil = SNAP_CEILING_CENTS  # 96c
+        _combined_snap = anchor_price + hedge_bid
+        if _combined_snap <= _snap_ceil:
+            spread = bot.get(f'live_{("no" if anchor_side == "yes" else "yes")}_ask', 0) - hedge_bid if hedge_bid > 0 else 0
+            snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
+            snap_price = max(1, snap_price)
+            if current_hedge_price != snap_price or not hedge_oid:
+                rung['_snap_reason'] = f'profit_snap_{_combined_snap}c'
+                print(f'💰 APEX PROFIT SNAP: {bot_id} rung#{rung_idx} ({width}c) combined={_combined_snap}c ≤ {_snap_ceil}c → snap @{snap_price}c')
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+            return
+
     if current_stage == 'pending_profit':
         # ── GREEDY SNAP: bid 1-4¢ above our order → snap to bid after timer ──
         # 1-2¢: 15s patience, 3-4¢: 25s patience

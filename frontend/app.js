@@ -5856,7 +5856,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 98 ? '#00ff88' : combined <= 100 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${wc > 0 ? ` · snap #${wc}` : ''} ${_phUrgBadge}</span>
+                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 98 ? '#00ff88' : combined <= 100 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · snap #${bot.fav_walk_count}` : ''}</span>
                             ${overCeiling && ceilSecsLeft > 0 ? `<span style="color:#ff4444;font-weight:700;font-family:monospace;font-size:12px;">⏱ ${Math.ceil(ceilSecsLeft)}s</span>` : ''}
                         </div>
                     </div><div style="display:none;">`;

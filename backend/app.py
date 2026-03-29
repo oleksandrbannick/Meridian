@@ -7286,9 +7286,9 @@ def create_ladder_arb_bot():
         if not widths or len(widths) < 1:
             return jsonify({'error': 'Need at least 1 width'}), 400
 
-        widths = sorted([int(w) for w in widths if int(w) <= 8])
+        widths = sorted([int(w) for w in widths if 3 <= int(w) <= 20])
         if not widths:
-            return jsonify({'error': 'All widths exceed 8¢ maximum — wider widths have 75%+ snap rate'}), 400
+            return jsonify({'error': 'No valid widths (must be 3-20¢)'}), 400
 
         # Auto-detect game phase
         manual_phase = data.get('game_phase')

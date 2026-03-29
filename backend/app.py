@@ -4291,16 +4291,29 @@ def _execute_ws_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        # Smart mode: both legs filled = always a win
-        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, 1)
+        # Estimate P&L from posted prices for smart mode (actual verified later)
+        _est_pnl = (100 - bot.get('yes_price', 50) - bot.get('no_price', 50)) * qty
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _est_pnl)
         will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
+        bot['_just_completed'] = True
         if will_repeat:
-            bot['waiting_repeat_since'] = time.time()
+            bot['waiting_repeat_since'] = time.time() + 3  # 3s linger
             bot['first_fill_at'] = None
             bot['first_leg'] = None
+            bot['dog_filled_at'] = None
+            bot['raw_hedge_ms'] = None
+            bot['hedge_latency_ms'] = None
+            bot['fav_order_id'] = None
+            bot['fav_fill_qty'] = 0
+            bot['dog_fill_qty'] = 0
+            bot['yes_fill_qty'] = 0
+            bot['no_fill_qty'] = 0
+            bot['_hedge_fired'] = False
+            bot['_trade_recorded'] = False
+            bot['_over_ceiling_since'] = None
             print(f'🔄 WS REPEAT: {bot_id} entering waiting_repeat — cycle {repeats_done_now}/{repeat_total}')
 
         # Record trade + P&L — wrapped separately so failures don't break repeat logic
@@ -4341,6 +4354,20 @@ def _execute_ws_completion(bot_id):
                 'fill_source': 'ws_realtime',
             }, bot)
             bot['_trade_recorded'] = True  # Prevent monitor from double-recording
+            # Record run history for frontend display (same as monitor path)
+            _dog_side = bot.get('dog_side', 'yes')
+            _fav_side = bot.get('fav_side', 'no' if _dog_side == 'yes' else 'yes')
+            bot.setdefault('_run_history', []).append({
+                'run': repeats_done_now,
+                'pnl': profit_cents,
+                'result': 'win' if profit_cents >= 0 else 'loss',
+                'dog_price': bot.get('dog_price') or (real_yes if _dog_side == 'yes' else real_no),
+                'fav_price': bot.get('fav_price') or (real_yes if _fav_side == 'yes' else real_no),
+                'qty': qty,
+                'ts': now,
+            })
+            if will_repeat:
+                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + profit_cents
             bot_log('ARB_COMPLETED', bot_id, {
                 'real_yes': real_yes, 'real_no': real_no, 'profit_cents': profit_cents,
                 'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,

@@ -9935,6 +9935,69 @@ def _handle_phantom(bot_id, bot, actions):
             print(f'❌ PHANTOM {bot_id}: repeat repost failed: {e}')
         return
 
+    # ── STATE: awaiting_settlement — cross-market complete, holding until settlement ──
+    if status == 'awaiting_settlement':
+        # Keep live prices updated
+        try:
+            if ws_manager:
+                _ws_p = ws_manager.get_price(ticker)
+                if _ws_p:
+                    bot['live_yes_bid'] = _ws_p.get('yes_bid', 0)
+                    bot['live_no_bid'] = _ws_p.get('no_bid', 0)
+                    bot['live_yes_ask'] = _ws_p.get('yes_ask', 0)
+                    bot['live_no_ask'] = _ws_p.get('no_ask', 0)
+                _ht = bot.get('hedge_ticker')
+                if _ht and _ht != ticker:
+                    _ws_h = ws_manager.get_price(_ht)
+                    if _ws_h:
+                        bot['live_hedge_yes_bid'] = _ws_h.get('yes_bid', 0)
+                        bot['live_hedge_no_bid'] = _ws_h.get('no_bid', 0)
+                        bot['live_hedge_yes_ask'] = _ws_h.get('yes_ask', 0)
+                        bot['live_hedge_no_ask'] = _ws_h.get('no_ask', 0)
+        except Exception:
+            pass
+        # Check positions every 60s — when both clear, mark completed
+        if now - bot.get('_last_settlement_check', 0) < 60:
+            return
+        bot['_last_settlement_check'] = now
+        _hedge_t = bot.get('hedge_ticker', ticker)
+        try:
+            api_read_limiter.wait()
+            _pos1 = kalshi_client.get_positions(ticker=ticker)
+            _p1_list = _pos1.get('market_positions', _pos1.get('positions', []))
+            _pos1_qty = sum(abs(_parse_position_qty(p)) for p in _p1_list if p.get('ticker') == ticker)
+
+            api_read_limiter.wait()
+            _pos2 = kalshi_client.get_positions(ticker=_hedge_t)
+            _p2_list = _pos2.get('market_positions', _pos2.get('positions', []))
+            _pos2_qty = sum(abs(_parse_position_qty(p)) for p in _p2_list if p.get('ticker') == _hedge_t)
+
+            # Reconcile card position counts with actual Kalshi
+            _old_dog = bot.get('_cross_settled_qty_dog', 0)
+            _old_fav = bot.get('_cross_settled_qty_fav', 0)
+            if _pos1_qty != _old_dog or _pos2_qty != _old_fav:
+                bot['_cross_settled_qty_dog'] = _pos1_qty
+                bot['_cross_settled_qty_fav'] = _pos2_qty
+                bot['_cross_settled_qty'] = max(_pos1_qty, _pos2_qty)
+                print(f'🔄 SETTLE RECONCILE: {bot_id} dog {_old_dog}→{_pos1_qty} fav {_old_fav}→{_pos2_qty}')
+                bot_log('PHANTOM_SETTLEMENT_RECONCILE', bot_id, {
+                    'old_dog': _old_dog, 'new_dog': _pos1_qty,
+                    'old_fav': _old_fav, 'new_fav': _pos2_qty,
+                })
+
+            if _pos1_qty == 0 and _pos2_qty == 0:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['_positions_cleared'] = True
+                print(f'✅ SETTLED: {bot_id} both positions cleared ({ticker} + {_hedge_t})')
+                bot_log('PHANTOM_CROSS_MARKET_SETTLED', bot_id, {
+                    'ticker': ticker, 'hedge_ticker': _hedge_t,
+                })
+                save_state()
+        except Exception as _se:
+            print(f'⚠ awaiting_settlement check {bot_id}: {_se}')
+        return
+
 
 def _handle_phantom_ladder(bot_id, bot, actions):
     """Handle all states for an anchor-ladder bot in the monitor loop."""

@@ -6042,15 +6042,15 @@ def _apex_snap_timer(ticker):
     if _is_halftime(ticker):
         return 999999  # effectively infinite — no snap during halftime
 
-    # End game: final period, < 2 min remaining → 5s flash
+    # End game: final period, < 2 min remaining → 15s
     if period >= final_period and secs is not None and secs <= 120:
-        return 5
-    # OT → 5s flash
-    if period > final_period:
-        return 5
-    # Late: final period, > 2 min → 15s
-    if period >= final_period:
         return 15
+    # OT → 15s
+    if period > final_period:
+        return 15
+    # Late: final period, > 2 min → 25s
+    if period >= final_period:
+        return 25
     # Mid: second half / later periods (Q3 for NBA, P2 for NHL) → 25s
     if period > max(1, final_period // 2):
         return 25
@@ -6391,13 +6391,13 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                 _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
                 return
 
-        # ── SNAPPED TIMEOUT: if stuck in snapped 60s+ with partial fill, sellback remainder ──
-        # Full-open hedges are cheap to wait on (already at bid). But partial fills
-        # mean we're exposed on the unhedged portion with no progress — cut it.
+        # ── SNAPPED SAFETY NET: 180s with no progress on partial fill → sellback ──
+        # Normal case: amend to bid fills quickly. This catches edge cases where
+        # amends silently fail or no counterparty exists for extended periods.
         _snap_at = rung.get('_snap_at', 0)
         _snapped_elapsed = now - _snap_at if _snap_at else 0
         _hfq = rung.get('hedge_fill_qty', 0)
-        if _snapped_elapsed >= 60 and 0 < _hfq < qty:
+        if _snapped_elapsed >= 180 and 0 < _hfq < qty:
             print(f'⏰ APEX SNAPPED TIMEOUT: {bot_id} rung#{rung_idx} ({width}c) {_hfq}/{qty} filled after {_snapped_elapsed:.0f}s → sellback remainder')
             bot_log('APEX_SNAPPED_TIMEOUT', bot_id, {
                 'rung_idx': rung_idx, 'width': width, 'hedge_fill': _hfq, 'qty': qty,
@@ -6444,13 +6444,15 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
 
     if hedge_oid:
         # Amend existing order to new price (like Phantom does)
+        # NOTE: Kalshi amend count = new TOTAL (not remaining). For partial fills,
+        # send original total so only the unfilled portion moves to new price.
         try:
             price_kwargs = {f'{hedge_side}_price': new_price}
             api_rate_limiter.wait()
             kalshi_client.amend_order(hedge_oid, ticker=ticker, side=hedge_side,
-                                     count=remaining, action='buy', **price_kwargs)
+                                     count=total_qty, action='buy', **price_kwargs)
             rung['hedge_price'] = new_price
-            print(f'  📌 HEDGE AMEND: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c (oid={str(hedge_oid)[:12]})')
+            print(f'  📌 HEDGE AMEND: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining}rem (oid={str(hedge_oid)[:12]})')
             save_state()
             return
         except Exception as e:
@@ -6481,8 +6483,32 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
                 hedge_oid = None
                 print(f'  ⚠ HEDGE GONE: {bot_id} rung#{rung_idx} order 404 → posting fresh')
             else:
-                print(f'  ⚠ HEDGE AMEND FAIL: {bot_id} rung#{rung_idx}: {e}')
-                return  # Don't post fresh on non-404 errors, try again next tick
+                # Non-404 amend failure — cancel and repost fresh (partial fill amend
+                # issues, 400 errors, etc). Don't loop on a broken amend forever.
+                print(f'  ⚠ HEDGE AMEND FAIL: {bot_id} rung#{rung_idx}: {e} → cancel+repost')
+                try:
+                    _cancel_with_retry(hedge_oid)
+                    # Check final fill count after cancel
+                    api_read_limiter.wait()
+                    resp = kalshi_client.get_order(hedge_oid)
+                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                    filled = _parse_fill_count(ord_data)
+                    if filled >= total_qty:
+                        rung['hedge_fill_qty'] = filled
+                        rung['hedge_fill_at'] = rung.get('hedge_fill_at') or time.time()
+                        rung['status'] = 'completed'
+                        rung['completed'] = True
+                        _apex_record_rung_pnl(bot_id, rung_idx)
+                        save_state()
+                        return
+                    if filled > already_filled:
+                        rung['hedge_fill_qty'] = filled
+                        already_filled = filled
+                        remaining = total_qty - already_filled
+                except Exception:
+                    pass
+                rung['hedge_order_id'] = None
+                hedge_oid = None
 
     # No existing order — post fresh (initial hedge or after 404)
     if remaining <= 0:

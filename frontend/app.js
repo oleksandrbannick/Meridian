@@ -1081,8 +1081,14 @@ function getRecommendedPresets(tier, signalType, market) {
     if (yesBid <= 0 || noBid <= 0) return signalRange;
 
     // Score ALL widths by fillability (how close orders post to current bids)
+    // Spread-aware: skip narrow widths (<8¢) when spread is gapped (>10¢)
+    const yesAsk = getPrice(market, 'yes_ask') || 0;
+    const noAsk = getPrice(market, 'no_ask') || 0;
+    const maxSpread = Math.max(yesAsk - yesBid, noAsk - noBid);
     const scored = [];
     for (const w of ALL_PRESET_WIDTHS) {
+        // In gapped markets, skip narrow widths — they get adversely selected
+        if (maxSpread > 10 && w < 8) continue;
         const arb = calculateArbPrices(market, w);
         const yesGap = yesBid - arb.targetYes;  // how far below YES bid
         const noGap = noBid - arb.targetNo;      // how far below NO bid
@@ -2423,11 +2429,13 @@ function createMarketRow(market, label) {
         if (aq >= 25 && !bothBroken && priceLean <= 40 && bidSum >= 80) {
             const qualLabel = aq >= 60 ? '🟢' : aq >= 35 ? '🟡' : '🔴';
             const _aqLabelColor = aq >= 60 ? '#00ff88' : aq >= 35 ? '#ffaa00' : '#ff4444';
+            const _wideWarn = spreadVal > 10 ? ' ⚠ WIDE' : '';
+            const _spreadColor = spreadVal > 10 ? '#ff4444' : spreadVal > 5 ? '#ffaa00' : '#00ff88';
             recoTypes.push({
                 type: 'apex',
-                label: `${qualLabel}${aq}`,
+                label: `${qualLabel}${aq} <span style="color:${_spreadColor};font-size:7px;">${spreadVal}¢${_wideWarn}</span>`,
                 labelColor: _aqLabelColor,
-                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${spreadVal}¢ · balance ${balPct}% · vol ${liq.vol} · ${qualLabel} ${aq}/100`,
+                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${spreadVal}¢${spreadVal > 10 ? ' (WIDE — use 8¢+ widths)' : ''} · balance ${balPct}% · vol ${liq.vol} · ${qualLabel} ${aq}/100`,
             });
         }
     }
@@ -4996,6 +5004,40 @@ async function viewOrderbook(ticker) {
         const impliedYesAsk = bestNoBid  != null ? 100 - bestNoBid  : '—';
         const impliedNoAsk  = bestYesBid != null ? 100 - bestYesBid : '—';
 
+        // ── Liquidity Analysis ──
+        const calcDepth = (orders, bestBid) => {
+            let total = 0, near = 0;
+            for (const o of orders) {
+                const { price, qty } = parseOrderLevel(o);
+                total += qty;
+                if (bestBid != null && Math.abs(price - bestBid) <= 5) near += qty;
+            }
+            return { total, near };
+        };
+        const yesDepth = calcDepth(yesOrders, bestYesBid);
+        const noDepth = calcDepth(noOrders, bestNoBid);
+        const yesSpread = (bestNoBid != null && bestYesBid != null) ? (100 - bestNoBid) - bestYesBid : 0;
+        const noSpread = (bestYesBid != null && bestNoBid != null) ? (100 - bestYesBid) - bestNoBid : 0;
+        const maxSpr = Math.max(yesSpread, noSpread);
+        const liqColor = (yesDepth.near + noDepth.near) >= 20 ? '#00ff88' : (yesDepth.near + noDepth.near) >= 5 ? '#ffaa00' : '#ff4444';
+        const spreadColor = maxSpr > 10 ? '#ff4444' : maxSpr > 5 ? '#ffaa00' : '#00ff88';
+        const liqHtml = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;font-size:11px;">
+            <div style="background:#0f1419;padding:8px;border-radius:6px;text-align:center;">
+                <div style="color:#8892a6;font-size:9px;">YES DEPTH (5¢)</div>
+                <div style="color:${liqColor};font-weight:700;">${yesDepth.near} contracts</div>
+                <div style="color:#555;font-size:8px;">${yesDepth.total} total</div>
+            </div>
+            <div style="background:#0f1419;padding:8px;border-radius:6px;text-align:center;">
+                <div style="color:#8892a6;font-size:9px;">NO DEPTH (5¢)</div>
+                <div style="color:${liqColor};font-weight:700;">${noDepth.near} contracts</div>
+                <div style="color:#555;font-size:8px;">${noDepth.total} total</div>
+            </div>
+        </div>
+        <div style="text-align:center;padding:4px;margin-bottom:10px;font-size:10px;">
+            Spread: <strong style="color:${spreadColor};">${maxSpr}¢</strong>
+            ${maxSpr > 10 ? '<span style="color:#ff4444;font-weight:700;"> ⚠ WIDE — use 8¢+ widths</span>' : ''}
+        </div>`;
+
         const renderModalRow = (level, color) => {
             const { price, qty } = parseOrderLevel(level);
             return `<div style="display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #2a3447;">
@@ -5015,6 +5057,7 @@ async function viewOrderbook(ticker) {
                     &nbsp;|&nbsp;
                     Buy NO: <strong style="color:#ff4444;">${typeof impliedNoAsk === 'number' ? impliedNoAsk+'¢' : impliedNoAsk}</strong>
                 </div>
+                ${liqHtml}
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                     <div>
                         <div style="color:#00ff88;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">YES BIDS</div>
@@ -5417,6 +5460,24 @@ async function placeSelectedWidthsBots() {
     }).then(r => r.json()).then(data => {
         if (data.bot_id) {
             showNotification(`△ Apex 2.0 deployed: ${data.rungs} rungs × ${qty}`);
+        } else if (data.warning && data.spread) {
+            // Spread-aware entry guard — offer override
+            if (confirm(`⚠️ Spread is ${data.spread}¢ — narrow widths (${(data.narrow_widths||[]).join(', ')}¢) may get adversely selected.\n\nDeploy anyway?`)) {
+                // Retry with force_narrow flag
+                fetch(`${API_BASE}/bot/ladder-arb`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ticker: deployTicker, widths: validWidths.map(v => v.w),
+                        quantity: qty, repeat_count: smartMode ? 0 : repeatCount,
+                        smart_mode: smartMode, game_phase: gamePhase, force_narrow: true,
+                    }),
+                }).then(r2 => r2.json()).then(d2 => {
+                    if (d2.bot_id) showNotification(`△ Apex 2.0 deployed (override): ${d2.rungs} rungs × ${qty}`);
+                    else showNotification(`❌ Apex failed: ${d2.error || 'Unknown error'}`);
+                    loadBots();
+                });
+            }
         } else {
             showNotification(`❌ Apex failed: ${data.error || 'Unknown error'}`);
         }
@@ -6070,10 +6131,18 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const profEst = combined > 0 ? (100 - combined) : 0;
             const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
 
-            // Stage display: breathing / drifting with timer / snapped
+            // Stage display: breathing / drifting with timer / snapped / burst / stop-loss / walking
             let stageHTML;
+            const snapReason = r._snap_reason || '';
+            const isBurst = snapReason.startsWith('burst_');
+            const isStopLossPP = snapReason.startsWith('stop_loss_pp');
+            const walkPrice = r._walk_price;
             if (rStage === 'pending_profit') {
-                if (midDist <= 5) {
+                if (isStopLossPP) {
+                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;animation:botPulse 0.5s infinite;">🛑 STOP-LOSS</span>`;
+                } else if (isBurst) {
+                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;animation:botPulse 0.5s infinite;">⚡ BURST</span>`;
+                } else if (midDist <= 5) {
                     stageHTML = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟢 ${midDist}¢</span>`;
                 } else if (driftStarted) {
                     stageHTML = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 ${midDist}¢ ${driftCountdown}s</span>`;
@@ -6081,7 +6150,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟡 ${midDist}¢</span>`;
                 }
             } else if (rStage === 'snapped') {
-                stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ AT BID</span>`;
+                if (isBurst) {
+                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ BURST</span>`;
+                } else if (isStopLossPP) {
+                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🛑 STOP-LOSS</span>`;
+                } else if (walkPrice) {
+                    stageHTML = `<span style="background:#aa66ff22;color:#aa66ff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">📈 WALK @${walkPrice}¢</span>`;
+                } else {
+                    stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ AT BID</span>`;
+                }
             } else {
                 stageHTML = `<span style="color:#555;font-size:9px;">${rStage}</span>`;
             }

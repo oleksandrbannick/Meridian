@@ -3233,6 +3233,13 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if not bot.get('first_fill_at'):
                     bot['first_fill_at'] = time.time()
                 bot['status'] = 'ladder_arb_active'
+                # ── Burst detection: track anchor fill sides ──
+                if '_anchor_fill_log' not in bot:
+                    bot['_anchor_fill_log'] = []
+                bot['_anchor_fill_log'].append((matched_side, time.time()))
+                # Prune entries older than 30s
+                _cutoff = time.time() - 30
+                bot['_anchor_fill_log'] = [(s, t) for s, t in bot['_anchor_fill_log'] if t > _cutoff]
                 threading.Thread(
                     target=_apex_post_rung_hedge,
                     args=(bot_id, matched_rung),
@@ -6098,7 +6105,7 @@ def _calculate_arb_prices_server(yes_bid, no_bid, yes_ask, no_ask, width):
 
 def _apex_snap_timer(ticker):
     """Dynamic snap timer based on game clock.
-    Early game: 60s patience. Mid game: 25s standard. End game: 5s flash exit."""
+    Early game: 60s patience. Mid game: 20s standard. Crunch (<2min): 5s survival."""
     # Sports without game clocks — always use fixed timer
     series = ticker.split('-')[0].upper() if ticker else ''
     if series.startswith('KXATP') or series.startswith('KXWTA'):
@@ -6130,18 +6137,18 @@ def _apex_snap_timer(ticker):
     if _is_halftime(ticker):
         return 999999  # effectively infinite — no snap during halftime
 
-    # End game: final period, < 2 min remaining → 15s
+    # Crunch time: final period, < 2 min remaining → 5s (survival mode)
     if period >= final_period and secs is not None and secs <= 120:
-        return 15
-    # OT → 15s
+        return 5
+    # OT → 5s (survival mode)
     if period > final_period:
-        return 15
-    # Late: final period, > 2 min → 25s
+        return 5
+    # Late: final period, > 2 min → 20s
     if period >= final_period:
-        return 25
-    # Mid: second half / later periods (Q3 for NBA, P2 for NHL) → 25s
+        return 20
+    # Mid: second half / later periods (Q3 for NBA, P2 for NHL) → 20s
     if period > max(1, final_period // 2):
-        return 25
+        return 20
     # Early game (first half) → 60s patience
     return 60
 
@@ -6374,6 +6381,67 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             return
 
     if current_stage == 'pending_profit':
+        # ── STOP-LOSS: fire immediately if underwater — don't wait for drift timer ──
+        _sl_cents = rung.get('stop_loss_cents', _apex_stop_loss_threshold(width))
+        if hedge_bid > 0 and anchor_price > 0:
+            _combined_sl = anchor_price + hedge_bid
+            if _combined_sl > 100 + _sl_cents:
+                # Extreme: combined > 115 → immediate sellback (taker exit)
+                if _combined_sl > 115:
+                    rung['_snap_reason'] = f'stop_loss_pp_extreme_{_combined_sl}c'
+                    print(f'🛑 APEX STOP-LOSS (PP EXTREME): {bot_id} rung#{rung_idx} ({width}c) combined={_combined_sl}c > 115c → sellback')
+                    bot_log('APEX_STOP_LOSS_PP', bot_id, {
+                        'rung_idx': rung_idx, 'width': width, 'combined': _combined_sl,
+                        'threshold': 100 + _sl_cents, 'anchor_price': anchor_price,
+                        'hedge_bid': hedge_bid, 'extreme': True,
+                    })
+                    _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_sl, _sl_cents)
+                    return
+                # Normal: snap to bid immediately — skip drift timer entirely
+                spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+                _sl_snap = (hedge_bid + 1) if spread > 1 else hedge_bid
+                _sl_snap = max(1, _sl_snap)
+                rung['time_stage'] = 'snapped'
+                rung['status'] = 'snapped'
+                rung['_snap_at'] = now
+                rung['_snap_reason'] = f'stop_loss_pp_{_combined_sl}c'
+                print(f'🛑 APEX STOP-LOSS (PP): {bot_id} rung#{rung_idx} ({width}c) combined={_combined_sl}c > {100 + _sl_cents}c → snap @{_sl_snap}c')
+                bot_log('APEX_STOP_LOSS_PP', bot_id, {
+                    'rung_idx': rung_idx, 'width': width, 'combined': _combined_sl,
+                    'threshold': 100 + _sl_cents, 'anchor_price': anchor_price,
+                    'hedge_bid': hedge_bid,
+                })
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, _sl_snap)
+                return
+
+        # ── BURST DETECTION: 2+ same-side anchor fills in 5s → snap immediately ──
+        _fill_log = bot.get('_anchor_fill_log', [])
+        if _fill_log and anchor_side:
+            _burst_window = now - 5
+            _same_side_recent = sum(1 for s, t in _fill_log if s == anchor_side and t > _burst_window)
+            if _same_side_recent >= 2:
+                if not bot.get('_burst_detected'):
+                    bot['_burst_detected'] = True
+                    bot['_burst_at'] = now
+                    print(f'⚡ BURST: {bot_id} {_same_side_recent}x {anchor_side.upper()} anchors in 5s — snapping all pending rungs')
+                    bot_log('APEX_BURST_DETECTED', bot_id, {
+                        'side': anchor_side, 'count': _same_side_recent,
+                    })
+                # Snap THIS rung to bid immediately
+                _burst_spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+                _burst_snap = (hedge_bid + 1) if _burst_spread > 1 else hedge_bid
+                _burst_snap = max(1, _burst_snap)
+                rung['time_stage'] = 'snapped'
+                rung['status'] = 'snapped'
+                rung['_snap_at'] = now
+                rung['_snap_reason'] = f'burst_{_same_side_recent}x_{anchor_side}'
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, _burst_snap)
+                return
+            else:
+                # Clear burst flag if window passed
+                if bot.get('_burst_detected') and (now - bot.get('_burst_at', 0) > 30):
+                    bot['_burst_detected'] = False
+
         # ── GREEDY SNAP: bid 1-4¢ above our order → snap to bid after timer ──
         # 1-2¢: 15s patience, 3-4¢: 25s patience
         greedy_gap = (hedge_bid - current_hedge_price) if (hedge_bid > 0 and current_hedge_price > 0) else 0
@@ -6412,8 +6480,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
             return
 
-        if midpoint_dist <= 3:
-            # ── WITHIN 3¢: sit, reset drift timer — market breathing ──
+        if midpoint_dist <= 4:
+            # ── WITHIN 4¢: sit, reset drift timer — market breathing ──
             if rung.get('_drift_started_at'):
                 rung['_drift_started_at'] = None  # reset timer — market came back
             rung['_snap_reason'] = 'breathing'
@@ -6519,10 +6587,25 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_hedge)
             return
 
-        # Still drifted — follow bid
+        # Still drifted — follow bid (with walk-up in gapped spreads)
         spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-        snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
-        snap_price = max(1, snap_price)
+        if spread > 4:
+            # ── WALK-UP: time-proportional walk from bid+1 toward midpoint ──
+            # In wide spreads, bid+1 is a dead order nobody will hit.
+            # Gradually walk into the spread over 45s, capped at 40% of spread.
+            _time_snapped = now - rung.get('_snap_at', now)
+            _walk_fraction = min(0.4, _time_snapped / 45)  # 0 → 0.4 over 45s
+            _walk_amount = int(spread * _walk_fraction)
+            snap_price = hedge_bid + 1 + _walk_amount
+            # Walk ceiling: combined ≤ 98¢ (breakeven)
+            _max_walk = max(1, 98 - anchor_price)
+            snap_price = min(snap_price, _max_walk)
+            snap_price = max(1, snap_price)
+            rung['_walk_price'] = snap_price  # expose to frontend
+        else:
+            snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
+            snap_price = max(1, snap_price)
+            rung['_walk_price'] = None
 
         # Amend if price changed or no order exists
         needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 10)
@@ -7279,6 +7362,17 @@ def create_ladder_arb_bot():
         drift_max = max(live_yes_bid, live_no_bid)
         if drift_max >= 80:
             return jsonify({'error': f'Drift guard: max side {drift_max}c — market too decided'}), 400
+
+        # Spread-aware entry guard: warn on narrow widths in gapped spreads
+        _yes_spread = live_yes_ask - live_yes_bid if live_yes_ask > live_yes_bid else 0
+        _no_spread = live_no_ask - live_no_bid if live_no_ask > live_no_bid else 0
+        _max_spread = max(_yes_spread, _no_spread)
+        _narrow_in_gap = [w for w in widths if w < 8 and _max_spread > 10]
+        if _narrow_in_gap and not data.get('force_narrow'):
+            return jsonify({
+                'error': f'Spread is {_max_spread}c — narrow widths ({", ".join(str(w) for w in _narrow_in_gap)}c) likely to get adversely selected. Use 8c+ widths or add force_narrow:true to override.',
+                'warning': True, 'spread': _max_spread, 'narrow_widths': _narrow_in_gap,
+            }), 400
 
         # Compute prices for each width and validate
         rung_specs = []

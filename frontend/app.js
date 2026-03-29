@@ -5718,7 +5718,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
-                ${dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● 20s walk</span>' : ''}
+                ${dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
                 ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
                 ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_stop_reason === 'manual' ? 'stopped' : '2L'})` : bot._smart_stop_pending ? `Stopping after this run · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
             </div>
@@ -5866,9 +5866,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const secsLeft = Math.max(0, hedgeTimeout - waitSec);
                     const combined = avgDogPrice + favPrice;
                     const atBid = favPrice >= favBid && favBid > 0;
-                    const atCeiling = combined >= 98;
+                    const atCeiling = combined > 100;
                     const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
-                    const statusText = atCeiling ? 'AT CEILING' : atBid ? 'AT BID' : 'SNAPPING TO BID';
+                    const statusText = atBid ? 'AT BID' : 'SNAPPING TO BID';
                     const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">

@@ -15825,6 +15825,30 @@ def smart_exit(bot_id):
             'qty': _loser_qty, 'price': sell_price,
             'winner_ticker': winner_ticker, 'winner_side': winner_side,
         }
+        # Record the smart exit recovery as additional P&L
+        # The per-run P&L assumed loser settles at 0¢ — any sell > 0 is extra recovery
+        if sell_price > 0:
+            _se_fee = _kalshi_taker_side_fee_cents(sell_price, _loser_qty)
+            _se_net = sell_revenue - _se_fee
+            if _se_net > 0:
+                session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _se_net
+            else:
+                session_pnl['gross_loss_cents'] = session_pnl.get('gross_loss_cents', 0) + abs(_se_net)
+            _record_trade({
+                'bot_id': bot_id, 'ticker': loser_ticker,
+                'yes_price': sell_price if loser_side == 'yes' else 0,
+                'no_price': sell_price if loser_side == 'no' else 0,
+                'quantity': _loser_qty,
+                'profit_cents': max(0, _se_net),
+                'loss_cents': max(0, -_se_net),
+                'fee_cents': _se_fee,
+                'result': 'smart_exit',
+                'exit_via': 'manual_smart_exit',
+                'sell_back_price': sell_price,
+                'timestamp': time.time(),
+                'bot_category': 'anchor_dog',
+                'cross_market': True,
+            }, bot)
         bot_log('SMART_EXIT_SELL', bot_id, {
             'loser': loser_ticker, 'side': loser_side, 'qty': _loser_qty,
             'sell_price': sell_price, 'winner': winner_ticker,

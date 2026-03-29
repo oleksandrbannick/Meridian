@@ -3039,6 +3039,22 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['status'] = 'dog_filled'
                 _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
                 break
+            elif bot['dog_fill_qty'] > 0 and not bot.get('_hedge_fired'):
+                # Partial fill — hedge immediately with what we have (same as ladder sweep)
+                bot['_hedge_fired'] = True
+                bot['dog_filled_at'] = time.time()
+                bot['quantity'] = bot['dog_fill_qty']  # hedge only what filled
+                bot['status'] = 'dog_filled'
+                # Cancel unfilled remainder
+                dog_oid = bot.get('dog_order_id')
+                if dog_oid and bot['dog_fill_qty'] < qty_bot:
+                    try:
+                        kalshi_client.cancel_order(dog_oid)
+                    except Exception:
+                        pass
+                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelled rest')
+                break
             print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
         elif matched == 'fav':
             bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count

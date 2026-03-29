@@ -9907,14 +9907,35 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['repeat_count'] = 0
                 save_state()
                 return
-            # Smart pricing first — need new_dog_price for hedge fill check
+            # Cross-market: re-check who's the dog — teams may have flipped
             fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
-            if hedge_ticker != ticker:
+            if hedge_ticker and hedge_ticker != ticker:
                 api_read_limiter.wait()
                 _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
+                _current_fav_bid = _best_bid(_fav_ob, fav_side)
+                # Dog flip detection: if old dog is now the expensive side, swap
+                if current_dog_bid > 50 and _current_fav_bid < 50:
+                    print(f'🔄 PHANTOM DOG FLIP: {bot_id} old dog {dog_side}@{current_dog_bid}¢ is now fav — swapping')
+                    bot_log('PHANTOM_DOG_FLIP', bot_id, {
+                        'old_dog_ticker': ticker, 'old_dog_side': dog_side, 'old_dog_bid': current_dog_bid,
+                        'old_fav_ticker': hedge_ticker, 'old_fav_side': fav_side, 'old_fav_bid': _current_fav_bid,
+                    })
+                    # Swap: old fav becomes new dog, old dog becomes new fav
+                    bot['ticker'], bot['hedge_ticker'] = hedge_ticker, ticker
+                    bot['dog_side'], bot['fav_side'] = fav_side, dog_side
+                    ticker = bot['ticker']
+                    hedge_ticker = bot['hedge_ticker']
+                    dog_side = bot['dog_side']
+                    fav_side = bot['fav_side']
+                    # Re-read orderbook for the new dog ticker
+                    ob = _fav_ob  # old fav ob is now the dog ob
+                    current_dog_bid = _current_fav_bid
+                    current_dog_ask = _best_ask(ob, dog_side)
+                    _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
+                    _current_fav_bid = _best_bid(_fav_ob, fav_side)
             else:
                 _fav_ob = ob
-            _current_fav_bid = _best_bid(_fav_ob, fav_side)
+                _current_fav_bid = _best_bid(_fav_ob, fav_side)
             anchor_depth = bot.get('anchor_depth', 5)
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid

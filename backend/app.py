@@ -11399,6 +11399,11 @@ def _phantom_set_final_status(bot, bot_id=''):
     else:
         bot['status'] = 'completed'
         bot['completed_at'] = now
+        # Force-stop smart mode so the completed card renders properly
+        # (prevents mid-repeat limbo on settled markets)
+        if bot.get('smart_mode') and not bot.get('_smart_stopped'):
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_reason'] = bot.get('_smart_stop_reason') or 'final'
         return 'completed'
 
 

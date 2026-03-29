@@ -9680,29 +9680,43 @@ def _handle_phantom(bot_id, bot, actions):
         # The normal hedge timeout handles exits if the fill never comes.
         # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
 
-        # ── Check if bid has gone past ceiling — sell back (SAME-MARKET ONLY) ──
-        # Cross-market: NEVER sell back — both positions settle separately, one will pay 100¢
+        # ── Check if bid has gone past ceiling — sell back immediately ──
+        # If bid > ceiling price AND we're already at ceiling, the hedge will never fill profitably
         _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-        if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold and not _is_cross:
+        if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold:
             # Bid is above ceiling AND we're already at ceiling — can't profit, sell back
+            # Check for partial fav fills first — only sell unhedged dogs
+            _ceil_fav_filled = bot.get('fav_fill_qty', 0)
+            try:
+                api_read_limiter.wait()
+                _ceil_fav_resp = kalshi_client.get_order(fav_order_id)
+                _ceil_fav_filled = max(_ceil_fav_filled, _parse_fill_count(_ceil_fav_resp.get('order', _ceil_fav_resp)))
+                bot['fav_fill_qty'] = _ceil_fav_filled
+            except Exception:
+                pass
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(fav_order_id)
             except Exception:
                 pass
-            bot['fav_order_id'] = None  # clear so sellback/repeat doesn't think hedge is live
+            bot['fav_order_id'] = None
             _over_combined = dog_price + current_fav_bid
-            print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ combined_at_bid={_over_combined}¢ — selling back')
+            _qty = bot.get('quantity', 1)
+            print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ combined={_over_combined}¢ fav_filled={_ceil_fav_filled}/{_qty}')
             bot_log('PHANTOM_CEILING_EXIT', bot_id, {
                 'dog_price': dog_price, 'fav_bid': current_fav_bid,
                 'fav_price': current_fav_price, 'max_fav_hold': max_fav_hold,
                 'combined_at_bid': _over_combined, 'ceiling': WALK_CEILING,
+                'cross_market': bool(_is_cross), 'fav_filled': _ceil_fav_filled,
             })
-            _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-            return
-        elif current_fav_bid > max_fav_hold and _is_cross:
-            # Cross-market: just hold at ceiling, waiting for fill — don't sell
-            print(f'📌 PHANTOM CROSS CEILING HOLD: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ — holding (cross-market)')
+            if _ceil_fav_filled > 0 and _ceil_fav_filled < _qty:
+                # Partial fill — only sell back uncovered dogs
+                _sell_qty = _qty - _ceil_fav_filled
+                bot['quantity'] = _sell_qty
+                _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
+                bot['quantity'] = _qty
+            else:
+                _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
             return
 
         # ── Bid-follow: always snap to bid, no walk intervals ──

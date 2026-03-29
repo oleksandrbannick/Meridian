@@ -9038,13 +9038,28 @@ def _handle_phantom(bot_id, bot, actions):
             _audit('DOG_FILLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'dog_price': actual_dog_price, 'qty': qty})
             _audit_position_check(bot_id, ticker, dog_side, 'after_dog_fill')
 
-            # Get current fav bid from orderbook (hedge_ticker for cross-market)
-            try:
-                api_read_limiter.wait()
-                ob = kalshi_client.get_market_orderbook(hedge_ticker)
-                fav_bid = _best_bid(ob, fav_side)
-            except Exception:
-                fav_bid = 0
+            # Record raw hedge speed — same as WS path
+            _raw_ms_mon = (time.time() - now) * 1000
+            bot['raw_hedge_ms'] = round(_raw_ms_mon, 1)
+
+            # Get fav bid — WS cache first (fast), REST fallback only if needed
+            fav_bid = 0
+            _hedge_price_path = 'monitor_rest'
+            if ws_manager:
+                _ws_fav = ws_manager.get_price(hedge_ticker)
+                if _ws_fav:
+                    fav_bid = _ws_fav.get(f'{fav_side}_bid', 0)
+                    if fav_bid > 0:
+                        _hedge_price_path = 'monitor_ws'
+            if fav_bid <= 0:
+                # WS cache miss — fall back to REST (slower but reliable)
+                try:
+                    api_read_limiter.wait()
+                    ob = kalshi_client.get_market_orderbook(hedge_ticker)
+                    fav_bid = _best_bid(ob, fav_side)
+                    _hedge_price_path = 'monitor_rest'
+                except Exception:
+                    fav_bid = 0
 
             if fav_bid <= 0:
                 print(f'⚠ PHANTOM {bot_id}: dog filled but no fav bid — holding')
@@ -9082,7 +9097,14 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['fav_order_id'] = fav_order_id
                 bot['fav_price'] = actual_fav_price
                 bot['status'] = 'fav_hedge_posted'
-                bot['fav_posted_at'] = now
+                bot['fav_posted_at'] = time.time()
+                bot['fav_walk_count'] = 0
+                bot['fav_last_walk_at'] = None
+
+                # Record hedge latency right after post (not later in monitor)
+                _rt_ms_mon = (time.time() - now) * 1000
+                bot['hedge_latency_ms'] = round(_rt_ms_mon, 1)
+                _record_latency('fill_to_hedge_phantom', _rt_ms_mon, {'bot_id': bot_id, 'type': 'phantom', 'path': _hedge_price_path})
 
                 # Update compat fields
                 if fav_side == 'yes':
@@ -9092,13 +9114,14 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['no_price'] = actual_fav_price
                     bot['no_order_id'] = fav_order_id
 
-                print(f'👻 PHANTOM HEDGE: {bot_id} dog filled @{actual_dog_price}¢ → fav {fav_side.upper()} posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢)')
+                print(f'👻 PHANTOM HEDGE: {bot_id} dog filled @{actual_dog_price}¢ → fav {fav_side.upper()} posted @{actual_fav_price}¢ (total {actual_dog_price + actual_fav_price}¢) [{_hedge_price_path} {_rt_ms_mon:.0f}ms]')
                 _audit('FAV_HEDGE_POSTED', bot_id, {'ticker': ticker, 'fav_side': fav_side, 'fav_price': actual_fav_price, 'fav_order_id': fav_order_id})
                 bot_log('PHANTOM_FAV_POSTED', bot_id, {
                     'dog_price': actual_dog_price, 'fav_price': actual_fav_price,
                     'fav_order_id': fav_order_id[:12], 'fav_bid': fav_bid,
                     'combined': actual_dog_price + actual_fav_price,
-                    'target_width': bot.get('target_width', 5), 'path': 'monitor',
+                    'target_width': bot.get('target_width', 5), 'path': _hedge_price_path,
+                    'hedge_latency_ms': round(_rt_ms_mon, 1),
                 })
                 actions.append({'bot_id': bot_id, 'action': 'anchor_fav_posted',
                                 'dog_price': actual_dog_price, 'fav_price': actual_fav_price})

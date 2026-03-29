@@ -6355,20 +6355,27 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                 return  # give it a chance to come back
             if now - rung['_dead_market_at'] < 30:
                 return  # wait 30s before giving up
-            # 30s with no bid — cancel hedge, record as loss
+            # 30s with no bid — cancel hedge, sellback unhedged portion
+            _dead_hfq = rung.get('hedge_fill_qty', 0)
             if hedge_oid:
                 try:
                     api_rate_limiter.wait()
                     kalshi_client.cancel_order(hedge_oid)
                 except Exception:
                     pass
-            rung['status'] = 'completed'
-            rung['completed'] = True
-            rung['hedge_fill_qty'] = 0
-            rung['_snap_reason'] = 'dead_market'
-            print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) hedge_bid=0 for 30s → completing as loss')
-            bot_log('APEX_DEAD_MARKET_RUNG', bot_id, {'rung_idx': rung_idx, 'width': width})
-            _apex_record_rung_pnl(bot_id, rung_idx)
+                rung['hedge_order_id'] = None
+            if _dead_hfq > 0:
+                # Partial hedge fills — sellback handles cleanup of both sides
+                print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) {_dead_hfq}/{qty} hedge filled → sellback remainder')
+                bot_log('APEX_DEAD_MARKET_RUNG', bot_id, {'rung_idx': rung_idx, 'width': width, 'hedge_fill': _dead_hfq})
+                _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, rung.get('stop_loss_cents', 6))
+            else:
+                rung['status'] = 'completed'
+                rung['completed'] = True
+                rung['_snap_reason'] = 'dead_market'
+                print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) hedge_bid=0 for 30s → completing as loss')
+                bot_log('APEX_DEAD_MARKET_RUNG', bot_id, {'rung_idx': rung_idx, 'width': width})
+                _apex_record_rung_pnl(bot_id, rung_idx)
             save_state()
             return
 
@@ -6384,8 +6391,21 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                 _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
                 return
 
-        # NOTE: No stop-loss in snapped stage — hedge is already at bid,
-        # selling back costs the same + taker fees. Just let it fill.
+        # ── SNAPPED TIMEOUT: if stuck in snapped 60s+ with partial fill, sellback remainder ──
+        # Full-open hedges are cheap to wait on (already at bid). But partial fills
+        # mean we're exposed on the unhedged portion with no progress — cut it.
+        _snap_at = rung.get('_snap_at', 0)
+        _snapped_elapsed = now - _snap_at if _snap_at else 0
+        _hfq = rung.get('hedge_fill_qty', 0)
+        if _snapped_elapsed >= 60 and 0 < _hfq < qty:
+            print(f'⏰ APEX SNAPPED TIMEOUT: {bot_id} rung#{rung_idx} ({width}c) {_hfq}/{qty} filled after {_snapped_elapsed:.0f}s → sellback remainder')
+            bot_log('APEX_SNAPPED_TIMEOUT', bot_id, {
+                'rung_idx': rung_idx, 'width': width, 'hedge_fill': _hfq, 'qty': qty,
+                'elapsed': round(_snapped_elapsed, 1),
+            })
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid,
+                                anchor_price + hedge_bid, rung.get('stop_loss_cents', 6))
+            return
 
         # Market came back within width of target? REVERT to target price for full profit
         if midpoint_dist <= width and target_hedge > 0:

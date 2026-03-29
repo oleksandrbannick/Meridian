@@ -12002,6 +12002,13 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         print(f'🔄 PHANTOM SELLBACK REPEAT: {bot_id} {_label} — re-anchoring')
     else:
         _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        # Clear current cycle fills so ghost count doesn't double-count
+        # (fills are already rolled into _cross_settled_qty)
+        bot['dog_fill_qty'] = 0
+        bot['fav_fill_qty'] = 0
+        bot['yes_fill_qty'] = 0
+        bot['no_fill_qty'] = 0
+        bot['total_dog_fill_qty'] = 0
         if _is_cross:
             bot['status'] = 'awaiting_settlement'
             bot['awaiting_since'] = now

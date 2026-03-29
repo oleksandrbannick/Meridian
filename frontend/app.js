@@ -5041,7 +5041,7 @@ function closeOrderbookModal() {
 }
 
 // Place both limit orders and register the bot
-const ALL_PRESET_WIDTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+const ALL_PRESET_WIDTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
 // Apex 2.0 stop-loss thresholds per width (mirrors backend _apex_stop_loss_threshold)

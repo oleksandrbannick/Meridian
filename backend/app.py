@@ -6331,8 +6331,30 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             return  # Already filled
 
         if hedge_bid <= 0:
-            return  # No market data yet
+            # Market dead — check if it's been dead for a while, then force-complete as loss
+            if not rung.get('_dead_market_at'):
+                rung['_dead_market_at'] = now
+                return  # give it a chance to come back
+            if now - rung['_dead_market_at'] < 30:
+                return  # wait 30s before giving up
+            # 30s with no bid — cancel hedge, record as loss
+            if hedge_oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(hedge_oid)
+                except Exception:
+                    pass
+            rung['status'] = 'completed'
+            rung['completed'] = True
+            rung['hedge_fill_qty'] = 0
+            rung['_snap_reason'] = 'dead_market'
+            print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) hedge_bid=0 for 30s → completing as loss')
+            bot_log('APEX_DEAD_MARKET_RUNG', bot_id, {'rung_idx': rung_idx, 'width': width})
+            _apex_record_rung_pnl(bot_id, rung_idx)
+            save_state()
+            return
 
+        rung['_dead_market_at'] = None  # bid is live, clear dead timer
         # Market came back within width of target? REVERT to target price for full profit
         if midpoint_dist <= width and target_hedge > 0:
             rung['time_stage'] = 'pending_profit'
@@ -15903,10 +15925,23 @@ def _sweep_orphaned_orders():
             btype = b.get('type', '')
             if cat in ('anchor_dog', 'anchor_ladder'):
                 dog_side = b.get('dog_side', '')
-                dog_qty = _safe_int_sweep(b.get('total_dog_fill_qty')) or _safe_int_sweep(b.get('dog_fill_qty')) or _safe_int_sweep(b.get('quantity'))
                 fav_side = b.get('fav_side', '')
-                fav_qty = _safe_int_sweep(b.get('fav_fill_qty'))
                 _hedge_t = b.get('hedge_ticker', t)  # cross-market: fav on different ticker
+                _is_cross_oc = _hedge_t and _hedge_t != t
+                # Cross-market awaiting: use _cross_settled_qty (fill counts are cleared on repeat)
+                if _is_cross_oc and b.get('status') == 'awaiting_settlement':
+                    _se = b.get('_smart_exit_sold')
+                    dog_qty = _safe_int_sweep(b.get('_cross_settled_qty_dog')) or _safe_int_sweep(b.get('_cross_settled_qty'))
+                    fav_qty = _safe_int_sweep(b.get('_cross_settled_qty_fav')) or _safe_int_sweep(b.get('_cross_settled_qty'))
+                    # Subtract smart exit sold positions
+                    if _se and _se.get('qty', 0) > 0:
+                        if _se.get('ticker') == t:
+                            dog_qty = max(0, dog_qty - _se['qty'])
+                        elif _se.get('ticker') == _hedge_t:
+                            fav_qty = max(0, fav_qty - _se['qty'])
+                else:
+                    dog_qty = _safe_int_sweep(b.get('total_dog_fill_qty')) or _safe_int_sweep(b.get('dog_fill_qty')) or _safe_int_sweep(b.get('quantity'))
+                    fav_qty = _safe_int_sweep(b.get('fav_fill_qty'))
                 if dog_qty > 0 and dog_side:
                     managed_qty[(t, dog_side)] = managed_qty.get((t, dog_side), 0) + dog_qty
                 if fav_qty > 0 and fav_side:

@@ -4572,16 +4572,22 @@ function openBotModal(market, _side, _price) {
         else if (sigType === 'early') { sigText = '⚪ EARLY — no score context yet'; sigColor = '#8892a6'; }
         else if (sigType === 'pregame') { sigText = '⏳ PREGAME'; sigColor = '#8892a6'; }
         else { sigText = `💡 ${liq.tierLabel}`; }
+        const _tmpRec = getRecommendedPresets(liq.tier, sigType, market);
+        const _recRange = _tmpRec.length ? `${_tmpRec[0]}-${_tmpRec[_tmpRec.length-1]}¢` : '';
         recEl.style.display = 'block';
         recEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">`
             + `<span style="color:${sigColor};font-weight:700;">${sigText}</span>`
-            + `<span style="color:#8892a6;font-size:10px;">${liq.yesBid}+${liq.noBid}=${liq.bidSum}¢ · spread ${liq.avgSpread}¢</span>`
+            + `<span style="color:#8892a6;font-size:10px;">${liq.yesBid}+${liq.noBid}=${liq.bidSum} · spread ${liq.avgSpread}c${_recRange ? ' · rec ' + _recRange : ''}</span>`
             + `</div>`;
     } else if (recEl) {
         recEl.style.display = 'none';
     }
-    window._recPresets = [];
+    // Auto-recommend widths based on spread + signal — pre-select best ones
+    const recWidths = getRecommendedPresets(liq.tier, sigType, market);
+    window._recPresets = recWidths;
     _selectedWidths.clear();
+    // Pre-select top 3 recommended widths (user can toggle)
+    recWidths.slice(0, 3).forEach(w => _selectedWidths.add(w));
     _syncPresetStyles();
     recalcArbPrices();
     _updateDeployButton();
@@ -4902,20 +4908,27 @@ function applyPreset(width) {
 }
 
 function _syncPresetStyles() {
+    const rec = window._recPresets || [];
     document.querySelectorAll('.arb-preset-btn').forEach(btn => {
         const w = parseInt(btn.dataset.width);
         const label = btn.querySelector('div');
         const isSelected = _selectedWidths.has(w);
+        const isRec = rec.includes(w);
         if (isSelected) {
             btn.style.border = '2px solid #ffd700';
             btn.style.background = '#ffd70022';
             btn.style.boxShadow = '0 0 8px #ffd70044';
             if (label) { label.textContent = `${w}¢`; label.style.color = '#ffd700'; }
+        } else if (isRec) {
+            btn.style.border = '2px solid #00ff8866';
+            btn.style.background = '#00ff8811';
+            btn.style.boxShadow = 'none';
+            if (label) { label.textContent = `${w}¢`; label.style.color = '#00ff88'; }
         } else {
             btn.style.border = '2px solid #1e274066';
             btn.style.background = '#0a0e1a';
             btn.style.boxShadow = 'none';
-            if (label) { label.textContent = `${w}¢`; label.style.color = '#00ff88'; }
+            if (label) { label.textContent = `${w}¢`; label.style.color = '#556'; }
         }
     });
 }

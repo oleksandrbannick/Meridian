@@ -5432,11 +5432,11 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
         const _runs = (bot.repeats_done || 0) + 1;
         const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
-        const _isAwaiting = status === 'awaiting_settlement' || _isCross;
         const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
         const _crossQty = bot._cross_settled_qty ?? 0;
         let _crossQtyDog = bot._cross_settled_qty_dog ?? _crossQty;
         let _crossQtyFav = bot._cross_settled_qty_fav ?? _crossQty;
+        const _isAwaiting = status === 'awaiting_settlement' || (_isCross && (_crossQtyDog > 0 || _crossQtyFav > 0));
         // Subtract smart exit sold qty from the correct side
         if (bot._smart_exit_sold && bot._smart_exit_sold.qty > 0) {
             if (bot._smart_exit_sold.ticker === bot.ticker) _crossQtyDog = Math.max(0, _crossQtyDog - bot._smart_exit_sold.qty);

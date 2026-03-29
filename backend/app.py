@@ -3978,6 +3978,9 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
+        bot['_cross_settled_qty'] = 0
+        bot['_cross_settled_qty_dog'] = 0
+        bot['_cross_settled_qty_fav'] = 0
         for rung in bot.get('rungs', []):
             rung['fill_qty'] = 0
             rung['order_id'] = None
@@ -6268,20 +6271,6 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         return
 
     if current_stage == 'pending_profit':
-        # ── STOP-LOSS: if combined already past threshold, sell back immediately ──
-        _sl = rung.get('stop_loss_cents', 6)
-        _combined_now = (anchor_price + hedge_bid) if hedge_bid > 0 else 0
-        if _combined_now >= 100 + _sl:
-            rung['time_stage'] = 'snapped'
-            rung['status'] = 'snapped'
-            rung['_snap_reason'] = f'stop_loss_{_combined_now}c'
-            print(f'🛑 APEX STOP→SELL: {bot_id} rung#{rung_idx} ({width}c) combined={_combined_now}c > {100+_sl}c → selling back')
-            bot_log('APEX_STOP_LOSS_SNAP', bot_id, {
-                'rung_idx': rung_idx, 'width': width, 'combined': _combined_now, 'threshold': 100 + _sl,
-            })
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
-            return
-
         # ── GREEDY SNAP: bid 1-4¢ above our order → snap to bid after timer ──
         # 1-2¢: 15s patience, 3-4¢: 25s patience
         greedy_gap = (hedge_bid - current_hedge_price) if (hedge_bid > 0 and current_hedge_price > 0) else 0

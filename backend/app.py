@@ -6271,7 +6271,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         # ── STOP-LOSS: if combined already past threshold, sell back immediately ──
         _sl = rung.get('stop_loss_cents', 6)
         _combined_now = (anchor_price + hedge_bid) if hedge_bid > 0 else 0
-        if _combined_now > 100 + _sl:
+        if _combined_now >= 100 + _sl:
             rung['time_stage'] = 'snapped'
             rung['status'] = 'snapped'
             rung['_snap_reason'] = f'stop_loss_{_combined_now}c'
@@ -6383,7 +6383,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         # ── STOP-LOSS: if combined past threshold, sell back instead of chasing ──
         _sl = rung.get('stop_loss_cents', 6)
         _combined_now = anchor_price + hedge_bid
-        if _combined_now > 100 + _sl:
+        if _combined_now >= 100 + _sl:
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 

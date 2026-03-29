@@ -9470,30 +9470,41 @@ def _handle_phantom(bot_id, bot, actions):
     # ── STATE: fav_hedge_posted — fav posted, waiting for fill ────
     if status == 'fav_hedge_posted':
         fav_order_id = bot.get('fav_order_id')
+        # Partial fill recovery: if hedge already filled but order ID cleared, use cached fill qty
+        _partial_qty = bot.get('_partial_hedge_qty', 0)
         if not fav_order_id:
-            bot_log('PHANTOM_NO_FAV_ORDER', bot_id, {'status': status}, level='WARN')
-            return
+            _cached_fav_fill = bot.get('fav_fill_qty', 0)
+            if _partial_qty > 0 and _cached_fav_fill >= _partial_qty:
+                # Hedge filled for partial amount — adjust qty and let completion logic run
+                qty = _partial_qty
+                bot['quantity'] = _partial_qty
+                print(f'✅ PHANTOM PARTIAL RECOVERY: {bot_id} fav already filled {_cached_fav_fill}/{_partial_qty} — completing with partial qty')
+            else:
+                bot_log('PHANTOM_NO_FAV_ORDER', bot_id, {'status': status, 'partial_qty': _partial_qty, 'fav_fill': _cached_fav_fill}, level='WARN')
+                return
 
-        api_read_limiter.wait()
-        fav_resp = kalshi_client.get_order(fav_order_id)
-        fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
-        fav_filled = _parse_fill_count(fav_ord)
-        bot['fav_fill_qty'] = fav_filled
+        if fav_order_id:
+            api_read_limiter.wait()
+            fav_resp = kalshi_client.get_order(fav_order_id)
+            fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
+            fav_filled = _parse_fill_count(fav_ord)
+            bot['fav_fill_qty'] = fav_filled
 
-        # Update compat fill fields
-        if fav_side == 'yes':
-            bot['yes_fill_qty'] = fav_filled
-        else:
-            bot['no_fill_qty'] = fav_filled
+            # Update compat fill fields
+            if fav_side == 'yes':
+                bot['yes_fill_qty'] = fav_filled
+            else:
+                bot['no_fill_qty'] = fav_filled
 
-        bot_log('PHANTOM_FAV_POLL', bot_id, {
-            'fav_filled': fav_filled, 'qty': qty,
-            'fav_price': bot.get('fav_price'), 'dog_price': bot.get('dog_price'),
-            'fav_order_id': fav_order_id[:12],
-            'fav_walk_count': bot.get('fav_walk_count', 0),
-            'wait_s': round(now - (bot.get('fav_posted_at') or now), 1),
-        })
+            bot_log('PHANTOM_FAV_POLL', bot_id, {
+                'fav_filled': fav_filled, 'qty': qty,
+                'fav_price': bot.get('fav_price'), 'dog_price': bot.get('dog_price'),
+                'fav_order_id': fav_order_id[:12],
+                'fav_walk_count': bot.get('fav_walk_count', 0),
+                'wait_s': round(now - (bot.get('fav_posted_at') or now), 1),
+            })
 
+        fav_filled = bot.get('fav_fill_qty', 0)  # ensure fav_filled is always set
         if fav_filled >= qty:
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
             # re-run the completion so the trade actually gets recorded in history
@@ -9502,7 +9513,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
             # BOTH LEGS FILLED — arb complete!
-            actual_fav_price = get_actual_fill_price(fav_order_id, fav_side) or bot['fav_price']
+            actual_fav_price = (get_actual_fill_price(fav_order_id, fav_side) if fav_order_id else None) or bot['fav_price']
             bot['fav_price'] = actual_fav_price
             dog_price = bot['dog_price']
 

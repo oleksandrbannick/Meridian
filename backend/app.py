@@ -4011,9 +4011,17 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         bot['_sellback_attempts'] = 0
         bot['_straggler_sold_qty'] = 0
         bot['_straggler_loss_cents'] = 0
-        bot['_cross_settled_qty'] = 0
-        bot['_cross_settled_qty_dog'] = 0
-        bot['_cross_settled_qty_fav'] = 0
+        # Cross-market: accumulate hedged positions (they're held for settlement), don't zero
+        _is_cross_sb = bot.get('hedge_ticker') and bot.get('hedge_ticker') != bot.get('ticker')
+        if _is_cross_sb:
+            _held = bot.get('fav_fill_qty', 0)  # only the hedged pairs are held
+            bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _held
+            bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _held
+            bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _held
+        else:
+            bot['_cross_settled_qty'] = 0
+            bot['_cross_settled_qty_dog'] = 0
+            bot['_cross_settled_qty_fav'] = 0
         for rung in bot.get('rungs', []):
             rung['fill_qty'] = 0
             rung['order_id'] = None
@@ -9988,6 +9996,19 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _pos2 = kalshi_client.get_positions(ticker=_hedge_t)
             _p2_list = _pos2.get('market_positions', _pos2.get('positions', []))
             _pos2_qty = sum(abs(_parse_position_qty(p)) for p in _p2_list if p.get('ticker') == _hedge_t)
+
+            # Reconcile card position counts with actual Kalshi positions
+            _old_dog = bot.get('_cross_settled_qty_dog', 0)
+            _old_fav = bot.get('_cross_settled_qty_fav', 0)
+            if _pos1_qty != _old_dog or _pos2_qty != _old_fav:
+                bot['_cross_settled_qty_dog'] = _pos1_qty
+                bot['_cross_settled_qty_fav'] = _pos2_qty
+                bot['_cross_settled_qty'] = max(_pos1_qty, _pos2_qty)
+                print(f'🔄 SETTLE RECONCILE: {bot_id} dog {_old_dog}→{_pos1_qty} fav {_old_fav}→{_pos2_qty}')
+                bot_log('PHANTOM_SETTLEMENT_RECONCILE', bot_id, {
+                    'old_dog': _old_dog, 'new_dog': _pos1_qty,
+                    'old_fav': _old_fav, 'new_fav': _pos2_qty,
+                })
 
             if _pos1_qty == 0 and _pos2_qty == 0:
                 bot['status'] = 'completed'

@@ -5853,15 +5853,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                          + (repostCt > 0 ? ` <span style="color:#888;font-size:9px;">(×${repostCt})</span>` : '');
                 }
                 if (status === 'fav_hedge_posted') {
+                    const hedgeTimeout = bot.hedge_timeout_s || 120;
+                    const favPostedAt = bot.fav_posted_at || bot.dog_filled_at || 0;
+                    const waitSec = favPostedAt > 0 ? Date.now()/1000 - favPostedAt : 0;
+                    const secsLeft = Math.max(0, hedgeTimeout - waitSec);
                     const combined = avgDogPrice + favPrice;
                     const atBid = favPrice >= favBid && favBid > 0;
-                    const overCeiling = combined > 100;
-                    const overCeilingSince = bot._over_ceiling_since || 0;
-                    const ceilElapsed = overCeilingSince > 0 ? Date.now()/1000 - overCeilingSince : 0;
-                    const ceilSecsLeft = overCeiling && overCeilingSince > 0 ? Math.max(0, 20 - ceilElapsed) : 0;
-                    const statusIcon = overCeiling ? '🔴' : atBid ? '🎯' : '⚡';
-                    const statusText = overCeiling ? `OVER 100¢ — ${Math.ceil(ceilSecsLeft)}s` : atBid ? 'AT BID' : 'SNAPPING';
-                    const statusCol = overCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
+                    const atCeiling = combined >= 98;
+                    const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
+                    const statusText = atCeiling ? 'AT CEILING' : atBid ? 'AT BID' : 'SNAPPING TO BID';
+                    const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
@@ -5869,8 +5870,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 98 ? '#00ff88' : combined <= 100 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · snap #${bot.fav_walk_count}` : ''}</span>
-                            ${overCeiling && ceilSecsLeft > 0 ? `<span style="color:#ff4444;font-weight:700;font-family:monospace;font-size:12px;">⏱ ${Math.ceil(ceilSecsLeft)}s</span>` : ''}
+                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${wc > 0 ? ` · step #${wc} · ${_phWalkInt}s` : ''} ${_phUrgBadge}</span>
+                            <span style="color:${secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff'};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(secsLeft/60)}:${String(Math.floor(secsLeft%60)).padStart(2,'0')}</span>
                         </div>
                     </div><div style="display:none;">`;
                 }
@@ -6264,9 +6265,10 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const filledAsk = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
     const currentHedgePrice = hedgePrice || 0;
     const combined = avgFilled + currentHedgePrice;
+    const _botCeiling = bot.hard_ceiling || 98;
     const firstFillAt = bot.first_fill_at || 0;
     const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
-    const atCeiling = combined > 100;
+    const atCeiling = combined >= _botCeiling;
     const gameUrgency = bot._game_urgency || 'normal';
     const walkInterval = bot._walk_interval != null ? bot._walk_interval : (atCeiling ? 3 : 20);
     const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(walkInterval - (nowSec - lastWalkAt))) : walkInterval;
@@ -6276,11 +6278,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         : '<span style="color:#8892a6;font-weight:600;font-size:9px;background:#8892a612;padding:1px 4px;border-radius:3px;">NORMAL</span>';
     const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
     const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
-    // Over-ceiling timer
-    const overCeilingSince = bot._over_ceiling_since || 0;
-    const ceilElapsed = overCeilingSince > 0 ? nowSec - overCeilingSince : 0;
-    const ceilSecsLeft = combined > 100 && overCeilingSince > 0 ? Math.max(0, 20 - ceilElapsed) : 0;
-    const ceilingDist = isFilled ? (100 - combined) : 0;
+    // Ceiling distance
+    const ceilingDist = isFilled ? (98 - combined) : 0;
 
     let rungsHTML;
     if (status === 'ladder_arb_active') {
@@ -6465,12 +6464,13 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             const maxHedge = bot._max_hedge || 0;
             const snapReady = bot._snap_ready || false;
             const spread = unfilledAsk > 0 ? unfilledAsk - unfilledBid : 0;
-            // State label: at bid, snapping, or over-ceiling with timer
+            // State label — 3 zones: snap (≤96), walk (97), ceiling (≥98)
             let stateLabel, stateColor;
             if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
-            else if (currentHedgePrice >= unfilledBid && unfilledBid > 0) { stateLabel = 'AT BID'; stateColor = '#00ff88'; }
-            else if (combined > 100) { stateLabel = ceilSecsLeft > 0 ? `OVER 100¢ — ${Math.ceil(ceilSecsLeft)}s` : 'OVER 100¢'; stateColor = '#ff4444'; }
-            else { stateLabel = 'SNAPPING'; stateColor = '#00aaff'; }
+            else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
+            else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
+            else if (combined >= _botCeiling) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
+            else { stateLabel = 'WALKING'; stateColor = '#00aaff'; }
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                     <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
@@ -6485,7 +6485,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                     <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
                 </div>
                 <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
-                    ${combined > 100 ? `<span style="color:#ff4444;font-weight:700;">⏱ ${ceilSecsLeft > 0 ? Math.ceil(ceilSecsLeft) + 's' : 'EXPIRED'}</span>` : `<span>margin: <strong style="color:${ceilingDist >= 4 ? '#00ff88' : ceilingDist >= 2 ? '#ffaa00' : '#ff4444'};">${ceilingDist}¢</strong></span>`}
+                    <span>ceiling: <strong style="color:${_botCeiling <= 96 ? '#00ff88' : _botCeiling <= 97 ? '#ffaa00' : '#ff4444'};">${_botCeiling}¢</strong></span>
+                    <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
                     ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
                     ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
                 </div>
@@ -6626,7 +6627,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     } else if (isFilled) {
         const isHalftime = ((gameScores && gameKey && (gameScores[gameKey] || {}).status_detail) || '').toLowerCase().includes('half');
         const walkLabel = walkCount > 0 ? `walked +${walkCount}` : '';
-        const ceilingStr = combined > 100 ? `<span style="color:#ff4444;font-weight:700;">⏱ over 100¢${ceilSecsLeft > 0 ? ' — ' + Math.ceil(ceilSecsLeft) + 's' : ''}</span>` : ceilingDist <= 3 ? `<span style="color:${ceilingDist <= 0 ? '#ff4444' : '#ff8800'};font-weight:700;">${ceilingDist}¢ to 100¢</span>` : '';
+        const ceilingStr = ceilingDist <= 3 ? `<span style="color:${ceilingDist <= 0 ? '#ff4444' : '#ff8800'};font-weight:700;">${ceilingDist}¢ to ceiling</span>` : '';
 
         if (isHalftime) {
             walkInfo = `<div style="background:#818cf822;border:1px solid #818cf833;border-radius:5px;padding:6px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
@@ -6728,8 +6729,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                     </span>
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                    <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 98 ? '#00ff88' : combined <= 100 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · snap #${walkCount} · filled ${fillAgeStr} ago</span>
-                    ${urgencyBadge} ${ceilingStr}
+                    <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>
+                    ${urgencyBadge} ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
                     ${(() => {
                         const sbTimeLeft = bot._sellback_time_left;
                         const sbGrace = bot._sellback_grace_s || 0;
@@ -6783,7 +6784,9 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         const currentCycle = repeatsDone + 1;
         cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
     }
-    // ceiling badge removed — phantom snaps past 100¢ now, no hard ceiling
+    if (_botCeiling < 98) {
+        cycleInfo += ` <span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>`;
+    }
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
@@ -7898,26 +7901,27 @@ async function loadBots() {
                 const favSide = (bot.fav_side || '?').toUpperCase();
                 const dogPrice = bot.dog_price || '?';
                 const favPrice = bot.fav_price || '?';
+                const hedgeTimeout = bot.hedge_timeout_s || 120;
+                const dogFilledAt = bot.dog_filled_at || 0;
+                const favPostedAt = bot.fav_posted_at || dogFilledAt || 0;
+                const hedgeElapsed = favPostedAt > 0 ? (Date.now()/1000 - favPostedAt) : 0;
+                const hedgeLeft = Math.max(0, hedgeTimeout - hedgeElapsed);
+                const hedgeColor = hedgeLeft <= 15 ? '#ff4444' : hedgeLeft <= 45 ? '#ff8800' : '#00aaff';
                 const isFavPosted = bot.status === 'fav_hedge_posted';
                 const favFillQty = bot.fav_fill_qty || 0;
                 const qty = bot.quantity || 1;
                 const totalCost = typeof dogPrice === 'number' && typeof favPrice === 'number' ? dogPrice + favPrice : '?';
                 const estPnl = typeof totalCost === 'number' ? (100 - totalCost) * qty : '?';
                 const pnlColor = typeof estPnl === 'number' ? (estPnl >= 0 ? '#00ff88' : '#ff4444') : '#555';
-                const _ocs = bot._over_ceiling_since || 0;
-                const _ocElap = _ocs > 0 ? Date.now()/1000 - _ocs : 0;
-                const _ocLeft = totalCost > 100 && _ocs > 0 ? Math.max(0, 20 - _ocElap) : 0;
-                const overCeil = typeof totalCost === 'number' && totalCost > 100;
-                const hedgeColor = overCeil ? '#ff4444' : '#00aaff';
                 const sellbackAttempts = bot._sellback_attempts || 0;
                 stopLossInfo = `<div style="background:${isFavPosted ? '#00aaff11' : '#00ff8811'};border:1px solid ${isFavPosted ? '#00aaff33' : '#00ff8833'};border-radius:5px;padding:6px 8px;font-size:10px;color:${isFavPosted ? '#00aaff' : '#00ff88'};margin-top:6px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:3px;">
                         <span>✓ <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ ${favFillQty > 0 ? `(${favFillQty}/${qty} filled)` : 'posted'}` : 'posting fav hedge...'}</span>
-                        ${overCeil ? `<span style="color:#ff4444;font-weight:700;font-family:monospace;font-size:12px;">⏱ ${Math.ceil(_ocLeft)}s</span>` : ''}
+                        <span style="color:${hedgeColor};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(hedgeLeft/60)}:${String(Math.floor(hedgeLeft%60)).padStart(2,'0')}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;">
-                        <span>Total: <strong style="color:${typeof totalCost === 'number' && totalCost <= 100 ? '#00ff88' : '#ff4444'};">${totalCost}¢</strong> · Est P&L: <strong style="color:${pnlColor};">${typeof estPnl === 'number' ? (estPnl >= 0 ? '+' : '') + estPnl + '¢' : '?'}</strong></span>
-                        ${overCeil ? '<span style="color:#ff4444;">Over 100¢ — 20s timer</span>' : sellbackAttempts > 0 ? `<span style="color:#555;">⚠ sellback retry #${sellbackAttempts}</span>` : ''}
+                        <span>Total: <strong>${totalCost}¢</strong> · Est P&L: <strong style="color:${pnlColor};">${typeof estPnl === 'number' ? (estPnl >= 0 ? '+' : '') + estPnl + '¢' : '?'}</strong></span>
+                        <span style="color:#555;">${sellbackAttempts > 0 ? `⚠ sellback retry #${sellbackAttempts} · ` : ''}Sellback if ceiling</span>
                     </div>
                 </div>`;
             } else if (isAnchorLadder && bot.status === 'ladder_posted') {
@@ -7943,16 +7947,16 @@ async function loadBots() {
                     ? Math.round(rungs.reduce((s, r) => s + r.price * (r.fill_qty || 0), 0) / totalFill) : 0);
                 const favSide = (bot.fav_side || '?').toUpperCase();
                 const favPrice = bot.fav_price || '—';
+                const hedgeTimeout = bot.hedge_timeout_s || 120;
+                const triggerAt = bot.bounce_triggered_at || bot.dog_filled_at || 0;
+                const hedgeElapsed = triggerAt > 0 ? (Date.now()/1000 - triggerAt) : 0;
+                const hedgeLeft = Math.max(0, hedgeTimeout - hedgeElapsed);
+                const hedgeColor = hedgeLeft <= 15 ? '#ff4444' : hedgeLeft <= 45 ? '#ff8800' : '#00aaff';
                 const isFavPosted = bot.status === 'fav_hedge_posted';
-                const _ladOcs = bot._over_ceiling_since || 0;
-                const _ladComb = typeof avgPrice === 'number' && typeof favPrice === 'number' ? avgPrice + favPrice : 0;
-                const _ladOver = _ladComb > 100;
-                const _ladOcElap = _ladOcs > 0 ? Date.now()/1000 - _ladOcs : 0;
-                const _ladOcLeft = _ladOver && _ladOcs > 0 ? Math.max(0, 20 - _ladOcElap) : 0;
                 stopLossInfo = `<div style="background:${isFavPosted ? '#00aaff11' : '#ff444411'};border:1px solid ${isFavPosted ? '#00aaff33' : '#ff444433'};border-radius:5px;padding:4px 8px;font-size:10px;color:${isFavPosted ? '#00aaff' : '#ff4444'};margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
                     <span>🪜 <strong>${totalFill}</strong> fills @ avg <strong>${avgPrice}¢</strong> — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢` : 'posting hedge...'}</span>
-                    ${_ladOver ? `<span style="color:#ff4444;font-weight:700;font-family:monospace;font-size:12px;">⏱ ${Math.ceil(_ladOcLeft)}s</span>` : ''}
-                    ${_ladOver ? '<span style="color:#ff4444;">Over 100¢ — 20s timer</span>' : ''}
+                    <span style="color:${hedgeColor};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(hedgeLeft/60)}:${String(Math.floor(hedgeLeft%60)).padStart(2,'0')}</span>
+                    <span style="color:#555;">Sellback if ceiling breached</span>
                 </div>`;
             }
 
@@ -8032,18 +8036,19 @@ async function loadBots() {
                 healthLabel = '🎯 ANCHORED';
                 anchoredHealthKey = 'waiting';
             } else if (bot.status === 'dog_filled' || (bot.status === 'fav_hedge_posted' && !isAnchorLadder)) {
-                // Anchor-dog: dog filled or fav hedge posted — over-ceiling health
-                const _hOcs = bot._over_ceiling_since || 0;
-                const _hOcElap = _hOcs > 0 ? Date.now()/1000 - _hOcs : 0;
-                const _hOcLeft = _hOcs > 0 ? Math.max(0, 20 - _hOcElap) : 0;
-                if (_hOcs > 0 && _hOcLeft <= 5) {
+                // Anchor-dog: dog filled, fav hedge in progress — time-based health
+                const hedgeTimeout = bot.hedge_timeout_s || 120;
+                const dogFilledAt = bot.dog_filled_at || 0;
+                const hedgeElapsed = dogFilledAt > 0 ? (Date.now()/1000 - dogFilledAt) : 0;
+                const hedgePctLeft = hedgeTimeout > 0 ? Math.max(0, hedgeTimeout - hedgeElapsed) / hedgeTimeout : 0;
+                if (hedgePctLeft <= 0.15) {
                     healthColor = '#ff4444';
                     healthAnim = 'animation: dangerPulse 0.8s ease-in-out infinite;';
-                    healthLabel = `🔴 ${Math.ceil(_hOcLeft)}s`;
+                    healthLabel = `🔴 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
                     anchoredHealthKey = 'danger';
-                } else if (_hOcs > 0) {
+                } else if (hedgePctLeft <= 0.40) {
                     healthColor = '#ff8800';
-                    healthLabel = `🟠 ${Math.ceil(_hOcLeft)}s`;
+                    healthLabel = `🟠 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
                     anchoredHealthKey = 'warning';
                 } else {
                     healthColor = '#00aaff';
@@ -8077,18 +8082,19 @@ async function loadBots() {
                 healthLabel = '⚡ HEDGE NEEDED';
                 anchoredHealthKey = 'danger';
             } else if (bot.status === 'fav_hedge_posted' && isAnchorLadder) {
-                // Ladder: fav hedge posted — over-ceiling health
-                const _lhOcs = bot._over_ceiling_since || 0;
-                const _lhOcElap = _lhOcs > 0 ? Date.now()/1000 - _lhOcs : 0;
-                const _lhOcLeft = _lhOcs > 0 ? Math.max(0, 20 - _lhOcElap) : 0;
-                if (_lhOcs > 0 && _lhOcLeft <= 5) {
+                // Ladder: fav hedge posted — time-based health
+                const hedgeTimeout = bot.hedge_timeout_s || 120;
+                const dogFilledAt = bot.dog_filled_at || bot.bounce_triggered_at || 0;
+                const hedgeElapsed = dogFilledAt > 0 ? (Date.now()/1000 - dogFilledAt) : 0;
+                const hedgePctLeft = hedgeTimeout > 0 ? Math.max(0, hedgeTimeout - hedgeElapsed) / hedgeTimeout : 0;
+                if (hedgePctLeft <= 0.15) {
                     healthColor = '#ff4444';
                     healthAnim = 'animation: dangerPulse 0.8s ease-in-out infinite;';
-                    healthLabel = `🔴 ${Math.ceil(_lhOcLeft)}s`;
+                    healthLabel = `🔴 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
                     anchoredHealthKey = 'danger';
-                } else if (_lhOcs > 0) {
+                } else if (hedgePctLeft <= 0.40) {
                     healthColor = '#ff8800';
-                    healthLabel = `🟠 ${Math.ceil(_lhOcLeft)}s`;
+                    healthLabel = `🟠 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
                     anchoredHealthKey = 'warning';
                 } else {
                     healthColor = '#00aaff';

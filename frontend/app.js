@@ -5673,7 +5673,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         const combined = avgDogPrice + favPrice;
         favStatusText = `Posted @${favPrice}¢ · combined ${combined}¢`;
     } else if (dogFilled) {
-        favStatusText = `Posting @${wouldPostAt}¢${favShave > 0 ? ` (bid-${favShave})` : ''} · walks +1¢/20s`;
+        favStatusText = `Posting @${wouldPostAt}¢${favShave > 0 ? ` (bid-${favShave})` : ''} · snap bid`;
     } else {
         const estProfit = 100 - effectiveDogPrice - wouldPostAt;
         favStatusText = `On fill → post @${wouldPostAt}¢${favShave > 0 ? ` (bid-${favShave})` : ''} · +${estProfit}¢/contract`;
@@ -6492,7 +6492,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
             else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
             else if (combined >= _botCeiling) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
-            else { stateLabel = 'WALKING'; stateColor = '#00aaff'; }
+            else { stateLabel = 'SNAPPING'; stateColor = '#00aaff'; }
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                     <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
@@ -6508,7 +6508,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 </div>
                 <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
                     <span>ceiling: <strong style="color:${_botCeiling <= 96 ? '#00ff88' : _botCeiling <= 97 ? '#ffaa00' : '#ff4444'};">${_botCeiling}¢</strong></span>
-                    <span>walk: <strong style="color:#00aaff;">${walkInterval}s</strong></span>
+                    <span>snap: <strong style="color:#00aaff;">bid</strong></span>
                     ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
                     ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
                 </div>
@@ -6726,7 +6726,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             const nextPrice = atBid ? currentHedgePrice : currentHedgePrice + 1;
             const walkPct = Math.min(100, ((walkInterval - nextWalkIn) / walkInterval) * 100);
             const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '📈';
-            const statusText = atCeiling ? 'AT CEILING — POSTING AT BID' : atBid ? 'AT BID' : 'WALKING';
+            const statusText = atBid ? 'AT BID' : 'SNAPPING TO BID';
             const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
             // Exit rules line
             const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'

@@ -3040,20 +3040,18 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
                 break
             elif bot['dog_fill_qty'] > 0 and not bot.get('_hedge_fired'):
-                # Partial fill — hedge immediately with what we have (same as ladder sweep)
+                # Partial fill — hedge FIRST, cancel remainder async (don't block hot path)
                 bot['_hedge_fired'] = True
                 bot['dog_filled_at'] = time.time()
-                bot['quantity'] = bot['dog_fill_qty']  # hedge only what filled
+                bot['_original_qty'] = qty_bot  # preserve original for repeats
+                bot['_partial_hedge_qty'] = bot['dog_fill_qty']  # hedge this many
                 bot['status'] = 'dog_filled'
-                # Cancel unfilled remainder
-                dog_oid = bot.get('dog_order_id')
-                if dog_oid and bot['dog_fill_qty'] < qty_bot:
-                    try:
-                        kalshi_client.cancel_order(dog_oid)
-                    except Exception:
-                        pass
                 _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelled rest')
+                # Cancel unfilled remainder AFTER hedge is queued — async, not on hot path
+                _cancel_oid = bot.get('dog_order_id') if bot['dog_fill_qty'] < qty_bot else None
+                if _cancel_oid:
+                    threading.Thread(target=lambda oid=_cancel_oid: _safe_cancel(oid, f'partial_fill_{bot_id}'), daemon=True).start()
+                print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
                 break
             print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
         elif matched == 'fav':
@@ -3309,7 +3307,7 @@ def _execute_phantom_hedge(bot_id):
         hedge_ticker = bot.get('hedge_ticker', ticker)
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
-        qty = bot.get('quantity', 1)
+        qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
         # Ceiling: only block if combined > 100¢ (guaranteed loss)
@@ -4330,6 +4328,11 @@ def _execute_ws_completion(bot_id):
             bot['_hedge_fired'] = False
             bot['_trade_recorded'] = False
             bot['_over_ceiling_since'] = None
+            # Restore original qty if reduced by partial fill
+            if bot.get('_original_qty'):
+                bot['quantity'] = bot['_original_qty']
+                bot.pop('_original_qty', None)
+            bot.pop('_partial_hedge_qty', None)
             print(f'🔄 WS REPEAT: {bot_id} entering waiting_repeat — cycle {repeats_done_now}/{repeat_total}')
 
         # Record trade + P&L — wrapped separately so failures don't break repeat logic
@@ -9539,6 +9542,11 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
+                # Restore original qty if it was reduced by partial fill
+                if bot.get('_original_qty'):
+                    bot['quantity'] = bot['_original_qty']
+                    bot.pop('_original_qty', None)
+                bot.pop('_partial_hedge_qty', None)
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})

@@ -6538,7 +6538,7 @@ def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, st
         save_state()
         return
 
-    # 3. Sell anchor position back at market
+    # 3. Sell anchor position back at market (unhedged portion)
     sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
                                    reason=f'apex_stop_{bot_id}_r{rung_idx}')
 
@@ -6550,6 +6550,35 @@ def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, st
             sell_price = bot.get(f'live_{anchor_side}_bid', 0)
         rung['_sellback_price'] = sell_price
         rung['stop_price'] = sell_price
+
+        # 4. Clean up partial hedge fills to prevent orphans
+        # If hedge partially filled (e.g. 2/3 NO), those 2 pairs (anchor+hedge) are
+        # stranded — sell BOTH sides to clear the position completely.
+        if hedged_qty > 0:
+            hedge_sell_price = 0
+            anchor_sell_price2 = 0
+            try:
+                _sold_h, _info_h = execute_sell(ticker, hedge_side, hedged_qty,
+                                                reason=f'apex_stop_cleanup_h_{bot_id}_r{rung_idx}')
+                if _sold_h and _info_h:
+                    hedge_sell_price = _info_h.get('price', 0) or _info_h.get('avg_price', 0)
+                print(f'  🧹 CLEANUP: sold {hedged_qty}x {hedge_side} partial hedge @{hedge_sell_price}c')
+            except Exception as _ce:
+                print(f'  ⚠ CLEANUP hedge sell failed: {_ce}')
+            try:
+                _sold_a, _info_a = execute_sell(ticker, anchor_side, hedged_qty,
+                                                reason=f'apex_stop_cleanup_a_{bot_id}_r{rung_idx}')
+                if _sold_a and _info_a:
+                    anchor_sell_price2 = _info_a.get('price', 0) or _info_a.get('avg_price', 0)
+                print(f'  🧹 CLEANUP: sold {hedged_qty}x {anchor_side} hedged anchor @{anchor_sell_price2}c')
+            except Exception as _ce:
+                print(f'  ⚠ CLEANUP anchor sell failed: {_ce}')
+            bot_log('APEX_RUNG_STOP_LOSS_CLEANUP', bot_id, {
+                'rung_idx': rung_idx, 'hedged_qty': hedged_qty,
+                'hedge_side': hedge_side, 'hedge_sell_price': hedge_sell_price,
+                'anchor_sell_price2': anchor_sell_price2,
+            })
+
         rung['status'] = 'completed'
         rung['completed'] = True
         rung['_sellback_pending'] = False

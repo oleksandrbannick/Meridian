@@ -3730,6 +3730,9 @@ def _execute_phantom_ladder_hedge(bot_id):
                             _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
                             _strag_loss = max(0, new_avg - _sell_p) * _extra_needed if _sell_p else new_avg * _extra_needed
                             session_pnl['gross_loss_cents'] += _strag_loss
+                            # Track straggler in bot state for accurate P&L and position tracking
+                            bot['_straggler_sold_qty'] = bot.get('_straggler_sold_qty', 0) + _extra_needed
+                            bot['_straggler_loss_cents'] = bot.get('_straggler_loss_cents', 0) + _strag_loss
                             print(f'   🔙 STRAGGLER SOLD: {bot_id} {_extra_needed}× @ {_sell_p}¢ loss={_strag_loss}¢')
                             bot_log('PHANTOM_LADDER_STRAGGLER_SOLD', bot_id, {
                                 'qty': _extra_needed, 'sell_price': _sell_p, 'loss': _strag_loss,
@@ -4001,6 +4004,8 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
+        bot['_straggler_sold_qty'] = 0
+        bot['_straggler_loss_cents'] = 0
         bot['_cross_settled_qty'] = 0
         bot['_cross_settled_qty_dog'] = 0
         bot['_cross_settled_qty_fav'] = 0
@@ -10709,6 +10714,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                                 _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
                                 _strag_loss = max(0, new_avg - _sell_p) * _mon_extra if _sell_p else new_avg * _mon_extra
                                 session_pnl['gross_loss_cents'] += _strag_loss
+                                # Track straggler in bot state for accurate P&L and position tracking
+                                bot['_straggler_sold_qty'] = bot.get('_straggler_sold_qty', 0) + _mon_extra
+                                bot['_straggler_loss_cents'] = bot.get('_straggler_loss_cents', 0) + _strag_loss
                                 print(f'🔙 PHANTOM MONITOR STRAGGLER SOLD: {bot_id} {_mon_extra}× @ {_sell_p}¢ loss={_strag_loss}¢')
                             except Exception as _mse:
                                 print(f'⚠ PHANTOM MONITOR STRAGGLER FAIL: {bot_id}: {_mse}')
@@ -10753,13 +10761,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * hedge_qty
-            fee = sum(
-                kalshi_fee_cents(
-                    r['price'] if dog_side == 'yes' else actual_fav_price,
-                    r['price'] if dog_side == 'no' else actual_fav_price,
-                    r.get('fill_qty', 0)
-                ) for r in bot['rungs'] if r.get('fill_qty', 0) > 0
+            # Fee: dog side per-rung (different prices), fav side once (single order)
+            _dog_fee = sum(
+                _kalshi_side_fee_cents(r['price'], r.get('fill_qty', 0))
+                for r in bot['rungs'] if r.get('fill_qty', 0) > 0
             )
+            _fav_fee = _kalshi_side_fee_cents(actual_fav_price, hedge_qty)
+            fee = _dog_fee + _fav_fee
             net_pnl = pnl_cents - fee
 
             filled_rung_count = len([r for r in bot['rungs'] if r.get('fill_qty', 0) > 0])
@@ -10871,30 +10879,37 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
             _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
             # Track accumulated cross-market positions before fill reset
+            # Subtract stragglers that were already sold back — they don't exist on Kalshi
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            _strag_sold = bot.get('_straggler_sold_qty', 0)
+            _strag_loss_total = bot.get('_straggler_loss_cents', 0)
             if _is_cross:
-                _cycle_dog = bot.get('total_dog_fill_qty', 0) or hedge_qty
+                _cycle_dog = max(0, (bot.get('total_dog_fill_qty', 0) or hedge_qty) - _strag_sold)
                 _cycle_fav = bot.get('fav_fill_qty', 0) or hedge_qty
                 bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog
                 bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog
                 bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav
+            # Adjust bot P&L for straggler sellback losses (already in session_pnl separately)
+            _bot_pnl = net_pnl - _strag_loss_total
             # Record run history before resetting fills
             bot.setdefault('_run_history', []).append({
                 'run': repeats_done_now,
-                'pnl': net_pnl,
-                'result': 'win' if net_pnl >= 0 else 'loss',
+                'pnl': _bot_pnl,
+                'result': 'win' if _bot_pnl >= 0 else 'loss',
                 'dog_price': avg_dog,
                 'fav_price': actual_fav_price,
                 'qty': hedge_qty,
+                'straggler_sold': _strag_sold,
+                'straggler_loss': _strag_loss_total,
                 'ts': time.time(),
             })
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
                 bot['_just_completed'] = True
-                bot['_last_pnl'] = net_pnl
-                bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
-                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
+                bot['_last_pnl'] = _bot_pnl
+                bot['_last_result'] = 'win' if _bot_pnl >= 0 else 'loss'
+                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _bot_pnl
                 bot['dog_filled_at'] = None
                 bot['raw_hedge_ms'] = None
                 bot['hedge_latency_ms'] = None
@@ -10903,11 +10918,13 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['total_dog_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
+                bot['_straggler_sold_qty'] = 0
+                bot['_straggler_loss_cents'] = 0
                 for rung in bot.get('rungs', []):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
-                print(f'👻 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢ — resetting for re-anchor')
+                print(f'👻 PHANTOM REPEAT: {bot_id} {_label} pnl={_bot_pnl}¢ — resetting for re-anchor')
                 bot_log('PHANTOM_LADDER_ENTER_REPEAT', bot_id, {
                     'cycle': repeats_done_now, 'total': repeat_total, 'net_pnl': net_pnl, 'smart': _smart_reason,
                 })
@@ -10926,9 +10943,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     bot['_just_completed'] = True
-                    bot['_last_pnl'] = net_pnl
-                    bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
-                    print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done pnl={net_pnl}¢')
+                    bot['_last_pnl'] = _bot_pnl
+                    bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _bot_pnl
+                    print(f'👻 PHANTOM COMPLETED: {bot_id} — all cycles done pnl={_bot_pnl}¢')
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'ladder_complete', 'profit_cents': net_pnl})
             return

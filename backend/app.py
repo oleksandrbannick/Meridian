@@ -6333,6 +6333,20 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         else:
             rung['_greedy_snap_at'] = None  # reset when out of greedy range
 
+        # ── BID DROP: if bid fell below our order, snap down immediately ──
+        # We're sitting above market = unfillable. No reason to wait.
+        if hedge_bid > 0 and current_hedge_price > 0 and hedge_bid < current_hedge_price:
+            snap_price = max(1, hedge_bid)
+            rung['_snap_reason'] = f'follow_bid_down_{current_hedge_price}to{snap_price}'
+            print(f'📉 APEX BID DROP: {bot_id} rung#{rung_idx} ({width}c) hedge@{current_hedge_price}¢ > bid@{hedge_bid}¢ → snap down to {snap_price}¢')
+            bot_log('APEX_BID_DROP_SNAP', bot_id, {
+                'rung_idx': rung_idx, 'width': width,
+                'old_price': current_hedge_price, 'new_price': snap_price,
+                'hedge_bid': hedge_bid,
+            })
+            _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+            return
+
         if midpoint_dist <= 3:
             # ── WITHIN 3¢: sit, reset drift timer — market breathing ──
             if rung.get('_drift_started_at'):

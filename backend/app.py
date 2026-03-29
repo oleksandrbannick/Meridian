@@ -11909,6 +11909,13 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['raw_hedge_ms'] = None
         bot['hedge_latency_ms'] = None
         bot['fav_order_id'] = None
+        # Cross-market: accumulate hedged positions before resetting fills
+        _is_cross_sb = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        if _is_cross_sb:
+            _held = bot.get('fav_fill_qty', 0)
+            bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _held
+            bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _held
+            bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _held
         bot['fav_fill_qty'] = 0
         bot['dog_fill_qty'] = 0
         bot['yes_fill_qty'] = 0
@@ -11916,6 +11923,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_hedge_fired'] = False
         bot['_trade_recorded'] = False
         bot['_sellback_attempts'] = 0
+        bot['_straggler_sold_qty'] = 0
+        bot['_straggler_loss_cents'] = 0
         bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)

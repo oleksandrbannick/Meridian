@@ -10122,12 +10122,31 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     _last_rung_idx = len(bot.get('rungs', [])) - 1
                     _lowest_new_price = max(1, smart_first - (_last_rung_idx * _rung_spacing)) if _last_rung_idx >= 0 else smart_first
                     if _lowest_new_price <= 3:
-                        bot['posted_at'] = now  # reset timer, don't repost
-                        bot_log('PHANTOM_LADDER_REPOST_SKIP_FLOOR', bot_id, {
+                        # Can't retreat further — check if we still have live orders
+                        _any_live = any(r.get('order_id') for r in bot.get('rungs', []) if r.get('fill_qty', 0) < r.get('qty', 1))
+                        if _any_live:
+                            # Orders still live, just skip repost and let them sit
+                            bot['posted_at'] = now
+                            bot_log('PHANTOM_LADDER_REPOST_SKIP_FLOOR', bot_id, {
+                                'smart_first': smart_first, 'lowest_would_be': _lowest_new_price,
+                                'spacing': _rung_spacing,
+                            })
+                            save_state()
+                            return
+                        # No live orders AND can't repost lower → stop the bot
+                        _is_cross_floor = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                        _has_pos_floor = bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0
+                        if _is_cross_floor and _has_pos_floor:
+                            bot['status'] = 'awaiting_settlement'
+                            bot['awaiting_since'] = now
+                        else:
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                        bot['repeat_count'] = 0
+                        print(f'🛑 PHANTOM FLOOR STOP: {bot_id} no orders, can\'t retreat below {_lowest_new_price}¢ — stopping')
+                        bot_log('PHANTOM_LADDER_FLOOR_STOP', bot_id, {
                             'smart_first': smart_first, 'lowest_would_be': _lowest_new_price,
-                            'spacing': _rung_spacing,
                         })
-                        print(f'⛔ PHANTOM REPOST SKIP: {bot_id} lowest rung would be {_lowest_new_price}¢ — too low')
                         save_state()
                         return
 

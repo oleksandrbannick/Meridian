@@ -9466,64 +9466,15 @@ def _handle_phantom(bot_id, bot, actions):
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                if _ceiling_elapsed >= 20:
-                    # 20s expired — cancel fav, sell back dog
-                    print(f'⏱ PHANTOM CEILING TIMEOUT: {bot_id} over 100¢ for {_ceiling_elapsed:.0f}s — selling back')
-                    bot_log('PHANTOM_CEILING_TIMEOUT', bot_id, {
-                        'dog_price': dog_price, 'fav_price': current_fav_price,
-                        'fav_bid': current_fav_bid, 'combined': combined_check,
+                # Over ceiling — just keep hedge at bid as maker. Completing at
+                # 102-108c is CHEAPER than selling back (same loss + no taker fees).
+                # Log periodically but never sell back.
+                if int(_ceiling_elapsed) % 30 == 0 and int(_ceiling_elapsed) > 0:
+                    print(f'⏱ PHANTOM OVER CEILING: {bot_id} {combined_check}¢ for {_ceiling_elapsed:.0f}s — holding at bid (cheaper than sellback)')
+                    bot_log('PHANTOM_OVER_CEILING_HOLD', bot_id, {
+                        'dog_price': dog_price, 'fav_bid': current_fav_bid, 'combined': combined_check,
                         'elapsed_s': round(_ceiling_elapsed, 1),
                     })
-                    # Check for partial fills before cancelling
-                    fav_filled = bot.get('fav_fill_qty', 0)
-                    try:
-                        api_read_limiter.wait()
-                        fav_order = kalshi_client.get_order(fav_order_id)
-                        fav_filled = max(fav_filled, _parse_fill_count(fav_order.get('order', fav_order)))
-                        bot['fav_fill_qty'] = fav_filled
-                    except Exception:
-                        pass
-                    if fav_filled >= qty:
-                        # Filled during timer — let completion run next cycle
-                        print(f'✅ PHANTOM FILLED DURING CEILING: {bot_id} {fav_filled}/{qty} — completing')
-                        bot['_over_ceiling_since'] = None
-                        return
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(fav_order_id)
-                    except Exception:
-                        pass
-                    bot['fav_order_id'] = None
-                    if fav_filled > 0 and fav_filled < qty:
-                        # Partial fill — record partial, sell back rest
-                        sell_qty = qty - fav_filled
-                        print(f'⏱ PHANTOM CEILING PARTIAL: {bot_id} {fav_filled}/{qty} filled — selling back {sell_qty}')
-                        fav_price = bot.get('fav_price', 0)
-                        profit_per = 100 - dog_price - fav_price
-                        est_fee = kalshi_fee_cents(
-                            dog_price if bot['dog_side'] == 'yes' else fav_price,
-                            dog_price if bot['dog_side'] == 'no' else fav_price,
-                            fav_filled
-                        )
-                        net_profit = max(0, profit_per * fav_filled - est_fee)
-                        session_pnl['gross_profit_cents'] += net_profit
-                        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
-                        _record_trade({
-                            'bot_id': bot_id, 'ticker': ticker,
-                            'yes_price': dog_price if bot['dog_side'] == 'yes' else fav_price,
-                            'no_price': dog_price if bot['dog_side'] == 'no' else fav_price,
-                            'quantity': fav_filled, 'profit_cents': net_profit, 'loss_cents': 0,
-                            'fee_cents': est_fee, 'result': 'anchor_partial_arb',
-                            'timestamp': now, 'placed_at': bot.get('created_at', now),
-                            'arb_width': bot.get('target_width', 0),
-                            'bot_category': 'anchor_dog',
-                        }, bot)
-                        bot['quantity'] = sell_qty
-                        _phantom_sell_back(bot_id, bot, dog_price, fav_price, 999, actions)
-                        bot['quantity'] = qty
-                    else:
-                        _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-                    return
         else:
             # Under 100¢ — clear timer
             if bot.get('_over_ceiling_since'):

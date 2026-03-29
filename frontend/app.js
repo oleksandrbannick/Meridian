@@ -7448,7 +7448,16 @@ async function loadBots() {
                         </div>`;
                     dogList.appendChild(header);
                     for (const botId of groupIds) {
-                        try { _renderDogBotCard(bots[botId], botId, dogList, gameScores); } catch(e) { console.error('Phantom render error:', botId, e); }
+                        try {
+                            _renderDogBotCard(bots[botId], botId, dogList, gameScores);
+                        } catch(e) {
+                            console.error('Phantom render error:', botId, e);
+                            const errCard = document.createElement('div');
+                            errCard.style.cssText = 'background:#0f1419;border:1px solid #ff880033;border-left:3px solid #ff8800;border-radius:12px;padding:14px;margin-bottom:10px;';
+                            const bot = bots[botId] || {};
+                            errCard.innerHTML = '<div style="display:flex;align-items:center;gap:8px;"><span style="color:#ffaa00;font-weight:800;font-size:10px;">PHANTOM</span><span style="color:#fff;font-weight:700;">' + (bot.status || '?') + '</span><span style="color:#ff8800;font-size:11px;">Card render error: ' + (e.message || e) + '</span></div><div style="color:#555;font-size:9px;margin-top:4px;">' + botId + '</div>';
+                            dogList.appendChild(errCard);
+                        }
                     }
                 });
             }

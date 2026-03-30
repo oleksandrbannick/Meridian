@@ -3459,7 +3459,6 @@ function setTradeMode(mode) {
         if (repeatEl && _savedPhantom?.repeatCount != null) repeatEl.value = _savedPhantom.repeatCount;
         const smartEl = document.getElementById('anchor-smart-mode');
         if (smartEl && _savedPhantom?.smartMode != null) smartEl.checked = _savedPhantom.smartMode;
-        if (_savedPhantom?.autoQty != null) _anchorAutoQty = _savedPhantom.autoQty;
         // Reset cross-market toggle (market-specific, don't persist)
         _anchorCrossMarketTicker = null;
         _anchorCrossMarketSide = 'yes';
@@ -3476,9 +3475,6 @@ function setTradeMode(mode) {
         // Apply saved base qty to first rung after render
         if (_savedPhantom?.baseQty > 1 && _anchorRungs.length > 0) {
             _anchorRungs[0].qty = _savedPhantom.baseQty;
-            if (_anchorAutoQty) {
-                _anchorRungs.forEach((r, i) => { r.qty = _savedPhantom.baseQty * (i + 1); });
-            }
             renderAnchorRungs(true);
         }
     } else {
@@ -3543,10 +3539,8 @@ let _anchorDogSide = '';  // 'yes' or 'no' (auto-detected)
 let _anchorFavBid = 0;
 let _anchorFavSide = '';
 let _anchorIsBrokenSpread = false;
-let _anchorRungs = [];    // [{price, qty, offset}] — offset = distance below anchor base
-let _anchorAutoPrice = true;  // auto-adjust rung prices to market
-let _anchorAutoQty = true;   // auto-scale qty: rung 1=1x, rung 2=2x, rung 3=3x (default ON)
-let _anchorRungSpacing = 2;   // spacing between rungs in cents (1 or 2)
+let _anchorRungs = [];    // [{price, qty, offset}] — single rung only
+let _anchorAutoPrice = true;  // auto-adjust rung price to market
 let _anchorCrossMarketTicker = null;  // opposing team's ticker when cross-market is on
 let _anchorCrossMarketSide = 'yes';   // which side to buy on both tickers in cross-market mode
 let _anchorCrossMarketSwapped = false; // true when opposing ticker is cheaper (becomes the anchor)
@@ -3792,55 +3786,17 @@ function initAnchorDogPrices() {
         // Force render immediately — the non-force render below can skip on mobile
         renderAnchorRungs(true);
     }
-    // Auto-adjust existing rungs to track market (and update offsets when depth is auto)
-    // Depth floor on rung 0: rung[0] sits at anchorDepth, deeper rungs stagger below
+    // Auto-adjust rung price to track market
     if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
-        for (let i = 0; i < _anchorRungs.length; i++) {
-            const rung = _anchorRungs[i];
-            if (isAutoDepth) rung.offset = anchorDepth + (i * _anchorRungSpacing);
-            const off = rung.offset || (anchorDepth + (i * _anchorRungSpacing));
-            rung.price = Math.max(1, anchorBase - off);
-        }
-    }
-    // Apply auto-scale if already enabled
-    if (_anchorAutoQty && _anchorRungs.length > 0) {
-        const baseQty = _anchorRungs[0].qty;
-        _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
+        const rung = _anchorRungs[0];
+        if (isAutoDepth) rung.offset = anchorDepth;
+        const off = rung.offset || anchorDepth;
+        rung.price = Math.max(1, anchorBase - off);
     }
     renderAnchorRungs();
     updateAnchorPreview();
 }
 
-function addAnchorRung() {
-    if (_anchorRungs.length >= 3) { showNotification('Max 3 rungs'); return; }
-    // Default offset: 2c deeper than the deepest existing rung
-    const maxOffset = _anchorRungs.length > 0
-        ? Math.max(..._anchorRungs.map(r => r.offset || 5))
-        : 5;  // first rung starts at full anchor_depth
-    const newOffset = maxOffset + 2;
-    const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
-    const newPrice = Math.max(1, anchorBase - newOffset);
-    _anchorRungs.push({ price: newPrice, qty: 1, offset: newOffset });
-    // Apply auto-scale if enabled
-    if (_anchorAutoQty) {
-        const baseQty = _anchorRungs[0].qty;
-        _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
-    }
-    renderAnchorRungs(true);
-    updateAnchorPreview();
-}
-
-function removeAnchorRung(idx) {
-    _anchorRungs.splice(idx, 1);
-    renderAnchorRungs(true);
-    updateAnchorPreview();
-}
-
-function clearAnchorRungs() {
-    _anchorRungs = [];
-    renderAnchorRungs();
-    updateAnchorPreview();
-}
 
 function updateRungPrice(idx, val) {
     const v = parseInt(val);
@@ -3857,19 +3813,6 @@ function updateRungQty(idx, val) {
     const v = parseInt(val);
     if (v >= 1 && v <= 99) {
         _anchorRungs[idx].qty = v;
-        // If auto-qty and user changed rung 1, rescale all others
-        if (_anchorAutoQty && idx === 0) {
-            _anchorRungs.forEach((r, i) => { if (i > 0) r.qty = v * (i + 1); });
-            // Update other rung qty inputs directly (renderAnchorRungs skips when input focused)
-            const container = document.getElementById('anchor-rungs-container');
-            if (container) {
-                const qtyInputs = container.querySelectorAll('input[type="number"]');
-                // qty inputs are at index 1,3,5... (price=0,2,4... qty=1,3,5...)
-                _anchorRungs.forEach((r, i) => {
-                    if (i > 0 && qtyInputs[i * 2 + 1]) qtyInputs[i * 2 + 1].value = r.qty;
-                });
-            }
-        }
     }
     updateAnchorPreview();
 }
@@ -3880,76 +3823,42 @@ function toggleAnchorAutoPrice() {
     renderAnchorRungs();
 }
 
-function toggleAnchorSpacing() {
-    _anchorRungSpacing = _anchorRungSpacing === 2 ? 1 : 2;
-    if (_anchorAutoPrice) initAnchorDogPrices();
-    renderAnchorRungs();
-    updateAnchorPreview();
-}
-
-function toggleAnchorAutoQty() {
-    _anchorAutoQty = !_anchorAutoQty;
-    if (_anchorAutoQty) {
-        // Apply 1x/2x/3x scaling based on rung index
-        const baseQty = _anchorRungs.length > 0 ? _anchorRungs[0].qty : 1;
-        _anchorRungs.forEach((r, i) => { r.qty = baseQty * (i + 1); });
-    }
-    renderAnchorRungs();
-    updateAnchorPreview();
-}
-
 function renderAnchorRungs(force) {
     const container = document.getElementById('anchor-rungs-container');
     if (!container) return;
-    // Don't overwrite inputs while user is typing (Bug 4 fix)
-    // Use both activeElement check AND a flag for mobile where focus is delayed
-    // Skip guard when force=true (explicit user actions like Add Rung)
+    // Don't overwrite inputs while user is typing
     if (!force) {
         if (container.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
         if (window._anchorInputFocused) return;
     }
-    const countEl = document.getElementById('anchor-rung-count');
-    if (countEl) {
-        const scaleLabel = _anchorAutoQty
-            ? '<span style="background:#00ff8822;color:#00ff88;font-size:9px;cursor:pointer;padding:1px 5px;border-radius:3px;" onclick="toggleAnchorAutoQty()">AUTO SCALE</span>'
-            : '<span style="background:#ff880022;color:#ff8800;font-size:9px;cursor:pointer;padding:1px 5px;border-radius:3px;" onclick="toggleAnchorAutoQty()">MANUAL QTY</span>';
-        const spacingLabel = `<span style="background:#60a5fa22;color:#60a5fa;font-size:9px;cursor:pointer;padding:1px 5px;border-radius:3px;" onclick="toggleAnchorSpacing()">RUNG GAP ${_anchorRungSpacing}¢</span>`;
-        countEl.innerHTML = `${_anchorRungs.length} rung${_anchorRungs.length !== 1 ? 's' : ''} · ${scaleLabel} · ${spacingLabel}`;
-    }
 
     if (_anchorRungs.length === 0) {
-        container.innerHTML = '<div style="text-align:center;color:#555;font-size:11px;padding:12px;border:1px dashed #1e2740;border-radius:6px;">No rungs yet — click "+ Add Rung"</div>';
+        container.innerHTML = '<div style="text-align:center;color:#555;font-size:11px;padding:12px;border:1px dashed #1e2740;border-radius:6px;">Waiting for market data…</div>';
         return;
     }
 
+    const rung = _anchorRungs[0];
     const anchorBase = _anchorIsBrokenSpread ? _anchorDogAsk : _anchorDogBid;
     const baseLabel = _anchorIsBrokenSpread ? 'ask' : 'bid';
-    container.innerHTML = _anchorRungs.map((rung, i) => {
-        const offset = rung.offset || 5;
-        const shaveColor = offset <= 3 ? '#ffaa00' : offset <= 7 ? '#ff8800' : '#ff5500';
-        return `<div style="display:flex;align-items:center;gap:8px;background:#060a14;border:1px solid #ffaa0033;border-radius:6px;padding:8px 10px;">
-            <span style="color:${shaveColor};font-weight:800;font-size:12px;width:20px;">#${i + 1}</span>
-            <div style="flex:1;display:flex;align-items:center;gap:6px;">
-                <div style="display:flex;align-items:center;gap:3px;">
-                    <span style="color:#8892a6;font-size:9px;">PRICE</span>
-                    <input type="number" min="1" max="50" value="${rung.price}" onchange="updateRungPrice(${i}, this.value)"
-                        onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
-                        style="width:48px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoPrice ? '#00ff8844' : '#1e2740'};border-radius:4px;color:#ffaa00;font-size:13px;font-weight:800;text-align:center;${_anchorAutoPrice ? 'opacity:0.8;' : ''}">
-                    <span style="color:#ffaa0066;font-size:10px;">¢</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:3px;">
-                    <span style="color:#8892a6;font-size:9px;">QTY</span>
-                    <input type="number" min="1" max="99" value="${rung.qty}" onchange="updateRungQty(${i}, this.value)"
-                        onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
-                        ${_anchorAutoQty && i > 0 ? 'readonly' : ''}
-                        style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoQty && i > 0 ? '#00ff8844' : '#1e2740'};border-radius:4px;color:${_anchorAutoQty && i > 0 ? '#00ff8888' : '#fff'};font-size:13px;font-weight:700;text-align:center;">
-                    ${_anchorAutoQty && i > 0 ? `<span style="color:#00ff8866;font-size:8px;">${i+1}x</span>` : ''}
-                </div>
-                <span style="color:#555;font-size:9px;">${baseLabel} ${anchorBase}¢ <span style="color:#ffaa00;">−${offset}¢</span></span>
+    const offset = rung.offset || 5;
+    container.innerHTML = `<div style="display:flex;align-items:center;gap:8px;background:#060a14;border:1px solid #ffaa0033;border-radius:6px;padding:8px 10px;">
+        <div style="flex:1;display:flex;align-items:center;gap:6px;">
+            <div style="display:flex;align-items:center;gap:3px;">
+                <span style="color:#8892a6;font-size:9px;">PRICE</span>
+                <input type="number" min="1" max="50" value="${rung.price}" onchange="updateRungPrice(0, this.value)"
+                    onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
+                    style="width:48px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoPrice ? '#00ff8844' : '#1e2740'};border-radius:4px;color:#ffaa00;font-size:13px;font-weight:800;text-align:center;${_anchorAutoPrice ? 'opacity:0.8;' : ''}">
+                <span style="color:#ffaa0066;font-size:10px;">¢</span>
             </div>
-            <button onclick="removeAnchorRung(${i})" style="background:none;border:none;color:#ff444488;cursor:pointer;font-size:14px;padding:2px 4px;" onmouseenter="this.style.color='#ff4444'" onmouseleave="this.style.color='#ff444488'">✕</button>
-        </div>`;
-    }).join('');
+            <div style="display:flex;align-items:center;gap:3px;">
+                <span style="color:#8892a6;font-size:9px;">QTY</span>
+                <input type="number" min="1" max="99" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
+                    onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
+                    style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;font-weight:700;text-align:center;">
+            </div>
+            <span style="color:#555;font-size:9px;">${baseLabel} ${anchorBase}¢ <span style="color:#ffaa00;">−${offset}¢</span></span>
+        </div>
+    </div>`;
 }
 
 function updateAnchorPreview() {
@@ -4015,7 +3924,7 @@ function updateAnchorPreview() {
 
         html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;">
             <div style="text-align:center;padding:6px;background:#0a0e1a;border-radius:6px;">
-                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">${_anchorRungs.length > 1 ? 'Avg dog' : 'Dog anchor'}</div>
+                <div style="color:#8892a6;font-size:9px;margin-bottom:2px;">Dog anchor</div>
                 <div style="color:#ffaa00;font-weight:800;font-size:16px;">${avgPrice}¢</div>
                 <div style="color:#555;font-size:9px;">${totalQty}×${_anchorDogSide.toUpperCase()}</div>
             </div>
@@ -4053,19 +3962,11 @@ function updateAnchorPreview() {
     const btn = document.getElementById('anchor-deploy-btn');
     if (btn) {
         const crossTag = isCrossMode ? ' (Cross)' : '';
-        if (_anchorRungs.length > 1) {
-            btn.textContent = `👻 Deploy ${_anchorRungs.length}-Rung Phantom${crossTag}`;
-            btn.style.background = isCrossMode
-                ? 'linear-gradient(135deg,#64ffda 0%,#00bfa5 100%)'
-                : 'linear-gradient(135deg,#ff6600 0%,#ff4400 100%)';
-            btn.style.color = isCrossMode ? '#000' : '#fff';
-        } else {
-            btn.textContent = `👻 Deploy Phantom Bot${crossTag}`;
-            btn.style.background = isCrossMode
-                ? 'linear-gradient(135deg,#64ffda 0%,#00bfa5 100%)'
-                : 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
-            btn.style.color = '#000';
-        }
+        btn.textContent = `👻 Deploy Phantom Bot${crossTag}`;
+        btn.style.background = isCrossMode
+            ? 'linear-gradient(135deg,#64ffda 0%,#00bfa5 100%)'
+            : 'linear-gradient(135deg,#ffaa00 0%,#ff8800 100%)';
+        btn.style.color = '#000';
     }
 }
 
@@ -4096,7 +3997,7 @@ function toggleApexSmartMode(checked) {
 
 async function deployAnchorBot() {
     if (!currentArbMarket) { alert('No market selected'); return; }
-    if (_anchorRungs.length === 0) { alert('Add at least one rung'); return; }
+    if (_anchorRungs.length === 0) { alert('No order configured'); return; }
     if (_anchorDogBid < 1) { alert('No dog bid detected — select a market first'); return; }
 
     const anchorDepth  = parseInt(document.getElementById('anchor-depth')?.value) || 5;
@@ -4117,36 +4018,22 @@ async function deployAnchorBot() {
     if (favCeiling < 1) { alert('Fav ceiling too low — avg dog price too high for 98¢ ceiling.'); return; }
 
     const isCrossMode = !!_anchorCrossMarketTicker && document.getElementById('anchor-cross-market')?.checked;
-    const isLadder = _anchorRungs.length > 1;
-    const rungDetails = _anchorRungs.map((r, i) => `  Rung ${i + 1}: ${_anchorDogSide.toUpperCase()} @ ${r.price}¢ × ${r.qty}`).join('\n');
-    const avgLine = isLadder ? `\nAvg dog price: ${avgPrice}¢` : '';
     const crossLine = isCrossMode ? `\nCross-market: hedge on ${_anchorCrossMarketTicker}` : '';
 
     const repeatLine = smartMode ? '\nMode: Smart (repeat on wins, stop after 2 losses)' : repeatCount > 0 ? `\nRepeat: ${repeatCount}× (${repeatCount + 1} total runs)` : '\nRepeat: single shot';
-    if (!confirm(`${isLadder ? '👻 Deploy Phantom Ladder' : '👻 Deploy Phantom Bot'}${isCrossMode ? ' (Cross-Market)' : ''} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n${rungDetails}${avgLine}\nDepth floor: ${anchorDepth}¢\nMax hedge: ≤${favCeiling}¢${crossLine}${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
+    if (!confirm(`👻 Deploy Phantom Bot${isCrossMode ? ' (Cross-Market)' : ''} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n  ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ × ${_anchorRungs[0].qty}\nDepth floor: ${anchorDepth}¢\nMax hedge: ≤${favCeiling}¢${crossLine}${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
-        const endpoint = isLadder ? 'bot/ladder' : 'bot/anchor';
-        const body = isLadder
-            ? {
-                ticker: currentArbMarket.ticker,
-                rungs: _anchorRungs.map(r => ({ price: r.price, qty: r.qty })),
-                target_width: 5,
-                dog_side: _anchorDogSide,
-                repeat_count: smartMode ? 0 : repeatCount,
-                smart_mode: smartMode,
-                anchor_depth: anchorDepth,
-            }
-            : {
-                ticker: currentArbMarket.ticker,
-                dog_price: _anchorRungs[0].price,
-                target_width: 5,
-                quantity: _anchorRungs[0].qty,
-                dog_side: _anchorDogSide,
-                repeat_count: smartMode ? 0 : repeatCount,
-                smart_mode: smartMode,
-                anchor_depth: anchorDepth,
-            };
+        const body = {
+            ticker: currentArbMarket.ticker,
+            dog_price: _anchorRungs[0].price,
+            target_width: 5,
+            quantity: _anchorRungs[0].qty,
+            dog_side: _anchorDogSide,
+            repeat_count: smartMode ? 0 : repeatCount,
+            smart_mode: smartMode,
+            anchor_depth: anchorDepth,
+        };
 
         // Add cross-market fields if active
         if (isCrossMode && _anchorCrossMarketTicker) {
@@ -4160,26 +4047,21 @@ async function deployAnchorBot() {
             }
         }
 
-        const resp = await fetch(`${API_BASE}/${endpoint}`, {
+        const resp = await fetch(`${API_BASE}/bot/anchor`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
         const data = await resp.json();
         if (data.success) {
-            const msg = isLadder
-                ? `👻 Phantom deployed: ${_anchorRungs.length} rungs · avg ${avgPrice}¢${isCrossMode ? ' (cross-market)' : ''}`
-                : `👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · depth ${anchorDepth}¢${isCrossMode ? ' (cross-market)' : ''}`;
-            showNotification(msg);
+            showNotification(`👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · depth ${anchorDepth}¢${isCrossMode ? ' (cross-market)' : ''}`);
             // Persist phantom settings for next deploy
             try {
                 localStorage.setItem('phantom_settings', JSON.stringify({
                     depth: anchorDepth,
                     baseQty: _anchorRungs[0]?.qty || 1,
-                    rungCount: _anchorRungs.length,
                     repeatCount: repeatCount,
                     smartMode: smartMode,
-                    autoQty: _anchorAutoQty,
                 }));
             } catch (e) {}
             closeModal();

@@ -3136,15 +3136,28 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 save_state()
                 break
             # Then check fav order ID (hedge fills)
+            _is_sup_fill = False
             if order_id != bot.get('fav_order_id'):
-                continue
-            bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
-            if bot['fav_side'] == 'yes':
-                bot['yes_fill_qty'] = bot['fav_fill_qty']
+                # Check supplemental hedge orders
+                for _sh in bot.get('_supplemental_hedges', []):
+                    if order_id == _sh.get('order_id'):
+                        _sh['fill_qty'] = _sh.get('fill_qty', 0) + count
+                        if _sh['fill_qty'] >= _sh.get('qty', 1):
+                            _sh['filled_at'] = time.time()
+                        _is_sup_fill = True
+                        print(f'👻 WS PHANTOM SUP FILL: {bot_id} +{count} → sup {_sh["fill_qty"]}/{_sh.get("qty", "?")}')
+                        save_state()
+                        break
+                if not _is_sup_fill:
+                    continue
             else:
-                bot['no_fill_qty'] = bot['fav_fill_qty']
-            print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{bot.get("hedge_qty", "?")}')
-            save_state()
+                bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
+                if bot['fav_side'] == 'yes':
+                    bot['yes_fill_qty'] = bot['fav_fill_qty']
+                else:
+                    bot['no_fill_qty'] = bot['fav_fill_qty']
+                print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{bot.get("hedge_qty", "?")}')
+                save_state()
             break
 
     # ── Apex 2.0: Per-rung WS fill matching ──────────────────────────
@@ -3265,41 +3278,6 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         break
 
 
-def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
-    """Pre-calculate the hedge price so it's ready to fire instantly on dog fill.
-    Returns the ceiling-capped hedge price or 0 if too low.
-    This is a FALLBACK when no live bid is available — the WS path uses the actual bid."""
-    # Cap at 100¢ combined — only block if literally impossible (>100¢ = guaranteed loss)
-    max_hedge = 100 - dog_price
-    if max_hedge < 1:
-        return 0
-    return max_hedge
-
-
-def _precalc_phantom_ladder_hedges(rungs, target_width, dog_side):
-    """Pre-calculate hedge prices AND avg fill prices for EVERY possible fill count.
-    Handles partial rung fills (important at high contract counts).
-    Assumes top-down fill order (highest price fills first).
-    Returns (hedge_dict, avg_dict) — both keyed by cumulative fill qty."""
-    sorted_rungs = sorted(rungs, key=lambda r: r['price'], reverse=True)
-    hedges = {}
-    avgs = {}
-    cum_qty = 0
-    cum_price_x_qty = 0
-    for r in sorted_rungs:
-        rq = r.get('qty', 1)
-        price = r['price']
-        # Precalc for every partial fill within this rung
-        for partial in range(1, rq + 1):
-            qty_at = cum_qty + partial
-            cost_at = cum_price_x_qty + price * partial
-            avg = round(cost_at / qty_at)
-            hedges[qty_at] = _precalc_phantom_hedge(avg, target_width, dog_side, qty_at)
-            avgs[qty_at] = avg
-        cum_qty += rq
-        cum_price_x_qty += price * rq
-    return hedges, avgs
-
 
 def _execute_phantom_hedge(bot_id):
     """Post the favorite hedge immediately after the dog fills.
@@ -3348,10 +3326,11 @@ def _execute_phantom_hedge(bot_id):
             hedge_price = fav_bid
             hedge_price = min(hedge_price, max_hedge)  # never exceed ceiling
         else:
-            # No WS bid available — fall back to precalc
-            hedge_price = bot.get('_precalc_hedge_price') or 0
-            if hedge_price < 1:
-                hedge_price = _precalc_phantom_hedge(dog_price, bot.get('target_width', 5), dog_side, qty)
+            # No WS bid — defer to monitor (will snap to bid when available)
+            print(f'   ⚠ No fav bid available — deferring to monitor')
+            bot_log('PHANTOM_HEDGE_NO_BID', bot_id, {'dog_price': dog_price, 'fav_bid': fav_bid, 'path': 'ws_fast'})
+            bot['status'] = 'dog_filled'
+            return
 
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
@@ -3467,17 +3446,17 @@ def _execute_phantom_ladder_hedge(bot_id):
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
 
-        # ── Compute avg_price and hedge_qty ──
+        # ── Compute avg_price and hedge_qty from actual rung fills ──
         total_fill_qty = bot.get('total_dog_fill_qty', 0)
-        precalc_avgs = bot.get('_precalc_avg_prices', {})
-        avg_price = precalc_avgs.get(total_fill_qty) or precalc_avgs.get(str(total_fill_qty), 0)
+        filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
 
-        if avg_price > 0 and total_fill_qty > 0:
+        if filled_rungs and total_fill_qty > 0:
+            avg_price = round(sum(r['price'] * r['fill_qty'] for r in filled_rungs) / total_fill_qty)
             bot['avg_fill_price'] = avg_price
             bot['hedge_qty'] = total_fill_qty
             bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
         else:
-            # Compute from rung fills (recovery path)
+            # Recovery path — no rung fills tracked yet
             filled_rungs = [r for r in bot['rungs'] if r.get('fill_qty', 0) > 0]
             bot_log('PHANTOM_LADDER_WS_HEDGE_START', bot_id, {
                 'path': 'computed', 'filled_rungs': len(filled_rungs),
@@ -3545,16 +3524,11 @@ def _execute_phantom_ladder_hedge(bot_id):
         _fav_spread = (_fav_ask - _fav_bid) if _fav_ask > 0 and _fav_bid > 0 else 0
 
         if _fav_bid > 0:
-            # Always post at bid — phantom needs ceiling margin, walk follows bid
+            # Always post at bid
             hedge_price = _fav_bid
         else:
-            # No WS bid — fall back to precalc hedge price
-            precalc_hedges = bot.get('_precalc_hedge_prices', {})
-            hedge_price = precalc_hedges.get(total_fill_qty) or precalc_hedges.get(str(total_fill_qty), 0)
-            if hedge_price <= 0:
-                hedge_price = _precalc_phantom_hedge(avg_price, bot.get('target_width', 5), dog_side, total_fill_qty)
-            if hedge_price <= 0:
-                hedge_price = bot.get('_precalc_hedge_price', 0)
+            # No WS bid — defer to monitor
+            hedge_price = 0
 
         if hedge_price < 1:
             print(f'   ⚠ Hedge price {hedge_price}¢ too low — deferring')
@@ -3690,98 +3664,57 @@ def _execute_phantom_ladder_hedge(bot_id):
 
             if cancelled_rungs:
                 print(f'   🔄 Cancelled {cancelled_rungs} unfilled rungs')
-            # If late fills found, amend hedge with updated qty + price
+            # If late fills found, place supplemental hedge (don't amend — preserve queue priority)
             if late_fill_qty <= 0:
                 save_state()
                 return
-            late_fill_qty_total = late_fill_qty
             new_total_fill = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
             new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / new_total_fill) if new_total_fill > 0 else avg_price
             bot['avg_fill_price'] = new_avg
-            _old_hedge_qty_before = bot.get('hedge_qty', 0) or hedge_qty
-            bot['hedge_qty'] = new_total_fill
-            target_width = bot.get('target_width', 5)
-            new_hedge_target = max(1, 100 - new_avg - target_width)
-            # Walk offset: how much the hedge has already walked from original target
-            old_target = max(1, 100 - avg_price - target_width)
-            walk_offset = max(0, bot.get('fav_price', old_target) - old_target)
-            amend_price = max(1, new_hedge_target + walk_offset)
-            if bot.get('fav_order_id'):
-                _old_hedge_qty = _old_hedge_qty_before
-                _extra_needed = new_total_fill - _old_hedge_qty
-                try:
-                    fav_side = bot.get('fav_side', 'yes')
-                    amend_kwargs = {f'{fav_side}_price': amend_price}
-                    # Acquire shared lock — prevents race with monitor walk and WS instant drop
-                    _phantom_drop_lock.acquire()
+            _old_hedge_qty = bot.get('hedge_qty', 0) or total_fill_qty
+            _extra_needed = new_total_fill - _old_hedge_qty
+            if _extra_needed > 0 and bot.get('fav_order_id'):
+                fav_side = bot.get('fav_side', 'yes')
+                # Get current fav bid for supplemental hedge
+                _sup_bid = 0
+                _ws_ticker = hedge_ticker if hedge_ticker != ticker else ticker
+                if ws_manager:
+                    _ws_sup = ws_manager.get_price(_ws_ticker)
+                    if _ws_sup:
+                        _sup_bid = _ws_sup.get(f'{fav_side}_bid', 0)
+                if _sup_bid <= 0:
+                    _sup_bid = bot.get('fav_price', 0)
+                _max_sup = 100 - new_avg
+                _sup_price = min(_sup_bid, _max_sup) if _sup_bid > 0 else 0
+                if _sup_price > 0 and new_avg + _sup_price <= 100:
                     try:
-                        fav_oid = bot.get('fav_order_id')  # Re-read after lock (may have changed)
-                        if not fav_oid:
-                            save_state()
-                            return
                         api_rate_limiter.wait()
-                        _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side, count=_old_hedge_qty, **amend_kwargs)
-                        # Capture new order ID
-                        _ao = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                        _new_oid = _ao.get('order_id', '')
-                        if _new_oid and _new_oid != fav_oid:
-                            bot['fav_order_id'] = _new_oid
-                            if fav_side == 'yes':
-                                bot['yes_order_id'] = _new_oid
-                            else:
-                                bot['no_order_id'] = _new_oid
-                    finally:
-                        _phantom_drop_lock.release()
-                    bot['fav_price'] = amend_price
-                    if fav_side == 'yes':
-                        bot['yes_price'] = amend_price
-                    else:
-                        bot['no_price'] = amend_price
-                    # Stragglers: sell back extra contracts — hedge window is gone
-                    if _extra_needed > 0:
-                        dog_side = bot.get('dog_side', 'yes')
-                        print(f'   🔙 STRAGGLER SELLBACK: {bot_id} {_extra_needed} late fills — selling back (hedge window closed)')
-                        bot_log('PHANTOM_LADDER_STRAGGLER_SELLBACK', bot_id, {
-                            'extra_qty': _extra_needed, 'dog_side': dog_side,
-                            'old_hedge_qty': _old_hedge_qty, 'total_fills': new_total_fill,
+                        _sup_resp, _sup_actual = create_order_maker(
+                            ticker=hedge_ticker, side=fav_side, action='buy',
+                            count=_extra_needed, price=_sup_price, priority=True,
+                        )
+                        _sup_oid = _sup_resp['order']['order_id']
+                        # Store supplemental hedge info on bot
+                        if not bot.get('_supplemental_hedges'):
+                            bot['_supplemental_hedges'] = []
+                        bot['_supplemental_hedges'].append({
+                            'order_id': _sup_oid, 'qty': _extra_needed,
+                            'price': _sup_actual, 'posted_at': time.time(),
+                            'fill_qty': 0,
                         })
-                        try:
-                            _sold, _sell_info = execute_sell(bot.get('ticker',''), dog_side, _extra_needed,
-                                                            reason=f'phantom_straggler_{bot_id}')
-                            _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
-                            # Straggler P&L: positive = lost money, negative = made money
-                            _strag_loss = (new_avg - _sell_p) * _extra_needed if _sell_p else new_avg * _extra_needed
-                            if _strag_loss > 0:
-                                session_pnl['gross_loss_cents'] += _strag_loss
-                            else:
-                                session_pnl['gross_profit_cents'] += abs(_strag_loss)
-                            # Track straggler in bot state for accurate P&L and position tracking
-                            bot['_straggler_sold_qty'] = bot.get('_straggler_sold_qty', 0) + _extra_needed
-                            bot['_straggler_loss_cents'] = bot.get('_straggler_loss_cents', 0) + _strag_loss
-                            _strag_label = f'loss={_strag_loss}¢' if _strag_loss > 0 else f'profit={abs(_strag_loss)}¢'
-                            print(f'   🔙 STRAGGLER SOLD: {bot_id} {_extra_needed}× @ {_sell_p}¢ {_strag_label}')
-                            bot_log('PHANTOM_LADDER_STRAGGLER_SOLD', bot_id, {
-                                'qty': _extra_needed, 'sell_price': _sell_p, 'pnl': -_strag_loss,
-                            })
-                        except Exception as _se:
-                            print(f'   ⚠ STRAGGLER SELLBACK FAIL: {bot_id}: {_se}')
-                    print(f'   📈 LATE FILL AMEND: {bot_id} qty={new_total_fill} avg={new_avg}¢ hedge@{amend_price}¢ (walk+{walk_offset}¢)')
-                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND', bot_id, {
-                        'new_total_fill': new_total_fill, 'new_avg': new_avg,
-                        'amend_price': amend_price, 'walk_offset': walk_offset,
-                        'late_fill_qty': late_fill_qty,
-                    })
-                    _audit('PHANTOM_LADDER_LATE_FILL_AMEND', bot_id, {
-                        'ticker': ticker, 'new_qty': new_total_fill, 'amend_price': amend_price,
-                    })
-                except Exception as ae:
-                    # Amend failed — restore hedge_qty to avoid state mismatch
-                    bot['hedge_qty'] = _old_hedge_qty_before
-                    print(f'   ⚠ LATE FILL AMEND FAIL: {bot_id}: {ae} — restored hedge_qty={_old_hedge_qty_before}')
-                    bot_log('PHANTOM_LADDER_LATE_FILL_AMEND_FAIL', bot_id, {
-                        'error': str(ae)[:300], 'new_total_fill': new_total_fill,
-                        'amend_price': amend_price, 'restored_hedge_qty': _old_hedge_qty_before,
-                    }, level='ERROR')
+                        print(f'   ✅ SUPPLEMENTAL HEDGE: {bot_id} +{_extra_needed}× {fav_side.upper()} @{_sup_actual}¢ (late fills, total hedge={new_total_fill})')
+                        bot_log('PHANTOM_LADDER_SUPPLEMENTAL_HEDGE', _bid, {
+                            'extra_qty': _extra_needed, 'sup_price': _sup_actual,
+                            'sup_order_id': _sup_oid[:12], 'new_avg': new_avg,
+                            'new_total_fill': new_total_fill, 'old_hedge_qty': _old_hedge_qty,
+                        })
+                    except Exception as _sup_err:
+                        print(f'   ⚠ SUPPLEMENTAL HEDGE FAIL: {bot_id}: {_sup_err}')
+                        bot_log('PHANTOM_LADDER_SUPPLEMENTAL_HEDGE_FAIL', _bid, {
+                            'error': str(_sup_err)[:300], 'extra_qty': _extra_needed,
+                        }, level='ERROR')
+                else:
+                    print(f'   ⚠ SUPPLEMENTAL HEDGE SKIP: {bot_id} no bid or over ceiling (bid={_sup_bid}¢ avg={new_avg}¢)')
             save_state()
 
         threading.Thread(target=_cancel_and_verify_rungs, args=(bot_id, bot), daemon=True).start()
@@ -3821,7 +3754,7 @@ def _ladder_sweep_then_hedge(bot_id):
 def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
     """Sell all filled ladder rung contracts back."""
     now = time.time()
-    # Safety: cancel fav hedge if still live
+    # Safety: cancel fav hedge + supplementals if still live
     _fav_oid = bot.get('fav_order_id')
     if _fav_oid:
         try:
@@ -3830,6 +3763,13 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
         except Exception:
             pass
         bot['fav_order_id'] = None
+    for _sh in bot.get('_supplemental_hedges', []):
+        if _sh.get('fill_qty', 0) < _sh.get('qty', 1):
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(_sh['order_id'])
+            except Exception:
+                pass
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     total_fill_qty = bot.get('hedge_qty') or sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
@@ -7762,8 +7702,6 @@ def create_anchor_bot():
             'yes_fill_qty':        0,
             'no_fill_qty':         0,
             'arb_width':           target_width,
-            # Pre-calculated hedge price — ready to fire instantly on dog fill
-            '_precalc_hedge_price': _precalc_phantom_hedge(actual_dog_price, target_width, dog_side, quantity),
             '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
             '_last_repost_at':     0,
             '_all_dog_order_ids':  [dog_order_id],
@@ -7916,9 +7854,6 @@ def create_ladder_bot():
             if hedge_ticker != ticker:
                 ws_manager.add_ticker(hedge_ticker)
 
-        # Pre-calculate hedge prices + avg fill prices for every fill count
-        _precalc_h, _precalc_a = _precalc_phantom_ladder_hedges(placed_rungs, target_width, dog_side)
-
         active_bots[bot_id] = {
             'ticker': ticker,
             'hedge_ticker': hedge_ticker,
@@ -7966,9 +7901,6 @@ def create_ladder_bot():
             'fav_walk_count': 0,
             'fav_walk_ceiling': 100,  # max combined cost — only sell back if > 100¢
             'fav_last_walk_at': None,
-            # Pre-calculated hedge prices + avg prices for every fill count (1, 2, 3 rungs)
-            '_precalc_hedge_prices': _precalc_h,
-            '_precalc_avg_prices': _precalc_a,
             '_bid_at_post': current_dog_bid if current_dog_bid > 0 else 0,
             '_last_repost_at': 0,
             '_order_group_id': phantom_group_id,
@@ -9320,9 +9252,7 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['no_order_id'] = new_order_id
                     bot['no_price'] = actual_new_price
 
-                # Recalculate precalc hedge price for new dog price
-                target_width = bot.get('target_width', 5)
-                bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_new_price, target_width, dog_side, qty)
+
 
                 print(f'🔄 PHANTOM REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
                       f'({trigger_reason} bid={current_dog_bid}¢ ask={current_dog_ask}¢ #{bot["dog_repost_count"]})')
@@ -9331,7 +9261,6 @@ def _handle_phantom(bot_id, bot, actions):
                     'dog_bid': current_dog_bid, 'dog_ask': current_dog_ask,
                     'trigger': trigger_reason, 'repost_count': bot['dog_repost_count'],
                     'new_order_id': new_order_id[:12],
-                    'precalc_hedge': bot.get('_precalc_hedge_price'),
                     'anchor_depth': anchor_depth, 'spread': spread,
                 })
                 _audit('PHANTOM_DOG_REPOST', bot_id, {
@@ -10124,8 +10053,6 @@ def _handle_phantom(bot_id, bot, actions):
             )
             bot['dog_order_id'] = dog_resp['order']['order_id']
             bot['dog_price'] = actual_price
-            # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
-            bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)
             bot['dog_fill_qty'] = 0
             bot['fav_fill_qty'] = 0
             bot['yes_fill_qty'] = 0
@@ -10564,10 +10491,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 ws_rp = (ws_manager.get_price(ticker) if ws_manager else None) or {}
                 bot['_bid_at_post'] = ws_rp.get(f'{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
-                # Pre-calculate hedge prices + avg prices for new rung prices
-                bot['_precalc_hedge_prices'], bot['_precalc_avg_prices'] = _precalc_phantom_ladder_hedges(
-                    new_rungs, bot.get('target_width', 5), dog_side
-                )
                 rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
                 print(f'🔄 PHANTOM LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
                 bot_log('PHANTOM_LADDER_REPEAT_POSTED', bot_id, {
@@ -10864,10 +10787,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     bot['_bid_at_post'] = rp_dog_bid
                     bot['_last_repost_at'] = now
                     bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
-                    # Re-precalculate hedge prices + avg prices with updated rung prices
-                    bot['_precalc_hedge_prices'], bot['_precalc_avg_prices'] = _precalc_phantom_ladder_hedges(
-                        bot['rungs'], bot.get('target_width', 5), dog_side
-                    )
                     print(f'🔄 PHANTOM REPOST: {bot_id} {old_first_price}¢→{smart_first}¢ '
                           f'({trigger_reason} bid={rp_dog_bid}¢ ask={rp_dog_ask}¢ #{bot["dog_repost_count"]})')
                     bot_log('PHANTOM_LADDER_REPOST', bot_id, {
@@ -10972,10 +10891,33 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         fav_ord = fav_resp.get('order', fav_resp) if isinstance(fav_resp, dict) else {}
         fav_filled = _parse_fill_count(fav_ord)
         bot['fav_fill_qty'] = fav_filled
+
+        # ── Check supplemental hedge fills ──
+        _sup_total_filled = 0
+        for _sh in bot.get('_supplemental_hedges', []):
+            if _sh.get('fill_qty', 0) >= _sh.get('qty', 1):
+                _sup_total_filled += _sh['fill_qty']
+                continue
+            try:
+                api_read_limiter.wait()
+                _sh_resp = kalshi_client.get_order(_sh['order_id'])
+                _sh_ord = _sh_resp.get('order', _sh_resp) if isinstance(_sh_resp, dict) else {}
+                _sh_fills = _parse_fill_count(_sh_ord)
+                _sh['fill_qty'] = _sh_fills
+                if _sh_fills >= _sh.get('qty', 1):
+                    _sh['filled_at'] = now
+                _sup_total_filled += _sh_fills
+            except Exception:
+                _sup_total_filled += _sh.get('fill_qty', 0)
+
+        _total_fav_filled = fav_filled + _sup_total_filled
         if fav_side == 'yes':
-            bot['yes_fill_qty'] = fav_filled
+            bot['yes_fill_qty'] = _total_fav_filled
         else:
-            bot['no_fill_qty'] = fav_filled
+            bot['no_fill_qty'] = _total_fav_filled
+
+        # Total contracts that need hedging (main + supplementals)
+        _total_hedge_target = hedge_qty + sum(s.get('qty', 0) for s in bot.get('_supplemental_hedges', []))
 
         # ── Verify actual rung fills before completion (catches WS-missed fills) ──
         if now - bot.get('_last_rung_verify', 0) >= 30:
@@ -11003,64 +10945,50 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     except Exception:
                         verified_total += rung.get('fill_qty', 0)
                 if verified_total > hedge_qty:
-                    # More fills than hedged — amend price, sell back stragglers
+                    # More fills than hedged — place supplemental hedge (preserve original queue priority)
                     _mon_extra = verified_total - hedge_qty
                     new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot['rungs'] if r.get('fill_qty', 0) > 0) / verified_total) if verified_total > 0 else bot.get('avg_fill_price', 0)
-                    old_avg = bot.get('avg_fill_price', new_avg)
                     bot['avg_fill_price'] = new_avg
-                    target_w = bot.get('target_width', 5)
-                    amend_p = max(1, 100 - new_avg - target_w)
-                    old_tgt = max(1, 100 - old_avg - target_w)
-                    w_off = max(0, bot.get('fav_price', amend_p) - old_tgt)
-                    amend_p = max(1, amend_p + w_off)
                     try:
-                        amend_kw = {f'{fav_side}_price': amend_p}
-                        api_rate_limiter.wait()
-                        kalshi_client.amend_order(fav_order_id, ticker=hedge_ticker, side=fav_side, count=hedge_qty, **amend_kw)
-                        bot['fav_price'] = amend_p
-                        # Sell back stragglers — hedge window is closed
-                        if _mon_extra > 0:
-                            dog_side = bot.get('dog_side', 'yes')
-                            print(f'🔙 PHANTOM MONITOR STRAGGLER: {bot_id} {_mon_extra} late fills — selling back')
-                            bot_log('PHANTOM_MONITOR_STRAGGLER_SELLBACK', bot_id, {
-                                'extra_qty': _mon_extra, 'dog_side': dog_side,
-                                'hedge_qty': hedge_qty, 'verified_total': verified_total,
+                        _sup_bid = current_fav_bid if current_fav_bid > 0 else bot.get('fav_price', 0)
+                        _max_sup = 100 - new_avg
+                        _sup_price = min(_sup_bid, _max_sup) if _sup_bid > 0 else 0
+                        if _sup_price > 0 and new_avg + _sup_price <= 100:
+                            api_rate_limiter.wait()
+                            _sup_resp, _sup_actual = create_order_maker(
+                                ticker=hedge_ticker, side=fav_side, action='buy',
+                                count=_mon_extra, price=_sup_price, priority=True,
+                            )
+                            _sup_oid = _sup_resp['order']['order_id']
+                            if not bot.get('_supplemental_hedges'):
+                                bot['_supplemental_hedges'] = []
+                            bot['_supplemental_hedges'].append({
+                                'order_id': _sup_oid, 'qty': _mon_extra,
+                                'price': _sup_actual, 'posted_at': now,
+                                'fill_qty': 0,
                             })
-                            try:
-                                _sold, _sell_info = execute_sell(bot.get('ticker',''), dog_side, _mon_extra,
-                                                                reason=f'phantom_monitor_straggler_{bot_id}')
-                                _sell_p = (_sell_info or {}).get('avg_price', 0) if isinstance(_sell_info, dict) else 0
-                                # Straggler P&L: positive = lost money, negative = made money
-                                _strag_loss = (new_avg - _sell_p) * _mon_extra if _sell_p else new_avg * _mon_extra
-                                if _strag_loss > 0:
-                                    session_pnl['gross_loss_cents'] += _strag_loss
-                                else:
-                                    session_pnl['gross_profit_cents'] += abs(_strag_loss)
-                                # Track straggler in bot state for accurate P&L and position tracking
-                                bot['_straggler_sold_qty'] = bot.get('_straggler_sold_qty', 0) + _mon_extra
-                                bot['_straggler_loss_cents'] = bot.get('_straggler_loss_cents', 0) + _strag_loss
-                                _strag_label = f'loss={_strag_loss}¢' if _strag_loss > 0 else f'profit={abs(_strag_loss)}¢'
-                                print(f'🔙 PHANTOM MONITOR STRAGGLER SOLD: {bot_id} {_mon_extra}× @ {_sell_p}¢ {_strag_label}')
-                            except Exception as _mse:
-                                print(f'⚠ PHANTOM MONITOR STRAGGLER FAIL: {bot_id}: {_mse}')
-                        print(f'📈 PHANTOM LATE FILL AMEND: {bot_id} hedge_qty={hedge_qty} verified={verified_total} avg={new_avg}¢ hedge@{amend_p}¢ stragglers={_mon_extra}')
-                        bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND', bot_id, {
-                            'verified_total': verified_total, 'new_avg': new_avg,
-                            'amend_price': amend_p, 'walk_offset': w_off,
-                        })
+                            print(f'✅ SUPPLEMENTAL HEDGE: {bot_id} +{_mon_extra}× {fav_side.upper()} @{_sup_actual}¢ (monitor verify, total hedge={verified_total})')
+                            bot_log('PHANTOM_LADDER_SUPPLEMENTAL_HEDGE', bot_id, {
+                                'extra_qty': _mon_extra, 'sup_price': _sup_actual,
+                                'sup_order_id': _sup_oid[:12], 'new_avg': new_avg,
+                                'verified_total': verified_total,
+                            })
+                        else:
+                            print(f'⚠ SUPPLEMENTAL HEDGE SKIP: {bot_id} no bid or over ceiling (bid={_sup_bid}¢ avg={new_avg}¢)')
                     except Exception as ae:
-                        print(f'⚠ PHANTOM LATE FILL AMEND FAIL: {bot_id}: {ae}')
-                        bot_log('PHANTOM_LADDER_MONITOR_LATE_FILL_AMEND_FAIL', bot_id, {
+                        print(f'⚠ SUPPLEMENTAL HEDGE FAIL: {bot_id}: {ae}')
+                        bot_log('PHANTOM_LADDER_SUPPLEMENTAL_HEDGE_FAIL', bot_id, {
                             'error': str(ae)[:300], 'verified_total': verified_total,
                         }, level='ERROR')
             except Exception as rv_err:
                 print(f'⚠ PHANTOM RUNG VERIFY FAIL: {bot_id}: {rv_err}')
                 bot_log('PHANTOM_LADDER_RUNG_VERIFY_ERROR', bot_id, {'error': str(rv_err)[:300]}, level='ERROR')
 
-        if fav_filled >= hedge_qty:
-            print(f'👻 PHANTOM COMPLETE: {bot_id} fav filled {fav_filled}/{hedge_qty}')
+        if _total_fav_filled >= _total_hedge_target:
+            print(f'👻 PHANTOM COMPLETE: {bot_id} fav filled {_total_fav_filled}/{_total_hedge_target} (main={fav_filled} sup={_sup_total_filled})')
             bot_log('PHANTOM_LADDER_FAV_FILLED', bot_id, {
-                'fav_filled': fav_filled, 'hedge_qty': hedge_qty,
+                'fav_filled': _total_fav_filled, 'hedge_qty': _total_hedge_target,
+                'main_filled': fav_filled, 'sup_filled': _sup_total_filled,
                 'fav_order_id': fav_order_id[:12], 'fav_side': fav_side,
             })
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
@@ -11072,24 +11000,41 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 })
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
-            # COMPLETE — calculate P&L
+            # COMPLETE — calculate P&L (main hedge + supplementals)
             actual_fav_price = get_actual_fill_price(fav_order_id, fav_side) or bot['fav_price']
             bot['fav_price'] = actual_fav_price
             avg_dog = bot.get('avg_fill_price', 0)
+
+            # Weighted avg fav price across main + supplemental hedges
+            _main_qty = min(fav_filled, hedge_qty)
+            _fav_cost = actual_fav_price * _main_qty
+            _fav_total_qty = _main_qty
+            for _sh in bot.get('_supplemental_hedges', []):
+                _sh_qty = _sh.get('fill_qty', 0)
+                if _sh_qty > 0:
+                    _sh_price = get_actual_fill_price(_sh['order_id'], fav_side) or _sh.get('price', 0)
+                    _sh['actual_price'] = _sh_price
+                    _fav_cost += _sh_price * _sh_qty
+                    _fav_total_qty += _sh_qty
+            _weighted_fav = round(_fav_cost / _fav_total_qty) if _fav_total_qty > 0 else actual_fav_price
+
             if fav_side == 'yes':
-                yes_p, no_p = actual_fav_price, avg_dog
+                yes_p, no_p = _weighted_fav, avg_dog
             else:
-                yes_p, no_p = avg_dog, actual_fav_price
+                yes_p, no_p = avg_dog, _weighted_fav
             bot['yes_price'] = yes_p
             bot['no_price'] = no_p
 
-            pnl_cents = (100 - yes_p - no_p) * hedge_qty
-            # Fee: dog side per-rung (different prices), fav side once (single order)
+            pnl_cents = (100 - yes_p - no_p) * _fav_total_qty
+            # Fee: dog side per-rung (different prices), fav side per order
             _dog_fee = sum(
                 _kalshi_side_fee_cents(r['price'], r.get('fill_qty', 0))
                 for r in bot['rungs'] if r.get('fill_qty', 0) > 0
             )
-            _fav_fee = _kalshi_side_fee_cents(actual_fav_price, hedge_qty)
+            _fav_fee = _kalshi_side_fee_cents(actual_fav_price, _main_qty)
+            for _sh in bot.get('_supplemental_hedges', []):
+                if _sh.get('fill_qty', 0) > 0:
+                    _fav_fee += _kalshi_side_fee_cents(_sh.get('actual_price', _sh.get('price', 0)), _sh['fill_qty'])
             fee = _dog_fee + _fav_fee
             net_pnl = pnl_cents - fee
 
@@ -11105,7 +11050,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _record_trade({
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': yes_p, 'no_price': no_p,
-                'quantity': hedge_qty,
+                'quantity': _fav_total_qty,
                 'profit_cents': net_pnl if net_pnl >= 0 else 0,
                 'loss_cents': abs(net_pnl) if net_pnl < 0 else 0,
                 'fee_cents': fee,
@@ -11114,7 +11059,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'first_leg': dog_side,
                 'dog_side': dog_side,
                 'dog_price': avg_dog,
-                'fav_price': actual_fav_price,
+                'fav_price': _weighted_fav,
                 'avg_dog_price': avg_dog,
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
                 'hedge_fill_latency_ms': bot.get('hedge_fill_latency_ms'),
@@ -11410,6 +11355,32 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['yes_price'] = new_fav_price
             else:
                 bot['no_price'] = new_fav_price
+            # ── Snap supplemental hedges to bid too ──
+            for _sh in bot.get('_supplemental_hedges', []):
+                if _sh.get('fill_qty', 0) >= _sh.get('qty', 1):
+                    continue  # already filled
+                _sh_old = _sh.get('price', 0)
+                if _sh_old == new_fav_price:
+                    continue  # already at bid
+                try:
+                    _sh_kw = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
+                    api_rate_limiter.wait()
+                    _sh_amend = kalshi_client.amend_order(_sh['order_id'], ticker=hedge_ticker, side=fav_side, count=_sh['qty'], **_sh_kw)
+                    _sh_ao = _sh_amend.get('order', _sh_amend) if isinstance(_sh_amend, dict) else {}
+                    _sh_new_oid = _sh_ao.get('order_id', '')
+                    if _sh_new_oid and _sh_new_oid != _sh['order_id']:
+                        _sh['order_id'] = _sh_new_oid
+                    _sh['price'] = new_fav_price
+                except Exception as _she:
+                    if '404' in str(_she):
+                        # Supplemental may have filled — check
+                        try:
+                            api_read_limiter.wait()
+                            _sh_chk = kalshi_client.get_order(_sh['order_id'])
+                            _sh_chk_ord = _sh_chk.get('order', _sh_chk) if isinstance(_sh_chk, dict) else {}
+                            _sh['fill_qty'] = _parse_fill_count(_sh_chk_ord)
+                        except Exception:
+                            pass
             save_state()
         except Exception as e:
             err_str = str(e)

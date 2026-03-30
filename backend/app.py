@@ -11243,6 +11243,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['_trade_recorded'] = False
                 bot['_straggler_sold_qty'] = 0
                 bot['_straggler_loss_cents'] = 0
+                # Cancel any unfilled supplemental hedges and clear the list
+                for _sh in bot.get('_supplemental_hedges', []):
+                    if _sh.get('fill_qty', 0) < _sh.get('qty', 1):
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_sh['order_id'])
+                        except Exception:
+                            pass
+                bot['_supplemental_hedges'] = []
                 for rung in bot.get('rungs', []):
                     rung['fill_qty'] = 0
                     rung['order_id'] = None

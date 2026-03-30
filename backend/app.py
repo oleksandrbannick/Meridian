@@ -3672,7 +3672,8 @@ def _execute_phantom_ladder_hedge(bot_id):
             new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0) / new_total_fill) if new_total_fill > 0 else avg_price
             bot['avg_fill_price'] = new_avg
             _old_hedge_qty = bot.get('hedge_qty', 0) or total_fill_qty
-            _extra_needed = new_total_fill - _old_hedge_qty
+            _existing_sup_qty = sum(s.get('qty', 0) for s in bot.get('_supplemental_hedges', []))
+            _extra_needed = new_total_fill - _old_hedge_qty - _existing_sup_qty
             if _extra_needed > 0 and bot.get('fav_order_id'):
                 fav_side = bot.get('fav_side', 'yes')
                 # Get current fav bid for supplemental hedge
@@ -10944,9 +10945,10 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         verified_total += max(actual_v, rung.get('fill_qty', 0))
                     except Exception:
                         verified_total += rung.get('fill_qty', 0)
-                if verified_total > hedge_qty:
-                    # More fills than hedged — place supplemental hedge (preserve original queue priority)
-                    _mon_extra = verified_total - hedge_qty
+                _existing_sup_qty = sum(s.get('qty', 0) for s in bot.get('_supplemental_hedges', []))
+                if verified_total > (hedge_qty + _existing_sup_qty):
+                    # More fills than hedged (main + supplementals) — place supplemental hedge
+                    _mon_extra = verified_total - hedge_qty - _existing_sup_qty
                     new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot['rungs'] if r.get('fill_qty', 0) > 0) / verified_total) if verified_total > 0 else bot.get('avg_fill_price', 0)
                     bot['avg_fill_price'] = new_avg
                     try:

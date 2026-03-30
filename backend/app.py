@@ -10950,7 +10950,15 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     new_avg = round(sum(r['price'] * r.get('fill_qty', 0) for r in bot['rungs'] if r.get('fill_qty', 0) > 0) / verified_total) if verified_total > 0 else bot.get('avg_fill_price', 0)
                     bot['avg_fill_price'] = new_avg
                     try:
-                        _sup_bid = current_fav_bid if current_fav_bid > 0 else bot.get('fav_price', 0)
+                        # Get fav bid from WS cache (monitor hasn't fetched orderbook yet)
+                        _sup_bid = 0
+                        _ws_sup_ticker = hedge_ticker if hedge_ticker != ticker else ticker
+                        if ws_manager:
+                            _ws_sup_data = ws_manager.get_price(_ws_sup_ticker)
+                            if _ws_sup_data:
+                                _sup_bid = _ws_sup_data.get(f'{fav_side}_bid', 0)
+                        if _sup_bid <= 0:
+                            _sup_bid = bot.get('fav_price', 0)
                         _max_sup = 100 - new_avg
                         _sup_price = min(_sup_bid, _max_sup) if _sup_bid > 0 else 0
                         if _sup_price > 0 and new_avg + _sup_price <= 100:
@@ -10983,6 +10991,51 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             except Exception as rv_err:
                 print(f'⚠ PHANTOM RUNG VERIFY FAIL: {bot_id}: {rv_err}')
                 bot_log('PHANTOM_LADDER_RUNG_VERIFY_ERROR', bot_id, {'error': str(rv_err)[:300]}, level='ERROR')
+
+        # Don't complete if there are unhedged dog fills that still need a supplemental
+        _actual_dog_fills = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
+        if _actual_dog_fills > _total_hedge_target:
+            # There are unhedged fills — try supplemental before completing
+            _unhedged = _actual_dog_fills - _total_hedge_target
+            _sup_bid = 0
+            _ws_sup_ticker = hedge_ticker if hedge_ticker != ticker else ticker
+            if ws_manager:
+                _ws_sup_data = ws_manager.get_price(_ws_sup_ticker)
+                if _ws_sup_data:
+                    _sup_bid = _ws_sup_data.get(f'{fav_side}_bid', 0)
+            if _sup_bid <= 0:
+                _sup_bid = bot.get('fav_price', 0)
+            _new_avg = bot.get('avg_fill_price', 0)
+            _max_sup = 100 - _new_avg if _new_avg > 0 else 0
+            _sup_p = min(_sup_bid, _max_sup) if _sup_bid > 0 and _max_sup > 0 else 0
+            if _sup_p > 0 and _new_avg + _sup_p <= 100:
+                try:
+                    api_rate_limiter.wait()
+                    _sup_resp, _sup_actual = create_order_maker(
+                        ticker=hedge_ticker, side=fav_side, action='buy',
+                        count=_unhedged, price=_sup_p, priority=True,
+                    )
+                    _sup_oid = _sup_resp['order']['order_id']
+                    if not bot.get('_supplemental_hedges'):
+                        bot['_supplemental_hedges'] = []
+                    bot['_supplemental_hedges'].append({
+                        'order_id': _sup_oid, 'qty': _unhedged,
+                        'price': _sup_actual, 'posted_at': now,
+                        'fill_qty': 0,
+                    })
+                    print(f'✅ SUPPLEMENTAL HEDGE: {bot_id} +{_unhedged}× {fav_side.upper()} @{_sup_actual}¢ (pre-completion catch)')
+                    bot_log('PHANTOM_LADDER_SUPPLEMENTAL_HEDGE', bot_id, {
+                        'extra_qty': _unhedged, 'sup_price': _sup_actual,
+                        'sup_order_id': _sup_oid[:12], 'path': 'pre_completion',
+                    })
+                    save_state()
+                    return  # Don't complete yet — wait for supplemental to fill
+                except Exception as _sup_err:
+                    print(f'⚠ SUPPLEMENTAL HEDGE FAIL (pre-completion): {bot_id}: {_sup_err}')
+                    bot_log('PHANTOM_LADDER_SUPPLEMENTAL_HEDGE_FAIL', bot_id, {
+                        'error': str(_sup_err)[:300], 'unhedged': _unhedged,
+                        'path': 'pre_completion',
+                    }, level='ERROR')
 
         if _total_fav_filled >= _total_hedge_target:
             print(f'👻 PHANTOM COMPLETE: {bot_id} fav filled {_total_fav_filled}/{_total_hedge_target} (main={fav_filled} sup={_sup_total_filled})')

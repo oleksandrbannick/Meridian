@@ -5858,24 +5858,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     </div>
                 ` : ''}
             </div>
-            ${(bot._supplemental_hedges && bot._supplemental_hedges.length > 0) ? bot._supplemental_hedges.map((sh, si) => {
-                const shFilled = (sh.fill_qty || 0) >= (sh.qty || 1);
-                const shFillPct = sh.qty > 0 ? Math.round(((sh.fill_qty || 0) / sh.qty) * 100) : 0;
-                const shCol = shFilled ? '#00ff88' : (sh.fill_qty || 0) > 0 ? '#ffaa00' : '#00aaff';
-                return `<div style="background:#060a14;border:1px solid ${shCol}33;border-radius:8px;padding:8px 10px;margin-top:6px;">
-                    <div style="color:#aa66ff;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">⭐ SUPPLEMENTAL #${si + 1}${shFilled ? ' · FILLED ✓' : ''}</div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <span style="color:#fff;font-weight:700;font-size:13px;">${sh.price || '?'}¢</span>
-                        <span style="color:#8892a6;font-size:10px;">×${sh.qty || '?'}</span>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
-                        <div style="flex:1;height:5px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                            <div style="width:${shFillPct}%;height:100%;background:${shCol};border-radius:3px;"></div>
-                        </div>
-                        <span style="color:${shCol};font-size:10px;font-weight:700;">${sh.fill_qty || 0}/${sh.qty || '?'}</span>
-                    </div>
-                </div>`;
-            }).join('') : ''}
         </div>
         ${(() => {
             // Running P&L for dog bot

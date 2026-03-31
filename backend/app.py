@@ -10101,6 +10101,25 @@ def _handle_phantom(bot_id, bot, actions):
             ob = kalshi_client.get_market_orderbook(ticker)
             current_dog_bid = _best_bid(ob, dog_side)
             current_dog_ask = _best_ask(ob, dog_side)
+
+            # Dog flip detection (same-market): if stored dog side bid > 50¢, it's now the fav
+            _is_cross_flip = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if not _is_cross_flip and current_dog_bid > 50:
+                _opp_side = 'yes' if dog_side == 'no' else 'no'
+                _opp_bid = _best_bid(ob, _opp_side)
+                if _opp_bid > 0 and _opp_bid < current_dog_bid:
+                    print(f'🔄 PHANTOM DOG FLIP: {bot_id} {dog_side}@{current_dog_bid}¢ is now fav → swapping to {_opp_side}@{_opp_bid}¢')
+                    bot_log('PHANTOM_DOG_FLIP', bot_id, {
+                        'old_dog_side': dog_side, 'old_dog_bid': current_dog_bid,
+                        'new_dog_side': _opp_side, 'new_dog_bid': _opp_bid,
+                    })
+                    bot['dog_side'] = _opp_side
+                    bot['fav_side'] = dog_side
+                    dog_side = _opp_side
+                    fav_side = bot['fav_side']
+                    current_dog_bid = _opp_bid
+                    current_dog_ask = _best_ask(ob, dog_side)
+
             if current_dog_bid <= 0:
                 # Preserve repeats — no market is temporary
                 _repeat_count = bot.get('repeat_count', 0)

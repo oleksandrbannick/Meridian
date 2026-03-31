@@ -5642,7 +5642,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const dogFillQty = bot.total_dog_fill_qty || bot.dog_fill_qty || 0;
     const dogFilled = isLadder ? dogFillQty >= (bot.total_dog_qty || qty) : dogFillQty >= qty;
     const favFillQty = bot.fav_fill_qty || 0;
-    const hedgeQty = bot.hedge_qty || (isLadder ? (bot.total_dog_fill_qty || qty) : qty);
+    const hedgeQty = bot.hedge_qty || bot._partial_hedge_qty || (isLadder ? (bot.total_dog_fill_qty || qty) : (dogFillQty > 0 ? dogFillQty : qty));
     const favFilled = favFillQty >= hedgeQty;
     const avgDogPrice = isLadder && bot.avg_fill_price > 0 ? bot.avg_fill_price : dogPrice;
     const repeatCount = bot.repeat_count || 0;

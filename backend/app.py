@@ -9408,6 +9408,10 @@ def _handle_phantom(bot_id, bot, actions):
             _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
             return
 
+        # Guard: WS handler may have completed the arb while we were making API calls above.
+        # Re-check status — if it changed from dog_filled, the WS handler already handled it.
+        if bot.get('status') != 'dog_filled':
+            return
         # Guard: WS handler may have already posted the fav hedge
         if bot.get('_hedge_fired') and bot.get('fav_order_id'):
             return

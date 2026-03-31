@@ -2821,7 +2821,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
             amend_kwargs = {f'{fav_side}_price': drop_target}
             api_rate_limiter.wait()
             _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
-                                      count=bot.get('hedge_qty', bot.get('quantity', 1)),
+                                      count=bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1)),
                                       **amend_kwargs)
             # Capture new order ID if Kalshi reassigned (amend = cancel+repost internally)
             _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
@@ -8944,7 +8944,7 @@ def _handle_phantom(bot_id, bot, actions):
     now = time.time()
     ticker = bot['ticker']
     hedge_ticker = bot.get('hedge_ticker', ticker)
-    qty = bot.get('quantity', 1)
+    qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
     dog_side = bot['dog_side']
     fav_side = bot['fav_side']
     status = bot['status']

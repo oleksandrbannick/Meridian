@@ -5499,7 +5499,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${(bot._run_history || []).map((r, i) => `
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
                             <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
-                            <span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span>
+                            <span style="color:#8892a6;">${r.dog_price || '?'}¢ ${r.result === 'sellback' ? '<span style="color:#ff4444;">→</span> ' + (r.fav_price || '?') + '¢ <span style="color:#ff4444;font-size:8px;">SB</span>' : '/ ' + (r.fav_price || '?') + '¢'}</span>
                             <span style="color:#8892a6;">x${r.qty || 1}</span>
                             ${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};font-size:9px;">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
@@ -5880,7 +5880,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 html += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;">';
                 html += _rh.map((r, i) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #1a254033;' : '') + 'font-size:10px;">'
                     + '<span style="color:#555;font-weight:600;">#' + (r.run || i + 1) + '</span>'
-                    + '<span style="color:#8892a6;">' + (r.dog_price || '?') + '¢ / ' + (r.fav_price || '?') + '¢</span>'
+                    + '<span style="color:#8892a6;">' + (r.dog_price || '?') + '¢ ' + (r.result === 'sellback' ? '<span style="color:#ff4444;">→</span> ' + (r.fav_price || '?') + '¢ <span style="color:#ff4444;font-size:8px;">SB</span>' : '/ ' + (r.fav_price || '?') + '¢') + '</span>'
                     + '<span style="color:#8892a6;">x' + (r.qty || 1) + '</span>'
                     + (r.raw_hedge_ms != null ? '<span style="color:' + (r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444') + ';font-size:9px;">⚡' + r.raw_hedge_ms.toFixed(1) + '</span>' : '')
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:700;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'

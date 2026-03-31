@@ -3789,9 +3789,8 @@ function initAnchorDogPrices() {
     // Auto-adjust rung price to track market
     if (_anchorAutoPrice && _anchorRungs.length > 0 && anchorBase > 0) {
         const rung = _anchorRungs[0];
-        if (isAutoDepth) rung.offset = anchorDepth;
-        const off = rung.offset || anchorDepth;
-        rung.price = Math.max(1, anchorBase - off);
+        rung.offset = anchorDepth;
+        rung.price = Math.max(1, anchorBase - anchorDepth);
     }
     renderAnchorRungs();
     updateAnchorPreview();

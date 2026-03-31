@@ -3103,10 +3103,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             # Log AFTER hedge is queued — not on hot path
             print(f'👻 WS PHANTOM RUNG FILL: {bot_id} rung[{matched_rung}] @{rung["price"]}¢ +{count} → {rung["fill_qty"]}/{rung["qty"]} (total {total_fill}/{bot["total_dog_qty"]})')
             _audit('LADDER_RUNG_FILL', bot_id, {'ticker': bot['ticker'], 'rung_price': rung.get('price'), 'fill_qty': rung.get('fill_qty'), 'total_fills': total_fill})
-            if _hedge_spawned:
-                # Defer save_state to background — don't block WS handler while hedge thread needs GIL
-                threading.Thread(target=save_state, daemon=True).start()
-            else:
+            if not _hedge_spawned:
+                # Skip save_state when hedge queued — json.dump GIL contention blocks hedge worker
                 save_state()
             break
         elif bot.get('status') in ('fav_hedge_posted', 'ladder_filled_no_fav'):
@@ -4390,6 +4388,8 @@ def _execute_ws_completion(bot_id):
                 'dog_price': bot.get('dog_price') or (real_yes if _dog_side == 'yes' else real_no),
                 'fav_price': bot.get('fav_price') or (real_yes if _fav_side == 'yes' else real_no),
                 'qty': qty,
+                'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                'hedge_latency_ms': bot.get('hedge_latency_ms'),
                 'ts': now,
             })
             if will_repeat:
@@ -7642,12 +7642,6 @@ def create_anchor_bot():
         # Auto-detect game phase
         game_phase = 'live' if _is_game_live(ticker) else 'pregame'
 
-        # Late-game block
-        if game_phase == 'live':
-            late_blocked, late_reason = _is_late_game(ticker)
-            if late_blocked:
-                return jsonify({'error': f'Late-game block — {late_reason}'}), 400
-
         # Per-ticker bot cap
         MAX_BOTS_PER_TICKER = 5
         active_on_ticker = sum(
@@ -9644,6 +9638,8 @@ def _handle_phantom(bot_id, bot, actions):
                 'dog_price': dog_price,
                 'fav_price': actual_fav_price,
                 'qty': qty,
+                'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                'hedge_latency_ms': bot.get('hedge_latency_ms'),
                 'ts': time.time(),
             })
             if _will_repeat:
@@ -11175,9 +11171,6 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             repeats_done_now = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done_now
             repeat_total = bot.get('repeat_count', 0)
-            # Smart mode override
-            _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
-            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
             # Track accumulated cross-market positions before fill reset
             # Subtract stragglers that were already sold back — they don't exist on Kalshi
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
@@ -11191,6 +11184,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav
             # Adjust bot P&L for straggler sellback losses (already in session_pnl separately)
             _bot_pnl = net_pnl - _strag_loss_total
+            # Smart mode override — use _bot_pnl (includes straggler losses) not net_pnl
+            _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _bot_pnl)
+            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
             # Record run history before resetting fills
             bot.setdefault('_run_history', []).append({
                 'run': repeats_done_now,
@@ -11199,6 +11195,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'dog_price': avg_dog,
                 'fav_price': actual_fav_price,
                 'qty': hedge_qty,
+                'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                'hedge_latency_ms': bot.get('hedge_latency_ms'),
                 'straggler_sold': _strag_sold,
                 'straggler_loss': _strag_loss_total,
                 'ts': time.time(),
@@ -12169,6 +12167,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'dog_price': dog_price,
         'fav_price': sell_price or 0,
         'qty': qty,
+        'raw_hedge_ms': bot.get('raw_hedge_ms'),
+        'hedge_latency_ms': bot.get('hedge_latency_ms'),
         'ts': now,
     })
 
@@ -13280,15 +13280,6 @@ def _run_monitor():
                     # that still achieve the target width.
                     # We need: yes_bid + no_bid >= 100 - target_width
                     # (so we can shave from bids and still have room)
-                    # Also skip if late-game window
-                    if phase == 'live':
-                        late_blocked, late_reason = _is_late_game(ticker)
-                        if late_blocked:
-                            bot['status'] = 'completed'
-                            print(f'🚫 REPEAT BLOCKED (late game): {bot_id} — {late_reason}')
-                            actions.append({'bot_id': bot_id, 'action': 'repeat_late_game_block'})
-                            continue
-
                     bid_sum = fresh_yes_bid + fresh_no_bid
                     target_total = 100 - target_width
                     # Derive asks via market identity: YES ask + NO bid = 100

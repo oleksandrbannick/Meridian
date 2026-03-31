@@ -5501,6 +5501,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
                             <span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span>
                             <span style="color:#8892a6;">x${r.qty || 1}</span>
+                            ${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};font-size:9px;">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
                         </div>
                     `).join('')}
@@ -5881,6 +5882,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="color:#555;font-weight:600;">#' + (r.run || i + 1) + '</span>'
                     + '<span style="color:#8892a6;">' + (r.dog_price || '?') + '¢ / ' + (r.fav_price || '?') + '¢</span>'
                     + '<span style="color:#8892a6;">x' + (r.qty || 1) + '</span>'
+                    + (r.raw_hedge_ms != null ? '<span style="color:' + (r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444') + ';font-size:9px;">⚡' + r.raw_hedge_ms.toFixed(1) + '</span>' : '')
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:700;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>').join('');
                 html += '</div>';

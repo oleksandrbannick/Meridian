@@ -15853,7 +15853,7 @@ def smart_exit(bot_id):
     try:
         _sold, _sell_info = execute_sell(loser_ticker, loser_side, _loser_qty,
                                          reason=f'smart_exit_{bot_id}')
-        sell_price = _sell_info.get('avg_price', 0) if isinstance(_sell_info, dict) else 0
+        sell_price = (_sell_info.get('actual_fill_price') or _sell_info.get('sell_price', 0)) if isinstance(_sell_info, dict) else 0
         sell_revenue = sell_price * _loser_qty
         result['sold'] = True
         result['sell_price'] = sell_price

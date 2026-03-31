@@ -9755,7 +9755,8 @@ def _handle_phantom(bot_id, bot, actions):
         _current_fav = bot.get('fav_price', 0)
         _live_bid = bot.get(f'live_{fav_side}_bid', 0)
         _at_bid = _current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True
-        if wait_s >= hedge_timeout_s and _at_bid:
+        _has_partial_fills = bot.get('fav_fill_qty', 0) > 0
+        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
                 'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

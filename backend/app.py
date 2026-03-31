@@ -17154,6 +17154,7 @@ PNL_LOSS_RESULTS = (
     'stop_loss_watch',  # straight bet stop-loss triggered
     'arb_loss',  # anchor-ladder/dog: completed with negative P&L (fees exceeded spread)
     'rebalancer_scrape',  # meridian rebalancer sold a filled leg back
+    'smart_exit',  # cross-market: sold losing leg to free capital
     # timeout_exit_* removed — amend completes the arb, recorded as 'completed' now
 )
 PNL_WIN_RESULTS = (

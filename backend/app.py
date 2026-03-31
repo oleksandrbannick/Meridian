@@ -1277,6 +1277,30 @@ def _best_ask(ob_data, side):
     return (100 - opp_bid) if opp_bid > 0 else 0
 
 
+def _bid_depth(ob_data, side, window=3):
+    """Sum bid quantities within `window` cents of best bid for a side.
+    Returns (depth_qty, best_bid_price).  depth_qty=0 if no bids."""
+    try:
+        norm = _normalize_orderbook(ob_data)
+        ob = norm.get('orderbook', norm)
+        levels = ob.get(side, [])
+        if not levels:
+            return 0, 0
+        sorted_levels = sorted(levels, key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+        best = sorted_levels[0][0] if isinstance(sorted_levels[0], list) else sorted_levels[0].get('price', 0)
+        total = 0
+        for lv in sorted_levels:
+            price = lv[0] if isinstance(lv, list) else lv.get('price', 0)
+            qty = lv[1] if isinstance(lv, list) else lv.get('quantity', 0)
+            if price >= best - window:
+                total += qty
+            else:
+                break
+        return total, best
+    except Exception:
+        return 0, 0
+
+
 def _parse_fill_count(order_data):
     """Parse fill count from Kalshi order object.
     Handles old format (filled_count/fill_count int), new FP format (fill_count_fp string),
@@ -7691,6 +7715,23 @@ def create_anchor_bot():
         else:
             fav_side = 'yes' if dog_side == 'no' else 'no'
 
+        # Fav liquidity check — warn if hedge side is thin
+        _fav_depth_init = 0
+        try:
+            if cross_market and hedge_ticker != ticker:
+                api_read_limiter.wait()
+                _fav_ob_init = kalshi_client.get_market_orderbook(hedge_ticker)
+            else:
+                _fav_ob_init = ob
+            _fav_depth_init, _fav_bid_init = _bid_depth(_fav_ob_init, fav_side, window=3)
+        except Exception:
+            pass
+        _fav_warning = ''
+        _min_fav_init = max(3, int(quantity * 1.5))
+        if 0 < _fav_depth_init < _min_fav_init:
+            _fav_warning = f'⚠ Fav {fav_side} depth thin ({_fav_depth_init} contracts in top 3¢, need ≥{_min_fav_init}) — hedge may not fill'
+            print(f'⚠ PHANTOM FAV THIN: {_fav_warning}')
+
         # Place ONLY the dog order — maker, post_only
         dog_resp, actual_dog_price = create_order_maker(
             ticker=ticker, side=dog_side, action='buy',
@@ -7754,6 +7795,7 @@ def create_anchor_bot():
             '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
             '_last_repost_at':     0,
             '_all_dog_order_ids':  [dog_order_id],
+            '_fav_depth':          _fav_depth_init,
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {
@@ -7770,7 +7812,9 @@ def create_anchor_bot():
             'dog_price':     actual_dog_price,
             'target_width':  target_width,
             'message':       f'[ANCHOR] {dog_side.upper()} dog posted at {actual_dog_price}¢ — '
-                             f'waiting for fill, then hedge {fav_side.upper()} (target {target_width}¢ width)'
+                             f'waiting for fill, then hedge {fav_side.upper()} (target {target_width}¢ width)',
+            'fav_depth':     _fav_depth_init,
+            'fav_warning':   _fav_warning,
         })
 
     except Exception as e:
@@ -9254,6 +9298,29 @@ def _handle_phantom(bot_id, bot, actions):
                 if retreat_triggered and _price_delta < 2:
                     return  # retreat jitter filter: don't waste API calls on <2¢ moves
 
+                # Fav liquidity guard: skip repost if fav side is dry (hedge won't fill)
+                _is_cross = bot.get('cross_market') and hedge_ticker and hedge_ticker != ticker
+                if _is_cross:
+                    try:
+                        api_read_limiter.wait()
+                        _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
+                    except Exception:
+                        _fav_ob = None
+                else:
+                    _fav_ob = ob  # same-market: fav side is in the same orderbook
+                if _fav_ob:
+                    _fav_depth, _fav_best = _bid_depth(_fav_ob, fav_side, window=3)
+                    _min_fav = max(3, int(qty * 1.5))
+                    bot['_fav_depth'] = _fav_depth  # track for UI
+                    if _fav_depth < _min_fav:
+                        print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth} (need ≥{_min_fav}) — skipping repost')
+                        bot_log('PHANTOM_FAV_DRY_SKIP', bot_id, {
+                            'fav_depth': _fav_depth, 'fav_bid': _fav_best, 'min_needed': _min_fav,
+                            'qty': qty, 'dog_bid': current_dog_bid, 'trigger': trigger_reason,
+                        })
+                        bot['posted_at'] = now  # reset timer so we check again next cycle
+                        return
+
                 # Track old order ID before overwriting (in case cancel fails)
                 all_dog_ids = bot.get('_all_dog_order_ids', [])
                 all_dog_ids.append(dog_order_id)
@@ -10087,6 +10154,21 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['repeat_count'] = 0
                 save_state()
                 return
+
+            # Fav liquidity guard: skip re-anchor if fav side is dry
+            if _fav_ob:
+                _fav_depth_r, _fav_best_r = _bid_depth(_fav_ob, fav_side, window=3)
+                _min_fav_r = max(3, int(qty * 1.5))
+                bot['_fav_depth'] = _fav_depth_r
+                if _fav_depth_r < _min_fav_r:
+                    print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth_r} (need ≥{_min_fav_r}) — delaying re-anchor')
+                    bot_log('PHANTOM_FAV_DRY_REANCHOR', bot_id, {
+                        'fav_depth': _fav_depth_r, 'fav_bid': _fav_best_r, 'min_needed': _min_fav_r,
+                        'qty': qty, 'dog_bid': current_dog_bid,
+                    })
+                    bot['waiting_repeat_since'] = now  # reset cooldown, try again next cycle
+                    save_state()
+                    return
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 

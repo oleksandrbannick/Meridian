@@ -3867,7 +3867,24 @@ function updateAnchorPreview() {
     if (depthDisplay) depthDisplay.textContent = `${anchorDepth}¢`;
     const shaveInfo = document.getElementById('anchor-shave-info');
     if (shaveInfo) {
-        shaveInfo.innerHTML = `<span style="color:#ffaa00;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>`;
+        // Depth recommendation from orderbook cache
+        let depthRec = '';
+        const _obTicker = currentArbMarket?.ticker;
+        const _obCache = _obTicker ? (window._obDepthCache || {})[_obTicker] : null;
+        if (_obCache && _obCache.dogDepth > 0) {
+            const dd = _obCache.dogDepth;
+            const fd = _obCache.favDepth;
+            let recDepth, recNote;
+            if (dd >= 500) { recDepth = 3; recNote = 'thick book — tight depth catches more'; }
+            else if (dd >= 200) { recDepth = 3; recNote = 'moderate book — 3¢ works well'; }
+            else if (dd >= 50) { recDepth = 5; recNote = 'standard depth'; }
+            else { recDepth = 6; recNote = 'thin book — wider for bigger dumps'; }
+            const recCol = anchorDepth === recDepth ? '#00ff88' : anchorDepth < recDepth ? '#ffaa00' : '#5a6484';
+            depthRec = ` · <span style="color:${recCol};font-size:9px;" title="Dog depth: ${dd.toLocaleString()} · Fav depth: ${fd.toLocaleString()}">rec: ${recDepth}¢ <span style="color:#5a6484;">(${recNote})</span></span>`;
+            // Fav liquidity warning
+            if (fd < 50) depthRec += ` · <span style="color:#ff4444;font-size:9px;font-weight:700;">⚠ fav thin (${fd})</span>`;
+        }
+        shaveInfo.innerHTML = `<span style="color:#ffaa00;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;
     }
 
     const previewEl = document.getElementById('anchor-preview-content');
@@ -4053,7 +4070,9 @@ async function deployAnchorBot() {
         });
         const data = await resp.json();
         if (data.success) {
-            showNotification(`👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · depth ${anchorDepth}¢${isCrossMode ? ' (cross-market)' : ''}`);
+            const favWarn = data.fav_warning ? `\n⚠ ${data.fav_warning}` : '';
+            const favDepthNote = data.fav_depth != null ? ` · fav depth ${data.fav_depth}` : '';
+            showNotification(`👻 Phantom deployed: ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ · depth ${anchorDepth}¢${favDepthNote}${isCrossMode ? ' (cross-market)' : ''}${favWarn}`);
             // Persist phantom settings for next deploy
             try {
                 localStorage.setItem('phantom_settings', JSON.stringify({
@@ -5796,7 +5815,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
-            <span style="color:#ffaa00;">Depth: ${bot.anchor_depth || targetWidth}¢</span>
+            <span style="color:#ffaa00;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
             <span style="color:#8892a6;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (2L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}

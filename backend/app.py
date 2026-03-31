@@ -9532,7 +9532,10 @@ def _handle_phantom(bot_id, bot, actions):
         _partial_qty = bot.get('_partial_hedge_qty', 0)
         if not fav_order_id:
             _cached_fav_fill = bot.get('fav_fill_qty', 0)
-            if _partial_qty > 0 and _cached_fav_fill >= _partial_qty:
+            if _cached_fav_fill >= qty:
+                # Fully filled but order ID cleared — let completion logic run
+                print(f'✅ PHANTOM FILL RECOVERY: {bot_id} fav fully filled {_cached_fav_fill}/{qty} but order ID gone — completing')
+            elif _partial_qty > 0 and _cached_fav_fill >= _partial_qty:
                 # Hedge filled for partial amount — adjust qty and let completion logic run
                 qty = _partial_qty
                 bot['quantity'] = _partial_qty

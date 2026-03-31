@@ -3819,15 +3819,8 @@ def _ladder_sweep_then_hedge(bot_id):
 def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actions):
     """Sell all filled ladder rung contracts back."""
     now = time.time()
-    # Safety: cancel fav hedge if still live
-    _fav_oid = bot.get('fav_order_id')
-    if _fav_oid:
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order(_fav_oid)
-        except Exception:
-            pass
-        bot['fav_order_id'] = None
+    # Safety: cancel fav hedge if still live — verify it's actually dead
+    _hedge_fills = _cancel_hedge_verified(bot, bot_id)
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     total_fill_qty = bot.get('hedge_qty') or sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
@@ -9765,21 +9758,11 @@ def _handle_phantom(bot_id, bot, actions):
                 'fav_price': bot.get('fav_price'), 'dog_price': dog_price,
                 'fav_walk_count': bot.get('fav_walk_count', 0),
             })
-            # Query fav fill count before cancelling — partial fills may exist
-            fav_filled = bot.get('fav_fill_qty', 0)
-            try:
-                api_read_limiter.wait()
-                fav_order = kalshi_client.get_order(fav_order_id)
-                fav_filled = max(fav_filled, _parse_fill_count(fav_order.get('order', fav_order)))
-                bot['fav_fill_qty'] = fav_filled
-            except Exception:
-                pass
+            # Cancel hedge and verify — catches fills that happened before/during cancel
             qty = bot.get('quantity', 1)
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_order_id)
-            except Exception:
-                pass
+            _verified_fills = _cancel_hedge_verified(bot, bot_id)
+            fav_filled = max(bot.get('fav_fill_qty', 0), _verified_fills)
+            bot['fav_fill_qty'] = fav_filled
             if fav_filled > 0 and fav_filled < qty:
                 # Partial fav fill — record partial arb completion, sell back only the uncovered dogs
                 sell_qty = qty - fav_filled
@@ -9864,12 +9847,12 @@ def _handle_phantom(bot_id, bot, actions):
         _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
         if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold:
             # Bid past ceiling, hedge at ceiling — will never fill profitably. Sell back.
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_order_id)
-            except Exception:
-                pass
-            bot['fav_order_id'] = None
+            _hedge_fills = _cancel_hedge_verified(bot, bot_id)
+            if _hedge_fills >= bot.get('quantity', 1):
+                # Hedge fully filled before we could cancel — arb is complete, don't sell back
+                print(f'✅ PHANTOM CEILING EXIT ABORT: {bot_id} hedge filled {_hedge_fills} before cancel — completing as arb')
+                bot_log('PHANTOM_CEILING_ABORT_FILLED', bot_id, {'hedge_fills': _hedge_fills})
+                return
             _over_combined = dog_price + current_fav_bid
             print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ combined={_over_combined}¢')
             bot_log('PHANTOM_CEILING_EXIT', bot_id, {
@@ -9896,12 +9879,11 @@ def _handle_phantom(bot_id, bot, actions):
                 # Fall through to amend at ceiling price
             else:
                 # Same-market: sell back, can't hedge profitably
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(fav_order_id)
-                except Exception:
-                    pass
-                bot['fav_order_id'] = None
+                _hedge_fills = _cancel_hedge_verified(bot, bot_id)
+                if _hedge_fills >= bot.get('quantity', 1):
+                    print(f'✅ PHANTOM CEILING EXIT ABORT: {bot_id} hedge filled {_hedge_fills} before cancel — completing as arb')
+                    bot_log('PHANTOM_CEILING_ABORT_FILLED', bot_id, {'hedge_fills': _hedge_fills})
+                    return
                 print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ would make combined={combined}¢ > {WALK_CEILING}¢ — selling back')
                 bot_log('PHANTOM_CEILING_EXIT', bot_id, {
                     'dog_price': dog_price, 'fav_bid': current_fav_bid,
@@ -11940,18 +11922,52 @@ def _phantom_set_final_status(bot, bot_id=''):
         return 'completed'
 
 
+def _cancel_hedge_verified(bot, bot_id):
+    """Cancel the fav hedge order and VERIFY it's dead. Returns filled qty from the order.
+    If cancel fails or order already filled, logs prominently and returns the fill count."""
+    fav_oid = bot.get('fav_order_id')
+    if not fav_oid:
+        return 0
+    filled_qty = 0
+    # Attempt cancel
+    try:
+        api_rate_limiter.wait()
+        kalshi_client.cancel_order(fav_oid)
+    except Exception as e:
+        print(f'⚠ HEDGE CANCEL FAILED: {bot_id} order={fav_oid[:12]} — {e}')
+        bot_log('HEDGE_CANCEL_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
+    # Verify: check order status to confirm cancel and catch fills
+    try:
+        api_read_limiter.wait()
+        resp = kalshi_client.get_order(fav_oid)
+        ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+        filled_qty = _parse_fill_count(ord_data)
+        status = ord_data.get('status', '?')
+        if filled_qty > 0:
+            print(f'⚠ HEDGE HAD FILLS BEFORE CANCEL: {bot_id} order={fav_oid[:12]} filled={filled_qty} status={status}')
+            bot_log('HEDGE_CANCEL_HAD_FILLS', bot_id, {
+                'order_id': fav_oid, 'filled_qty': filled_qty, 'status': status,
+            }, level='WARN')
+        if status not in ('cancelled', 'canceled'):
+            # Order is still active — retry cancel
+            print(f'⚠ HEDGE STILL ACTIVE AFTER CANCEL: {bot_id} order={fav_oid[:12]} status={status} — retrying')
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(fav_oid)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f'⚠ HEDGE VERIFY FAILED: {bot_id} order={fav_oid[:12]} — {e}')
+        bot_log('HEDGE_VERIFY_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
+    bot['fav_order_id'] = None
+    return filled_qty
+
+
 def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     """Sell the filled dog leg back to recover capital when arb is dead."""
     now = time.time()
-    # Safety: cancel fav hedge if still live
-    _fav_oid = bot.get('fav_order_id')
-    if _fav_oid:
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order(_fav_oid)
-        except Exception:
-            pass
-        bot['fav_order_id'] = None
+    # Safety: cancel fav hedge if still live — verify it's actually dead
+    _hedge_fills = _cancel_hedge_verified(bot, bot_id)
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     qty = bot.get('quantity', 1)

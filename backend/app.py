@@ -9235,10 +9235,37 @@ def _handle_phantom(bot_id, bot, actions):
                     save_state()
                     return
 
-                # Drift guard: if dog side bid is very high (>50c), the market
-                # has moved too far — this isn't a dog anymore, cancel
+                # Drift guard: if dog side bid is very high (>50c), sides flipped
                 if current_dog_bid > 50:
-                    print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — no longer underdog, cancelling')
+                    _is_cross_drift = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                    # Same-market: flip sides and re-anchor instead of cancelling
+                    if not _is_cross_drift:
+                        _opp = 'yes' if dog_side == 'no' else 'no'
+                        _opp_bid = _best_bid(ob, _opp)
+                        if _opp_bid > 0 and _opp_bid < current_dog_bid:
+                            print(f'🔄 PHANTOM DRIFT FLIP: {bot_id} {dog_side}@{current_dog_bid}¢→fav, {_opp}@{_opp_bid}¢→dog')
+                            _safe_cancel(dog_order_id, f'phantom drift flip {bot_id}')
+                            for _old_oid in bot.get('_all_dog_order_ids', []):
+                                if _old_oid and _old_oid != dog_order_id:
+                                    _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
+                            bot['dog_side'] = _opp
+                            bot['fav_side'] = dog_side
+                            bot['dog_order_id'] = None
+                            bot['dog_fill_qty'] = 0
+                            bot['fav_fill_qty'] = 0
+                            bot['_hedge_fired'] = False
+                            bot['_trade_recorded'] = False
+                            bot['_all_dog_order_ids'] = []
+                            bot['status'] = 'waiting_repeat'
+                            bot['waiting_repeat_since'] = time.time()
+                            bot_log('PHANTOM_DRIFT_FLIP', bot_id, {
+                                'old_dog': dog_side, 'old_bid': current_dog_bid,
+                                'new_dog': _opp, 'new_bid': _opp_bid,
+                            })
+                            save_state()
+                            return
+                    # Cross-market or can't flip → cancel
+                    print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — cancelling')
                     _safe_cancel(dog_order_id, f'phantom drift cancel {bot_id}')
                     for _drift_key in ('fav_order_id', 'hedge_order_id'):
                         _drift_oid = bot.get(_drift_key)
@@ -9247,10 +9274,8 @@ def _handle_phantom(bot_id, bot, actions):
                     for _drift_oid in bot.get('_all_dog_order_ids', []):
                         if _drift_oid and _drift_oid != dog_order_id:
                             _safe_cancel(_drift_oid, f'phantom drift cancel old dog {bot_id}')
-                    # Cross-market → awaiting settlement ONLY if it actually holds positions
-                    _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
                     _has_any_fills = _has_settled_positions or (bot.get('dog_fill_qty', 0) > 0) or (bot.get('_cross_settled_qty', 0) > 0)
-                    if _is_cross and _has_any_fills:
+                    if _is_cross_drift and _has_any_fills:
                         bot['status'] = 'awaiting_settlement'
                         bot['awaiting_since'] = now
                         bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty_dog', bot.get('_cross_settled_qty', 0))

@@ -3875,14 +3875,17 @@ function updateAnchorPreview() {
             const dd = _obCache.dogDepth;
             const fd = _obCache.favDepth;
             let recDepth, recNote;
-            if (dd >= 500) { recDepth = 3; recNote = 'thick book — tight depth catches more'; }
-            else if (dd >= 200) { recDepth = 3; recNote = 'moderate book — 3¢ works well'; }
-            else if (dd >= 50) { recDepth = 5; recNote = 'standard depth'; }
-            else { recDepth = 6; recNote = 'thin book — wider for bigger dumps'; }
-            const recCol = anchorDepth === recDepth ? '#00ff88' : anchorDepth < recDepth ? '#ffaa00' : '#5a6484';
-            depthRec = ` · <span style="color:${recCol};font-size:9px;" title="Dog depth: ${dd.toLocaleString()} · Fav depth: ${fd.toLocaleString()}">rec: ${recDepth}¢ <span style="color:#5a6484;">(${recNote})</span></span>`;
-            // Fav liquidity warning
-            if (fd < 50) depthRec += ` · <span style="color:#ff4444;font-size:9px;font-weight:700;">⚠ fav thin (${fd})</span>`;
+            if (dd >= 500) { recDepth = 3; recNote = 'thick book'; }
+            else if (dd >= 200) { recDepth = 3; recNote = 'moderate book'; }
+            else if (dd >= 50) { recDepth = 5; recNote = 'standard'; }
+            else { recDepth = 6; recNote = 'thin book'; }
+            const recMatch = anchorDepth === recDepth;
+            const recCol = recMatch ? '#00ff88' : '#ffaa00';
+            depthRec = `<div style="margin-top:3px;padding:3px 6px;background:${recCol}11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
+                `<span style="color:${recCol};font-weight:700;">📊 Rec: ${recDepth}¢</span> ` +
+                `<span style="color:#8892a6;">${recNote} · dog ${dd.toLocaleString()} · fav ${fd.toLocaleString()}</span>` +
+                (fd < 50 ? ` <span style="color:#ff4444;font-weight:700;">⚠ fav thin!</span>` : '') +
+                `</div>`;
         }
         shaveInfo.innerHTML = `<span style="color:#ffaa00;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;
     }

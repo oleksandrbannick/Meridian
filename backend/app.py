@@ -10073,6 +10073,23 @@ def _handle_phantom(bot_id, bot, actions):
         wait_since = bot.get('waiting_repeat_since', now)
         if now - wait_since < 10:  # 10s cooldown between repeats
             return
+
+        # Smart stop check: cross-market → awaiting_settlement, same-market → completed
+        if bot.get('_smart_stop_pending') or bot.get('_smart_stopped'):
+            _is_cross_ss = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if _is_cross_ss and bot.get('_cross_settled_qty', 0) > 0:
+                bot['status'] = 'awaiting_settlement'
+                bot['awaiting_since'] = now
+                bot['_smart_stopped'] = True
+                print(f'⏹ SMART STOP → AWAITING: {bot_id} cross-market positions held ({bot.get("_cross_settled_qty")}x)')
+            else:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['_smart_stopped'] = True
+                print(f'⏹ SMART STOP → COMPLETED: {bot_id}')
+            save_state()
+            return
+
         # Clear completion linger flag
         bot.pop('_just_completed', None)
         bot.pop('_last_pnl', None)

@@ -4567,11 +4567,13 @@ def _phantom_gap_threshold(bot, current_dog_bid):
     bid_history = [(t, b) for t, b in bid_history if now - t <= 60]
     bot['_bid_history'] = bid_history
     if len(bid_history) < 2:
+        anchor_depth = bot.get('anchor_depth', 5)
+        _thresh = min(3, anchor_depth)
         bot['_volatility'] = 0
         bot['_market_condition'] = 'calm'
-        bot['_gap_threshold'] = 3
+        bot['_gap_threshold'] = _thresh
         bot['_gap_cooldown'] = 15
-        return 3, 15
+        return _thresh, 15
     bids = [b for _, b in bid_history]
     volatility = max(bids) - min(bids)
     if volatility > 8:
@@ -4580,6 +4582,9 @@ def _phantom_gap_threshold(bot, current_dog_bid):
         thresh, cd, cond = 5, 20, 'normal'
     else:
         thresh, cd, cond = 3, 15, 'calm'
+    # Cap threshold at anchor_depth so bot never drifts further than its depth floor
+    anchor_depth = bot.get('anchor_depth', 5)
+    thresh = min(thresh, anchor_depth)
     bot['_volatility'] = volatility
     bot['_market_condition'] = cond
     bot['_gap_threshold'] = thresh

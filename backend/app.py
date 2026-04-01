@@ -3997,8 +3997,29 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
             'avg_price': avg_price, 'total_fill_qty': total_fill_qty,
             'recheck_qty': _recheck_qty,
         })
-        loss_cents = 0
-        sell_price = avg_price  # assume break-even since we don't know actual price
+        # Check market settlement for actual P&L instead of blindly recording 0
+        _lac_mkt_result = ''
+        try:
+            api_read_limiter.wait()
+            _lac_mkt = kalshi_client.get_market(ticker)
+            _lac_mkt_data = _lac_mkt.get('market', _lac_mkt) if isinstance(_lac_mkt, dict) else {}
+            _lac_mkt_result = _lac_mkt_data.get('result', '').lower()
+        except Exception as _lac_err:
+            print(f'   ⚠ Could not check market result: {_lac_err}')
+        _lac_dog_won = (dog_side == 'yes' and _lac_mkt_result == 'yes') or \
+                       (dog_side == 'no' and _lac_mkt_result == 'no')
+        if _lac_mkt_result and _lac_dog_won:
+            sell_price = 100
+            loss_cents = -(100 - avg_price) * total_fill_qty  # negative = profit
+            print(f'🏆 PHANTOM LADDER SELLBACK SETTLED WIN: {bot_id} | dog {dog_side} won, +{(100 - avg_price) * total_fill_qty}¢')
+        elif _lac_mkt_result and not _lac_dog_won:
+            sell_price = 0
+            loss_cents = avg_price * total_fill_qty
+            print(f'💀 PHANTOM LADDER SELLBACK SETTLED LOSS: {bot_id} | dog {dog_side} lost, -{avg_price * total_fill_qty}¢')
+        else:
+            loss_cents = 0
+            sell_price = avg_price
+            print(f'🔙 PHANTOM SELLBACK: {bot_id} | position cleared, market result unknown — recording 0')
     else:
         loss_cents = (avg_price - sell_price) * total_fill_qty if sell_price else avg_price * total_fill_qty
 
@@ -9785,8 +9806,10 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         # Fav not filled yet — check if game/market is over
-        if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
-            # Game ending with fav unfilled — check if market settled
+        # Check via ESPN OR direct Kalshi market status (fallback for markets ESPN doesn't track)
+        _fav_wait = now - (bot.get('fav_posted_at') or bot.get('dog_filled_at') or now)
+        _check_settlement = (bot.get('game_phase') == 'live' and _is_game_ending(ticker)) or _fav_wait > bot.get('hedge_timeout_s', 120)
+        if _check_settlement:
             try:
                 api_read_limiter.wait()
                 mkt_resp = kalshi_client.get_market(ticker)
@@ -12204,17 +12227,55 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         _sell_err = (sell_info or {}).get('error', '') if isinstance(sell_info, dict) else ''
         _pos_empty = (sell_info or {}).get('position_check_empty', False) if isinstance(sell_info, dict) else False
         if _pos_empty and _order_actual_fills is not None and _order_actual_fills > 0:
-            print(f'✅ PHANTOM SELLBACK CLEARED: {bot_id} position gone but order had {_order_actual_fills} fills — '
-                  f'another bot or emergency exit already sold. Recording 0-cost.')
+            # Position gone — check if market settled to get actual P&L
+            _pe_loss = 0
+            _pe_profit = 0
+            _pe_sell_price = dog_price
+            _pe_result_tag = 'anchor_sellback_position_cleared'
+            try:
+                api_read_limiter.wait()
+                _pe_mkt = kalshi_client.get_market(ticker)
+                _pe_mkt_data = _pe_mkt.get('market', _pe_mkt) if isinstance(_pe_mkt, dict) else {}
+                _pe_mkt_result = _pe_mkt_data.get('result', '').lower()
+                _pe_dog_won = (dog_side == 'yes' and _pe_mkt_result == 'yes') or \
+                              (dog_side == 'no' and _pe_mkt_result == 'no')
+                if _pe_mkt_result and _pe_dog_won:
+                    _pe_profit = (100 - dog_price) * qty
+                    _pe_sell_price = 100
+                    _pe_result_tag = 'settled_win_dog'
+                    print(f'🏆 PHANTOM SELLBACK SETTLED WIN: {bot_id} | dog {dog_side} won, +{_pe_profit}¢')
+                elif _pe_mkt_result and not _pe_dog_won:
+                    _pe_loss = dog_price * qty
+                    _pe_sell_price = 0
+                    _pe_result_tag = 'settled_loss_dog'
+                    print(f'💀 PHANTOM SELLBACK SETTLED LOSS: {bot_id} | dog {dog_side} lost, -{_pe_loss}¢')
+                else:
+                    print(f'✅ PHANTOM SELLBACK CLEARED: {bot_id} position gone, market result unknown — recording 0')
+            except Exception as _pe_err:
+                print(f'✅ PHANTOM SELLBACK CLEARED: {bot_id} position gone — could not check market: {_pe_err}')
+            _pe_fee = _kalshi_side_fee_cents(dog_price, qty)
+            _pe_loss += _pe_fee
+            if _pe_profit > 0:
+                _pe_profit -= _pe_fee
+                if _pe_profit < 0:
+                    _pe_loss = abs(_pe_profit)
+                    _pe_profit = 0
+            if _pe_profit > 0:
+                session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _pe_profit
+                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _pe_profit
+            elif _pe_loss > 0:
+                session_pnl['gross_loss_cents'] += _pe_loss
+                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - _pe_loss
             bot_log('PHANTOM_SELLBACK_ALREADY_CLEARED', bot_id, {
                 'dog_price': dog_price, 'qty': qty, 'order_fills': _order_actual_fills,
+                'settlement_profit': _pe_profit, 'settlement_loss': _pe_loss,
             }, level='WARN')
             _record_trade({
-                'bot_id': bot_id, 'result': 'anchor_sellback',
+                'bot_id': bot_id, 'result': _pe_result_tag,
                 'ticker': ticker, 'dog_side': dog_side, 'fav_side': bot.get('fav_side', ''),
-                'dog_price': dog_price, 'fav_price': 0, 'profit_cents': 0, 'net_pnl_cents': 0,
-                'quantity': qty, 'sell_price': dog_price, 'loss_cents': 0, 'fees_cents': 0,
-                'timestamp': now, 'fill_source': 'anchor_sellback_position_cleared',
+                'dog_price': dog_price, 'fav_price': 0, 'profit_cents': _pe_profit, 'net_pnl_cents': _pe_profit - _pe_loss,
+                'quantity': qty, 'sell_price': _pe_sell_price, 'loss_cents': _pe_loss, 'fees_cents': _pe_fee,
+                'timestamp': now, 'fill_source': _pe_result_tag,
                 'bot_category': 'anchor_dog',
                 'cross_market': bot.get('cross_market', False),
                 'hedge_ticker': bot.get('hedge_ticker', ''),
@@ -12252,9 +12313,32 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     sell_price = sell_info.get('actual_fill_price') or sell_info.get('sell_price') or 0
 
     if already_cleared and not sell_price:
-        print(f'🔙 PHANTOM SELLBACK: {bot_id} | position already cleared on Kalshi — recording 0 loss')
-        loss_cents = 0
-        sell_price = dog_price  # assume break-even
+        # Market likely settled — check settlement result for actual P&L
+        _ac_mkt_result = ''
+        try:
+            api_read_limiter.wait()
+            _ac_mkt = kalshi_client.get_market(ticker)
+            _ac_mkt_data = _ac_mkt.get('market', _ac_mkt) if isinstance(_ac_mkt, dict) else {}
+            _ac_mkt_result = _ac_mkt_data.get('result', '').lower()
+        except Exception as _ac_err:
+            print(f'   ⚠ Could not check market result: {_ac_err}')
+        _dog_won = (dog_side == 'yes' and _ac_mkt_result == 'yes') or \
+                   (dog_side == 'no' and _ac_mkt_result == 'no')
+        if _ac_mkt_result and _dog_won:
+            # Dog side won — settled at 100¢, profit = (100 - dog_price) * qty
+            sell_price = 100
+            loss_cents = -(100 - dog_price) * qty  # negative = profit, handled below
+            print(f'🏆 PHANTOM SELLBACK SETTLED WIN: {bot_id} | dog {dog_side} won, +{(100 - dog_price) * qty}¢')
+        elif _ac_mkt_result and not _dog_won:
+            # Dog side lost — settled at 0¢, loss = dog_price * qty
+            sell_price = 0
+            loss_cents = dog_price * qty
+            print(f'💀 PHANTOM SELLBACK SETTLED LOSS: {bot_id} | dog {dog_side} lost, -{dog_price * qty}¢')
+        else:
+            # Can't determine — record 0 (conservative fallback)
+            print(f'🔙 PHANTOM SELLBACK: {bot_id} | position cleared, market result unknown — recording 0')
+            loss_cents = 0
+            sell_price = dog_price
     else:
         loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
 

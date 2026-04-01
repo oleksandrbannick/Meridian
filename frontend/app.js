@@ -3182,7 +3182,7 @@ function displayOrderbookLadder(orderbook) {
     if (ticker || (orderbook.ticker)) {
         const tk = ticker || orderbook.ticker;
         window._obDepthCache = window._obDepthCache || {};
-        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, catchScore, ts: Date.now() };
+        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, dogBid: dogBidPrice, favBid: favBidPrice, catchScore, ts: Date.now() };
         _updateGhostPill(tk, catchScore);
     }
 
@@ -3874,16 +3874,30 @@ function updateAnchorPreview() {
         if (_obCache && _obCache.dogDepth > 0) {
             const dd = _obCache.dogDepth;
             const fd = _obCache.favDepth;
-            let recDepth, recNote;
-            if (dd >= 500) { recDepth = 3; recNote = 'thick book'; }
-            else if (dd >= 200) { recDepth = 3; recNote = 'moderate book'; }
-            else if (dd >= 50) { recDepth = 5; recNote = 'standard'; }
-            else { recDepth = 6; recNote = 'thin book'; }
-            const recMatch = anchorDepth === recDepth;
+            const dogBid = _obCache.dogBid || 0;
+            const favBid = _obCache.favBid || 0;
+            // Depth = ceiling margin. Thick fav = stable bid, tight depth OK.
+            // Thin fav = bid moves fast, need wider depth for ceiling room.
+            let recDepth = 5;  // default
+            let reasons = [];
+            // Fav liquidity: thick = stable prices = tight depth OK, thin = volatile = wider
+            if (fd >= 500) { recDepth = 3; reasons.push('fav very thick'); }
+            else if (fd >= 200) { recDepth = 4; reasons.push('fav thick'); }
+            else if (fd >= 100) { recDepth = 5; reasons.push('fav moderate'); }
+            else if (fd >= 30) { recDepth = 7; reasons.push('fav light'); }
+            else { recDepth = 8; reasons.push('fav thin'); }
+            // Market balance: dog bid high = close match = volatile = need more room
+            if (dogBid >= 35) { recDepth = Math.max(recDepth, 8); reasons.push('close match'); }
+            else if (dogBid >= 25) { recDepth = Math.max(recDepth, 7); reasons.push('mid-range'); }
+            // Spread: YES+NO bids far from 100 = wide spread = more walk needed
+            const totalBids = dogBid + favBid;
+            if (totalBids > 0 && totalBids < 90) { recDepth = Math.max(recDepth, 7); reasons.push('wide spread'); }
+            const recNote = reasons.join(' · ');
+            const recMatch = anchorDepth >= recDepth && anchorDepth <= recDepth + 2;
             const recCol = recMatch ? '#00ff88' : '#ffaa00';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:${recCol}11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
-                `<span style="color:${recCol};font-weight:700;">📊 Rec: ${recDepth}¢</span> ` +
-                `<span style="color:#8892a6;">${recNote} · dog ${dd.toLocaleString()} · fav ${fd.toLocaleString()}</span>` +
+                `<span style="color:${recCol};font-weight:700;">📊 Rec: ${recDepth}¢+</span> ` +
+                `<span style="color:#8892a6;">${recNote} · dog ${dd.toLocaleString()}@${dogBid}¢ · fav ${fd.toLocaleString()}@${favBid}¢</span>` +
                 (fd < 50 ? ` <span style="color:#ff4444;font-weight:700;">⚠ fav thin!</span>` : '') +
                 `</div>`;
         }

@@ -9316,6 +9316,16 @@ def _handle_phantom(bot_id, bot, actions):
                 anchor_base = current_dog_ask if spread > 2 else current_dog_bid
                 new_dog_price = max(1, anchor_base - anchor_depth)
 
+                # Price ceiling: don't repost UP if new dog price > 40¢ (coin-flip territory)
+                if new_dog_price > 40 and new_dog_price > bot.get('dog_price', 0) and not retreat_triggered:
+                    print(f'🛡️ PHANTOM PRICE CAP: {bot_id} new_dog={new_dog_price}¢ > 40¢ — skipping repost up')
+                    bot_log('PHANTOM_PRICE_CAP_SKIP', bot_id, {
+                        'new_dog': new_dog_price, 'current_dog': bot.get('dog_price', 0),
+                        'dog_bid': current_dog_bid,
+                    })
+                    bot['posted_at'] = now
+                    return
+
                 # Price floor: don't repost at < 3¢ — no viable edge at that level
                 if new_dog_price < 3:
                     print(f'🛑 PHANTOM PRICE FLOOR: {bot_id} new_price={new_dog_price}¢ (bid={current_dog_bid}¢ depth={anchor_depth}¢) — too low, cancelling')

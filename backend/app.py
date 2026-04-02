@@ -6195,15 +6195,12 @@ def _apex_snap_timer(ticker):
     # Early game (first half) → 60s patience
     return 60
 
-def _apex_stop_loss_threshold(width):
-    """Width-calibrated stop-loss: max cents over breakeven before sellback fires.
-    Tighter = fewer tail losses. combined > 100 + threshold triggers exit."""
-    if width <= 5:
-        return 6    # combined > 106c → sell back
-    elif width <= 8:
-        return 8    # combined > 108c → sell back
-    else:
-        return 12   # combined > 112c → sell back
+def _apex_stop_loss_threshold(width, anchor_price=0):
+    """Delta-adjusted stop-loss: width × multiplier based on anchor price zone.
+    Near 50¢ (high volatility): 2× width. Near extremes (stickier): 1.5× width.
+    Returns max cents over breakeven (100¢) before taker sellback fires."""
+    multiplier = 2.0 if anchor_price >= 35 else 1.5
+    return max(4, int(width * multiplier))  # floor of 4¢ to avoid noise exits
 
 
 def _apex_post_rung_hedge(bot_id, rung_idx):
@@ -6329,11 +6326,13 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
 
 
 def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
-    """Two-Step Apex Protocol. Called from monitor for each active rung.
-    Step 1 (pending_profit): Hedge at target width — dynamic timer based on game clock.
-    Step 2 (snapped): Amend to bid — exit the position."""
+    """Apex rung monitor. Simple system:
+    1. Poll hedge fill status (backup for WS)
+    2. Profit snap: combined ≤ 96¢ → snap to bid+1, fast fill
+    3. Snap to bid: always follow the market
+    4. Delta-adjusted stop-loss: combined > 100 + threshold → taker exit
+    5. Dead market: bid=0 for 30s → exit"""
     now = time.time()
-    ticker = bot['ticker']
     anchor_side = rung.get('anchor_side')
     if not anchor_side:
         return
@@ -6342,13 +6341,6 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     width = rung.get('width', 5)
     qty = rung.get('quantity', bot.get('quantity', 1))
     hedge_oid = rung.get('hedge_order_id')
-    current_stage = rung.get('time_stage', 'pending_profit')
-    anchor_fill_at = rung.get('anchor_fill_at', now)
-    elapsed = now - anchor_fill_at
-
-    # Dynamic timer based on game clock
-    snap_timer = _apex_snap_timer(ticker)
-    rung['_snap_timer'] = snap_timer  # expose to frontend for countdown
 
     # ── Poll hedge fill status (backup for WS misses) ──
     if hedge_oid:
@@ -6373,7 +6365,6 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                     rung['hedge_fill_qty'] = filled
                     if not rung.get('hedge_fill_at'):
                         rung['hedge_fill_at'] = now
-                # Hedge cancelled externally → repost below
                 if ord_status in ('canceled', 'cancelled'):
                     print(f'⚠ APEX RUNG: {bot_id} rung#{rung_idx} hedge cancelled externally → will repost')
                     rung['hedge_order_id'] = None
@@ -6383,322 +6374,92 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                     rung['hedge_order_id'] = None
                     hedge_oid = None
 
-    # Get live market price for hedge side
+    # Get live market prices
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
-    profit_cap = max(1, 98 - anchor_price)  # only used during target window
-
-    # ── Midpoint Guard + Game-Clock Timer ──
-    # Market "breathes" — sit indefinitely while within 5¢ of target.
-    # Timer only starts when drift >5¢, resets if market comes back.
     hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
     current_hedge_price = rung.get('hedge_price', 0)
-    target_hedge = rung.get('target_hedge_price', current_hedge_price)
 
-    # Distance from our hedge order to market bid
-    midpoint_dist = abs(hedge_bid - target_hedge) if hedge_bid > 0 else 0
-    rung['_midpoint_dist'] = midpoint_dist  # expose to frontend
-
-    # Hedge order lost? Repost — use live bid in snapped state, target in profit state
-    # (skip if sellback pending — hedge was intentionally cancelled)
+    # Hedge order lost? Repost at bid
     if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty and not rung.get('_sellback_pending'):
-        if current_stage == 'snapped' and hedge_bid > 0:
-            repost_price = hedge_bid  # follow market when snapped
-        else:
-            repost_price = current_hedge_price or target_hedge or max(1, 100 - anchor_price - width)
+        repost_price = hedge_bid if hedge_bid > 0 else max(1, 100 - anchor_price - width)
         _apex_snap_hedge(bot_id, bot, rung, rung_idx, repost_price)
         return
 
-    # ── PROFIT SNAP: if combined ≤ snap ceiling, snap to bid INSTANTLY ──
-    # This fires in ANY stage — profit is locked in, just fill it.
-    if hedge_bid > 0 and anchor_price > 0:
-        _snap_ceil = SNAP_CEILING_CENTS  # 96c
-        _combined_snap = anchor_price + hedge_bid
-        if _combined_snap <= _snap_ceil:
-            spread = bot.get(f'live_{("no" if anchor_side == "yes" else "yes")}_ask', 0) - hedge_bid if hedge_bid > 0 else 0
-            snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
-            snap_price = max(1, snap_price)
-            if current_hedge_price != snap_price or not hedge_oid:
-                rung['_snap_reason'] = f'profit_snap_{_combined_snap}c'
-                print(f'💰 APEX PROFIT SNAP: {bot_id} rung#{rung_idx} ({width}c) combined={_combined_snap}c ≤ {_snap_ceil}c → snap @{snap_price}c')
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+    # ── DEAD MARKET: bid=0 for 30s → exit ──
+    if hedge_bid <= 0:
+        if not rung.get('_dead_market_at'):
+            rung['_dead_market_at'] = now
             return
-
-    # ── PATIENT MODE: skip all time-decay logic, just wait for maker fills ──
-    # Only safety rails: extreme stop-loss (>115¢) and dead market (bid=0 for 30s)
-    _patient = bot.get('patient_mode', True)  # patient mode is default for Apex
-    if _patient:
-        if current_stage == 'pending_profit':
-            rung['_snap_reason'] = 'patient'
+        if now - rung['_dead_market_at'] < 30:
             return
-        if current_stage == 'snapped':
-            # Dead market handler — still needed in patient mode
-            if hedge_bid <= 0:
-                if not rung.get('_dead_market_at'):
-                    rung['_dead_market_at'] = now
-                    return
-                if now - rung['_dead_market_at'] < 30:
-                    return
-                _dead_hfq = rung.get('hedge_fill_qty', 0)
-                if hedge_oid:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(hedge_oid)
-                    except Exception:
-                        pass
-                    rung['hedge_order_id'] = None
-                if _dead_hfq > 0:
-                    print(f'💀 APEX PATIENT DEAD: {bot_id} rung#{rung_idx} ({width}c) {_dead_hfq}/{qty} hedge → sellback')
-                    _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, rung.get('stop_loss_cents', 6))
-                else:
-                    rung['status'] = 'completed'
-                    rung['completed'] = True
-                    rung['_snap_reason'] = 'patient_dead_market'
-                    print(f'💀 APEX PATIENT DEAD: {bot_id} rung#{rung_idx} ({width}c) no bid 30s → loss')
-                    _apex_record_rung_pnl(bot_id, rung_idx)
-                save_state()
-                return
-            rung['_dead_market_at'] = None
-            # In patient mode, revert snapped back to pending_profit (sit on target)
-            rung['time_stage'] = 'pending_profit'
-            rung['status'] = 'pending_profit'
-            rung['_snap_reason'] = 'patient_revert'
-            if target_hedge > 0:
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_hedge)
-            return
+        _dead_hfq = rung.get('hedge_fill_qty', 0)
+        if hedge_oid:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(hedge_oid)
+            except Exception:
+                pass
+            rung['hedge_order_id'] = None
+        if _dead_hfq > 0:
+            print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) {_dead_hfq}/{qty} hedge → sellback')
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, _apex_stop_loss_threshold(width, anchor_price))
+        else:
+            rung['status'] = 'completed'
+            rung['completed'] = True
+            rung['_snap_reason'] = 'dead_market'
+            print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) no bid 30s → loss')
+            _apex_record_rung_pnl(bot_id, rung_idx)
+        save_state()
         return
+    rung['_dead_market_at'] = None
 
-    if current_stage == 'pending_profit':
-        # ── STOP-LOSS: fire immediately if underwater — don't wait for drift timer ──
-        _sl_cents = rung.get('stop_loss_cents', _apex_stop_loss_threshold(width))
-        if hedge_bid > 0 and anchor_price > 0:
-            _combined_sl = anchor_price + hedge_bid
-            if _combined_sl > 100 + _sl_cents:
-                # Extreme: combined > 115 → immediate sellback (taker exit)
-                if _combined_sl > 115:
-                    rung['_snap_reason'] = f'stop_loss_pp_extreme_{_combined_sl}c'
-                    print(f'🛑 APEX STOP-LOSS (PP EXTREME): {bot_id} rung#{rung_idx} ({width}c) combined={_combined_sl}c > 115c → sellback')
-                    bot_log('APEX_STOP_LOSS_PP', bot_id, {
-                        'rung_idx': rung_idx, 'width': width, 'combined': _combined_sl,
-                        'threshold': 100 + _sl_cents, 'anchor_price': anchor_price,
-                        'hedge_bid': hedge_bid, 'extreme': True,
-                    })
-                    _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_sl, _sl_cents)
-                    return
-                # Normal: snap to bid immediately — skip drift timer entirely
-                spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-                _sl_snap = (hedge_bid + 1) if spread > 1 else hedge_bid
-                _sl_snap = max(1, _sl_snap)
-                rung['time_stage'] = 'snapped'
-                rung['status'] = 'snapped'
-                rung['_snap_at'] = now
-                rung['_snap_reason'] = f'stop_loss_pp_{_combined_sl}c'
-                print(f'🛑 APEX STOP-LOSS (PP): {bot_id} rung#{rung_idx} ({width}c) combined={_combined_sl}c > {100 + _sl_cents}c → snap @{_sl_snap}c')
-                bot_log('APEX_STOP_LOSS_PP', bot_id, {
-                    'rung_idx': rung_idx, 'width': width, 'combined': _combined_sl,
-                    'threshold': 100 + _sl_cents, 'anchor_price': anchor_price,
-                    'hedge_bid': hedge_bid,
-                })
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, _sl_snap)
-                return
+    # ── SELLBACK RETRY: if previous sellback failed, retry ──
+    if rung.get('_sellback_pending'):
+        _sl = _apex_stop_loss_threshold(width, anchor_price)
+        _combined_now = anchor_price + hedge_bid
+        if _combined_now <= 100 + _sl:
+            rung['_sellback_pending'] = False  # market recovered
+        else:
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
+            return
 
-        # ── BURST DETECTION: 2+ same-side anchor fills in 5s → snap immediately ──
-        _fill_log = bot.get('_anchor_fill_log', [])
-        if _fill_log and anchor_side:
-            _burst_window = now - 5
-            _same_side_recent = sum(1 for s, t in _fill_log if s == anchor_side and t > _burst_window)
-            if _same_side_recent >= 2:
-                if not bot.get('_burst_detected'):
-                    bot['_burst_detected'] = True
-                    bot['_burst_at'] = now
-                    print(f'⚡ BURST: {bot_id} {_same_side_recent}x {anchor_side.upper()} anchors in 5s — snapping all pending rungs')
-                    bot_log('APEX_BURST_DETECTED', bot_id, {
-                        'side': anchor_side, 'count': _same_side_recent,
-                    })
-                # Snap THIS rung to bid immediately
-                _burst_spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-                _burst_snap = (hedge_bid + 1) if _burst_spread > 1 else hedge_bid
-                _burst_snap = max(1, _burst_snap)
-                rung['time_stage'] = 'snapped'
-                rung['status'] = 'snapped'
-                rung['_snap_at'] = now
-                rung['_snap_reason'] = f'burst_{_same_side_recent}x_{anchor_side}'
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, _burst_snap)
-                return
-            else:
-                # Clear burst flag if window passed
-                if bot.get('_burst_detected') and (now - bot.get('_burst_at', 0) > 30):
-                    bot['_burst_detected'] = False
-
-        # ── GREEDY SNAP: bid 1-4¢ above our order → snap to bid after timer ──
-        # 1-2¢: 15s patience, 3-4¢: 25s patience
-        greedy_gap = (hedge_bid - current_hedge_price) if (hedge_bid > 0 and current_hedge_price > 0) else 0
-        if 0 < greedy_gap <= 4:
-            greedy_timer = 5 if greedy_gap <= 2 else 10
-            if not rung.get('_greedy_snap_at'):
-                rung['_greedy_snap_at'] = now
-            greedy_elapsed = now - rung['_greedy_snap_at']
-            if greedy_elapsed >= greedy_timer:
-                snap_price = max(1, hedge_bid)
-                rung['_greedy_snap_at'] = None
-                rung['_snap_reason'] = f'greedy_snap_{greedy_gap}c'
-                bot_log('APEX_GREEDY_SNAP', bot_id, {
-                    'rung_idx': rung_idx, 'width': width, 'gap': greedy_gap,
-                    'elapsed': round(greedy_elapsed, 1), 'snap_price': snap_price,
-                })
-                print(f'💰 APEX GREEDY: {bot_id} rung#{rung_idx} ({width}c) {greedy_gap}¢ away {greedy_elapsed:.0f}s → snap @{snap_price}c')
+    # ── PROFIT SNAP: combined ≤ 96¢ → snap to bid+1 for fast fill ──
+    if anchor_price > 0:
+        _combined = anchor_price + hedge_bid
+        if _combined <= SNAP_CEILING_CENTS:  # 96c
+            spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+            snap_price = max(1, (hedge_bid + 1) if spread > 1 else hedge_bid)
+            if current_hedge_price != snap_price or not hedge_oid:
+                rung['_snap_reason'] = f'profit_snap_{_combined}c'
                 _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
-                return
-            rung['_snap_reason'] = f'greedy_{greedy_gap}c_{greedy_elapsed:.0f}s/{greedy_timer}s'
             return
-        else:
-            rung['_greedy_snap_at'] = None  # reset when out of greedy range
 
-        # ── BID DROP: if bid fell below our order, snap down immediately ──
-        # We're sitting above market = unfillable. No reason to wait.
-        if hedge_bid > 0 and current_hedge_price > 0 and hedge_bid < current_hedge_price:
-            snap_price = max(1, hedge_bid)
-            rung['_snap_reason'] = f'follow_bid_down_{current_hedge_price}to{snap_price}'
-            print(f'📉 APEX BID DROP: {bot_id} rung#{rung_idx} ({width}c) hedge@{current_hedge_price}¢ > bid@{hedge_bid}¢ → snap down to {snap_price}¢')
-            bot_log('APEX_BID_DROP_SNAP', bot_id, {
-                'rung_idx': rung_idx, 'width': width,
-                'old_price': current_hedge_price, 'new_price': snap_price,
-                'hedge_bid': hedge_bid,
+    # ── DELTA-ADJUSTED STOP-LOSS: combined > 100 + threshold → taker exit ──
+    if hedge_bid > 0 and anchor_price > 0:
+        _sl_cents = _apex_stop_loss_threshold(width, anchor_price)
+        _combined = anchor_price + hedge_bid
+        if _combined > 100 + _sl_cents:
+            rung['_snap_reason'] = f'stop_loss_{_combined}c>{100 + _sl_cents}c'
+            print(f'🛑 APEX STOP-LOSS: {bot_id} rung#{rung_idx} ({width}c) combined={_combined}c > {100 + _sl_cents}c → taker exit')
+            bot_log('APEX_STOP_LOSS', bot_id, {
+                'rung_idx': rung_idx, 'width': width, 'combined': _combined,
+                'threshold': 100 + _sl_cents, 'anchor_price': anchor_price,
+                'hedge_bid': hedge_bid, 'multiplier': 2.0 if anchor_price >= 35 else 1.5,
             })
-            _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined, _sl_cents)
             return
 
-        if midpoint_dist <= 4:
-            # ── WITHIN 4¢: sit, reset drift timer — market breathing ──
-            if rung.get('_drift_started_at'):
-                rung['_drift_started_at'] = None  # reset timer — market came back
-            rung['_snap_reason'] = 'breathing'
-            return
+    # ── SNAP TO BID: always follow the market ──
+    # Cap at ceiling (100 - anchor_price) so we never go over breakeven
+    max_hedge = max(1, 100 - anchor_price)
+    spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
+    snap_price = max(1, min((hedge_bid + 1) if spread > 1 else hedge_bid, max_hedge))
 
-        # ── DRIFTED >5¢: start game-clock timer (or check if it expired) ──
-        if not rung.get('_drift_started_at'):
-            rung['_drift_started_at'] = now  # start timer NOW
-            rung['_snap_reason'] = f'drifting_{midpoint_dist}c'
-            print(f'🟡 APEX DRIFT: {bot_id} rung#{rung_idx} ({width}c) {midpoint_dist}¢ away → timer started ({snap_timer}s)')
-            return
-
-        drift_elapsed = now - rung['_drift_started_at']
-        rung['_snap_reason'] = f'drifting_{midpoint_dist}c_{drift_elapsed:.0f}s/{snap_timer}s'
-
-        if drift_elapsed < snap_timer:
-            return  # Timer still running — wait
-
-        # ── TIMER EXPIRED while >5¢ away → SNAP ──
-        rung['time_stage'] = 'snapped'
-        rung['status'] = 'snapped'
-        rung['_snap_at'] = now
-        current_stage = 'snapped'
-        _reason = f'drift_{midpoint_dist}c_timer_{drift_elapsed:.0f}s'
-        rung['_snap_reason'] = _reason
-        bot_log('APEX_SNAP_TO_MARKET', bot_id, {
-            'rung_idx': rung_idx, 'width': width, 'drift_elapsed': round(drift_elapsed, 1),
-            'midpoint_dist': midpoint_dist, 'snap_timer': snap_timer, 'reason': _reason,
-        })
-        print(f'⚡ APEX SNAP: {bot_id} rung#{rung_idx} ({width}c) {_reason} → snap to bid')
-
-    # ── SNAPPED: amend to bid to exit — BUT revert if market comes back ──
-    if current_stage == 'snapped':
-        if rung.get('hedge_fill_qty', 0) >= qty:
-            return  # Already filled
-
-        if hedge_bid <= 0:
-            # Market dead — check if it's been dead for a while, then force-complete as loss
-            if not rung.get('_dead_market_at'):
-                rung['_dead_market_at'] = now
-                return  # give it a chance to come back
-            if now - rung['_dead_market_at'] < 30:
-                return  # wait 30s before giving up
-            # 30s with no bid — cancel hedge, sellback unhedged portion
-            _dead_hfq = rung.get('hedge_fill_qty', 0)
-            if hedge_oid:
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(hedge_oid)
-                except Exception:
-                    pass
-                rung['hedge_order_id'] = None
-            if _dead_hfq > 0:
-                # Partial hedge fills — sellback handles cleanup of both sides
-                print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) {_dead_hfq}/{qty} hedge filled → sellback remainder')
-                bot_log('APEX_DEAD_MARKET_RUNG', bot_id, {'rung_idx': rung_idx, 'width': width, 'hedge_fill': _dead_hfq})
-                _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, rung.get('stop_loss_cents', 6))
-            else:
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                rung['_snap_reason'] = 'dead_market'
-                print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) hedge_bid=0 for 30s → completing as loss')
-                bot_log('APEX_DEAD_MARKET_RUNG', bot_id, {'rung_idx': rung_idx, 'width': width})
-                _apex_record_rung_pnl(bot_id, rung_idx)
-            save_state()
-            return
-
-        rung['_dead_market_at'] = None  # bid is live, clear dead timer
-
-        # ── SELLBACK RETRY: if previous (pending_profit) sellback failed, retry ──
-        if rung.get('_sellback_pending'):
-            _combined_now = anchor_price + hedge_bid
-            _sl = rung.get('stop_loss_cents', 6)
-            if _combined_now <= 100 + _sl:
-                rung['_sellback_pending'] = False  # market recovered, abort sellback
-            else:
-                _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
-                return
-
-        # ── SNAPPED SAFETY NET: 180s with no progress on partial fill → sellback ──
-        # Normal case: amend to bid fills quickly. This catches edge cases where
-        # amends silently fail or no counterparty exists for extended periods.
-        _snap_at = rung.get('_snap_at', 0)
-        _snapped_elapsed = now - _snap_at if _snap_at else 0
-        _hfq = rung.get('hedge_fill_qty', 0)
-        if _snapped_elapsed >= 180 and 0 < _hfq < qty:
-            print(f'⏰ APEX SNAPPED TIMEOUT: {bot_id} rung#{rung_idx} ({width}c) {_hfq}/{qty} filled after {_snapped_elapsed:.0f}s → sellback remainder')
-            bot_log('APEX_SNAPPED_TIMEOUT', bot_id, {
-                'rung_idx': rung_idx, 'width': width, 'hedge_fill': _hfq, 'qty': qty,
-                'elapsed': round(_snapped_elapsed, 1),
-            })
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid,
-                                anchor_price + hedge_bid, rung.get('stop_loss_cents', 6))
-            return
-
-        # Market came back within width of target? REVERT to target price for full profit
-        if midpoint_dist <= width and target_hedge > 0:
-            rung['time_stage'] = 'pending_profit'
-            rung['status'] = 'pending_profit'
-            rung['_drift_started_at'] = None
-            rung['_snap_reason'] = 'reverted'
-            print(f'🟢 APEX REVERT: {bot_id} rung#{rung_idx} ({width}c) market back within {midpoint_dist}¢ → reverting to target @{target_hedge}c')
-            _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_hedge)
-            return
-
-        # Still drifted — follow bid (with walk-up in gapped spreads)
-        spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-        if spread > 4:
-            # ── WALK-UP: time-proportional walk from bid+1 toward midpoint ──
-            # In wide spreads, bid+1 is a dead order nobody will hit.
-            # Gradually walk into the spread over 45s, capped at 40% of spread.
-            _time_snapped = now - rung.get('_snap_at', now)
-            _walk_fraction = min(0.4, _time_snapped / 45)  # 0 → 0.4 over 45s
-            _walk_amount = int(spread * _walk_fraction)
-            snap_price = hedge_bid + 1 + _walk_amount
-            # Walk ceiling: combined ≤ 98¢ (breakeven)
-            _max_walk = max(1, 98 - anchor_price)
-            snap_price = min(snap_price, _max_walk)
-            snap_price = max(1, snap_price)
-            rung['_walk_price'] = snap_price  # expose to frontend
-        else:
-            snap_price = (hedge_bid + 1) if spread > 1 else hedge_bid
-            snap_price = max(1, snap_price)
-            rung['_walk_price'] = None
-
-        # Amend if price changed or no order exists
-        needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 10)
-        if needs_snap:
-            rung['_last_snap'] = now
-            _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+    rung['_snap_reason'] = f'at_bid_{snap_price}c'
+    needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 5)
+    if needs_snap:
+        rung['_last_snap'] = now
+        _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
 
 
 def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
@@ -7365,7 +7126,6 @@ def create_ladder_arb_bot():
         quantity = int(data.get('quantity', 1))
         repeat_count = int(data.get('repeat_count', 0))
         smart_mode   = bool(data.get('smart_mode', False))
-        patient_mode = bool(data.get('patient_mode', False))
         if smart_mode:
             repeat_count = 999  # effectively infinite — smart mode controls stopping
         hard_ceiling = min(98, max(96, int(data.get('hard_ceiling', HARD_CEILING_CENTS))))
@@ -7569,7 +7329,6 @@ def create_ladder_arb_bot():
             'repeat_count': repeat_count,
             'repeats_done': 0,
             'smart_mode': smart_mode,
-            'patient_mode': patient_mode,
             'consecutive_losses': 0,
             'hard_ceiling': hard_ceiling,
             'arb_width': narrowest_width,
@@ -12085,28 +11844,20 @@ def _handle_apex(bot_id, bot, actions):
             any_filled = True
             all_resolved = False
 
-            # Active rung with fill — run two-step protocol
+            # Active rung with fill — run tick
             if rs in ('anchor_filled', 'pending_profit', 'snapped',
                        'profit_window', 'scratch_window', 'panic_window'):
                 any_active = True
                 # Skip if hedge thread is still running (anchor_filled → waiting for thread)
                 if rs == 'anchor_filled':
-                    # Check if hedge thread has completed (status would change)
                     age = now - (rung.get('anchor_fill_at') or now)
                     if age > 10:
-                        # Thread probably failed — set to pending_profit so tick can handle it
                         rung['status'] = 'pending_profit'
-                        rung['time_stage'] = 'pending_profit'
-                        rung['stage_entered_at'] = now
                         print(f'⚠ APEX STALE ANCHOR: {bot_id} rung#{idx} stuck in anchor_filled for {age:.0f}s → pending_profit')
                     continue
-                # Migrate old status names to new ones
-                if rs in ('profit_window', 'scratch_window'):
+                # Migrate any old statuses to pending_profit
+                if rs in ('profit_window', 'scratch_window', 'panic_window', 'snapped'):
                     rung['status'] = 'pending_profit'
-                    rung['time_stage'] = 'pending_profit'
-                elif rs == 'panic_window':
-                    rung['status'] = 'snapped'
-                    rung['time_stage'] = 'snapped'
                 try:
                     _apex_time_decay_tick(bot_id, bot, rung, idx)
                 except Exception as _tde:

@@ -5058,11 +5058,10 @@ const ALL_PRESET_WIDTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MIN_FAV_ENTRY_FOR_BOT = 65;
 
 // Apex 2.0 stop-loss thresholds per width (mirrors backend _apex_stop_loss_threshold)
-function _apexStopLossThreshold(width) {
-    if (width <= 5) return 8;
-    if (width <= 8) return 12;
-    if (width <= 14) return 20;
-    return 25;
+function _apexStopLossThreshold(width, anchorPrice) {
+    // Delta-adjusted: 2× near midrange (≥35¢), 1.5× near extremes
+    const mult = (anchorPrice && anchorPrice >= 35) ? 2.0 : 1.5;
+    return Math.max(4, Math.round(width * mult));
 }
 
 // ── Multi-width selector state ──
@@ -5228,7 +5227,6 @@ async function createBot() {
     const quantity        = parseInt(document.getElementById('bot-quantity').value);
     const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
     const smart_mode      = !!document.getElementById('apex-smart-mode')?.checked;
-    const patient_mode    = !!document.getElementById('apex-patient-mode')?.checked;
     const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
 
     if (yes_price + no_price >= 100) {
@@ -5249,10 +5247,9 @@ async function createBot() {
     const favPrice = Math.max(yes_price, no_price);
     const profitPer = 100 - yes_price - no_price;
     const totalCost = (yes_price + no_price) * quantity;
-    const patientMsg = patient_mode ? '\n🧘 Patient Mode (no snap — maker fills only)' : '';
     const repeatMsg = smart_mode ? '\n↻ Smart Mode (repeat on wins, stop after 2 losses)' : repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    const slInfo = patient_mode ? 'Safety: extreme only (>115¢)' : `Stop-loss: ${_apexStopLossThreshold(arb_width)}¢`;
-    if (!confirm(`△ Deploy Apex 2.0 — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n${slInfo}${patientMsg}${repeatMsg}\n\nConfirm order?`)) return;
+    const slInfo = `Stop-loss: ${_apexStopLossThreshold(arb_width)}¢ (delta-adjusted)`;
+    if (!confirm(`△ Deploy Apex 2.0 — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n${slInfo}${repeatMsg}\n\nConfirm order?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
@@ -5264,7 +5261,6 @@ async function createBot() {
                 quantity,
                 repeat_count: smart_mode ? 0 : repeat_count,
                 smart_mode,
-                patient_mode,
             }),
         });
         const data = await resp.json();
@@ -5313,7 +5309,6 @@ async function placeSelectedWidthsBots() {
     const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
     const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
     const smartMode   = !!document.getElementById('apex-smart-mode')?.checked;
-    const patientMode = !!document.getElementById('apex-patient-mode')?.checked;
     const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
 
     // ── Fetch fresh orderbook prices before computing widths ───────────────────
@@ -5416,7 +5411,6 @@ async function placeSelectedWidthsBots() {
             quantity: qty,
             repeat_count: smartMode ? 0 : repeatCount,
             smart_mode: smartMode,
-            patient_mode: patientMode,
             game_phase: gamePhase,
         }),
     }).then(r => r.json()).then(data => {
@@ -5504,7 +5498,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${liveScoreHtml}
                     ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">CROSS</span>' : ''}
                     ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs</span>` : _runs > 1 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_runs} runs</span>` : ''}
-                    ${bot.patient_mode ? '<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Patient</span>' : ''}
                     ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : ''); })()}
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -7810,7 +7803,7 @@ async function loadBots() {
                     }
                 }
             } else if (phase === 'pregame') {
-                timeoutInfo = `<span style="color:#555;font-size:10px;">∞ Patient</span>`;
+                timeoutInfo = `<span style="color:#555;font-size:10px;">⏳ Pre-game</span>`;
             }
 
             // Waiting for repeat spread
@@ -9191,7 +9184,7 @@ const botBuddyMessages = {
     holding: [
         `<strong>Holding steady</strong> — one leg filled, waiting for the other side`,
         `<strong>Riding it out</strong> — this is normal. Bid moves, trade stays on track`,
-        `<strong>Patient mode.</strong> Timeout amend is the safety net — no rush`,
+        `<strong>On the bid.</strong> Hedge is tracking the market — waiting for the fill`,
         `<strong>Sitting tight.</strong> Both orders are working, just need the fill`,
         `<strong>All good.</strong> Plenty of time left — watching for the second leg`,
     ],

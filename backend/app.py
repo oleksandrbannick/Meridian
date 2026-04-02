@@ -4356,6 +4356,9 @@ def _execute_ws_completion(bot_id):
         bot['completed_at'] = now
         bot['status'] = 'waiting_repeat' if will_repeat else 'completed'
         bot['_just_completed'] = True
+        # Capture latency BEFORE clearing for run history
+        _saved_raw_hedge_ms = bot.get('raw_hedge_ms')
+        _saved_hedge_latency_ms = bot.get('hedge_latency_ms')
         if will_repeat:
             bot['waiting_repeat_since'] = time.time() + 3  # 3s linger
             bot['first_fill_at'] = None
@@ -4426,8 +4429,8 @@ def _execute_ws_completion(bot_id):
                 'dog_price': bot.get('dog_price') or (real_yes if _dog_side == 'yes' else real_no),
                 'fav_price': bot.get('fav_price') or (real_yes if _fav_side == 'yes' else real_no),
                 'qty': qty,
-                'raw_hedge_ms': bot.get('raw_hedge_ms'),
-                'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'raw_hedge_ms': _saved_raw_hedge_ms,
+                'hedge_latency_ms': _saved_hedge_latency_ms,
                 'ts': now,
             })
             if will_repeat:
@@ -10238,21 +10241,32 @@ def _handle_phantom(bot_id, bot, actions):
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             new_dog_price = max(1, anchor_base - anchor_depth)
 
-            # Drift guard: stop if dog is dead OR new price too low to be viable
-            if current_dog_bid <= 1 or new_dog_price < 3:
+            # Drift guard: stop if dog is dead, price too low, or price too high
+            _drift_stop = False
+            _drift_reason = ''
+            if current_dog_bid <= 1:
+                _drift_stop = True
+                _drift_reason = 'dog_dead'
+            elif new_dog_price < 3:
+                _drift_stop = True
+                _drift_reason = f'price_too_low_{new_dog_price}c'
+            elif new_dog_price > 40:
+                _drift_stop = True
+                _drift_reason = f'price_too_high_{new_dog_price}c'
+            if _drift_stop:
                 bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
                     'dog_bid': current_dog_bid, 'new_dog_price': new_dog_price,
-                    'reason': 'dog_dead' if current_dog_bid <= 1 else f'price_too_low_{new_dog_price}c',
+                    'reason': _drift_reason,
                 })
                 _is_cross_drift = hedge_ticker and hedge_ticker != ticker and (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0)
                 if _is_cross_drift:
                     bot['status'] = 'awaiting_settlement'
                     bot['awaiting_since'] = now
-                    print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — too low, awaiting settlement (cross-market)')
+                    print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — {_drift_reason}, awaiting settlement (cross-market)')
                 else:
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
-                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — too low, stopping')
+                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — {_drift_reason}, stopping')
                 bot['repeat_count'] = 0
                 save_state()
                 return
@@ -10649,37 +10663,39 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             _avg_dog_est = max(1, anchor_base - anchor_depth)  # estimate new avg dog price
-            # Drift guard: only stop if dog is dead (bid at 1¢) — let normal ceiling/sellback handle the rest
+            # Drift guard: stop if dog dead, rung price at floor, or price too high
+            _first_rung_est = max(1, anchor_base - anchor_depth)
+            _rung_spacing = bot.get('rung_spacing', 2)
+            _num_rungs = len(bot.get('rungs', []))
+            _lowest_rung_est = max(1, _first_rung_est - ((_num_rungs - 1) * _rung_spacing)) if _num_rungs > 0 else _first_rung_est
+            _ladder_drift_stop = False
+            _ladder_drift_reason = ''
             if current_dog_bid <= 1:
+                _ladder_drift_stop = True
+                _ladder_drift_reason = 'dog_dead'
+            elif _lowest_rung_est <= 3:
+                _ladder_drift_stop = True
+                _ladder_drift_reason = f'rung_floor_{_lowest_rung_est}c'
+            elif _first_rung_est > 40:
+                _ladder_drift_stop = True
+                _ladder_drift_reason = f'price_too_high_{_first_rung_est}c'
+            if _ladder_drift_stop:
                 bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'reason': 'dog_dead',
+                    'dog_bid': current_dog_bid, 'first_rung': _first_rung_est,
+                    'lowest_rung': _lowest_rung_est, 'reason': _ladder_drift_reason,
                 })
                 _phantom_set_final_status(bot, bot_id)
                 bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ — dog dead, stopping')
+                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ first_rung={_first_rung_est}¢ lowest={_lowest_rung_est}¢ — {_ladder_drift_reason}, stopping')
                 save_state()
                 return
-            # spread and anchor_base already computed above for hedge check
 
             # Batch-place all rungs for new cycle — depth floor anchored to rung 0
             repeat_ph_group = _create_order_group()
             repeat_specs = []
             repeat_qtys = []
-            _rung_spacing = bot.get('rung_spacing', 2)
-            _num_rungs = len(bot.get('rungs', []))
-            _first_rung_price = max(1, anchor_base - anchor_depth)
-            _lowest_rung_price = max(1, _first_rung_price - ((_num_rungs - 1) * _rung_spacing)) if _num_rungs > 0 else _first_rung_price
-            if _lowest_rung_price <= 3:
-                # All rungs would hit the floor — market too thin, stop
-                _phantom_set_final_status(bot, bot_id)
-                bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM REPEAT FLOOR: {bot_id} lowest rung={_lowest_rung_price}¢ (dog_bid={current_dog_bid}¢) — too low, stopping')
-                bot_log('PHANTOM_REPEAT_SKIP_FLOOR', bot_id, {
-                    'first_rung': _first_rung_price, 'lowest_rung': _lowest_rung_price,
-                    'dog_bid': current_dog_bid, 'anchor_depth': anchor_depth,
-                })
-                save_state()
-                return
+            _first_rung_price = _first_rung_est
+            _lowest_rung_price = _lowest_rung_est
             for rung in bot.get('rungs', []):
                 rung_price = max(1, anchor_base - anchor_depth - (len(repeat_specs) * _rung_spacing))
                 rung_qty = rung.get('qty', qty)

@@ -6444,7 +6444,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
 
     # ── PATIENT MODE: skip all time-decay logic, just wait for maker fills ──
     # Only safety rails: extreme stop-loss (>115¢) and dead market (bid=0 for 30s)
-    _patient = bot.get('patient_mode', False)
+    _patient = bot.get('patient_mode', True)  # patient mode is default for Apex
     if _patient:
         if current_stage == 'pending_profit':
             # Extreme stop-loss only — true emergency
@@ -7510,6 +7510,22 @@ def create_ladder_arb_bot():
             if target_no >= live_no_ask and live_no_ask > 0:
                 continue
             rung_specs.append({'width': w, 'yes_price': target_yes, 'no_price': target_no, 'rung_qty': quantity})
+
+        # Dedup: different widths can map to same prices — keep wider (more profit)
+        _seen_prices = {}
+        _deduped = []
+        for s in rung_specs:
+            _key = (s['yes_price'], s['no_price'])
+            if _key in _seen_prices:
+                # Keep the wider width (more profit per contract)
+                if s['width'] > _seen_prices[_key]['width']:
+                    _deduped = [x for x in _deduped if (x['yes_price'], x['no_price']) != _key]
+                    _deduped.append(s)
+                    _seen_prices[_key] = s
+            else:
+                _seen_prices[_key] = s
+                _deduped.append(s)
+        rung_specs = _deduped
 
         if not rung_specs:
             return jsonify({'error': 'No valid widths after price computation'}), 400
@@ -11960,6 +11976,16 @@ def _handle_apex(bot_id, bot, actions):
                 if profit <= 0:
                     continue
                 valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn})
+            # Dedup: different widths can map to same prices
+            _seen_p = {}
+            _deduped_v = []
+            for _vs in valid_specs:
+                _vk = (_vs['yes_price'], _vs['no_price'])
+                if _vk not in _seen_p or _vs['width'] > _seen_p[_vk]['width']:
+                    _deduped_v = [x for x in _deduped_v if (x['yes_price'], x['no_price']) != _vk]
+                    _deduped_v.append(_vs)
+                    _seen_p[_vk] = _vs
+            valid_specs = _deduped_v
             repeat_group_id = _create_order_group()
             if valid_specs:
                 yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]

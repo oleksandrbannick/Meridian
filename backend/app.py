@@ -12219,17 +12219,16 @@ def _handle_apex(bot_id, bot, actions):
                             _pr[f'{_ps}_order_id'] = None
                     _pr['status'] = 'stopped'
                     print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (2min since first rung complete)')
-                # Cancel stalled hedge rungs (anchor filled, hedge unfilled for 2min+)
+                # Sell back stalled hedge rungs (anchor filled, hedge unfilled for 2min+)
                 elif _pr.get('status') in ('pending_profit', 'snapped') and _pr.get('hedge_fill_qty', 0) == 0:
-                    _hedge_oid = _pr.get('hedge_order_id')
-                    if _hedge_oid:
-                        _cancel_with_retry(_hedge_oid)
-                        _pr['hedge_order_id'] = None
-                    _pr['status'] = 'completed'
-                    _pr['completed'] = True
+                    _pr_idx = bot.get('rungs', []).index(_pr)
+                    _pr_anchor = _pr.get('anchor_side', 'yes')
+                    _pr_anchor_price = _pr.get(f'{_pr_anchor}_price', 0)
+                    _pr_hedge_bid = bot.get(f'live_{("no" if _pr_anchor == "yes" else "yes")}_bid', 0)
                     _pr['_snap_reason'] = 'auto_cancel_stalled'
-                    _apex_record_rung_pnl(bot_id, bot.get('rungs', []).index(_pr))
-                    print(f'⏹ APEX AUTO-CANCEL: {bot_id} stalled hedge rung w={_pr.get("width",0)}c (0 hedge fills, 2min+) → record as loss')
+                    print(f'⏹ APEX STALLED SELLBACK: {bot_id} rung w={_pr.get("width",0)}c (0 hedge fills, 2min+) → selling anchor back')
+                    _apex_rung_sellback(bot_id, bot, _pr, _pr_idx, _pr_hedge_bid,
+                                        _pr_anchor_price + _pr_hedge_bid, _pr.get('stop_loss_cents', 6))
             # Re-check if all resolved now
             all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
 

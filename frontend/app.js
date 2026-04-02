@@ -6530,12 +6530,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
             else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
             else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
-            else if (combined >= _botCeiling) {
-                const _ncSince = bot._near_ceiling_since || 0;
-                const _ncElapsed = _ncSince > 0 ? Math.floor(nowSec - _ncSince) : 0;
-                stateLabel = _ncElapsed > 0 ? `CEILING — ${Math.max(0, 10 - _ncElapsed)}s` : 'CEILING — 10s';
-                stateColor = '#ff4444';
-            }
+            else if (combined >= _botCeiling) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
             else { stateLabel = 'SNAPPING'; stateColor = '#00aaff'; }
             hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">

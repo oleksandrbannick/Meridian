@@ -3381,20 +3381,6 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # Fav-rising guard: if fav was climbing before the dog filled, the whole market
-        # shifted — the dog fill is not a real arb. Sell back instead of hedging.
-        _fav_rising, _fav_rise_amt = _fav_was_rising(_ws_ticker, fav_side)
-        if _fav_rising:
-            print(f'🛡️ FAV RISING: {bot_id} fav {fav_side} rose {_fav_rise_amt}¢ in last 5s on {_ws_ticker} — market shift, not real arb')
-            bot_log('PHANTOM_FAV_RISING_SKIP', bot_id, {
-                'fav_side': fav_side, 'fav_rise': _fav_rise_amt, 'fav_bid': fav_bid,
-                'dog_price': dog_price, 'combined': dog_price + fav_bid,
-                'hedge_ticker': _ws_ticker, 'path': 'ws_fast',
-            })
-            bot['status'] = 'dog_filled'  # defer to monitor — will sell back via ceiling/timeout
-            bot['_fav_rising_skip'] = True
-            return
-
         # Ceiling handling: always post at max_hedge if breakeven is possible.
         # Posting at max_hedge (breakeven) is always better than selling back at a loss.
         if dog_price + hedge_price > 100:
@@ -4586,13 +4572,11 @@ def _phantom_gap_threshold(bot, current_dog_bid):
     bid_history = [(t, b) for t, b in bid_history if now - t <= 60]
     bot['_bid_history'] = bid_history
     if len(bid_history) < 2:
-        anchor_depth = bot.get('anchor_depth', 5)
-        _thresh = min(3, anchor_depth)
         bot['_volatility'] = 0
         bot['_market_condition'] = 'calm'
-        bot['_gap_threshold'] = _thresh
+        bot['_gap_threshold'] = 3
         bot['_gap_cooldown'] = 15
-        return _thresh, 15
+        return 3, 15
     bids = [b for _, b in bid_history]
     volatility = max(bids) - min(bids)
     if volatility > 8:
@@ -4601,9 +4585,6 @@ def _phantom_gap_threshold(bot, current_dog_bid):
         thresh, cd, cond = 5, 20, 'normal'
     else:
         thresh, cd, cond = 3, 15, 'calm'
-    # Cap threshold at anchor_depth so bot never drifts further than its depth floor
-    anchor_depth = bot.get('anchor_depth', 5)
-    thresh = min(thresh, anchor_depth)
     bot['_volatility'] = volatility
     bot['_market_condition'] = cond
     bot['_gap_threshold'] = thresh
@@ -8995,25 +8976,6 @@ def _get_price_velocity_urgency(ticker):
         return 'late'        # 15+ cent drop in 2 min
     return 'normal'
 
-def _fav_was_rising(hedge_ticker, fav_side, window_s=5, threshold=3):
-    """Check if the fav bid was rising in the seconds before now.
-    Returns (was_rising: bool, rise_amount: int).
-    Used to detect market shifts where fav movement caused the dog fill.
-    Fav rising = whole market shifted, dog fill is not a real arb."""
-    history = _price_velocity_history.get(hedge_ticker)
-    if not history or len(history) < 2:
-        return False, 0
-    now = time.time()
-    idx = 1 if fav_side == 'yes' else 2  # (timestamp, yes_bid, no_bid)
-    recent_bids = []
-    for h in history:
-        if now - h[0] <= window_s and h[idx] > 0:
-            recent_bids.append(h[idx])
-    if len(recent_bids) < 2:
-        return False, 0
-    rise = recent_bids[-1] - recent_bids[0]
-    return rise >= threshold, rise
-
 def _get_game_urgency(ticker):
     """Return game urgency level based on live game state.
     Returns: 'normal', 'late', 'critical', or 'halftime'.
@@ -9130,7 +9092,6 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['live_hedge_no_bid'] = ws_p_hedge.get('no_bid', 0)
                 bot['live_hedge_yes_ask'] = ws_p_hedge.get('yes_ask', 0)
                 bot['live_hedge_no_ask'] = ws_p_hedge.get('no_ask', 0)
-                _record_price_for_velocity(hedge_ticker, ws_p_hedge.get('yes_bid', 0), ws_p_hedge.get('no_bid', 0))
     except Exception:
         pass
 
@@ -9605,12 +9566,6 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         dog_price = bot['dog_price']
-        # Fav-rising skip: WS handler detected fav climbing before fill — sell back
-        if bot.get('_fav_rising_skip'):
-            print(f'🛡️ FAV RISING SELLBACK: {bot_id} fav was rising before dog fill — selling back')
-            bot.pop('_fav_rising_skip', None)
-            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, dog_price + fav_bid, actions)
-            return
         # Always post at fav bid — only sell back if combined > 100¢
         hedge_price = fav_bid
         if hedge_price < 1:
@@ -9879,7 +9834,6 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
                 bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
-                bot['_near_ceiling_since'] = None
                 bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
@@ -10056,43 +10010,6 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
-
-        # ── 10s Breakeven Timer: if combined >= 98¢, maker fill window then bail ──
-        _breakeven_combined = dog_price + current_fav_bid
-        _BREAKEVEN_THRESHOLD = 98
-        _BREAKEVEN_TIMEOUT_S = 10
-        if _breakeven_combined >= _BREAKEVEN_THRESHOLD:
-            if not bot.get('_near_ceiling_since'):
-                bot['_near_ceiling_since'] = now
-                print(f'⏱ NEAR CEILING: {bot_id} combined={_breakeven_combined}¢ ≥ {_BREAKEVEN_THRESHOLD}¢ — {_BREAKEVEN_TIMEOUT_S}s maker window started')
-                bot_log('PHANTOM_NEAR_CEILING_START', bot_id, {
-                    'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                    'combined': _breakeven_combined,
-                })
-            else:
-                _be_elapsed = now - bot['_near_ceiling_since']
-                if _be_elapsed >= _BREAKEVEN_TIMEOUT_S:
-                    print(f'⏱ BREAKEVEN TIMEOUT: {bot_id} combined={_breakeven_combined}¢ for {_be_elapsed:.0f}s — selling back')
-                    bot_log('PHANTOM_BREAKEVEN_TIMEOUT', bot_id, {
-                        'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                        'combined': _breakeven_combined, 'elapsed_s': round(_be_elapsed, 1),
-                    })
-                    _qty = bot.get('quantity', 1)
-                    _hedge_fills = _cancel_hedge_verified(bot, bot_id)
-                    if _hedge_fills >= _qty:
-                        print(f'✅ BREAKEVEN FILLED: {bot_id} hedge filled {_hedge_fills} before cancel')
-                        bot['_near_ceiling_since'] = None
-                        return
-                    if _hedge_fills > 0:
-                        _unhedged = _qty - _hedge_fills
-                        bot['fav_fill_qty'] = _hedge_fills
-                        bot['quantity'] = _unhedged
-                    _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-                    return
-        else:
-            # Combined dropped below 98¢ — reset timer
-            if bot.get('_near_ceiling_since'):
-                bot['_near_ceiling_since'] = None
 
         # Walk target: always bid — phantom needs ceiling margin, walk handles the rest
         walk_target = current_fav_bid
@@ -10438,7 +10355,6 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_hedge_fired'] = False  # clear so next fill can hedge
             bot['_trade_recorded'] = False
             bot['_over_ceiling_since'] = None  # clear so fresh run starts clean
-            bot['_near_ceiling_since'] = None
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['fav_walk_count'] = 0
@@ -12639,7 +12555,6 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_straggler_sold_qty'] = 0
         bot['_straggler_loss_cents'] = 0
         bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
-        bot['_near_ceiling_since'] = None
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0

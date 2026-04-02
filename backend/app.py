@@ -3381,6 +3381,20 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
+        # Fav-rising guard: if fav was climbing before the dog filled, the whole market
+        # shifted — the dog fill is not a real arb. Sell back instead of hedging.
+        _fav_rising, _fav_rise_amt = _fav_was_rising(_ws_ticker, fav_side)
+        if _fav_rising:
+            print(f'🛡️ FAV RISING: {bot_id} fav {fav_side} rose {_fav_rise_amt}¢ in last 5s on {_ws_ticker} — market shift, not real arb')
+            bot_log('PHANTOM_FAV_RISING_SKIP', bot_id, {
+                'fav_side': fav_side, 'fav_rise': _fav_rise_amt, 'fav_bid': fav_bid,
+                'dog_price': dog_price, 'combined': dog_price + fav_bid,
+                'hedge_ticker': _ws_ticker, 'path': 'ws_fast',
+            })
+            bot['status'] = 'dog_filled'  # defer to monitor — will sell back via ceiling/timeout
+            bot['_fav_rising_skip'] = True
+            return
+
         # Ceiling handling: always post at max_hedge if breakeven is possible.
         # Posting at max_hedge (breakeven) is always better than selling back at a loss.
         if dog_price + hedge_price > 100:
@@ -8935,6 +8949,25 @@ def _get_price_velocity_urgency(ticker):
         return 'late'        # 15+ cent drop in 2 min
     return 'normal'
 
+def _fav_was_rising(hedge_ticker, fav_side, window_s=5, threshold=3):
+    """Check if the fav bid was rising in the seconds before now.
+    Returns (was_rising: bool, rise_amount: int).
+    Used to detect market shifts where fav movement caused the dog fill.
+    Fav rising = whole market shifted, dog fill is not a real arb."""
+    history = _price_velocity_history.get(hedge_ticker)
+    if not history or len(history) < 2:
+        return False, 0
+    now = time.time()
+    idx = 1 if fav_side == 'yes' else 2  # (timestamp, yes_bid, no_bid)
+    recent_bids = []
+    for h in history:
+        if now - h[0] <= window_s and h[idx] > 0:
+            recent_bids.append(h[idx])
+    if len(recent_bids) < 2:
+        return False, 0
+    rise = recent_bids[-1] - recent_bids[0]
+    return rise >= threshold, rise
+
 def _get_game_urgency(ticker):
     """Return game urgency level based on live game state.
     Returns: 'normal', 'late', 'critical', or 'halftime'.
@@ -9051,6 +9084,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['live_hedge_no_bid'] = ws_p_hedge.get('no_bid', 0)
                 bot['live_hedge_yes_ask'] = ws_p_hedge.get('yes_ask', 0)
                 bot['live_hedge_no_ask'] = ws_p_hedge.get('no_ask', 0)
+                _record_price_for_velocity(hedge_ticker, ws_p_hedge.get('yes_bid', 0), ws_p_hedge.get('no_bid', 0))
     except Exception:
         pass
 
@@ -9525,6 +9559,12 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         dog_price = bot['dog_price']
+        # Fav-rising skip: WS handler detected fav climbing before fill — sell back
+        if bot.get('_fav_rising_skip'):
+            print(f'🛡️ FAV RISING SELLBACK: {bot_id} fav was rising before dog fill — selling back')
+            bot.pop('_fav_rising_skip', None)
+            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, dog_price + fav_bid, actions)
+            return
         # Always post at fav bid — only sell back if combined > 100¢
         hedge_price = fav_bid
         if hedge_price < 1:

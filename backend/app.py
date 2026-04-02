@@ -6449,11 +6449,13 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined, _sl_cents)
             return
 
-    # ── SNAP TO BID: always follow the market ──
-    # Cap at ceiling (100 - anchor_price) so we never go over breakeven
-    max_hedge = max(1, 100 - anchor_price)
+    # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──
+    # If bid drops below target → follow it (better fill price)
+    # If bid is above target → stay at target (maintain profitable width)
+    target_hedge = rung.get('target_hedge_price', 0) or max(1, 100 - anchor_price - width)
     spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-    snap_price = max(1, min((hedge_bid + 1) if spread > 1 else hedge_bid, max_hedge))
+    bid_price = (hedge_bid + 1) if spread > 1 else hedge_bid
+    snap_price = max(1, min(bid_price, target_hedge))
 
     rung['_snap_reason'] = f'at_bid_{snap_price}c'
     needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 5)

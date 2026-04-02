@@ -9833,6 +9833,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
                 bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
+                bot['_near_ceiling_since'] = None
                 bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
@@ -10009,6 +10010,43 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
+
+        # ── 10s Breakeven Timer: if combined >= 98¢, maker fill window then bail ──
+        _breakeven_combined = dog_price + current_fav_bid
+        _BREAKEVEN_THRESHOLD = 98
+        _BREAKEVEN_TIMEOUT_S = 10
+        if _breakeven_combined >= _BREAKEVEN_THRESHOLD:
+            if not bot.get('_near_ceiling_since'):
+                bot['_near_ceiling_since'] = now
+                print(f'⏱ NEAR CEILING: {bot_id} combined={_breakeven_combined}¢ ≥ {_BREAKEVEN_THRESHOLD}¢ — {_BREAKEVEN_TIMEOUT_S}s maker window started')
+                bot_log('PHANTOM_NEAR_CEILING_START', bot_id, {
+                    'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                    'combined': _breakeven_combined,
+                })
+            else:
+                _be_elapsed = now - bot['_near_ceiling_since']
+                if _be_elapsed >= _BREAKEVEN_TIMEOUT_S:
+                    print(f'⏱ BREAKEVEN TIMEOUT: {bot_id} combined={_breakeven_combined}¢ for {_be_elapsed:.0f}s — selling back')
+                    bot_log('PHANTOM_BREAKEVEN_TIMEOUT', bot_id, {
+                        'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                        'combined': _breakeven_combined, 'elapsed_s': round(_be_elapsed, 1),
+                    })
+                    _qty = bot.get('quantity', 1)
+                    _hedge_fills = _cancel_hedge_verified(bot, bot_id)
+                    if _hedge_fills >= _qty:
+                        print(f'✅ BREAKEVEN FILLED: {bot_id} hedge filled {_hedge_fills} before cancel')
+                        bot['_near_ceiling_since'] = None
+                        return
+                    if _hedge_fills > 0:
+                        _unhedged = _qty - _hedge_fills
+                        bot['fav_fill_qty'] = _hedge_fills
+                        bot['quantity'] = _unhedged
+                    _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
+                    return
+        else:
+            # Combined dropped below 98¢ — reset timer
+            if bot.get('_near_ceiling_since'):
+                bot['_near_ceiling_since'] = None
 
         # Walk target: always bid — phantom needs ceiling margin, walk handles the rest
         walk_target = current_fav_bid
@@ -10354,6 +10392,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_hedge_fired'] = False  # clear so next fill can hedge
             bot['_trade_recorded'] = False
             bot['_over_ceiling_since'] = None  # clear so fresh run starts clean
+            bot['_near_ceiling_since'] = None
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['fav_walk_count'] = 0
@@ -12552,6 +12591,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_straggler_sold_qty'] = 0
         bot['_straggler_loss_cents'] = 0
         bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
+                bot['_near_ceiling_since'] = None
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0

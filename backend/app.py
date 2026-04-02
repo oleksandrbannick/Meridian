@@ -4349,7 +4349,9 @@ def _execute_ws_completion(bot_id):
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
         # Estimate P&L from posted prices for smart mode (actual verified later)
-        _est_pnl = (100 - bot.get('yes_price', 50) - bot.get('no_price', 50)) * qty
+        _est_yes = bot.get('yes_price', 50)
+        _est_no = bot.get('no_price', 50)
+        _est_pnl = (100 - _est_yes - _est_no) * qty - kalshi_fee_cents(_est_yes, _est_no, qty)
         _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _est_pnl)
         will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 

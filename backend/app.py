@@ -12207,13 +12207,8 @@ def _handle_apex(bot_id, bot, actions):
                             _pr[f'{_ps}_order_id'] = None
                     _pr['status'] = 'stopped'
                     print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (2min since first rung complete)')
-            # Re-check if all resolved now — stalled hedge rungs count as resolved
-            # so the bot can repeat while those hedges keep working in the background
-            all_resolved = all(
-                r.get('status') in ('completed', 'stopped', 'scratched')
-                or (r.get('status') in ('pending_profit', 'snapped') and r.get('anchor_side'))
-                for r in bot.get('rungs', [])
-            )
+            # Re-check if all resolved now
+            all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
 
         # Check if ALL rungs are resolved → bot completion
         if all_resolved and any_filled:

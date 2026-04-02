@@ -6442,6 +6442,63 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                 _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
             return
 
+    # ── PATIENT MODE: skip all time-decay logic, just wait for maker fills ──
+    # Only safety rails: extreme stop-loss (>115¢) and dead market (bid=0 for 30s)
+    _patient = bot.get('patient_mode', False)
+    if _patient:
+        if current_stage == 'pending_profit':
+            # Extreme stop-loss only — true emergency
+            if hedge_bid > 0 and anchor_price > 0:
+                _combined_p = anchor_price + hedge_bid
+                if _combined_p > 115:
+                    rung['_snap_reason'] = f'patient_extreme_{_combined_p}c'
+                    print(f'🛑 APEX PATIENT STOP-LOSS: {bot_id} rung#{rung_idx} ({width}c) combined={_combined_p}c > 115c → sellback')
+                    bot_log('APEX_PATIENT_STOP_LOSS', bot_id, {
+                        'rung_idx': rung_idx, 'width': width, 'combined': _combined_p,
+                        'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
+                    })
+                    _sl_cents = rung.get('stop_loss_cents', _apex_stop_loss_threshold(width))
+                    _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_p, _sl_cents)
+                    return
+            rung['_snap_reason'] = 'patient'
+            return
+        if current_stage == 'snapped':
+            # Dead market handler — still needed in patient mode
+            if hedge_bid <= 0:
+                if not rung.get('_dead_market_at'):
+                    rung['_dead_market_at'] = now
+                    return
+                if now - rung['_dead_market_at'] < 30:
+                    return
+                _dead_hfq = rung.get('hedge_fill_qty', 0)
+                if hedge_oid:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(hedge_oid)
+                    except Exception:
+                        pass
+                    rung['hedge_order_id'] = None
+                if _dead_hfq > 0:
+                    print(f'💀 APEX PATIENT DEAD: {bot_id} rung#{rung_idx} ({width}c) {_dead_hfq}/{qty} hedge → sellback')
+                    _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, rung.get('stop_loss_cents', 6))
+                else:
+                    rung['status'] = 'completed'
+                    rung['completed'] = True
+                    rung['_snap_reason'] = 'patient_dead_market'
+                    print(f'💀 APEX PATIENT DEAD: {bot_id} rung#{rung_idx} ({width}c) no bid 30s → loss')
+                    _apex_record_rung_pnl(bot_id, rung_idx)
+                save_state()
+                return
+            rung['_dead_market_at'] = None
+            # In patient mode, revert snapped back to pending_profit (sit on target)
+            rung['time_stage'] = 'pending_profit'
+            rung['status'] = 'pending_profit'
+            rung['_snap_reason'] = 'patient_revert'
+            if target_hedge > 0:
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, target_hedge)
+            return
+        return
+
     if current_stage == 'pending_profit':
         # ── STOP-LOSS: fire immediately if underwater — don't wait for drift timer ──
         _sl_cents = rung.get('stop_loss_cents', _apex_stop_loss_threshold(width))
@@ -7339,6 +7396,7 @@ def create_ladder_arb_bot():
         quantity = int(data.get('quantity', 1))
         repeat_count = int(data.get('repeat_count', 0))
         smart_mode   = bool(data.get('smart_mode', False))
+        patient_mode = bool(data.get('patient_mode', False))
         if smart_mode:
             repeat_count = 999  # effectively infinite — smart mode controls stopping
         hard_ceiling = min(98, max(96, int(data.get('hard_ceiling', HARD_CEILING_CENTS))))
@@ -7542,6 +7600,7 @@ def create_ladder_arb_bot():
             'repeat_count': repeat_count,
             'repeats_done': 0,
             'smart_mode': smart_mode,
+            'patient_mode': patient_mode,
             'consecutive_losses': 0,
             'hard_ceiling': hard_ceiling,
             'arb_width': narrowest_width,

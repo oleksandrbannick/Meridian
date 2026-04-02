@@ -3887,8 +3887,11 @@ function updateAnchorPreview() {
             else if (fd >= 30) { recDepth = 7; reasons.push('fav light'); }
             else { recDepth = 8; reasons.push('fav thin'); }
             // Market balance: dog bid high = close match = volatile = need more room
-            if (dogBid >= 35) { recDepth = Math.max(recDepth, 8); reasons.push('close match'); }
-            else if (dogBid >= 25) { recDepth = Math.max(recDepth, 7); reasons.push('mid-range'); }
+            // But only override if fav isn't thick — thick fav absorbs movement
+            if (dogBid >= 35 && fd < 500) { recDepth = Math.max(recDepth, 8); reasons.push('close match'); }
+            else if (dogBid >= 35) { recDepth = Math.max(recDepth, 5); reasons.push('close match'); }
+            else if (dogBid >= 25 && fd < 200) { recDepth = Math.max(recDepth, 7); reasons.push('mid-range'); }
+            else if (dogBid >= 25) { reasons.push('mid-range'); }
             // Spread: YES+NO bids far from 100 = wide spread = more walk needed
             const totalBids = dogBid + favBid;
             if (totalBids > 0 && totalBids < 90) { recDepth = Math.max(recDepth, 7); reasons.push('wide spread'); }

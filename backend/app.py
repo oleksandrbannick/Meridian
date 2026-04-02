@@ -12591,7 +12591,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         bot['_straggler_sold_qty'] = 0
         bot['_straggler_loss_cents'] = 0
         bot['_over_ceiling_since'] = None  # clear so next run doesn't inherit stale timer
-                bot['_near_ceiling_since'] = None
+        bot['_near_ceiling_since'] = None
         bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
         bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
         bot['_last_repost_at'] = 0

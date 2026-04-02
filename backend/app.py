@@ -6423,17 +6423,6 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 
-    # ── PROFIT SNAP: combined ≤ 96¢ → snap to bid+1 for fast fill ──
-    if anchor_price > 0:
-        _combined = anchor_price + hedge_bid
-        if _combined <= SNAP_CEILING_CENTS:  # 96c
-            spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-            snap_price = max(1, (hedge_bid + 1) if spread > 1 else hedge_bid)
-            if current_hedge_price != snap_price or not hedge_oid:
-                rung['_snap_reason'] = f'profit_snap_{_combined}c'
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
-            return
-
     # ── DELTA-ADJUSTED STOP-LOSS: combined > 100 + threshold → taker exit ──
     if hedge_bid > 0 and anchor_price > 0:
         _sl_cents = _apex_stop_loss_threshold(width, anchor_price)

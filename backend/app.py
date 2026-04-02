@@ -12208,8 +12208,9 @@ def _handle_apex(bot_id, bot, actions):
         # Auto-cancel unfilled posted rungs 2min after first rung completes both sides
         # (gives wider rungs time to fill, then cleans up and starts next cycle)
         _first_rung_done_at = bot.get('_first_rung_completed_at')
-        if has_posted and _first_rung_done_at and now - _first_rung_done_at > 120:
+        if _first_rung_done_at and now - _first_rung_done_at > 120:
             for _pr in bot.get('rungs', []):
+                # Cancel unfilled posted rungs (no fills at all)
                 if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
                     for _ps in ('yes', 'no'):
                         _poid = _pr.get(f'{_ps}_order_id')
@@ -12218,6 +12219,17 @@ def _handle_apex(bot_id, bot, actions):
                             _pr[f'{_ps}_order_id'] = None
                     _pr['status'] = 'stopped'
                     print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (2min since first rung complete)')
+                # Cancel stalled hedge rungs (anchor filled, hedge unfilled for 2min+)
+                elif _pr.get('status') in ('pending_profit', 'snapped') and _pr.get('hedge_fill_qty', 0) == 0:
+                    _hedge_oid = _pr.get('hedge_order_id')
+                    if _hedge_oid:
+                        _cancel_with_retry(_hedge_oid)
+                        _pr['hedge_order_id'] = None
+                    _pr['status'] = 'completed'
+                    _pr['completed'] = True
+                    _pr['_snap_reason'] = 'auto_cancel_stalled'
+                    _apex_record_rung_pnl(bot_id, bot.get('rungs', []).index(_pr))
+                    print(f'⏹ APEX AUTO-CANCEL: {bot_id} stalled hedge rung w={_pr.get("width",0)}c (0 hedge fills, 2min+) → record as loss')
             # Re-check if all resolved now
             all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
 

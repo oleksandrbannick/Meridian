@@ -6447,19 +6447,6 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     _patient = bot.get('patient_mode', True)  # patient mode is default for Apex
     if _patient:
         if current_stage == 'pending_profit':
-            # Extreme stop-loss only — true emergency
-            if hedge_bid > 0 and anchor_price > 0:
-                _combined_p = anchor_price + hedge_bid
-                if _combined_p > 115:
-                    rung['_snap_reason'] = f'patient_extreme_{_combined_p}c'
-                    print(f'🛑 APEX PATIENT STOP-LOSS: {bot_id} rung#{rung_idx} ({width}c) combined={_combined_p}c > 115c → sellback')
-                    bot_log('APEX_PATIENT_STOP_LOSS', bot_id, {
-                        'rung_idx': rung_idx, 'width': width, 'combined': _combined_p,
-                        'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
-                    })
-                    _sl_cents = rung.get('stop_loss_cents', _apex_stop_loss_threshold(width))
-                    _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_p, _sl_cents)
-                    return
             rung['_snap_reason'] = 'patient'
             return
         if current_stage == 'snapped':
@@ -12205,12 +12192,13 @@ def _handle_apex(bot_id, bot, actions):
                 except Exception as _tde:
                     print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
 
-        # Auto-cancel unfilled posted rungs 2min after first rung completes both sides
-        # (gives wider rungs time to fill, then cleans up and starts next cycle)
+        # Auto-cancel unfilled POSTED rungs 2min after first rung completes both sides
+        # These never got any fills — safe to cancel and move on.
+        # Stalled hedge rungs (anchor filled, hedge waiting) are LEFT ALONE — they'll
+        # either fill or get exited at game end.
         _first_rung_done_at = bot.get('_first_rung_completed_at')
-        if _first_rung_done_at and now - _first_rung_done_at > 120:
+        if has_posted and _first_rung_done_at and now - _first_rung_done_at > 120:
             for _pr in bot.get('rungs', []):
-                # Cancel unfilled posted rungs (no fills at all)
                 if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
                     for _ps in ('yes', 'no'):
                         _poid = _pr.get(f'{_ps}_order_id')
@@ -12219,18 +12207,13 @@ def _handle_apex(bot_id, bot, actions):
                             _pr[f'{_ps}_order_id'] = None
                     _pr['status'] = 'stopped'
                     print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (2min since first rung complete)')
-                # Sell back stalled hedge rungs (anchor filled, hedge unfilled for 2min+)
-                elif _pr.get('status') in ('pending_profit', 'snapped') and _pr.get('hedge_fill_qty', 0) == 0:
-                    _pr_idx = bot.get('rungs', []).index(_pr)
-                    _pr_anchor = _pr.get('anchor_side', 'yes')
-                    _pr_anchor_price = _pr.get(f'{_pr_anchor}_price', 0)
-                    _pr_hedge_bid = bot.get(f'live_{("no" if _pr_anchor == "yes" else "yes")}_bid', 0)
-                    _pr['_snap_reason'] = 'auto_cancel_stalled'
-                    print(f'⏹ APEX STALLED SELLBACK: {bot_id} rung w={_pr.get("width",0)}c (0 hedge fills, 2min+) → selling anchor back')
-                    _apex_rung_sellback(bot_id, bot, _pr, _pr_idx, _pr_hedge_bid,
-                                        _pr_anchor_price + _pr_hedge_bid, _pr.get('stop_loss_cents', 6))
-            # Re-check if all resolved now
-            all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
+            # Re-check if all resolved now — stalled hedge rungs count as resolved
+            # so the bot can repeat while those hedges keep working in the background
+            all_resolved = all(
+                r.get('status') in ('completed', 'stopped', 'scratched')
+                or (r.get('status') in ('pending_profit', 'snapped') and r.get('anchor_side'))
+                for r in bot.get('rungs', [])
+            )
 
         # Check if ALL rungs are resolved → bot completion
         if all_resolved and any_filled:

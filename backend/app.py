@@ -7333,6 +7333,8 @@ def _execute_apex_completion(bot_id):
         repeat_total = bot.get('repeat_count', 0)
         _smart_repeat, _ = _smart_mode_should_repeat(bot, total_pnl)
         _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done <= repeat_total)
+        # Always update lifetime P&L — not just on repeat
+        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
         if _will_repeat:
             bot['status'] = 'waiting_repeat'
             bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
@@ -7340,7 +7342,6 @@ def _execute_apex_completion(bot_id):
             bot['first_fill_at'] = None
             bot['_first_rung_completed_at'] = None
             bot['completed_rungs_count'] = 0
-            bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
             bot['net_pnl_cents'] = 0
             print(f'🔄 APEX REPEAT: {bot_id} cycle {repeats_done}/{repeat_total} → repost')
         else:
@@ -12111,21 +12112,28 @@ def _handle_apex(bot_id, bot, actions):
                 except Exception as _tde:
                     print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
 
-        # Auto-cancel unfilled POSTED rungs 2min after first rung completes both sides
-        # These never got any fills — safe to cancel and move on.
-        # Stalled hedge rungs (anchor filled, hedge waiting) are LEFT ALONE — they'll
-        # either fill or get exited at game end.
+        # Auto-cancel unfilled POSTED rungs: either 2min after first completion,
+        # or immediately when market has drifted 15¢+ past the rung's posted price.
         _first_rung_done_at = bot.get('_first_rung_completed_at')
-        if has_posted and _first_rung_done_at and now - _first_rung_done_at > 120:
+        _time_cancel = has_posted and _first_rung_done_at and now - _first_rung_done_at > 120
+        if has_posted and (any_active or _time_cancel):
             for _pr in bot.get('rungs', []):
                 if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
-                    for _ps in ('yes', 'no'):
-                        _poid = _pr.get(f'{_ps}_order_id')
-                        if _poid:
-                            _cancel_with_retry(_poid)
-                            _pr[f'{_ps}_order_id'] = None
-                    _pr['status'] = 'stopped'
-                    print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped (2min since first rung complete)')
+                    _should_cancel = _time_cancel
+                    # Market drift cancel: if YES bid moved 15¢+ from rung's posted price, it's dead
+                    if not _should_cancel and yes_bid > 0:
+                        _rung_yes = _pr.get('yes_price', 0)
+                        if _rung_yes > 0 and abs(yes_bid - _rung_yes) >= 15:
+                            _should_cancel = True
+                    if _should_cancel:
+                        for _ps in ('yes', 'no'):
+                            _poid = _pr.get(f'{_ps}_order_id')
+                            if _poid:
+                                _cancel_with_retry(_poid)
+                                _pr[f'{_ps}_order_id'] = None
+                        _pr['status'] = 'stopped'
+                        _drift_info = f'yes_bid={yes_bid} rung_yes={_pr.get("yes_price",0)}' if not _time_cancel else '2min timeout'
+                        print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped ({_drift_info})')
             # Re-check if all resolved now
             all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
 

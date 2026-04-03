@@ -6474,15 +6474,32 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
 
     if _rung_age >= _rung_timeout and anchor_filled_at:
-        rung['_snap_reason'] = f'timeout_{int(_rung_age)}s'
-        print(f'⏰ APEX TIMEOUT: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s elapsed, hedge unfilled → selling back')
-        bot_log('APEX_TIMEOUT', bot_id, {
-            'rung_idx': rung_idx, 'width': width,
-            'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
-            'hedge_bid': hedge_bid, 'age_s': round(_rung_age, 1),
-            'timeout_s': _rung_timeout,
-        })
-        _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
+        # At timeout: try to complete the arb by snapping hedge to ask (taker).
+        # Only sell back if completing would cost > 100¢ (guaranteed loss).
+        _taker_combined = anchor_price + hedge_ask if hedge_ask > 0 else 999
+        if _taker_combined <= 100 and hedge_ask > 0:
+            # Profitable or breakeven at ask — snap to ask for instant fill
+            rung['_snap_reason'] = f'timeout_snap_ask_{hedge_ask}c'
+            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → snapping hedge to ask {hedge_ask}¢ (combined {_taker_combined}¢)')
+            bot_log('APEX_TIMEOUT_SNAP', bot_id, {
+                'rung_idx': rung_idx, 'width': width,
+                'anchor_price': anchor_price, 'hedge_ask': hedge_ask,
+                'combined': _taker_combined, 'age_s': round(_rung_age, 1),
+                'timeout_s': _rung_timeout,
+            })
+            _apex_snap_hedge(bot_id, bot, rung, rung_idx, hedge_ask)
+        else:
+            # Combined > 100¢ at ask — can't complete profitably, sell back
+            rung['_snap_reason'] = f'timeout_{int(_rung_age)}s'
+            print(f'⏰ APEX TIMEOUT SELLBACK: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, ask={hedge_ask}¢ combined={_taker_combined}¢ > 100¢ → selling back')
+            bot_log('APEX_TIMEOUT', bot_id, {
+                'rung_idx': rung_idx, 'width': width,
+                'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
+                'hedge_ask': hedge_ask, 'hedge_bid': hedge_bid,
+                'combined': _taker_combined, 'age_s': round(_rung_age, 1),
+                'timeout_s': _rung_timeout,
+            })
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
         return
 
     # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──

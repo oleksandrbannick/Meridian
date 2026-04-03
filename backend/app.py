@@ -9109,9 +9109,11 @@ def _handle_phantom(bot_id, bot, actions):
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
         timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
 
-        # Retreat check: if bid crept within 1¢ of depth floor, retreat to restore buffer
+        # Retreat check: independent from repost cooldown — this is urgent protection
+        # Only rate-limit to 3s to prevent API spam, but never blocked by repost cooldown
         retreat_triggered = False
-        if dog_filled == 0 and ws_dog_bid > 0 and since_last_repost >= cooldown_s:
+        _since_last_retreat = now - bot.get('_last_retreat_at', 0)
+        if dog_filled == 0 and ws_dog_bid > 0 and _since_last_retreat >= 3:
             _anchor_depth = bot.get('anchor_depth', 5)
             _dog_price = bot.get('dog_price', 0)
             _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
@@ -9314,6 +9316,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['posted_at'] = now
                 bot['_bid_at_post'] = current_dog_bid
                 bot['_last_repost_at'] = now
+                if retreat_triggered:
+                    bot['_last_retreat_at'] = now
                 bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
                 # Update compat fields
                 if dog_side == 'yes':

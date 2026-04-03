@@ -9840,38 +9840,30 @@ def _handle_phantom(bot_id, bot, actions):
         # The normal hedge timeout handles exits if the fill never comes.
         # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
 
-        # ── Bid past ceiling: HOLD at max_fav_hold, don't sell back ──
-        # Filling at combined=100c costs ~4c in fees. Selling back costs 15-50c+ in slippage.
-        # Our order below bid has good queue priority — likely fills. 120s timeout is the safety net.
-        _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-        if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold:
-            # Already at ceiling, bid past us — just hold and wait for fill or timeout
-            if not bot.get('_ceiling_hold_logged'):
-                bot['_ceiling_hold_logged'] = True
-                _over_combined = dog_price + current_fav_bid
-                print(f'⏳ PHANTOM CEILING HOLD: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ — holding at ceiling, waiting for fill')
-                bot_log('PHANTOM_CEILING_HOLD', bot_id, {
-                    'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                    'fav_price': current_fav_price, 'max_fav_hold': max_fav_hold,
-                    'combined_at_bid': _over_combined, 'ceiling': WALK_CEILING,
-                })
-            return  # hold — don't sell, don't amend, just wait
-        else:
-            bot['_ceiling_hold_logged'] = False  # reset so we log again if bid crosses back over
-
-        # ── Bid-follow: always snap to bid, no walk intervals ──
-        new_fav_price = walk_target
-        if new_fav_price == current_fav_price:
-            return  # already at bid/ceiling, holding
-
-        walk_type = 'snap_to_bid'
-        combined = dog_price + new_fav_price
-        if combined > WALK_CEILING:
-            # Cap at ceiling for both same-market and cross-market — hold and wait for fill
+        # ── Snap target: bid capped at ceiling (98c combined) ──
+        # walk_target is already min(fav_bid, max_fav_hold) from line above.
+        # If at ceiling and bid past us → hold. 120s timeout is the safety net.
+        new_fav_price = min(walk_target, max_fav_hold)
+        # Also snap DOWN if above ceiling (e.g., after ceiling change from 100→98)
+        if current_fav_price > max_fav_hold:
             new_fav_price = max_fav_hold
-            if new_fav_price == current_fav_price:
-                return  # already at ceiling, holding
-            # Fall through to amend at ceiling price
+        if new_fav_price == current_fav_price:
+            # Already at target — if bid past ceiling, log hold once
+            if current_fav_bid > max_fav_hold:
+                if not bot.get('_ceiling_hold_logged'):
+                    bot['_ceiling_hold_logged'] = True
+                    print(f'⏳ PHANTOM CEILING HOLD: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ — holding at {current_fav_price}¢, waiting for fill')
+                    bot_log('PHANTOM_CEILING_HOLD', bot_id, {
+                        'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                        'fav_price': current_fav_price, 'max_fav_hold': max_fav_hold,
+                        'ceiling': WALK_CEILING,
+                    })
+            else:
+                bot['_ceiling_hold_logged'] = False
+            return  # at target, nothing to do
+        bot['_ceiling_hold_logged'] = False
+        walk_type = 'snap_to_bid' if new_fav_price <= current_fav_price else 'snap_up'
+        combined = dog_price + new_fav_price
 
         # Amend fav order (shared lock with WS instant drop to prevent race)
         try:

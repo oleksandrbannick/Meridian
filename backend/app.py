@@ -4719,6 +4719,7 @@ _rest_price_cache = {}  # {ticker: {yes_bid, no_bid, yes_ask, no_ask, _ts}}
 _KALSHI_TO_ESPN = {
     'WAS': 'WSH', 'NYK': 'NY', 'NOP': 'NO', 'SAS': 'SA',
     'GSW': 'GS', 'UTA': 'UTAH', 'PHX': 'PHO',
+    'CWS': 'CHW',  # Chicago White Sox: Kalshi=CWS, ESPN=CHW
 }
 
 # Reverse map ESPN → Kalshi for game time lookups

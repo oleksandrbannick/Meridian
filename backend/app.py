@@ -9841,7 +9841,7 @@ def _handle_phantom(bot_id, bot, actions):
         # At 101-105¢ combined, completing costs 1-5¢/contract — way cheaper than sellback.
         # Hold until it fills, recovers, or combined exceeds 105¢.
         _SELLBACK_THRESHOLD = 105
-        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills and _best_combined > _SELLBACK_THRESHOLD:
+        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills and _best_combined >= _SELLBACK_THRESHOLD:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
                 'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

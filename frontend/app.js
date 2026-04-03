@@ -7022,6 +7022,49 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         </div>`;
     }
 
+    // ── Rebalancer status indicator ──
+    const rebalOn = bot.rebalancer_enabled !== false && bot.rebalancer_mode !== 'off';
+    const rebalExitReason = bot.rebalancer_exit_reason;
+    let rebalHtml = '';
+    if (rebalExitReason) {
+        // Rebalancer already acted
+        const reasonMap = { scrape: '🔄 SCRAPED', enhance: '💰 ENHANCED', ride: '🏇 RIDING TO SETTLE' };
+        const reasonCol = { scrape: '#ff4444', enhance: '#00ff88', ride: '#00aaff' };
+        rebalHtml = `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:${(reasonCol[rebalExitReason]||'#aa66ff')}11;border:1px solid ${(reasonCol[rebalExitReason]||'#aa66ff')}33;border-radius:5px;font-size:10px;margin-top:4px;">
+            <span style="color:${reasonCol[rebalExitReason]||'#aa66ff'};font-weight:700;">${reasonMap[rebalExitReason]||rebalExitReason}</span>
+            <span style="color:#8892a6;">Rebalancer took action</span>
+        </div>`;
+    } else if (status === 'one_filled' || status === 'both_filled') {
+        // Show rebalancer plan
+        const loserBidA = liveNoABid, loserBidB = liveNoBBid;
+        const minBid = Math.min(loserBidA || 99, loserBidB || 99);
+        const maxBid = Math.max(loserBidA || 0, loserBidB || 0);
+        const protectFloor = bot.rebalancer_protect_floor || 80;
+        const scrapeCeil = bot.rebalancer_scrape_ceil || 10;
+        let planLabel = '', planColor = '#555';
+        if (!rebalOn) {
+            planLabel = 'OFF';
+            planColor = '#555';
+        } else if (minBid >= protectFloor) {
+            planLabel = 'HOLDING — both legs healthy';
+            planColor = '#00ff88';
+        } else if (minBid < scrapeCeil && hasLiveScore) {
+            planLabel = status === 'both_filled' ? 'WILL ENHANCE — sell dead leg late game' : 'WILL SCRAPE — sell dead leg late game';
+            planColor = '#ffaa00';
+        } else if (maxBid >= 70 && minBid < 30 && hasLiveScore) {
+            planLabel = status === 'one_filled' ? 'WILL RIDE winner to settlement' : 'WATCHING — may sell loser late game';
+            planColor = '#00aaff';
+        } else {
+            planLabel = 'WATCHING — acts late game only';
+            planColor = '#8892a6';
+        }
+        rebalHtml = `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#aa66ff08;border:1px solid #aa66ff22;border-radius:5px;font-size:10px;margin-top:4px;">
+            <span style="color:#aa66ff;font-weight:700;font-size:9px;letter-spacing:.05em;">REBALANCER</span>
+            <span style="color:${rebalOn ? '#aa66ff' : '#555'};font-weight:600;">${rebalOn ? 'AUTO' : 'OFF'}</span>
+            ${rebalOn ? `<span style="color:#333;">·</span><span style="color:${planColor};">${planLabel}</span>` : ''}
+        </div>`;
+    }
+
     const el = document.createElement('div');
     el.className = 'bot-item';
     el.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${borderCol};cursor:pointer;`;
@@ -7108,6 +7151,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             ${floorPrice > 0 ? `<span style="color:#ff6666;">Stop-loss: ${floorPrice}¢ drop</span>` : ''}
         </div>
         ${legStatusHtml}
+        ${rebalHtml}
         <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
     `;
     container.appendChild(el);

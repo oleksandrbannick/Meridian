@@ -9953,6 +9953,23 @@ def _handle_phantom(bot_id, bot, actions):
             save_state()
             return
 
+        # Settlement check: don't keep waiting on finalized markets (throttled to every 60s)
+        if now - bot.get('_last_settle_check_wr', 0) > 60:
+            bot['_last_settle_check_wr'] = now
+            try:
+                api_read_limiter.wait()
+                _wr_mkt = kalshi_client.get_market(ticker)
+                _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
+                _wr_status = _wr_m.get('status', '').lower()
+                if _wr_status in ('finalized', 'settled', 'closed'):
+                    print(f'🏁 PHANTOM SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
+                    bot_log('PHANTOM_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
+                    _phantom_set_final_status(bot, bot_id)
+                    save_state()
+                    return
+            except Exception as _se:
+                print(f'⚠ waiting_repeat settle check {bot_id}: {_se}')
+
         # Clear completion linger flag
         bot.pop('_just_completed', None)
         bot.pop('_last_pnl', None)
@@ -10399,6 +10416,24 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         wait_since = bot.get('waiting_repeat_since', now)
         if now - wait_since < 10:  # 10s cooldown
             return
+
+        # Settlement check: don't keep waiting on finalized markets (throttled to every 60s)
+        if now - bot.get('_last_settle_check_wr', 0) > 60:
+            bot['_last_settle_check_wr'] = now
+            try:
+                api_read_limiter.wait()
+                _wr_mkt = kalshi_client.get_market(ticker)
+                _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
+                _wr_status = _wr_m.get('status', '').lower()
+                if _wr_status in ('finalized', 'settled', 'closed'):
+                    print(f'🏁 PHANTOM LADDER SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
+                    bot_log('PHANTOM_LADDER_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
+                    _phantom_set_final_status(bot, bot_id)
+                    save_state()
+                    return
+            except Exception as _se:
+                print(f'⚠ ladder waiting_repeat settle check {bot_id}: {_se}')
+
         bot_log('PHANTOM_LADDER_WAITING_REPEAT_CHECK', bot_id, {
             'wait_s': round(now - wait_since, 1),
             'repeats_done': bot.get('repeats_done', 0),

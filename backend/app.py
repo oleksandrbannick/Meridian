@@ -6463,18 +6463,25 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
     _drift_grace = 5  # seconds before drift detection kicks in
     _drift_age = (now - anchor_filled_at) if anchor_filled_at else 999  # unknown age = past grace
+
+    # Update frontend display fields: bid drop distance, grace timer, threshold
+    anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)
+    _drop_now = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else 0
+    rung['_midpoint_dist'] = _drop_now
+    rung['_snap_timer'] = _drift_grace
+    rung['_drift_started_at'] = anchor_filled_at if anchor_filled_at else None
+    rung['_stop_loss_threshold'] = _apex_stop_loss_threshold(width, anchor_price)
+
     if hedge_bid > 0 and anchor_price > 0 and _drift_age > _drift_grace:
-        anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
-        if anchor_bid > 0:
-            _drop = anchor_price - anchor_bid
+        if anchor_bid_now > 0:
             _max_drop = _apex_stop_loss_threshold(width, anchor_price)
-            if _drop >= _max_drop:
-                rung['_snap_reason'] = f'drift_cut_{anchor_bid}c_drop{_drop}c'
-                print(f'🛑 APEX DRIFT CUT: {bot_id} rung#{rung_idx} ({width}c) anchor {anchor_price}c→bid {anchor_bid}c (drop {_drop}c≥{_max_drop}c) → maker exit')
+            if _drop_now >= _max_drop:
+                rung['_snap_reason'] = f'drift_cut_{anchor_bid_now}c_drop{_drop_now}c'
+                print(f'🛑 APEX DRIFT CUT: {bot_id} rung#{rung_idx} ({width}c) anchor {anchor_price}c→bid {anchor_bid_now}c (drop {_drop_now}c≥{_max_drop}c) → maker exit')
                 bot_log('APEX_STOP_LOSS', bot_id, {
                     'rung_idx': rung_idx, 'width': width,
-                    'anchor_price': anchor_price, 'anchor_bid': anchor_bid,
-                    'drop': _drop, 'max_drop': _max_drop,
+                    'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
+                    'drop': _drop_now, 'max_drop': _max_drop,
                     'hedge_bid': hedge_bid, 'combined': anchor_price + hedge_bid,
                     'type': 'drift_cut',
                 })

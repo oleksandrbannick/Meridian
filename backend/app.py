@@ -11699,6 +11699,24 @@ def _handle_apex(bot_id, bot, actions):
             return
         if now - wait_since < 10:
             return
+
+        # Settlement check: don't repost on finalized markets (throttled to every 60s)
+        if now - bot.get('_last_settle_check_wr', 0) > 60:
+            bot['_last_settle_check_wr'] = now
+            try:
+                api_read_limiter.wait()
+                _wr_mkt = kalshi_client.get_market(ticker)
+                _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
+                _wr_status = _wr_m.get('status', '').lower()
+                if _wr_status in ('finalized', 'settled', 'closed'):
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    print(f'🏁 APEX SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
+                    bot_log('APEX_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
+                    save_state()
+                    return
+            except Exception as _se:
+                print(f'⚠ apex waiting_repeat settle check {bot_id}: {_se}')
         # Safety: cancel any leftover orders from previous cycle before reposting
         _old_og = bot.get('_order_group_id')
         if _old_og:

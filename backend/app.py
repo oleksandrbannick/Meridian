@@ -4508,9 +4508,12 @@ def _latency_stats(category):
     vals = [e['ms'] for e in entries]
     vals_sorted = sorted(vals)
     p95_idx = max(0, int(len(vals_sorted) * 0.95) - 1)
+    _mid = len(vals_sorted) // 2
+    _median = vals_sorted[_mid] if len(vals_sorted) % 2 else (vals_sorted[_mid - 1] + vals_sorted[_mid]) / 2
     return {
         'min':    round(vals_sorted[0], 1),
         'avg':    round(sum(vals) / len(vals), 1),
+        'median': round(_median, 1),
         'max':    round(vals_sorted[-1], 1),
         'p95':    round(vals_sorted[p95_idx], 1),
         'count':  len(vals),

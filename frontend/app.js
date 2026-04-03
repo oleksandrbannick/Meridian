@@ -11052,14 +11052,14 @@ async function loadLatency() {
                 <div style="color:#555;font-size:11px;margin-top:4px;">No data yet</div>
             </div>`;
             const _fmtMs = v => v < 1 ? v.toFixed(1) : Math.round(v);
-            const mainVal = c.live != null ? _fmtMs(c.live) : _fmtMs(s.avg);
+            const mainVal = c.live != null ? _fmtMs(c.live) : _fmtMs(s.median != null ? s.median : s.avg);
             const mainLabel = c.live != null ? 'now' : 'avg';
             const _mainNum = parseFloat(mainVal);
             const valCol = _mainNum < 200 ? '#00ff88' : _mainNum < 500 ? '#ffaa00' : '#ff4444';
             // Hedge tiles: side-by-side raw + round trip at equal size
             if (c.rawKey) {
                 const rs = data[c.rawKey] || {};
-                const rawVal = rs.count ? _fmtMs(rs.avg) : null;
+                const rawVal = rs.count ? _fmtMs(rs.median != null ? rs.median : rs.avg) : null;
                 const _rawNum = rawVal != null ? parseFloat(rawVal) : null;
                 const rawCol = _rawNum != null ? (_rawNum < 5 ? '#00ffcc' : _rawNum < 15 ? '#00ff88' : _rawNum < 50 ? '#ffaa00' : '#ff4444') : '#555';
                 return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">

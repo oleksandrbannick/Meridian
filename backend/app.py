@@ -6440,7 +6440,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     # Grace period: wait 5s after anchor fill before checking (avoid blips).
     anchor_filled_at = rung.get('anchor_filled_at') or rung.get('filled_at') or 0
     _drift_grace = 5  # seconds before drift detection kicks in
-    if hedge_bid > 0 and anchor_price > 0 and anchor_filled_at and (now - anchor_filled_at) > _drift_grace:
+    _drift_age = (now - anchor_filled_at) if anchor_filled_at else 999  # unknown age = past grace
+    if hedge_bid > 0 and anchor_price > 0 and _drift_age > _drift_grace:
         anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
         if anchor_bid > 0:
             _drop = anchor_price - anchor_bid

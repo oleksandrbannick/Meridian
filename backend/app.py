@@ -6460,7 +6460,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     # ── DRIFT-BASED QUICK CUT: anchor bid dropped > threshold from entry → maker exit ──
     # Detect early drift and cut for a small loss instead of waiting for a big one.
     # Grace period: wait 5s after anchor fill before checking (avoid blips).
-    anchor_filled_at = rung.get('anchor_filled_at') or rung.get('filled_at') or 0
+    anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
     _drift_grace = 5  # seconds before drift detection kicks in
     _drift_age = (now - anchor_filled_at) if anchor_filled_at else 999  # unknown age = past grace
     if hedge_bid > 0 and anchor_price > 0 and _drift_age > _drift_grace:
@@ -6657,47 +6657,12 @@ def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, st
         save_state()
         return
 
-    # 3. Sell anchor position back — maker first (bid+1), taker fallback after 3s
-    anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
+    # 3. Sell anchor position back — TAKER IMMEDIATELY (stop-loss = speed over price)
+    # Old approach waited 3s for maker fill, causing massive slippage in fast markets.
     sold = False
     sell_info = None
-    if anchor_bid > 0:
-        maker_price = anchor_bid + 1
-        try:
-            _maker_resp, _maker_price = create_order_maker(
-                ticker=ticker, side=anchor_side, action='sell',
-                count=sell_qty, price=maker_price, priority=True
-            )
-            _maker_oid = _maker_resp.get('order', {}).get('order_id', '')
-            if _maker_oid:
-                # Wait up to 3s for maker fill
-                _wait_end = time.time() + 3
-                while time.time() < _wait_end:
-                    time.sleep(0.5)
-                    try:
-                        api_read_limiter.wait()
-                        _mr = kalshi_client.get_order(_maker_oid)
-                        _mo = _mr.get('order', _mr) if isinstance(_mr, dict) else {}
-                        _mf = _parse_fill_count(_mo)
-                        if _mf >= sell_qty:
-                            sold = True
-                            sell_info = {'price': _maker_price, 'avg_price': _maker_price}
-                            print(f'  ✅ MAKER SELLBACK: {bot_id} rung#{rung_idx} filled {_mf}x @{_maker_price}c')
-                            break
-                    except Exception:
-                        pass
-                if not sold:
-                    # Cancel maker, fall through to taker
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(_maker_oid)
-                    except Exception:
-                        pass
-        except Exception as _me:
-            print(f'  ⚠ Maker sellback failed: {_me}')
-    if not sold:
-        sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
-                                       reason=f'apex_stop_{bot_id}_r{rung_idx}')
+    sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
+                                   reason=f'apex_stop_{bot_id}_r{rung_idx}')
 
     if sold:
         sell_price = 0
@@ -12042,7 +12007,12 @@ def _handle_apex(bot_id, bot, actions):
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
-                bot['waiting_repeat_since'] = now
+                # After stop-loss cycle, add 30s cooldown (vs normal 10s) to avoid cascading losses
+                _had_sellback = any(r.get('_net_pnl', 0) < -10 for r in bot.get('rungs', []))
+                _cooldown = 30 if _had_sellback else 0
+                bot['waiting_repeat_since'] = now + _cooldown  # adds to the existing 10s wait
+                if _had_sellback:
+                    print(f'⏳ APEX STOP-LOSS COOLDOWN: {bot_id} waiting 40s before repeat (stop-loss cycle)')
                 bot['first_fill_at'] = None
                 bot['_first_rung_completed_at'] = None
                 bot['completed_rungs_count'] = 0

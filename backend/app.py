@@ -11982,6 +11982,19 @@ def _handle_apex(bot_id, bot, actions):
             # Mark completed first to prevent _execute_apex_completion race
             bot['_bot_completed'] = True
 
+            # Record run history (same as _execute_apex_completion path)
+            completed_count = sum(1 for r in bot.get('rungs', []) if r.get('completed'))
+            total_pnl_hist = bot.get('net_pnl_cents', 0)
+            bot.setdefault('_run_history', []).append({
+                'run': bot.get('repeats_done', 0) + 1,
+                'pnl': total_pnl_hist,
+                'result': 'win' if total_pnl_hist >= 0 else 'loss',
+                'rungs_completed': completed_count,
+                'total_rungs': len(bot.get('rungs', [])),
+                'qty': bot.get('quantity', 1),
+                'ts': now,
+            })
+
             # Check for repeat
             repeats_done = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = repeats_done

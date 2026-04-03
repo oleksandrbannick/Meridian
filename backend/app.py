@@ -9841,37 +9841,24 @@ def _handle_phantom(bot_id, bot, actions):
         # The normal hedge timeout handles exits if the fill never comes.
         # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
 
-        # ── Check if bid has gone past ceiling — sell back immediately ──
-        # If bid > ceiling price AND we're already at ceiling, the hedge will never fill profitably
+        # ── Bid past ceiling: HOLD at max_fav_hold, don't sell back ──
+        # Filling at combined=100c costs ~4c in fees. Selling back costs 15-50c+ in slippage.
+        # Our order below bid has good queue priority — likely fills. 120s timeout is the safety net.
         _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
         if current_fav_bid > max_fav_hold and current_fav_price >= max_fav_hold:
-            # Bid past ceiling, hedge at ceiling — will never fill profitably. Sell back.
-            _qty = bot.get('quantity', 1)
-            _hedge_fills = _cancel_hedge_verified(bot, bot_id)
-            if _hedge_fills >= _qty:
-                # Hedge fully filled before we could cancel — arb is complete, don't sell back
-                print(f'✅ PHANTOM CEILING EXIT ABORT: {bot_id} hedge filled {_hedge_fills} before cancel — completing as arb')
-                bot_log('PHANTOM_CEILING_ABORT_FILLED', bot_id, {'hedge_fills': _hedge_fills})
-                return
-            if _hedge_fills > 0:
-                # Partial hedge fill — only sell back the unhedged dogs, not the hedged ones
-                _unhedged = _qty - _hedge_fills
-                print(f'⚠ PHANTOM CEILING PARTIAL: {bot_id} hedge filled {_hedge_fills}/{_qty} before cancel — selling back {_unhedged} unhedged dogs')
-                bot_log('PHANTOM_CEILING_PARTIAL', bot_id, {
-                    'hedge_fills': _hedge_fills, 'qty': _qty, 'unhedged': _unhedged,
+            # Already at ceiling, bid past us — just hold and wait for fill or timeout
+            if not bot.get('_ceiling_hold_logged'):
+                bot['_ceiling_hold_logged'] = True
+                _over_combined = dog_price + current_fav_bid
+                print(f'⏳ PHANTOM CEILING HOLD: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ — holding at ceiling, waiting for fill')
+                bot_log('PHANTOM_CEILING_HOLD', bot_id, {
+                    'dog_price': dog_price, 'fav_bid': current_fav_bid,
+                    'fav_price': current_fav_price, 'max_fav_hold': max_fav_hold,
+                    'combined_at_bid': _over_combined, 'ceiling': WALK_CEILING,
                 })
-                bot['fav_fill_qty'] = _hedge_fills
-                bot['quantity'] = _unhedged  # only sell back the unhedged portion
-            _over_combined = dog_price + current_fav_bid
-            print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ > max={max_fav_hold}¢ combined={_over_combined}¢')
-            bot_log('PHANTOM_CEILING_EXIT', bot_id, {
-                'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                'fav_price': current_fav_price, 'max_fav_hold': max_fav_hold,
-                'combined_at_bid': _over_combined, 'ceiling': WALK_CEILING,
-                'hedge_fills': _hedge_fills,
-            })
-            _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-            return
+            return  # hold — don't sell, don't amend, just wait
+        else:
+            bot['_ceiling_hold_logged'] = False  # reset so we log again if bid crosses back over
 
         # ── Bid-follow: always snap to bid, no walk intervals ──
         new_fav_price = walk_target
@@ -9881,36 +9868,11 @@ def _handle_phantom(bot_id, bot, actions):
         walk_type = 'snap_to_bid'
         combined = dog_price + new_fav_price
         if combined > WALK_CEILING:
-            if _is_cross:
-                # Cross-market: hold at ceiling, don't sell — one side pays 100¢ on settlement
-                new_fav_price = max_fav_hold
-                if new_fav_price == current_fav_price:
-                    return
-                # Fall through to amend at ceiling price
-            else:
-                # Same-market: sell back, can't hedge profitably
-                _qty = bot.get('quantity', 1)
-                _hedge_fills = _cancel_hedge_verified(bot, bot_id)
-                if _hedge_fills >= _qty:
-                    print(f'✅ PHANTOM CEILING EXIT ABORT: {bot_id} hedge filled {_hedge_fills} before cancel — completing as arb')
-                    bot_log('PHANTOM_CEILING_ABORT_FILLED', bot_id, {'hedge_fills': _hedge_fills})
-                    return
-                if _hedge_fills > 0:
-                    _unhedged = _qty - _hedge_fills
-                    print(f'⚠ PHANTOM CEILING PARTIAL: {bot_id} hedge filled {_hedge_fills}/{_qty} before cancel — selling back {_unhedged} unhedged dogs')
-                    bot_log('PHANTOM_CEILING_PARTIAL', bot_id, {
-                        'hedge_fills': _hedge_fills, 'qty': _qty, 'unhedged': _unhedged,
-                    })
-                    bot['fav_fill_qty'] = _hedge_fills
-                    bot['quantity'] = _unhedged
-                print(f'🚫 PHANTOM CEILING EXIT: {bot_id} bid={current_fav_bid}¢ would make combined={combined}¢ > {WALK_CEILING}¢ — selling back')
-                bot_log('PHANTOM_CEILING_EXIT', bot_id, {
-                    'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                    'combined': combined, 'ceiling': WALK_CEILING,
-                    'hedge_fills': _hedge_fills,
-                })
-                _phantom_sell_back(bot_id, bot, dog_price, current_fav_price, 999, actions)
-                return
+            # Cap at ceiling for both same-market and cross-market — hold and wait for fill
+            new_fav_price = max_fav_hold
+            if new_fav_price == current_fav_price:
+                return  # already at ceiling, holding
+            # Fall through to amend at ceiling price
 
         # Amend fav order (shared lock with WS instant drop to prevent race)
         try:

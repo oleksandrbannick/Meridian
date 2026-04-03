@@ -2827,7 +2827,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         # Cap at ceiling
         dog_price = bot.get('dog_price') or bot.get('avg_fill_price') or 0
         if dog_price > 0:
-            max_fav = bot.get('fav_walk_ceiling', 100) - dog_price
+            max_fav = bot.get('fav_walk_ceiling', 98) - dog_price
             drop_target = min(drop_target, max_fav)
 
         if drop_target <= 0 or drop_target >= fav_price:
@@ -7651,7 +7651,7 @@ def create_anchor_bot():
             'anchor_depth':        anchor_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
-            'fav_walk_ceiling':    100,  # max combined cost — only sell back if > 100¢
+            'fav_walk_ceiling':    98,  # max combined cost — 98¢ = breakeven after fees
             'fav_last_walk_at':    None,
             'market_type':         _detect_market_type(ticker),
             'spread_line':         _extract_spread_line(ticker),
@@ -7868,7 +7868,7 @@ def create_ladder_bot():
             'rung_spacing': rung_spacing,
             'fav_shave': fav_shave,
             'fav_walk_count': 0,
-            'fav_walk_ceiling': 100,  # max combined cost — only sell back if > 100¢
+            'fav_walk_ceiling': 98,  # max combined cost — 98¢ = breakeven after fees
             'fav_last_walk_at': None,
             # Pre-calculated hedge prices + avg prices for every fill count (1, 2, 3 rungs)
             '_precalc_hedge_prices': _precalc_h,
@@ -9746,8 +9746,8 @@ def _handle_phantom(bot_id, bot, actions):
         _at_ceiling = _current_fav >= _max_fav  # at ceiling = can't go higher, counts as "at bid"
         _at_bid = _at_ceiling or (_current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True)
         _has_partial_fills = bot.get('fav_fill_qty', 0) > 0
-        # Pause hedge timeout when combined < 96¢ — trade is clearly profitable, be patient
-        if _live_bid > 0 and dog_price + _live_bid < 96:
+        # Pause hedge timeout when combined < ceiling — trade is profitable, be patient
+        if _live_bid > 0 and dog_price + _live_bid < WALK_CEILING:
             bot['fav_posted_at'] = now  # reset timer — profitable position
         if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {

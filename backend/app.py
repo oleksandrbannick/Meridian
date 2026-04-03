@@ -4847,18 +4847,19 @@ def _refresh_espn_cache():
                         # (e.g., NHL BOS=post shouldn't overwrite NBA BOS=in)
                         existing = team_info.get(abbr_upper)
                         if existing and existing.get('status') == 'in' and status != 'in':
-                            # Store under sport-qualified key instead
-                            team_info[f'{sport}:{abbr_upper}'] = new_entry
+                            pass  # Don't overwrite the bare key — live game takes priority
                         else:
                             team_info[abbr_upper] = new_entry
+                        # Always store under sport-qualified key so cross-sport lookups work
+                        # (e.g., NBA DET vs NHL DET — both need to be findable)
+                        team_info[f'{sport}:{abbr_upper}'] = new_entry
                         # Also store under Kalshi code if different
                         kalshi_code = _ESPN_TO_KALSHI.get(abbr_upper)
                         if kalshi_code:
                             _existing_k = team_info.get(kalshi_code)
-                            if _existing_k and _existing_k.get('status') == 'in' and status != 'in':
-                                team_info[f'{sport}:{kalshi_code}'] = new_entry
-                            else:
+                            if not (_existing_k and _existing_k.get('status') == 'in' and status != 'in'):
                                 team_info[kalshi_code] = new_entry
+                            team_info[f'{sport}:{kalshi_code}'] = new_entry
         except Exception:
             continue
     _espn_cache = {'data': team_info, 'ts': time.time()}
@@ -15124,7 +15125,7 @@ def list_bots():
             continue
         # Meridian bots use ticker_a/ticker_b, others use ticker
         _tickers = [bot.get('ticker', '')]
-        if bot.get('ticker_a'):
+        if bot.get('ticker_a') and bot.get('ticker_a') != bot.get('ticker'):
             _tickers.append(bot['ticker_a'])
         for ticker in _tickers:
             if not ticker:
@@ -15132,9 +15133,12 @@ def list_bots():
             parts = ticker.split('-')
             gk = parts[1] if len(parts) >= 2 else parts[0]
             if gk not in game_scores:
-                score_info = _get_game_score_for_ticker(ticker)
-                if score_info:
-                    game_scores[gk] = score_info
+                try:
+                    score_info = _get_game_score_for_ticker(ticker)
+                    if score_info:
+                        game_scores[gk] = score_info
+                except Exception as _gs_err:
+                    print(f'⚠ game_scores lookup failed for {ticker}: {_gs_err}')
     return jsonify({'bots': active_bots, 'game_scores': game_scores})
 
 

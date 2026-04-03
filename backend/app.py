@@ -6462,12 +6462,13 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 
-    # ── HARD TIMEOUT: sell anchor back if hedge hasn't filled after 180s ──
+    # ── HARD TIMEOUT: snap to bid or sell back, whichever is cheaper ──
     # No drift-based stop-loss — anchor bid dropping doesn't affect hedge fill price.
     # If hedge fills at target width, profit is guaranteed regardless of anchor bid.
-    # Just wait for fill or give up after 3 minutes.
+    # Timer varies by game phase: late game = shorter (prices converging fast).
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
-    _rung_timeout = 180  # seconds — strict time limit
+    _game_phase = bot.get('game_phase', 'live')
+    _rung_timeout = 120 if _game_phase == 'pregame' else 180  # shorter pregame (less volatile)
     _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
 
     # Update frontend display fields
@@ -6479,31 +6480,35 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
 
     if _rung_age >= _rung_timeout and anchor_filled_at:
-        # At timeout: uncap the hedge and snap to bid (maker, no fees).
-        # Only sell back if combined at bid > 100¢ (no profitable exit possible).
-        _max_hedge = 100 - anchor_price  # uncapped ceiling
+        # At timeout: compare snap (maker) vs sellback (taker) cost, pick cheaper.
         _bid_combined = anchor_price + hedge_bid if hedge_bid > 0 else 999
-        if _bid_combined <= 100 and hedge_bid > 0:
-            # Snap hedge to bid uncapped — maker fill, still profitable
-            _uncapped_snap = min(hedge_bid, _max_hedge)
+        _snap_cost = max(0, _bid_combined - 100)  # ¢ loss per contract from completing at bid
+        _sellback_cost = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else anchor_price  # ¢ loss from selling anchor back
+        # Snap is maker (low fees), sellback is taker (higher fees) — snap wins ties
+        if hedge_bid > 0 and _snap_cost <= _sellback_cost:
+            # Snap to bid — cheaper exit (or both profitable)
+            _max_hedge = 100 - anchor_price
+            _uncapped_snap = min(hedge_bid, max(1, _max_hedge + 5))  # allow up to 105¢ combined
             rung['_snap_reason'] = f'timeout_snap_{_uncapped_snap}c'
-            rung['_timeout_uncapped'] = True  # flag so normal snap uses uncapped ceiling too
-            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → uncapped snap to bid {_uncapped_snap}¢ (combined {anchor_price + _uncapped_snap}¢)')
+            rung['_timeout_uncapped'] = True
+            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → snap to bid {_uncapped_snap}¢ (combined {anchor_price + _uncapped_snap}¢, snap_cost={_snap_cost}¢ vs sellback_cost={_sellback_cost}¢)')
             bot_log('APEX_TIMEOUT_SNAP', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
                 'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
                 'snap_price': _uncapped_snap, 'combined': anchor_price + _uncapped_snap,
+                'snap_cost': _snap_cost, 'sellback_cost': _sellback_cost,
                 'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
             })
             _apex_snap_hedge(bot_id, bot, rung, rung_idx, _uncapped_snap)
         else:
-            # Combined > 100¢ at bid — can't complete profitably, sell back
+            # Sell back anchor — cheaper exit
             rung['_snap_reason'] = f'timeout_{int(_rung_age)}s'
-            print(f'⏰ APEX TIMEOUT SELLBACK: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, bid={hedge_bid}¢ combined={_bid_combined}¢ > 100¢ → selling back')
+            print(f'⏰ APEX TIMEOUT SELLBACK: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, sellback_cost={_sellback_cost}¢ vs snap_cost={_snap_cost}¢')
             bot_log('APEX_TIMEOUT', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
                 'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
                 'hedge_bid': hedge_bid, 'combined': _bid_combined,
+                'snap_cost': _snap_cost, 'sellback_cost': _sellback_cost,
                 'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
             })
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)

@@ -5897,7 +5897,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                             <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
-                            <span style="color:${secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff'};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(secsLeft/60)}:${String(Math.floor(secsLeft%60)).padStart(2,'0')}</span>
+                            <span style="color:${secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff'};font-weight:700;font-family:monospace;font-size:12px;">${Math.round(secsLeft)}s</span>
                         </div>
                     </div><div style="display:none;">`;
                 }

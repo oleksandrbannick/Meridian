@@ -7679,7 +7679,7 @@ def create_anchor_bot():
             'anchor_depth':        anchor_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
-            'fav_walk_ceiling':    98,  # max combined cost — 98¢ = breakeven after fees
+            'fav_walk_ceiling':    100,  # max combined cost — 100¢ = breakeven, avoid costly sellbacks
             'fav_last_walk_at':    None,
             'market_type':         _detect_market_type(ticker),
             'spread_line':         _extract_spread_line(ticker),
@@ -7896,7 +7896,7 @@ def create_ladder_bot():
             'rung_spacing': rung_spacing,
             'fav_shave': fav_shave,
             'fav_walk_count': 0,
-            'fav_walk_ceiling': 98,  # max combined cost — 98¢ = breakeven after fees
+            'fav_walk_ceiling': 100,  # max combined cost — 100¢ = breakeven, avoid costly sellbacks
             'fav_last_walk_at': None,
             # Pre-calculated hedge prices + avg prices for every fill count (1, 2, 3 rungs)
             '_precalc_hedge_prices': _precalc_h,

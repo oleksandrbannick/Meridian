@@ -9109,13 +9109,13 @@ def _handle_phantom(bot_id, bot, actions):
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
         timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
 
-        # Retreat check: if bid crept closer than depth floor, retreat immediately
+        # Retreat check: if bid crept within 1¢ of depth floor, retreat to restore buffer
         retreat_triggered = False
         if dog_filled == 0 and ws_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
             _dog_price = bot.get('dog_price', 0)
             _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
-            if 0 <= _depth_gap and _depth_gap < _anchor_depth:
+            if 0 <= _depth_gap and _depth_gap < _anchor_depth - 1:
                 retreat_triggered = True
 
         if gap_triggered or timer_triggered or retreat_triggered:
@@ -9819,9 +9819,11 @@ def _handle_phantom(bot_id, bot, actions):
             _live_fav_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) or _live_fav_bid
         _live_combined = dog_price + _live_fav_bid if _live_fav_bid > 0 else 999
         _best_combined = min(_posted_combined, _live_combined)
-        # Timer runs from dog fill (120s total). Sell only if timer expired AND unprofitable.
-        # If timer expired but combined ≤ 100¢, hold until it fills or goes unprofitable.
-        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills and _best_combined > 100:
+        # Timer runs from dog fill (120s total). Sell only if timer expired AND clearly unprofitable.
+        # At 101-105¢ combined, completing costs 1-5¢/contract — way cheaper than sellback.
+        # Hold until it fills, recovers, or combined exceeds 105¢.
+        _SELLBACK_THRESHOLD = 105
+        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills and _best_combined > _SELLBACK_THRESHOLD:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
                 'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

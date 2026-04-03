@@ -6461,7 +6461,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     # Detect early drift and cut for a small loss instead of waiting for a big one.
     # Grace period: wait 5s after anchor fill before checking (avoid blips).
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
-    _drift_grace = 5  # seconds before drift detection kicks in
+    _drift_grace = 30  # seconds before drift detection kicks in (low-liq markets jump ±5c as noise)
     _drift_age = (now - anchor_filled_at) if anchor_filled_at else 999  # unknown age = past grace
 
     # Update frontend display fields: bid drop distance, grace timer, threshold

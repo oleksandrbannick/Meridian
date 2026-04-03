@@ -9769,8 +9769,10 @@ def _handle_phantom(bot_id, bot, actions):
         _at_ceiling = _current_fav >= _max_fav  # at ceiling = can't go higher, counts as "at bid"
         _at_bid = _at_ceiling or (_current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True)
         _has_partial_fills = bot.get('fav_fill_qty', 0) > 0
-        # Pause hedge timeout when combined < ceiling — trade is profitable, be patient
-        if _live_bid > 0 and dog_price + _live_bid < WALK_CEILING:
+        # Pause hedge timeout when our posted combined < ceiling — trade is profitable, be patient
+        # Use actual posted fav price (not _live_bid which is wrong for cross-market bots)
+        _posted_combined = dog_price + _current_fav if _current_fav > 0 else 999
+        if _posted_combined < WALK_CEILING:
             bot['fav_posted_at'] = now  # reset timer — profitable position
         if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {

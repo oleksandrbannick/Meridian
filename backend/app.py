@@ -5049,7 +5049,7 @@ def _parse_ticker_teams(ticker: str):
     parts = ticker.split('-')
     if len(parts) < 2:
         return None, None
-    stripped = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
+    stripped = re.sub(r'^\d{2}[A-Z]{3}\d+', '', parts[1])  # strip date + optional game time digits
     if len(stripped) < 4:
         return None, None
     # Try classic 3+3 first
@@ -5066,7 +5066,7 @@ def _get_all_ticker_team_candidates(ticker: str):
     parts = ticker.split('-')
     if len(parts) < 2:
         return []
-    stripped = re.sub(r'^\d{2}[A-Z]{3}\d{2}', '', parts[1])
+    stripped = re.sub(r'^\d{2}[A-Z]{3}\d+', '', parts[1])  # strip date + optional game time digits
     if not stripped or len(stripped) < 4:
         return []
     candidates = []

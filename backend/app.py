@@ -9305,8 +9305,33 @@ def _handle_phantom(bot_id, bot, actions):
                 all_dog_ids.append(dog_order_id)
                 bot['_all_dog_order_ids'] = all_dog_ids
 
-                # Cancel old, place new
+                # Cancel old order, then verify it didn't fill during the cancel
                 _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
+                try:
+                    api_read_limiter.wait()
+                    _old_ord = kalshi_client.get_order(dog_order_id)
+                    _old_data = _old_ord.get('order', _old_ord) if isinstance(_old_ord, dict) else {}
+                    _old_fills = _parse_fill_count(_old_data)
+                    if _old_fills > 0:
+                        # Old order filled during cancel race — don't repost, let monitor handle the fill
+                        bot['dog_fill_qty'] = _old_fills
+                        if dog_side == 'yes':
+                            bot['yes_fill_qty'] = _old_fills
+                        else:
+                            bot['no_fill_qty'] = _old_fills
+                        actual_dog_price = get_actual_fill_price(dog_order_id, dog_side) or bot['dog_price']
+                        bot['dog_price'] = actual_dog_price
+                        bot['status'] = 'dog_filled'
+                        bot['dog_filled_at'] = now
+                        bot['_hedge_fired'] = False
+                        print(f'⚠ REPOST RACE: {bot_id} old order filled {_old_fills}x during cancel — switching to dog_filled')
+                        bot_log('PHANTOM_REPOST_RACE_FILL', bot_id, {
+                            'old_order': dog_order_id[:12], 'fills': _old_fills, 'dog_price': actual_dog_price,
+                        })
+                        save_state()
+                        return
+                except Exception as _rc_err:
+                    print(f'⚠ REPOST RACE CHECK FAILED: {bot_id}: {_rc_err}')
 
                 new_resp, actual_new_price = create_order_maker(
                     ticker=ticker, side=dog_side, action='buy',

@@ -18076,9 +18076,14 @@ def get_active_positions():
                 # Cross-market: fav position is on hedge_ticker, not ticker
                 _fav_ticker = b.get('hedge_ticker', t) or t
                 _is_same_market = _fav_ticker == t
-                # Include accumulated positions from previous cross-market runs (separate per side)
-                _cross_settled_dog = _si(b.get('_cross_settled_qty_dog', b.get('_cross_settled_qty', 0)))
-                _cross_settled_fav = _si(b.get('_cross_settled_qty_fav', b.get('_cross_settled_qty', 0)))
+                # Include accumulated positions from previous cross-market runs ONLY when
+                # the bot is in awaiting_settlement (actively tracking them for settlement).
+                # In other statuses (e.g. dog_anchor_posted), these are stale counters — the bot
+                # isn't watching those positions, so don't claim it's managing them.
+                _bst = b.get('status', '')
+                _count_cross = _bst == 'awaiting_settlement'
+                _cross_settled_dog = _si(b.get('_cross_settled_qty_dog', b.get('_cross_settled_qty', 0))) if _count_cross else 0
+                _cross_settled_fav = _si(b.get('_cross_settled_qty_fav', b.get('_cross_settled_qty', 0))) if _count_cross else 0
                 # Same-market: Kalshi settles matching fills instantly - use NET only
                 if _is_same_market and dog_side and fav_side and dog_side != fav_side:
                     net_dog = max(0, dog_fills - fav_qty)

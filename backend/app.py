@@ -17949,6 +17949,7 @@ def get_active_positions():
             # awaiting settlement on Kalshi and shouldn't be flagged as orphans
             if _bstatus in ('completed', 'stopped', 'cancelled'):
                 _bcat = b.get('bot_category', '')
+                _btype = b.get('type', '')
                 _has_net_fills = False
                 if _bcat in ('anchor_dog', 'anchor_ladder'):
                     _yes_f = _si(b.get('yes_fill_qty', 0))
@@ -17960,6 +17961,9 @@ def get_active_positions():
                     _hf_yes = sum(_si(r.get('hedge_fill_qty', 0)) for r in b.get('rungs', []) if r.get('anchor_side') == 'no')
                     _hf_no = sum(_si(r.get('hedge_fill_qty', 0)) for r in b.get('rungs', []) if r.get('anchor_side') == 'yes')
                     _has_net_fills = (_yes_f + _hf_yes) != (_no_f + _hf_no)
+                elif _btype == 'middle':
+                    # Meridian: any filled leg = position on Kalshi
+                    _has_net_fills = b.get('leg_a_filled') or b.get('leg_b_filled')
                 if not _has_net_fills:
                     continue  # balanced fills → net position is 0, skip
             t = b.get('ticker', '')

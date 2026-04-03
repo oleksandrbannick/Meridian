@@ -3232,6 +3232,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             other_side = 'no' if matched_side == 'yes' else 'yes'
             other_fill = rung.get(f'{other_side}_fill_qty', 0)
 
+            # Track when partial fills start (for monitor grace-period promotion)
+            if rung[fill_key] > 0 and not rung.get('_partial_fill_at'):
+                rung['_partial_fill_at'] = time.time()
+                rung['_partial_fill_side'] = matched_side
+
             print(f'△ WS APEX FILL: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} +{count} → {rung[fill_key]}/{qty_per}')
             bot_log('APEX_WS_RUNG_FILL', bot_id, {
                 'rung_idx': matched_rung, 'side': matched_side, 'count': count,
@@ -3247,8 +3252,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
                 print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
                 _apex_record_rung_pnl(bot_id, matched_rung)
-            elif rung[fill_key] >= qty_per and rung.get('status', 'posted') == 'posted' and other_fill == 0:
-                # Anchor fill: one side fully filled, other untouched → spawn per-rung hedge
+            elif rung[fill_key] > 0 and rung.get('status', 'posted') == 'posted' and other_fill == 0:
+                # Anchor fill (any amount): start timer, track existing hedge order
                 rung['anchor_side'] = matched_side
                 rung['anchor_fill_at'] = time.time()
                 rung['status'] = 'anchor_filled'
@@ -8919,6 +8924,43 @@ def _handle_phantom(bot_id, bot, actions):
     except Exception:
         pass
 
+    # ── Smart-stopped cleanup: cancel unfilled orders and complete ──
+    if bot.get('_smart_stopped') and status in ('dog_anchor_posted', 'waiting_repeat'):
+        _cancel_oid = bot.get('dog_order_id')
+        if _cancel_oid:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(_cancel_oid)
+            except Exception:
+                pass
+        _phantom_set_final_status(bot, bot_id)
+        bot_log('PHANTOM_SMART_STOP_CLEANUP', bot_id, {'prev_status': status, 'cancelled_order': bool(_cancel_oid)})
+        print(f'🧹 SMART CLEANUP: {bot_id} smart-stopped in {status} → {bot["status"]}')
+        save_state()
+        return
+
+    # ── Settlement cleanup: cancel unfilled orders if market settled ──
+    if status in ('dog_anchor_posted', 'waiting_repeat') and now - bot.get('_last_settle_check_global', 0) > 60:
+        bot['_last_settle_check_global'] = now
+        try:
+            api_read_limiter.wait()
+            _mkt = kalshi_client.get_market(ticker)
+            if isinstance(_mkt, dict) and _mkt.get('status') in ('settled', 'finalized', 'closed'):
+                _cancel_oid = bot.get('dog_order_id')
+                if _cancel_oid:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(_cancel_oid)
+                    except Exception:
+                        pass
+                _phantom_set_final_status(bot, bot_id)
+                bot_log('PHANTOM_SETTLED_CLEANUP', bot_id, {'prev_status': status, 'mkt_status': _mkt.get('status')})
+                print(f'🧹 SETTLED CLEANUP: {bot_id} market {_mkt.get("status")} → {bot["status"]}')
+                save_state()
+                return
+        except Exception:
+            pass
+
     # ── STATE: dog_anchor_posted — waiting for dog to fill ────────
     if status == 'dog_anchor_posted':
         dog_order_id = bot.get('dog_order_id')
@@ -9769,10 +9811,10 @@ def _handle_phantom(bot_id, bot, actions):
         _at_ceiling = _current_fav >= _max_fav  # at ceiling = can't go higher, counts as "at bid"
         _at_bid = _at_ceiling or (_current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True)
         _has_partial_fills = bot.get('fav_fill_qty', 0) > 0
-        # Pause hedge timeout when our posted combined < ceiling — trade is profitable, be patient
+        # Pause hedge timeout when our posted combined <= ceiling — trade is profitable, be patient
         # Use actual posted fav price (not _live_bid which is wrong for cross-market bots)
         _posted_combined = dog_price + _current_fav if _current_fav > 0 else 999
-        if _posted_combined < WALK_CEILING:
+        if _posted_combined <= WALK_CEILING:
             bot['fav_posted_at'] = now  # reset timer — profitable position
         if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {

@@ -5460,7 +5460,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         );
         if (!_midRepeat) {
         const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
-        const _runs = (bot.repeats_done || 0) + 1;
+        const _runs = Math.max(1, bot.repeats_done || 0);
         const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
         const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
         const _crossQty = bot._cross_settled_qty ?? 0;
@@ -5473,8 +5473,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             else _crossQtyFav = Math.max(0, _crossQtyFav - bot._smart_exit_sold.qty);
         }
         const _isSmart = bot._smart_stopped;
-        const _col = _isAwaiting ? '#818cf8' : _isSmart ? '#00e5ff' : '#00ff88';
-        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
+        const _isSettled = _isSmart && bot._smart_stop_reason === 'final';
+        const _col = _isAwaiting ? '#818cf8' : _isSettled ? '#ffaa00' : _isSmart ? '#00e5ff' : '#00ff88';
+        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSettled ? '🏁 MARKET SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
         const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
         const dogSide = bot.dog_side || 'no';
         const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
@@ -5738,7 +5739,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
                 ${dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
                 ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
-                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_stop_reason === 'manual' ? 'stopped' : '2L'})` : bot._smart_stop_pending ? `Stopping after this run · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
+                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_stop_reason === 'manual' ? 'stopped' : `${bot._smart_losses || bot.consecutive_losses || 0}L`})` : bot._smart_stop_pending ? `Stopping after this run · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
@@ -5837,7 +5838,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <span style="color:#ffaa00;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
             <span style="color:#8892a6;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
-            ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (2L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
+            ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             <span style="color:#555;">Hedge tgt: ≤${favCeiling}¢ → snap bid</span>
             ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const lat = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
             ${(() => {

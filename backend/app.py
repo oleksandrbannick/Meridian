@@ -9109,14 +9109,13 @@ def _handle_phantom(bot_id, bot, actions):
         gap_triggered = gap >= gap_thresh and since_last_repost >= cooldown_s and dog_filled == 0
         timer_triggered = age_min >= DOG_REPOST_MINUTES and dog_filled == 0
 
-        # Retreat check: if bid crept within 2¢ of dog order, retreat to restore depth
+        # Retreat check: if bid crept closer than depth floor, retreat immediately
         retreat_triggered = False
         if dog_filled == 0 and ws_dog_bid > 0 and since_last_repost >= cooldown_s:
             _anchor_depth = bot.get('anchor_depth', 5)
             _dog_price = bot.get('dog_price', 0)
             _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
-            _retreat_threshold = 2  # retreat if bid crept 2¢+ toward our order
-            if 0 <= _depth_gap and _depth_gap <= (_anchor_depth - _retreat_threshold):
+            if 0 <= _depth_gap and _depth_gap < _anchor_depth:
                 retreat_triggered = True
 
         if gap_triggered or timer_triggered or retreat_triggered:
@@ -9268,8 +9267,8 @@ def _handle_phantom(bot_id, bot, actions):
                 if _price_delta <= 1 and not retreat_triggered:
                     bot['posted_at'] = now
                     return
-                if retreat_triggered and _price_delta < 2:
-                    return  # retreat jitter filter: don't waste API calls on <2¢ moves
+                if retreat_triggered and _price_delta < 1:
+                    return  # retreat jitter filter: don't waste API calls on <1¢ moves
 
                 # Fav liquidity guard: skip repost if fav side is dry (hedge won't fill)
                 _is_cross = bot.get('cross_market') and hedge_ticker and hedge_ticker != ticker

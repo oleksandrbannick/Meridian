@@ -6474,30 +6474,32 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
 
     if _rung_age >= _rung_timeout and anchor_filled_at:
-        # At timeout: try to complete the arb by snapping hedge to ask (taker).
-        # Only sell back if completing would cost > 100¢ (guaranteed loss).
-        _taker_combined = anchor_price + hedge_ask if hedge_ask > 0 else 999
-        if _taker_combined <= 100 and hedge_ask > 0:
-            # Profitable or breakeven at ask — snap to ask for instant fill
-            rung['_snap_reason'] = f'timeout_snap_ask_{hedge_ask}c'
-            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → snapping hedge to ask {hedge_ask}¢ (combined {_taker_combined}¢)')
+        # At timeout: uncap the hedge and snap to bid (maker, no fees).
+        # Only sell back if combined at bid > 100¢ (no profitable exit possible).
+        _max_hedge = 100 - anchor_price  # uncapped ceiling
+        _bid_combined = anchor_price + hedge_bid if hedge_bid > 0 else 999
+        if _bid_combined <= 100 and hedge_bid > 0:
+            # Snap hedge to bid uncapped — maker fill, still profitable
+            _uncapped_snap = min(hedge_bid, _max_hedge)
+            rung['_snap_reason'] = f'timeout_snap_{_uncapped_snap}c'
+            rung['_timeout_uncapped'] = True  # flag so normal snap uses uncapped ceiling too
+            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → uncapped snap to bid {_uncapped_snap}¢ (combined {anchor_price + _uncapped_snap}¢)')
             bot_log('APEX_TIMEOUT_SNAP', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
-                'anchor_price': anchor_price, 'hedge_ask': hedge_ask,
-                'combined': _taker_combined, 'age_s': round(_rung_age, 1),
-                'timeout_s': _rung_timeout,
+                'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
+                'snap_price': _uncapped_snap, 'combined': anchor_price + _uncapped_snap,
+                'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
             })
-            _apex_snap_hedge(bot_id, bot, rung, rung_idx, hedge_ask)
+            _apex_snap_hedge(bot_id, bot, rung, rung_idx, _uncapped_snap)
         else:
-            # Combined > 100¢ at ask — can't complete profitably, sell back
+            # Combined > 100¢ at bid — can't complete profitably, sell back
             rung['_snap_reason'] = f'timeout_{int(_rung_age)}s'
-            print(f'⏰ APEX TIMEOUT SELLBACK: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, ask={hedge_ask}¢ combined={_taker_combined}¢ > 100¢ → selling back')
+            print(f'⏰ APEX TIMEOUT SELLBACK: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, bid={hedge_bid}¢ combined={_bid_combined}¢ > 100¢ → selling back')
             bot_log('APEX_TIMEOUT', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
                 'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
-                'hedge_ask': hedge_ask, 'hedge_bid': hedge_bid,
-                'combined': _taker_combined, 'age_s': round(_rung_age, 1),
-                'timeout_s': _rung_timeout,
+                'hedge_bid': hedge_bid, 'combined': _bid_combined,
+                'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
             })
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
         return
@@ -6505,7 +6507,11 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──
     # If bid drops below target → follow it (better fill price)
     # If bid is above target → stay at target (maintain profitable width)
-    target_hedge = rung.get('target_hedge_price', 0) or max(1, 100 - anchor_price - width)
+    # After timeout: uncapped — allow up to 100-anchor to complete the arb
+    if rung.get('_timeout_uncapped'):
+        target_hedge = max(1, 100 - anchor_price)  # uncapped: any profitable fill
+    else:
+        target_hedge = rung.get('target_hedge_price', 0) or max(1, 100 - anchor_price - width)
     spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
     bid_price = (hedge_bid + 1) if spread > 1 else hedge_bid
     snap_price = max(1, min(bid_price, target_hedge))

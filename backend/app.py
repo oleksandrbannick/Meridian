@@ -6542,6 +6542,11 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
     if remaining <= 0:
         return
 
+    # Skip if already at this price — avoid AMEND_ORDER_NO_OP loops
+    current_price = rung.get('hedge_price', 0)
+    if current_price == new_price and hedge_oid:
+        return
+
     if hedge_oid:
         # Amend existing order to new price (like Phantom does)
         # NOTE: Kalshi amend count = new TOTAL (not remaining). For partial fills,

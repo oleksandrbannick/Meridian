@@ -6386,9 +6386,31 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                     rung['hedge_order_id'] = None
                     hedge_oid = None
 
-    # Get live market prices
+    # Get live market prices — WS first, orderbook fallback if WS is empty
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
+    anchor_bid_live = bot.get(f'live_{anchor_side}_bid', 0)
+    if hedge_bid <= 0 or anchor_bid_live <= 0:
+        # WS prices missing — fetch from orderbook so stop-loss can function
+        if now - rung.get('_last_ob_fallback', 0) > 10:  # throttle to every 10s
+            rung['_last_ob_fallback'] = now
+            try:
+                api_read_limiter.wait()
+                _ob = kalshi_client.get_market_orderbook(bot['ticker'])
+                _hb = _best_bid(_ob, hedge_side)
+                _ha = _best_ask(_ob, hedge_side)
+                _ab = _best_bid(_ob, anchor_side)
+                if _hb > 0:
+                    hedge_bid = _hb
+                    bot[f'live_{hedge_side}_bid'] = _hb
+                if _ha > 0:
+                    hedge_ask = _ha
+                    bot[f'live_{hedge_side}_ask'] = _ha
+                if _ab > 0:
+                    anchor_bid_live = _ab
+                    bot[f'live_{anchor_side}_bid'] = _ab
+            except Exception:
+                pass
     current_hedge_price = rung.get('hedge_price', 0)
 
     # Hedge order lost? Repost at bid

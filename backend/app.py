@@ -9234,6 +9234,9 @@ def _handle_phantom(bot_id, bot, actions):
                 spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
                 anchor_base = current_dog_ask if spread > 2 else current_dog_bid
                 new_dog_price = max(1, anchor_base - anchor_depth)
+                # Never post at or above bid — maintain depth floor
+                if current_dog_bid > 0 and new_dog_price >= current_dog_bid:
+                    new_dog_price = max(1, current_dog_bid - anchor_depth)
 
                 # Price ceiling: don't repost UP if new dog price > 40¢ (coin-flip territory)
                 if new_dog_price > 40 and new_dog_price > bot.get('dog_price', 0) and not retreat_triggered:
@@ -10152,6 +10155,9 @@ def _handle_phantom(bot_id, bot, actions):
             spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
             anchor_base = current_dog_ask if spread > 2 else current_dog_bid
             new_dog_price = max(1, anchor_base - anchor_depth)
+            # Never post at or above bid — maintain depth floor from the start
+            if current_dog_bid > 0 and new_dog_price >= current_dog_bid:
+                new_dog_price = max(1, current_dog_bid - anchor_depth)
 
             # Drift guard: stop if dog is dead, price too low, or price too high
             _drift_stop = False

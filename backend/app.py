@@ -5317,14 +5317,9 @@ def _is_game_ending(ticker: str) -> bool:
         if status == 'in':
             r = rule[1]
             period = score_info.get('period', 0)
-            # Tennis: no clock — check if one player has match-winning sets
+            # Tennis: ESPN score fields are unreliable (may be games not sets).
+            # Don't auto-cancel based on score — only trust ESPN 'post' status.
             if r.get('tennis'):
-                home_sets = score_info.get('home_score', 0)
-                away_sets = score_info.get('away_score', 0)
-                sets_to_win = 2  # best of 3 (ATP main + WTA)
-                # One player has already won enough sets
-                if home_sets >= sets_to_win or away_sets >= sets_to_win:
-                    return True
                 return False
             # Clock-based sports: check final 60 seconds
             clock = score_info.get('clock', '')

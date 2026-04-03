@@ -8950,7 +8950,7 @@ def _handle_phantom(bot_id, bot, actions):
         try:
             api_read_limiter.wait()
             _mkt = kalshi_client.get_market(ticker)
-            if isinstance(_mkt, dict) and _mkt.get('status') in ('settled', 'finalized', 'closed'):
+            if isinstance(_mkt, dict) and _mkt.get('status') in ('settled', 'finalized'):
                 _cancel_oid = bot.get('dog_order_id')
                 if _cancel_oid:
                     try:
@@ -9380,7 +9380,7 @@ def _handle_phantom(bot_id, bot, actions):
             mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
             mkt_status = mkt.get('status', '').lower()
             mkt_result = mkt.get('result', '').lower()
-            if mkt_status in ('settled', 'finalized', 'closed'):
+            if mkt_status in ('settled', 'finalized'):
                 dog_price = bot['dog_price']
                 # Dog side won → position pays 100¢
                 dog_won = (dog_side == 'yes' and mkt_result == 'yes') or \
@@ -9764,7 +9764,7 @@ def _handle_phantom(bot_id, bot, actions):
                 mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
                 mkt_status = mkt.get('status', '').lower()
                 mkt_result = mkt.get('result', '').lower()
-                if mkt_status in ('settled', 'finalized', 'closed'):
+                if mkt_status in ('settled', 'finalized'):
                     # Cancel unfilled fav order
                     try:
                         api_rate_limiter.wait()
@@ -10063,7 +10063,7 @@ def _handle_phantom(bot_id, bot, actions):
                 _wr_mkt = kalshi_client.get_market(ticker)
                 _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
                 _wr_status = _wr_m.get('status', '').lower()
-                if _wr_status in ('finalized', 'settled', 'closed'):
+                if _wr_status in ('finalized', 'settled'):
                     print(f'🏁 PHANTOM SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
                     bot_log('PHANTOM_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
                     _phantom_set_final_status(bot, bot_id)
@@ -10527,7 +10527,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 _wr_mkt = kalshi_client.get_market(ticker)
                 _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
                 _wr_status = _wr_m.get('status', '').lower()
-                if _wr_status in ('finalized', 'settled', 'closed'):
+                if _wr_status in ('finalized', 'settled'):
                     print(f'🏁 PHANTOM LADDER SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
                     bot_log('PHANTOM_LADDER_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
                     _phantom_set_final_status(bot, bot_id)
@@ -11721,7 +11721,7 @@ def _handle_apex(bot_id, bot, actions):
                 _wr_mkt = kalshi_client.get_market(ticker)
                 _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
                 _wr_status = _wr_m.get('status', '').lower()
-                if _wr_status in ('finalized', 'settled', 'closed'):
+                if _wr_status in ('finalized', 'settled'):
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     print(f'🏁 APEX SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')

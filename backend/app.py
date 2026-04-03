@@ -3466,11 +3466,21 @@ def _execute_phantom_hedge(bot_id):
         print(f'❌ WS PHANTOM HEDGE {bot_id}: {e}')
         import traceback
         traceback.print_exc()
-        bot_log('PHANTOM_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:300], 'path': 'ws_fast'}, level='ERROR')
-        _audit('PHANTOM_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:200]})
+        try:
+            bot_log('PHANTOM_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:300], 'path': 'ws_fast'}, level='ERROR')
+            _audit('PHANTOM_WS_HEDGE_ERROR', bot_id, {'error': str(e)[:200]})
+        except Exception:
+            pass
         bot = active_bots.get(bot_id)
         if bot:
-            bot['status'] = 'dog_filled'  # fallback to monitor
+            # Only reset to dog_filled if the order was NOT already placed.
+            # If fav_order_id exists, the hedge is live on Kalshi — don't lose track of it.
+            if bot.get('fav_order_id'):
+                bot['status'] = 'fav_hedge_posted'
+                if not bot.get('fav_posted_at'):
+                    bot['fav_posted_at'] = time.time()
+            else:
+                bot['status'] = 'dog_filled'  # fallback to monitor retry
 
 
 def _execute_phantom_ladder_hedge(bot_id):
@@ -9340,8 +9350,16 @@ def _handle_phantom(bot_id, bot, actions):
         # Re-check status — if it changed from dog_filled, the WS handler already handled it.
         if bot.get('status') != 'dog_filled':
             return
-        # Guard: WS handler may have already posted the fav hedge
-        if bot.get('_hedge_fired') and bot.get('fav_order_id'):
+        # Guard: WS handler already fired the hedge — don't post a duplicate.
+        # If fav_order_id is set, transition to fav_hedge_posted so snap-bid can run.
+        # If fav_order_id is not set yet, hedge worker is mid-flight — just wait.
+        if bot.get('_hedge_fired'):
+            if bot.get('fav_order_id'):
+                bot['status'] = 'fav_hedge_posted'
+                if not bot.get('fav_posted_at'):
+                    bot['fav_posted_at'] = now
+                print(f'🔧 PHANTOM STATUS FIX: {bot_id} _hedge_fired but stuck in dog_filled → fav_hedge_posted')
+                save_state()
             return
 
         try:
@@ -15104,13 +15122,19 @@ def list_bots():
     for bid, bot in list(active_bots.items()):
         if bot.get('status') in ('completed', 'stopped'):
             continue
-        ticker = bot.get('ticker', '')
-        parts = ticker.split('-')
-        gk = parts[1] if len(parts) >= 2 else parts[0]
-        if gk not in game_scores:
-            score_info = _get_game_score_for_ticker(ticker)
-            if score_info:
-                game_scores[gk] = score_info
+        # Meridian bots use ticker_a/ticker_b, others use ticker
+        _tickers = [bot.get('ticker', '')]
+        if bot.get('ticker_a'):
+            _tickers.append(bot['ticker_a'])
+        for ticker in _tickers:
+            if not ticker:
+                continue
+            parts = ticker.split('-')
+            gk = parts[1] if len(parts) >= 2 else parts[0]
+            if gk not in game_scores:
+                score_info = _get_game_score_for_ticker(ticker)
+                if score_info:
+                    game_scores[gk] = score_info
     return jsonify({'bots': active_bots, 'game_scores': game_scores})
 
 

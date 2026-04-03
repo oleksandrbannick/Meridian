@@ -9813,9 +9813,16 @@ def _handle_phantom(bot_id, bot, actions):
         # Pause hedge timeout when our posted combined <= ceiling — trade is profitable, be patient
         # Use actual posted fav price (not _live_bid which is wrong for cross-market bots)
         _posted_combined = dog_price + _current_fav if _current_fav > 0 else 999
-        if _posted_combined <= WALK_CEILING:
+        # Also check live bid for the actual current combined (fav may not have walked yet)
+        _live_fav_bid = bot.get(f'live_{fav_side}_bid', 0)
+        if hedge_ticker != ticker:
+            _live_fav_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) or _live_fav_bid
+        _live_combined = dog_price + _live_fav_bid if _live_fav_bid > 0 else 999
+        _best_combined = min(_posted_combined, _live_combined)
+        if _best_combined <= WALK_CEILING or _best_combined <= 100:
             bot['fav_posted_at'] = now  # reset timer — profitable position
-        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills:
+            wait_s = 0  # prevent timeout on same tick as timer reset
+        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills and _best_combined > 100:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
                 'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

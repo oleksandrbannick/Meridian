@@ -6210,11 +6210,9 @@ def _apex_snap_timer(ticker):
     return 60
 
 def _apex_stop_loss_threshold(width, anchor_price=0):
-    """Delta-adjusted stop-loss: width × multiplier based on anchor price zone.
-    Near 50¢ (high volatility): 2× width. Near extremes (stickier): 1.5× width.
-    Returns max cents over breakeven (100¢) before taker sellback fires."""
-    multiplier = 2.0 if anchor_price >= 35 else 1.5
-    return max(4, int(width * multiplier))  # floor of 4¢ to avoid noise exits
+    """Drift-based stop-loss: how many cents the anchor bid can drop before quick cut.
+    Small threshold = cut early with tiny loss instead of big late loss."""
+    return 5  # sell back if anchor bid dropped 5¢+ from entry
 
 
 def _apex_post_rung_hedge(bot_id, rung_idx):
@@ -6437,20 +6435,28 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 
-    # ── DELTA-ADJUSTED STOP-LOSS: combined > 100 + threshold → taker exit ──
-    if hedge_bid > 0 and anchor_price > 0:
-        _sl_cents = _apex_stop_loss_threshold(width, anchor_price)
-        _combined = anchor_price + hedge_bid
-        if _combined > 100 + _sl_cents:
-            rung['_snap_reason'] = f'stop_loss_{_combined}c>{100 + _sl_cents}c'
-            print(f'🛑 APEX STOP-LOSS: {bot_id} rung#{rung_idx} ({width}c) combined={_combined}c > {100 + _sl_cents}c → taker exit')
-            bot_log('APEX_STOP_LOSS', bot_id, {
-                'rung_idx': rung_idx, 'width': width, 'combined': _combined,
-                'threshold': 100 + _sl_cents, 'anchor_price': anchor_price,
-                'hedge_bid': hedge_bid, 'multiplier': 2.0 if anchor_price >= 35 else 1.5,
-            })
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined, _sl_cents)
-            return
+    # ── DRIFT-BASED QUICK CUT: anchor bid dropped > threshold from entry → maker exit ──
+    # Detect early drift and cut for a small loss instead of waiting for a big one.
+    # Grace period: wait 5s after anchor fill before checking (avoid blips).
+    anchor_filled_at = rung.get('anchor_filled_at') or rung.get('filled_at') or 0
+    _drift_grace = 5  # seconds before drift detection kicks in
+    if hedge_bid > 0 and anchor_price > 0 and anchor_filled_at and (now - anchor_filled_at) > _drift_grace:
+        anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
+        if anchor_bid > 0:
+            _drop = anchor_price - anchor_bid
+            _max_drop = _apex_stop_loss_threshold(width, anchor_price)
+            if _drop >= _max_drop:
+                rung['_snap_reason'] = f'drift_cut_{anchor_bid}c_drop{_drop}c'
+                print(f'🛑 APEX DRIFT CUT: {bot_id} rung#{rung_idx} ({width}c) anchor {anchor_price}c→bid {anchor_bid}c (drop {_drop}c≥{_max_drop}c) → maker exit')
+                bot_log('APEX_STOP_LOSS', bot_id, {
+                    'rung_idx': rung_idx, 'width': width,
+                    'anchor_price': anchor_price, 'anchor_bid': anchor_bid,
+                    'drop': _drop, 'max_drop': _max_drop,
+                    'hedge_bid': hedge_bid, 'combined': anchor_price + hedge_bid,
+                    'type': 'drift_cut',
+                })
+                _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, _max_drop)
+                return
 
     # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──
     # If bid drops below target → follow it (better fill price)
@@ -6628,9 +6634,47 @@ def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, st
         save_state()
         return
 
-    # 3. Sell anchor position back at market (unhedged portion)
-    sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
-                                   reason=f'apex_stop_{bot_id}_r{rung_idx}')
+    # 3. Sell anchor position back — maker first (bid+1), taker fallback after 3s
+    anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
+    sold = False
+    sell_info = None
+    if anchor_bid > 0:
+        maker_price = anchor_bid + 1
+        try:
+            _maker_resp, _maker_price = create_order_maker(
+                ticker=ticker, side=anchor_side, action='sell',
+                count=sell_qty, price=maker_price, priority=True
+            )
+            _maker_oid = _maker_resp.get('order', {}).get('order_id', '')
+            if _maker_oid:
+                # Wait up to 3s for maker fill
+                _wait_end = time.time() + 3
+                while time.time() < _wait_end:
+                    time.sleep(0.5)
+                    try:
+                        api_read_limiter.wait()
+                        _mr = kalshi_client.get_order(_maker_oid)
+                        _mo = _mr.get('order', _mr) if isinstance(_mr, dict) else {}
+                        _mf = _parse_fill_count(_mo)
+                        if _mf >= sell_qty:
+                            sold = True
+                            sell_info = {'price': _maker_price, 'avg_price': _maker_price}
+                            print(f'  ✅ MAKER SELLBACK: {bot_id} rung#{rung_idx} filled {_mf}x @{_maker_price}c')
+                            break
+                    except Exception:
+                        pass
+                if not sold:
+                    # Cancel maker, fall through to taker
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(_maker_oid)
+                    except Exception:
+                        pass
+        except Exception as _me:
+            print(f'  ⚠ Maker sellback failed: {_me}')
+    if not sold:
+        sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
+                                       reason=f'apex_stop_{bot_id}_r{rung_idx}')
 
     if sold:
         sell_price = 0

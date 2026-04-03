@@ -6457,36 +6457,33 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 
-    # ── DRIFT-BASED QUICK CUT: anchor bid dropped > threshold from entry → maker exit ──
-    # Detect early drift and cut for a small loss instead of waiting for a big one.
-    # Grace period: wait 5s after anchor fill before checking (avoid blips).
+    # ── HARD TIMEOUT: sell anchor back if hedge hasn't filled after 180s ──
+    # No drift-based stop-loss — anchor bid dropping doesn't affect hedge fill price.
+    # If hedge fills at target width, profit is guaranteed regardless of anchor bid.
+    # Just wait for fill or give up after 3 minutes.
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
-    _drift_grace = 30  # seconds before drift detection kicks in (low-liq markets jump ±5c as noise)
-    _drift_age = (now - anchor_filled_at) if anchor_filled_at else 999  # unknown age = past grace
+    _rung_timeout = 180  # seconds — strict time limit
+    _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
 
-    # Update frontend display fields: bid drop distance, grace timer, threshold
+    # Update frontend display fields
     anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)
     _drop_now = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else 0
     rung['_midpoint_dist'] = _drop_now
-    rung['_snap_timer'] = _drift_grace
+    rung['_snap_timer'] = _rung_timeout
     rung['_drift_started_at'] = anchor_filled_at if anchor_filled_at else None
-    rung['_stop_loss_threshold'] = _apex_stop_loss_threshold(width, anchor_price)
+    rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
 
-    if hedge_bid > 0 and anchor_price > 0 and _drift_age > _drift_grace:
-        if anchor_bid_now > 0:
-            _max_drop = _apex_stop_loss_threshold(width, anchor_price)
-            if _drop_now >= _max_drop:
-                rung['_snap_reason'] = f'drift_cut_{anchor_bid_now}c_drop{_drop_now}c'
-                print(f'🛑 APEX DRIFT CUT: {bot_id} rung#{rung_idx} ({width}c) anchor {anchor_price}c→bid {anchor_bid_now}c (drop {_drop_now}c≥{_max_drop}c) → maker exit')
-                bot_log('APEX_STOP_LOSS', bot_id, {
-                    'rung_idx': rung_idx, 'width': width,
-                    'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
-                    'drop': _drop_now, 'max_drop': _max_drop,
-                    'hedge_bid': hedge_bid, 'combined': anchor_price + hedge_bid,
-                    'type': 'drift_cut',
-                })
-                _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, _max_drop)
-                return
+    if _rung_age >= _rung_timeout and anchor_filled_at:
+        rung['_snap_reason'] = f'timeout_{int(_rung_age)}s'
+        print(f'⏰ APEX TIMEOUT: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s elapsed, hedge unfilled → selling back')
+        bot_log('APEX_TIMEOUT', bot_id, {
+            'rung_idx': rung_idx, 'width': width,
+            'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
+            'hedge_bid': hedge_bid, 'age_s': round(_rung_age, 1),
+            'timeout_s': _rung_timeout,
+        })
+        _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
+        return
 
     # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──
     # If bid drops below target → follow it (better fill price)
@@ -9738,17 +9735,19 @@ def _handle_phantom(bot_id, bot, actions):
 
         # ── Fav Bid-Follow System ──
         # Snap to bid every cycle. Hold at 100. Timeout sells back.
-        WALK_CEILING = bot.get('fav_walk_ceiling', 100)
+        WALK_CEILING = bot.get('fav_walk_ceiling', 98)
         dog_price = bot['dog_price']
 
         # Check absolute timeout — give up after hedge_timeout_s total
         # But ONLY if hedge is already at or near the bid (snap first, then timeout)
         _current_fav = bot.get('fav_price', 0)
         _live_bid = bot.get(f'live_{fav_side}_bid', 0)
-        _at_bid = _current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True
+        _max_fav = bot.get('fav_walk_ceiling', 98) - dog_price
+        _at_ceiling = _current_fav >= _max_fav  # at ceiling = can't go higher, counts as "at bid"
+        _at_bid = _at_ceiling or (_current_fav >= _live_bid - 1 if _live_bid > 0 and _current_fav > 0 else True)
         _has_partial_fills = bot.get('fav_fill_qty', 0) > 0
-        # Pause hedge timeout when combined < 98¢ — trade is profitable, be patient
-        if _live_bid > 0 and dog_price + _live_bid < 98:
+        # Pause hedge timeout when combined < 96¢ — trade is clearly profitable, be patient
+        if _live_bid > 0 and dog_price + _live_bid < 96:
             bot['fav_posted_at'] = now  # reset timer — profitable position
         if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {

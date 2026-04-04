@@ -3253,24 +3253,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
                 _apex_record_rung_pnl(bot_id, matched_rung)
             elif rung[fill_key] > 0 and rung.get('status', 'posted') == 'posted' and other_fill == 0:
-                # Anchor fill detected — verify it's real before proceeding
-                _anchor_oid = rung.get(f'{matched_side}_order_id')
-                if _anchor_oid:
-                    try:
-                        api_read_limiter.wait()
-                        _av = kalshi_client.get_order(_anchor_oid)
-                        _avd = _av.get('order', _av) if isinstance(_av, dict) else {}
-                        _real_fill = _parse_fill_count(_avd)
-                        if _real_fill <= 0:
-                            print(f'⚠ APEX GHOST FILL BLOCKED: {bot_id} rung#{matched_rung} WS reported {matched_side} fill but order has 0 actual fills — ignoring')
-                            bot_log('APEX_GHOST_FILL_BLOCKED', bot_id, {'rung_idx': matched_rung, 'side': matched_side, 'order_id': _anchor_oid}, level='WARN')
-                            rung[fill_key] = 0  # reset ghost fill
-                            save_state()
-                            return
-                        rung[fill_key] = _real_fill  # use verified count
-                    except Exception as _ve:
-                        print(f'⚠ Apex anchor verify failed {bot_id}: {_ve} — proceeding with WS fill')
-                # Verified anchor fill: start timer, track existing hedge order
+                # Anchor fill detected from WS — trust it and proceed
+                # (API verification was removed: it races the WS and returns stale 0-fill data,
+                # blocking real fills and creating orphaned positions on Kalshi)
                 rung['anchor_side'] = matched_side
                 rung['anchor_fill_at'] = time.time()
                 rung['status'] = 'anchor_filled'
@@ -6797,11 +6782,28 @@ def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, st
         _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback')
         save_state()
     else:
-        rung['_sellback_pending'] = True
-        print(f'⚠ APEX STOP-LOSS SELL FAIL: {bot_id} rung#{rung_idx} ({width}c) — will retry')
-        bot_log('APEX_RUNG_STOP_LOSS_FAIL', bot_id, {
-            'rung_idx': rung_idx, 'anchor_side': anchor_side, 'sell_qty': sell_qty,
-        }, level='WARN')
+        _sell_attempts = rung.get('_sellback_attempts', 0) + 1
+        rung['_sellback_attempts'] = _sell_attempts
+        if _sell_attempts >= 5:
+            # Give up after 5 failed attempts — force-complete as orphan
+            # Position stays on Kalshi (visible in My Positions as orphan)
+            rung['status'] = 'completed'
+            rung['completed'] = True
+            rung['_sellback_pending'] = False
+            rung['_sellback_orphan'] = True
+            print(f'⚠ APEX STOP-LOSS ORPHAN: {bot_id} rung#{rung_idx} ({width}c) — {_sell_attempts} sell attempts failed, completing as orphan')
+            bot_log('APEX_RUNG_STOP_LOSS_ORPHAN', bot_id, {
+                'rung_idx': rung_idx, 'anchor_side': anchor_side, 'sell_qty': sell_qty,
+                'attempts': _sell_attempts,
+            }, level='WARN')
+            _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback_orphan')
+        else:
+            rung['_sellback_pending'] = True
+            print(f'⚠ APEX STOP-LOSS SELL FAIL: {bot_id} rung#{rung_idx} ({width}c) — attempt {_sell_attempts}/5, will retry')
+            bot_log('APEX_RUNG_STOP_LOSS_FAIL', bot_id, {
+                'rung_idx': rung_idx, 'anchor_side': anchor_side, 'sell_qty': sell_qty,
+                'attempt': _sell_attempts,
+            }, level='WARN')
         save_state()
 
 

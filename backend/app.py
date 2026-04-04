@@ -7646,14 +7646,11 @@ def create_anchor_bot():
             anchor_depth = max(3, target_width)  # depth = depth_floor, minimum 3¢
         fav_shave = 0  # fav always posts at bid, no shave needed
 
-        # Smart pricing: anchor_depth below bid if tight spread (≤2c), below ask if broken spread
+        # Smart pricing: always anchor_depth below bid — strict depth floor
         if live_dog_bid > 0:
-            spread = (live_dog_ask - live_dog_bid) if live_dog_ask > 0 else 1
-            anchor_base = live_dog_ask if spread > 2 else live_dog_bid
-            smart_price = max(1, anchor_base - anchor_depth)
-            print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} spread={spread} '
-                  f'base={"ask" if spread > 2 else "bid"} depth={anchor_depth}¢ fav_shave={fav_shave}¢ '
-                  f'→ {smart_price}¢ (frontend sent {dog_price}¢)')
+            smart_price = max(1, live_dog_bid - anchor_depth)
+            print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} '
+                  f'depth={anchor_depth}¢ → {smart_price}¢ (frontend sent {dog_price}¢)')
             dog_price = smart_price
 
         if cross_market and hedge_ticker != ticker:
@@ -7846,18 +7843,15 @@ def create_ladder_bot():
                 anchor_depth = max(5, target_width)
         fav_shave = 0
 
-        # Smart pricing: adjust all rungs relative to live price at order creation time
-        # Depth floor anchors to rung 0 (first rung) — all rungs sit at or below anchor_depth
+        # Smart pricing: always anchor_depth below bid — strict depth floor
+        # Rung[0] = bid - anchor_depth (first rung is the depth floor)
         rung_spacing = 2
         if current_dog_bid > 0:
-            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
-            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-            # Rung[0] = anchor_base - anchor_depth (first rung is the depth floor)
-            smart_first = max(1, anchor_base - anchor_depth)
+            smart_first = max(1, current_dog_bid - anchor_depth)
 
             # Apply per-rung stagger from smart_first
-            print(f'👻 PHANTOM SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} spread={spread} '
-                  f'base={"ask" if spread > 2 else "bid"} anchor_depth={anchor_depth} smart_first={smart_first} '
+            print(f'👻 PHANTOM SMART PRICE: bid={current_dog_bid} ask={current_dog_ask} '
+                  f'anchor_depth={anchor_depth} smart_first={smart_first} '
                   f'(depth floor on rung 0)')
             for idx, r in enumerate(rungs_input):
                 r['price'] = max(1, smart_first - (idx * rung_spacing))
@@ -9273,14 +9267,9 @@ def _handle_phantom(bot_id, bot, actions):
                     save_state()
                     return
 
-                # Smart reprice: same logic as initial placement — use stored anchor_depth
+                # Smart reprice: always anchor_depth below bid — strict depth floor
                 anchor_depth = bot.get('anchor_depth', 5)
-                spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
-                anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-                new_dog_price = max(1, anchor_base - anchor_depth)
-                # Never post at or above bid — maintain depth floor
-                if current_dog_bid > 0 and new_dog_price >= current_dog_bid:
-                    new_dog_price = max(1, current_dog_bid - anchor_depth)
+                new_dog_price = max(1, current_dog_bid - anchor_depth)
 
                 # Price ceiling: don't repost UP if new dog price > 40¢ (coin-flip territory)
                 if new_dog_price > 40 and new_dog_price > bot.get('dog_price', 0) and not retreat_triggered:
@@ -10196,12 +10185,7 @@ def _handle_phantom(bot_id, bot, actions):
                 _fav_ob = ob
                 _current_fav_bid = _best_bid(_fav_ob, fav_side)
             anchor_depth = bot.get('anchor_depth', 5)
-            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
-            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-            new_dog_price = max(1, anchor_base - anchor_depth)
-            # Never post at or above bid — maintain depth floor from the start
-            if current_dog_bid > 0 and new_dog_price >= current_dog_bid:
-                new_dog_price = max(1, current_dog_bid - anchor_depth)
+            new_dog_price = max(1, current_dog_bid - anchor_depth)
 
             # Drift guard: stop if dog is dead, price too low, or price too high
             _drift_stop = False
@@ -10640,11 +10624,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             else:
                 _fav_ob = ob
             _current_fav_bid = _best_bid(_fav_ob, fav_side)
-            spread = (current_dog_ask - current_dog_bid) if current_dog_ask > 0 else 1
-            anchor_base = current_dog_ask if spread > 2 else current_dog_bid
-            _avg_dog_est = max(1, anchor_base - anchor_depth)  # estimate new avg dog price
+            _avg_dog_est = max(1, current_dog_bid - anchor_depth)  # estimate new avg dog price
             # Drift guard: stop if dog dead, rung price at floor, or price too high
-            _first_rung_est = max(1, anchor_base - anchor_depth)
+            _first_rung_est = max(1, current_dog_bid - anchor_depth)
             _rung_spacing = bot.get('rung_spacing', 2)
             _num_rungs = len(bot.get('rungs', []))
             _lowest_rung_est = max(1, _first_rung_est - ((_num_rungs - 1) * _rung_spacing)) if _num_rungs > 0 else _first_rung_est
@@ -10932,11 +10914,9 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     save_state()
                     return
 
-                # Smart pricing — depth floor anchored to rung 0 (first rung)
-                spread = (rp_dog_ask - rp_dog_bid) if rp_dog_ask > 0 else 1
-                anchor_base = rp_dog_ask if spread > 2 else rp_dog_bid
+                # Smart pricing — depth floor always from bid (strict)
                 _rung_spacing = bot.get('rung_spacing', 2)
-                smart_first = max(1, anchor_base - anchor_depth)
+                smart_first = max(1, rp_dog_bid - anchor_depth)
 
                 old_first_price = bot['rungs'][0]['price'] if bot.get('rungs') else 0
                 _lad_price_delta = abs(smart_first - old_first_price)

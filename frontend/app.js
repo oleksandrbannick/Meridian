@@ -808,25 +808,38 @@ function getMarketLiquidity(market) {
     // Always use raw YES/NO depth + current dogSide — cached dogDepth/favDepth may be stale if sides flipped
     const _favDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3) : 0;
     const _dogDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3) : 0;
-    // Fav depth (40 pts) — thick fav = hedge fills instantly
+    // Sport detection for bonus
+    const _tk = market.ticker || '';
+    const _phTennis = _tk.startsWith('KXATP') || _tk.startsWith('KXWTA');
+    const _phNBA = _tk.includes('NBA');
+    const _phNHL = _tk.includes('NHL');
+    // When depth cached: use contracts-per-level (much better than total depth)
+    const _favPL = _phHasDepth ? (_phObCache.favPerLevel || Math.round(_favDepth / Math.max(1, 10))) : 0;
+    // Fav liquidity (30 pts) — contracts-per-level when available, spread proxy otherwise
     const _phFavPts = _phHasDepth
-        ? (_favDepth >= 1000 ? 40 : _favDepth >= 500 ? 35 : _favDepth >= 200 ? 28 : _favDepth >= 100 ? 20 : _favDepth >= 50 ? 10 : 0)
-        : (spread <= 1 ? 40 : spread <= 2 ? 35 : spread <= 3 ? 25 : spread <= 5 ? 10 : 0);
-    // Dog thinness bonus/penalty — thin dog = GOOD (easy fill), thick dog = BAD (competition)
+        ? (_favPL >= 50 ? 30 : _favPL >= 20 ? 22 : _favPL >= 10 ? 14 : _favPL >= 5 ? 7 : 0)
+        : (spread <= 1 ? 30 : spread <= 2 ? 25 : spread <= 3 ? 18 : spread <= 5 ? 8 : 0);
+    // Dog thinness bonus (10 pts) — thin dog = easy fill
     const _phDogPts = _phHasDepth
-        ? (_dogDepth <= 50 ? 10 : _dogDepth <= 200 ? 5 : _dogDepth >= 2000 ? -15 : _dogDepth >= 500 ? -10 : 0)
+        ? (_dogDepth <= 50 ? 10 : _dogDepth <= 200 ? 5 : 0)
+        : 0;
+    // Gap penalty when depth cached
+    const _phGapPenalty = _phHasDepth
+        ? ((_phObCache.favGaps || 0) >= 3 ? -10 : (_phObCache.favGaps || 0) >= 2 ? -5 : 0)
         : 0;
     const phantomQuality = Math.round(Math.max(0, Math.min(100,
-        // Fav depth/spread (40 pts) — can hedge fill instantly?
+        // Fav depth/contracts-per-level (30 pts)
         _phFavPts +
-        // Dog depth bonus/penalty — thin dog good, thick dog bad
+        // Dog thinness bonus (10 pts)
         _phDogPts +
-        // Volume (25 pts) — deeper book = more whale activity + hedge absorption
-        (vol >= 200 ? 25 : vol >= 100 ? 20 : vol >= 50 ? 15 : vol >= 20 ? 10 : 0) +
-        // Dog price sweet spot (20 pts) — 10-25¢ ideal
-        (dogPrice >= 10 && dogPrice <= 25 ? 20 : dogPrice >= 7 && dogPrice <= 35 ? 12 : 0) +
-        // Hedge room (15 pts) — more room = more profit per trade
-        (hedgeRoom >= 5 ? 15 : hedgeRoom >= 3 ? 10 : hedgeRoom >= 2 ? 5 : 0)
+        // Hedge room (30 pts) — THE key factor: combined ≤97 = profitable, 98+ = disaster
+        (hedgeRoom >= 6 ? 30 : hedgeRoom >= 5 ? 25 : hedgeRoom >= 3 ? 18 : hedgeRoom >= 2 ? 5 : 0) +
+        // Sport bonus (15 pts) — tennis proven 2x better
+        (_phTennis ? 15 : (_phNBA || _phNHL) ? 8 : 0) +
+        // Volume (10 pts) — proxy for activity level
+        (vol >= 200 ? 10 : vol >= 100 ? 8 : vol >= 50 ? 5 : vol >= 20 ? 3 : 0) +
+        // Fav gaps penalty
+        _phGapPenalty
     )));
 
     // Apex quality: depth/spread (both legs fill) + balanced prices + live game + volume
@@ -3138,14 +3151,33 @@ function displayOrderbookLadder(orderbook) {
     // ── Compute depth scores and update quality badges ──
     // Same 10¢ window for both sides so numbers are directly comparable
     const DEPTH_WINDOW = 10;
-    const yesDepth = yesOrders.reduce((s, o) => {
-        const { price, qty } = parseOrderLevel(o);
-        return (bestYesBid && price >= bestYesBid - DEPTH_WINDOW) ? s + qty : s;
-    }, 0);
-    const noDepth = noOrders.reduce((s, o) => {
-        const { price, qty } = parseOrderLevel(o);
-        return (bestNoBid && price >= bestNoBid - DEPTH_WINDOW) ? s + qty : s;
-    }, 0);
+
+    // Contracts-per-level + gap analysis for each side
+    function _analyzeSide(orders, bestBid) {
+        let totalQty = 0, levels = 0, gaps = 0;
+        const filledCents = new Set();
+        if (!bestBid) return { totalQty: 0, levels: 0, gaps: 0, perLevel: 0, top3Qty: 0 };
+        let top3Qty = 0, top3Count = 0;
+        for (const o of orders) {
+            const { price, qty } = parseOrderLevel(o);
+            if (price < bestBid - DEPTH_WINDOW) continue;
+            totalQty += qty;
+            levels++;
+            filledCents.add(price);
+            if (top3Count < 3) { top3Qty += qty; top3Count++; }
+        }
+        // Count gaps: missing cents between bestBid and bestBid - DEPTH_WINDOW
+        for (let c = bestBid; c >= bestBid - DEPTH_WINDOW && c >= 1; c--) {
+            if (!filledCents.has(c)) gaps++;
+        }
+        const perLevel = levels > 0 ? Math.round(totalQty / levels) : 0;
+        return { totalQty, levels, gaps, perLevel, top3Qty };
+    }
+
+    const yesAnalysis = _analyzeSide(yesOrders, bestYesBid);
+    const noAnalysis = _analyzeSide(noOrders, bestNoBid);
+    const yesDepth = yesAnalysis.totalQty;
+    const noDepth = noAnalysis.totalQty;
     const minDepth = Math.min(yesDepth, noDepth);
 
     // Identify dog/fav sides for phantom context
@@ -3153,55 +3185,92 @@ function displayOrderbookLadder(orderbook) {
     const favSideOb = dogSideOb === 'yes' ? 'no' : 'yes';
     const dogDepth = dogSideOb === 'yes' ? yesDepth : noDepth;
     const favDepth = dogSideOb === 'yes' ? noDepth : yesDepth;
-    // Depth score component (0-35 pts, replaces spread tightness when real depth available)
-    const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
+    const dogAnalysis = dogSideOb === 'yes' ? yesAnalysis : noAnalysis;
+    const favAnalysis = dogSideOb === 'yes' ? noAnalysis : yesAnalysis;
 
     // Show depth from PHANTOM perspective: DOG on left, FAV on right
-    // DOG = cheap side (where whale dumps fill you), FAV = expensive side (hedge target)
     const dogSideLabel = dogSideOb.toUpperCase();
     const favSideLabel = favSideOb.toUpperCase();
     const dogBidPrice = dogSideOb === 'yes' ? bestYesBid : bestNoBid;
     const favBidPrice = favSideOb === 'yes' ? bestYesBid : bestNoBid;
-    // Use standard YES=green, NO=red for side colors
     const dogCol = dogSideOb === 'yes' ? '#00ff88' : '#ff4444';
     const favCol = favSideOb === 'yes' ? '#00ff88' : '#ff4444';
-    const dogNote = dogDepth < 200 ? 'thin — easy fill' : dogDepth < 500 ? 'moderate' : 'crowded';
-    const favNote = favDepth >= 200 ? 'thick — slow to move, easy catch' : favDepth >= 50 ? 'ok — hedge should catch' : 'thin — hedge may miss';
-    // Catch score: how likely the hedge fills based on fav depth (0-100)
-    const catchScore = Math.min(100, Math.round(
-        (favDepth >= 500 ? 50 : favDepth >= 200 ? 40 : favDepth >= 100 ? 28 : favDepth >= 50 ? 15 : 0) +
-        (dogDepth < 50 ? 20 : dogDepth < 200 ? 10 : 0) +
-        (minDepth >= 200 ? 15 : minDepth >= 50 ? 8 : 0) +
-        (favDepth > dogDepth * 2 ? 15 : favDepth > dogDepth ? 8 : 0)
-    ));
+
+    // Hedge room: how much under 100¢ the combined price is
+    const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
+
+    // Detect sport from ticker for sport bonus
+    const _obTk = ob._ticker || orderbook.ticker || '';
+    const _isTennis = _obTk.startsWith('KXATP') || _obTk.startsWith('KXWTA');
+    const _isNBA = _obTk.includes('NBA');
+    const _isNHL = _obTk.includes('NHL');
+
+    // ── CATCH SCORE (0-100) — based on actual trade performance data ──
+    // Fav contracts/level (35pts) — THE key factor, determines if hedge fills
+    const _favPL = favAnalysis.perLevel;
+    const favPLpts = _favPL >= 50 ? 35 : _favPL >= 20 ? 25 : _favPL >= 10 ? 15 : _favPL >= 5 ? 8 : 0;
+    // Hedge room (30pts) — combined ≤97 = profitable, 98+ = disaster
+    const roomPts = hedgeRoom >= 6 ? 30 : hedgeRoom >= 5 ? 25 : hedgeRoom >= 3 ? 18 : hedgeRoom >= 2 ? 5 : 0;
+    // Fav gaps penalty (-15pts) — gaps mean sweeps crash through
+    const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
+    // Dog thinness bonus (10pts) — thin dog = easy fill
+    const dogThinPts = dogDepth < 50 ? 10 : dogDepth < 200 ? 5 : 0;
+    // Sport bonus (15pts) — tennis proven 2x better than MLB/Other
+    const sportPts = _isTennis ? 15 : (_isNBA || _isNHL) ? 8 : 0;
+    // Max safe qty: fav top-3 bids can absorb your hedge
+    const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 2));
+
+    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + roomPts + gapPenalty + dogThinPts + sportPts)));
     const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
     const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
 
-    // Store for ghost score updates + pass catch score to market card pills
+    // Quality notes
+    const dogNote = dogDepth < 50 ? 'thin — easy fill' : dogDepth < 200 ? 'moderate' : dogDepth < 500 ? 'busy' : 'crowded';
+    const favNote = _favPL >= 20 ? 'thick — easy catch' : _favPL >= 10 ? 'ok — hedge should catch' : _favPL >= 5 ? 'light — hedge may lag' : 'thin — hedge may miss';
+
+    // Store for ghost score updates + depth rec + bot creation
+    const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
     const ticker = ob._ticker || '';
     if (ticker || (orderbook.ticker)) {
         const tk = ticker || orderbook.ticker;
         window._obDepthCache = window._obDepthCache || {};
-        window._obDepthCache[tk] = { yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts, dogDepth, favDepth, dogBid: dogBidPrice, favBid: favBidPrice, catchScore, ts: Date.now() };
+        window._obDepthCache[tk] = {
+            yesDepth3: yesDepth, noDepth3: noDepth, minDepth, depthPts,
+            dogDepth, favDepth, dogBid: dogBidPrice, favBid: favBidPrice,
+            dogPerLevel: dogAnalysis.perLevel, favPerLevel: favAnalysis.perLevel,
+            dogGaps: dogAnalysis.gaps, favGaps: favAnalysis.gaps,
+            favTop3: favAnalysis.top3Qty, maxSafeQty,
+            hedgeRoom, catchScore, sportPts,
+            ts: Date.now()
+        };
         _updateGhostPill(tk, catchScore);
     }
+
+    // Score breakdown tooltip
+    const _scoreBreakdown = `Fav depth: ${favPLpts}pts · Room: ${roomPts}pts · Gaps: ${gapPenalty}pts · Dog: ${dogThinPts}pts · Sport: ${sportPts}pts`;
 
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>
-            <span style="color:${catchCol};font-weight:800;font-size:12px;">${botIconImg('phantom', 14)} ${catchLabel} ${catchScore}</span>
+            <span style="color:${catchCol};font-weight:800;font-size:12px;" title="${_scoreBreakdown}">${botIconImg('phantom', 14)} ${catchLabel} ${catchScore}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
-                <div style="color:${dogCol};font-size:9px;font-weight:700;margin-bottom:2px;">🐕 DOG · ${dogSideLabel} @ ${dogBidPrice}¢</div>
+                <div style="color:${dogCol};font-size:9px;font-weight:700;margin-bottom:2px;">DOG · ${dogSideLabel} @ ${dogBidPrice}¢</div>
                 <div style="color:${dogCol};font-weight:800;font-size:18px;">${dogDepth.toLocaleString()}</div>
-                <div style="color:${dogCol};font-size:8px;font-weight:600;">${dogNote}</div>
+                <div style="color:${dogCol};font-size:8px;font-weight:600;">${dogAnalysis.perLevel}/lvl · ${dogAnalysis.gaps} gaps</div>
+                <div style="color:${dogCol};font-size:8px;">${dogNote}</div>
             </div>
             <div style="text-align:center;background:${favCol}08;border:1px solid ${favCol}22;border-radius:6px;padding:6px;">
-                <div style="color:${favCol};font-size:9px;font-weight:700;margin-bottom:2px;">⭐ FAV · ${favSideLabel} @ ${favBidPrice}¢</div>
+                <div style="color:${favCol};font-size:9px;font-weight:700;margin-bottom:2px;">FAV · ${favSideLabel} @ ${favBidPrice}¢</div>
                 <div style="color:${favCol};font-weight:800;font-size:18px;">${favDepth.toLocaleString()}</div>
-                <div style="color:${favCol};font-size:8px;font-weight:600;">${favNote}</div>
+                <div style="color:${favCol};font-size:8px;font-weight:600;">${favAnalysis.perLevel}/lvl · ${favAnalysis.gaps} gaps</div>
+                <div style="color:${favCol};font-size:8px;">${favNote}</div>
             </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
+            <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${hedgeRoom >= 3 ? '#00ff88' : '#ff4444'};font-weight:700;">${hedgeRoom}¢</span></span>
+            <span style="color:#8892a6;font-size:9px;">Max qty: <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span> <span style="color:#555;">(fav top3: ${favAnalysis.top3Qty})</span></span>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');
@@ -3876,32 +3945,38 @@ function updateAnchorPreview() {
             const fd = _obCache.favDepth;
             const dogBid = _obCache.dogBid || 0;
             const favBid = _obCache.favBid || 0;
-            // Depth = ceiling margin. Thick fav = stable bid, tight depth OK.
-            // Thin fav = bid moves fast, need wider depth for ceiling room.
+            const fpl = _obCache.favPerLevel || 0;  // contracts per level on fav side
+            const fGaps = _obCache.favGaps || 0;
+            const maxQty = _obCache.maxSafeQty || 1;
+            // Depth rec based on contracts-per-level (not total depth)
+            // Thick book per-level = stable, tight depth OK. Thin per-level = volatile, wider depth.
             let recDepth = 5;  // default
             let reasons = [];
-            // Fav liquidity: thick = stable prices = tight depth OK, thin = volatile = wider
-            if (fd >= 500) { recDepth = 3; reasons.push('fav very thick'); }
-            else if (fd >= 200) { recDepth = 4; reasons.push('fav thick'); }
-            else if (fd >= 100) { recDepth = 5; reasons.push('fav moderate'); }
-            else if (fd >= 30) { recDepth = 7; reasons.push('fav light'); }
-            else { recDepth = 8; reasons.push('fav thin'); }
-            // Market balance: dog bid high = close match = volatile = need more room
-            // But only override if fav isn't thick — thick fav absorbs movement
-            if (dogBid >= 35 && fd < 500) { recDepth = Math.max(recDepth, 8); reasons.push('close match'); }
+            if (fpl >= 50) { recDepth = 3; reasons.push(`fav ${fpl}/lvl thick`); }
+            else if (fpl >= 20) { recDepth = 4; reasons.push(`fav ${fpl}/lvl solid`); }
+            else if (fpl >= 10) { recDepth = 5; reasons.push(`fav ${fpl}/lvl moderate`); }
+            else if (fpl >= 5) { recDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
+            else { recDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
+            // Gaps on fav side = sweeps crash through, need wider depth
+            if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} gaps`); }
+            else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} gaps`); }
+            // Market balance: dog bid high = close match = volatile
+            if (dogBid >= 35 && fpl < 50) { recDepth = Math.max(recDepth, 8); reasons.push('close match'); }
             else if (dogBid >= 35) { recDepth = Math.max(recDepth, 5); reasons.push('close match'); }
-            else if (dogBid >= 25 && fd < 200) { recDepth = Math.max(recDepth, 7); reasons.push('mid-range'); }
-            else if (dogBid >= 25) { reasons.push('mid-range'); }
-            // Spread: YES+NO bids far from 100 = wide spread = more walk needed
+            // Wide spread = more walk needed
             const totalBids = dogBid + favBid;
             if (totalBids > 0 && totalBids < 90) { recDepth = Math.max(recDepth, 7); reasons.push('wide spread'); }
             const recNote = reasons.join(' · ');
             const recMatch = anchorDepth >= recDepth && anchorDepth <= recDepth + 2;
             const recCol = recMatch ? '#00ff88' : '#ffaa00';
+            const thinWarn = fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:${recCol}11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${recCol};font-weight:700;">📊 Rec: ${recDepth}¢+</span> ` +
-                `<span style="color:#8892a6;">${recNote} · dog ${dd.toLocaleString()}@${dogBid}¢ · fav ${fd.toLocaleString()}@${favBid}¢</span>` +
-                (fd < 50 ? ` <span style="color:#ff4444;font-weight:700;">⚠ fav thin!</span>` : '') +
+                `<span style="color:#8892a6;">${recNote}</span>${thinWarn}` +
+                `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
+                `dog ${dd.toLocaleString()} (${_obCache.dogPerLevel||0}/lvl) @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢` +
+                `</div>` +
+                `<div style="margin-top:2px;color:#ffaa00;font-size:9px;font-weight:600;">Max safe qty: ${maxQty} <span style="color:#555;font-weight:400;">(fav top 3 bids: ${_obCache.favTop3||0})</span></div>` +
                 `</div>`;
         }
         shaveInfo.innerHTML = `<span style="color:#ffaa00;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;

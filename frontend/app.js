@@ -6957,15 +6957,18 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             liveScoreDiff = Math.abs(h - aw);
 
             // Directional: determine which team is home/away from ticker_a
-            // Kalshi ticker format: SERIES-{DATE}{AWAY}{HOME}-{TEAMCODE}{SPREAD}
-            // e.g. KXNBASPREAD-26MAR10MEMPHI-MEM35 → away=MEM, home=PHI
+            // Kalshi ticker format: SERIES-{DATE}{TIME}{AWAY}{HOME}-{TEAMCODE}{SPREAD}
+            // e.g. KXMLBSPREAD-26APR031610TBMIN-TB2 → date=26APR03, time=1610, away=TB, home=MIN
             let legAInRangeDir = null, legBInRangeDir = null;
+            let _awayCode = '', _homeCode = '';
             const tParts = (bot.ticker_a || '').split('-');
             if (tParts.length >= 3) {
                 const tACode = (tParts[2].match(/^([A-Z]+)/) || [])[1] || '';
-                const tGameSeg = tParts[1].replace(/^\d{2}[A-Z]{3}\d{2}/, ''); // e.g. "MEMPHI"
+                const tGameSeg = tParts[1].replace(/^\d{2}[A-Z]{3}\d+/, ''); // strip date+time digits, e.g. "26APR031610" → "TBMIN"
                 if (tACode && tGameSeg.includes(tACode)) {
                     const teamAIsAway = tGameSeg.startsWith(tACode);
+                    _awayCode = teamAIsAway ? (bot.team_a_name||'Away') : (bot.team_b_name||'Away');
+                    _homeCode = teamAIsAway ? (bot.team_b_name||'Home') : (bot.team_a_name||'Home');
                     const teamA_score = teamAIsAway ? aw : h;
                     const teamB_score = teamAIsAway ? h : aw;
                     const teamA_lead = teamA_score - teamB_score; // + = teamA winning
@@ -6981,11 +6984,13 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             const bothIn = legAInRange && legBInRange;
             const scoreColor = bothIn ? '#00ff88' : (legAInRange || legBInRange) ? '#ffaa33' : '#ff5555';
             const rangeLabel = bothIn ? '🎯 IN MIDDLE'
-                : legAInRange ? `✅ Leg A winning`
-                : legBInRange ? `✅ Leg B winning`
+                : legAInRange ? `✅ ${bot.team_a_name||'A'} NO winning`
+                : legBInRange ? `✅ ${bot.team_b_name||'B'} NO winning`
                 : '⛔ both losing';
             const detail = gs.status_detail || '';
-            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${aw}–${h}${detail ? ' · ' + detail : ''} · ${rangeLabel}</span>`;
+            const scoreTeams = _awayCode ? `${_awayCode} ` : '';
+            const scoreTeamsR = _homeCode ? ` ${_homeCode}` : '';
+            liveScoreHtml = `<span style="background:#ffffff0a;border-radius:4px;padding:2px 7px;font-size:10px;color:${scoreColor};font-weight:700;">${scoreTeams}${aw}–${h}${scoreTeamsR}${detail ? ' · ' + detail : ''} · ${rangeLabel}</span>`;
         }
     }
 
@@ -7087,7 +7092,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             // Leg A shows team_b getting points (left), Leg B shows team_a getting points (right)
             // If team_a is the away team, we need to swap so team_a's card (Leg B) is on the LEFT
             const _tParts = (bot.ticker_a || '').split('-');
-            const _gameSeg = _tParts.length >= 2 ? _tParts[1].replace(/^\d{2}[A-Z]{3}\d{2}/, '') : '';
+            const _gameSeg = _tParts.length >= 2 ? _tParts[1].replace(/^\d{2}[A-Z]{3}\d+/, '') : '';
             const _tACode = _tParts.length >= 3 ? (_tParts[2].match(/^([A-Z]+)/) || [])[1] || '' : '';
             const _teamAIsAway = _gameSeg && _tACode && _gameSeg.startsWith(_tACode);
             // If team_a is away, swap: show Leg B (team_a getting pts) on left, Leg A on right

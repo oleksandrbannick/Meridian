@@ -10199,16 +10199,19 @@ function anchorScanNavigate(eventTicker) {
 async function quickBot(ticker, yesPrice, noPrice) {
     // Qty: prefer scan modal qty input; fall back to global controls bar
     const quantity        = parseInt(document.getElementById('scan-qty')?.value) || parseInt(document.getElementById('bot-quantity')?.value) || 1;
+    const smartMode       = document.getElementById('scan-smart-mode')?.checked || false;
+    const repeatCount     = smartMode ? 999 : parseInt(document.getElementById('scan-repeat-count')?.value) || 0;
     const totalCost       = (yesPrice + noPrice) * quantity;
     const profitPer       = 100 - yesPrice - noPrice;
 
-    if (!confirm(`△ Deploy Apex Bot — ${quantity} contract(s)\n\nTicker: ${ticker}\nYES limit buy: ${yesPrice}¢\nNO limit buy: ${noPrice}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n8-min timeout if one leg fills\n\nConfirm?`)) return;
+    const runsLabel = smartMode ? 'Smart mode (auto-repeat)' : repeatCount > 0 ? `${repeatCount + 1} runs` : '1 run';
+    if (!confirm(`⚡ Deploy Instant Arb — ${quantity}× ${runsLabel}\n\nTicker: ${ticker}\nYES limit: ${yesPrice}¢  ·  NO limit: ${noPrice}¢\nCost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nWidth: +${profitPer}¢/contract\n\nBoth sides posted at bid+1. Sits patiently.\n2.5-min timeout if one leg fills.\n\nConfirm?`)) return;
 
     try {
         const resp = await fetch(`${API_BASE}/bot/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity }),
+            body: JSON.stringify({ ticker, yes_price: yesPrice, no_price: noPrice, quantity, repeat_count: repeatCount, smart_mode: smartMode }),
         });
         const data = await resp.json();
         if (data.success) {

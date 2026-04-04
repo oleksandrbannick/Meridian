@@ -1448,6 +1448,14 @@
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</span>
                 <input type="number" id="scan-qty" min="1" max="50" value="1"
                        style="width:46px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                <span style="color:#333;font-size:11px;">|</span>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                    <input type="checkbox" id="scan-smart-mode" style="accent-color:#00e5ff;width:14px;height:14px;">
+                    <span style="color:#00e5ff;font-size:10px;font-weight:700;">Smart</span>
+                </label>
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Runs:</span>
+                <input type="number" id="scan-repeat-count" min="0" max="50" value="0"
+                       style="width:40px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
             </div>
             <div id="scan-anchor-controls" style="display:none;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">Signal:</span>
@@ -3079,7 +3087,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1775350006"></script>
+    <script src="app.js?v=1775350007"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

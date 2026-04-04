@@ -5907,7 +5907,10 @@ def create_bot():
             if late_blocked:
                 return jsonify({'error': f'⏰ Late-game block — {late_reason}'}), 400
 
+        smart_mode     = bool(data.get('smart_mode', False))
         repeat_count   = int(data.get('repeat_count', 0))      # 0 = no repeat, N = repeat N more times (N+1 total runs)
+        if smart_mode:
+            repeat_count = 999  # effectively infinite — smart mode controls stopping
         arb_width      = int(data.get('arb_width', 0))         # remember target width for repeat
 
         if not ticker or yes_price is None or no_price is None:
@@ -6037,6 +6040,10 @@ def create_bot():
             'repost_count':     0,
             'repeat_count':     repeat_count,
             'repeats_done':     0,
+            'smart_mode':       smart_mode,
+            'consecutive_losses': 0,
+            '_smart_wins':      0,
+            '_smart_losses':    0,
             'arb_width':        arb_width if arb_width > 0 else profit_per,
             'live_yes_bid':     live_yes_bid,
             'live_no_bid':      live_no_bid,

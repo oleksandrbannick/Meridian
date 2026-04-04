@@ -9622,6 +9622,13 @@ def _handle_phantom(bot_id, bot, actions):
     # ── STATE: fav_hedge_posted — fav posted, waiting for fill ────
     if status == 'fav_hedge_posted':
         fav_order_id = bot.get('fav_order_id')
+        # Recover fav_order_id from side-specific field if missing
+        if not fav_order_id:
+            _fav_oid_recover = bot.get(f'{fav_side}_order_id')
+            if _fav_oid_recover:
+                bot['fav_order_id'] = _fav_oid_recover
+                fav_order_id = _fav_oid_recover
+                print(f'🔍 PHANTOM FAV ORDER RECOVERED: {bot_id} from {fav_side}_order_id={_fav_oid_recover[:12]}')
         # Partial fill recovery: if hedge already filled but order ID cleared, use cached fill qty
         _partial_qty = bot.get('_partial_hedge_qty', 0)
         if not fav_order_id:

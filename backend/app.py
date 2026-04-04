@@ -7724,7 +7724,7 @@ def create_anchor_bot():
             'anchor_depth':        anchor_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
-            'fav_walk_ceiling':    105,  # matches sellback threshold — fill at slight loss beats sellback
+            'fav_walk_ceiling':    100,  # breakeven ceiling — completing at 100¢ as maker (~1¢ fee) beats sellback
             'fav_last_walk_at':    None,
             'market_type':         _detect_market_type(ticker),
             'spread_line':         _extract_spread_line(ticker),
@@ -7941,7 +7941,7 @@ def create_ladder_bot():
             'rung_spacing': rung_spacing,
             'fav_shave': fav_shave,
             'fav_walk_count': 0,
-            'fav_walk_ceiling': 105,  # matches sellback threshold — fill at slight loss beats sellback
+            'fav_walk_ceiling': 100,  # breakeven ceiling — completing at 100¢ as maker (~1¢ fee) beats sellback
             'fav_last_walk_at': None,
             # Pre-calculated hedge prices + avg prices for every fill count (1, 2, 3 rungs)
             '_precalc_hedge_prices': _precalc_h,
@@ -9876,11 +9876,12 @@ def _handle_phantom(bot_id, bot, actions):
             _live_fav_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) or _live_fav_bid
         _live_combined = dog_price + _live_fav_bid if _live_fav_bid > 0 else 999
         _best_combined = min(_posted_combined, _live_combined)
-        # Timer runs from dog fill (120s total). Sell only if timer expired AND clearly unprofitable.
-        # At 101-105¢ combined, completing costs 1-5¢/contract — way cheaper than sellback.
-        # Hold until it fills, recovers, or combined exceeds 105¢.
-        _SELLBACK_THRESHOLD = 105
-        if wait_s >= hedge_timeout_s and _at_bid and not _has_partial_fills and _best_combined >= _SELLBACK_THRESHOLD:
+        # Zone-based timeout:
+        #   combined <= 100¢: hold indefinitely (maker completion ~1¢ fee beats sellback ~5-10¢ loss)
+        #   combined > 100¢: 15s quick timeout, then sell back (can't fill profitably)
+        if _best_combined <= 100:
+            pass  # breakeven or better — hold for maker fill, never sell back
+        elif wait_s >= 15 and _at_bid and not _has_partial_fills:
             bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
                 'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
                 'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),
@@ -9935,7 +9936,7 @@ def _handle_phantom(bot_id, bot, actions):
         # Priority 1: Drop to bid if above it (instant)
         # Priority 2: Profit snap to bid if combined <= 96¢ (instant, up or down)
         # Priority 3: Normal walk +1¢ toward bid (every 20s)
-        # Hard ceiling: combined (dog + fav) never exceeds WALK_CEILING (98¢)
+        # Hard ceiling: combined (dog + fav) never exceeds WALK_CEILING (100¢)
         current_fav_price = bot.get('fav_price', 0)
         if current_fav_price <= 0:
             return
@@ -9959,21 +9960,20 @@ def _handle_phantom(bot_id, bot, actions):
         # Walk target: always bid — phantom needs ceiling margin, walk handles the rest
         walk_target = current_fav_bid
 
-        # Hard ceiling: 100¢ combined — only sell back if literally over 100
-        max_fav_hold = WALK_CEILING - dog_price       # 100 - dog = hold here
-        max_fav_sellback = WALK_CEILING + 1 - dog_price  # 101 - dog = sellback
+        # Hard ceiling: 100¢ combined — walk up to breakeven, never above
+        max_fav_hold = WALK_CEILING - dog_price       # 100 - dog = breakeven ceiling
         walk_target = min(walk_target, max_fav_hold)
 
         if walk_target <= 0:
             return
 
         # No premature ceiling sellback — snap to max_fav_hold and hold.
-        # The normal hedge timeout handles exits if the fill never comes.
-        # Bid above ceiling just means we sit at max_fav_hold (combined=98) and wait.
+        # Zone-based timeout handles exits: <=100¢ hold, >100¢ quick exit.
+        # Bid above ceiling just means we sit at max_fav_hold (combined=100) and wait.
 
-        # ── Snap target: bid capped at ceiling (98c combined) ──
-        # walk_target is already min(fav_bid, max_fav_hold) from line above.
-        # If at ceiling and bid past us → hold. 120s timeout is the safety net.
+        # ── Snap target: bid capped at ceiling (100¢ combined) ──
+        # walk_target is already min(fav_bid, max_fav_hold) from above.
+        # If at ceiling and bid past us → hold for maker fill. Zone timeout is the safety net.
         new_fav_price = min(walk_target, max_fav_hold)
         # Also snap DOWN if above ceiling (e.g., after ceiling change from 100→98)
         if current_fav_price > max_fav_hold:

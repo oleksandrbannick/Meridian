@@ -3202,98 +3202,95 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if matched_rung is None:
             continue
 
-        rung = bot['rungs'][matched_rung]
-        qty_per = rung.get('quantity', bot.get('quantity', 1))
+        # Lock to prevent race with hedge thread modifying same rung
+        with ws_fill_lock:
+            rung = bot['rungs'][matched_rung]
+            qty_per = rung.get('quantity', bot.get('quantity', 1))
 
-        if is_hedge_fill:
-            # Per-rung hedge fill
-            old_hfq = rung.get('hedge_fill_qty', 0)
-            rung['hedge_fill_qty'] = min(old_hfq + count, qty_per)
-            if not rung.get('hedge_fill_at'):
-                rung['hedge_fill_at'] = time.time()
-            bot_log('APEX_WS_RUNG_HEDGE_FILL', bot_id, {
-                'rung_idx': matched_rung, 'count': count, 'width': rung.get('width', 0),
-                'old_fill': old_hfq, 'new_fill': rung['hedge_fill_qty'], 'qty': qty_per,
-            })
-            print(f'△ WS APEX HEDGE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) +{count} → {rung["hedge_fill_qty"]}/{qty_per}')
+            if is_hedge_fill:
+                # Per-rung hedge fill
+                old_hfq = rung.get('hedge_fill_qty', 0)
+                rung['hedge_fill_qty'] = min(old_hfq + count, qty_per)
+                if not rung.get('hedge_fill_at'):
+                    rung['hedge_fill_at'] = time.time()
+                bot_log('APEX_WS_RUNG_HEDGE_FILL', bot_id, {
+                    'rung_idx': matched_rung, 'count': count, 'width': rung.get('width', 0),
+                    'old_fill': old_hfq, 'new_fill': rung['hedge_fill_qty'], 'qty': qty_per,
+                })
+                print(f'△ WS APEX HEDGE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) +{count} → {rung["hedge_fill_qty"]}/{qty_per}')
 
-            # Check if rung fully hedged
-            if rung['hedge_fill_qty'] >= qty_per and not rung.get('completed'):
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-                _apex_record_rung_pnl(bot_id, matched_rung)
-                print(f'✅ APEX RUNG COMPLETE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c)')
-        else:
-            # Anchor/entry fill
-            fill_key = f'{matched_side}_fill_qty'
-            old_fill = rung.get(fill_key, 0)
-            rung[fill_key] = min(old_fill + count, qty_per)
-            if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
-                rung[f'{matched_side}_filled_at'] = time.time()
+                # Check if rung fully hedged
+                if rung['hedge_fill_qty'] >= qty_per and not rung.get('completed'):
+                    rung['status'] = 'completed'
+                    rung['completed'] = True
+                    bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
+                    _apex_record_rung_pnl(bot_id, matched_rung)
+                    print(f'✅ APEX RUNG COMPLETE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c)')
+            else:
+                # Anchor/entry fill
+                fill_key = f'{matched_side}_fill_qty'
+                old_fill = rung.get(fill_key, 0)
+                rung[fill_key] = min(old_fill + count, qty_per)
+                if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
+                    rung[f'{matched_side}_filled_at'] = time.time()
 
-            other_side = 'no' if matched_side == 'yes' else 'yes'
-            other_fill = rung.get(f'{other_side}_fill_qty', 0)
+                other_side = 'no' if matched_side == 'yes' else 'yes'
+                other_fill = rung.get(f'{other_side}_fill_qty', 0)
 
-            # Track when partial fills start (for monitor grace-period promotion)
-            if rung[fill_key] > 0 and not rung.get('_partial_fill_at'):
-                rung['_partial_fill_at'] = time.time()
-                rung['_partial_fill_side'] = matched_side
+                # Track when partial fills start (for monitor grace-period promotion)
+                if rung[fill_key] > 0 and not rung.get('_partial_fill_at'):
+                    rung['_partial_fill_at'] = time.time()
+                    rung['_partial_fill_side'] = matched_side
 
-            print(f'△ WS APEX FILL: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} +{count} → {rung[fill_key]}/{qty_per}')
-            bot_log('APEX_WS_RUNG_FILL', bot_id, {
-                'rung_idx': matched_rung, 'side': matched_side, 'count': count,
-                'width': rung.get('width', 0), 'price': rung.get(f'{matched_side}_price', 0),
-                'old_fill': old_fill, 'new_fill': rung[fill_key],
-            })
+                print(f'△ WS APEX FILL: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} +{count} → {rung[fill_key]}/{qty_per}')
+                bot_log('APEX_WS_RUNG_FILL', bot_id, {
+                    'rung_idx': matched_rung, 'side': matched_side, 'count': count,
+                    'width': rung.get('width', 0), 'price': rung.get(f'{matched_side}_price', 0),
+                    'old_fill': old_fill, 'new_fill': rung[fill_key],
+                })
 
-            # Both sides filled on this rung → completed (cancel-race or natural)
-            if other_fill >= qty_per and rung[fill_key] >= qty_per and not rung.get('completed'):
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                rung['completed_at'] = time.time()
-                bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-                print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
-                _apex_record_rung_pnl(bot_id, matched_rung)
-            elif rung[fill_key] > 0 and rung.get('status', 'posted') == 'posted' and other_fill == 0:
-                # Anchor fill detected from WS — trust it and proceed
-                # (API verification was removed: it races the WS and returns stale 0-fill data,
-                # blocking real fills and creating orphaned positions on Kalshi)
-                rung['anchor_side'] = matched_side
-                rung['anchor_fill_at'] = time.time()
-                rung['status'] = 'anchor_filled'
-                if not bot.get('first_fill_at'):
-                    bot['first_fill_at'] = time.time()
-                bot['status'] = 'ladder_arb_active'
-                # ── Burst detection: track anchor fill sides ──
-                if '_anchor_fill_log' not in bot:
-                    bot['_anchor_fill_log'] = []
-                bot['_anchor_fill_log'].append((matched_side, time.time()))
-                # Prune entries older than 30s
-                _cutoff = time.time() - 30
-                bot['_anchor_fill_log'] = [(s, t) for s, t in bot['_anchor_fill_log'] if t > _cutoff]
-                threading.Thread(
-                    target=_apex_post_rung_hedge,
-                    args=(bot_id, matched_rung),
-                    daemon=True
-                ).start()
-                print(f'⚡ APEX ANCHOR: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} → hedge thread spawned')
-            elif rung[fill_key] >= qty_per:
-                # One side filled but other has partial fills — just update status
-                if not bot.get('first_fill_at'):
-                    bot['first_fill_at'] = time.time()
-                bot['status'] = 'ladder_arb_active'
+                # Both sides filled on this rung → completed (cancel-race or natural)
+                if other_fill >= qty_per and rung[fill_key] >= qty_per and not rung.get('completed'):
+                    rung['status'] = 'completed'
+                    rung['completed'] = True
+                    rung['completed_at'] = time.time()
+                    bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
+                    print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
+                    _apex_record_rung_pnl(bot_id, matched_rung)
+                elif rung[fill_key] > 0 and rung.get('status', 'posted') == 'posted' and other_fill == 0:
+                    # Anchor fill detected from WS — trust it and proceed
+                    rung['anchor_side'] = matched_side
+                    rung['anchor_fill_at'] = time.time()
+                    rung['status'] = 'anchor_filled'
+                    if not bot.get('first_fill_at'):
+                        bot['first_fill_at'] = time.time()
+                    bot['status'] = 'ladder_arb_active'
+                    # ── Burst detection: track anchor fill sides ──
+                    if '_anchor_fill_log' not in bot:
+                        bot['_anchor_fill_log'] = []
+                    bot['_anchor_fill_log'].append((matched_side, time.time()))
+                    _cutoff = time.time() - 30
+                    bot['_anchor_fill_log'] = [(s, t) for s, t in bot['_anchor_fill_log'] if t > _cutoff]
+                    threading.Thread(
+                        target=_apex_post_rung_hedge,
+                        args=(bot_id, matched_rung),
+                        daemon=True
+                    ).start()
+                    print(f'⚡ APEX ANCHOR: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} → hedge thread spawned')
+                elif rung[fill_key] >= qty_per:
+                    if not bot.get('first_fill_at'):
+                        bot['first_fill_at'] = time.time()
+                    bot['status'] = 'ladder_arb_active'
 
-        # Check if ALL rungs are resolved → bot completion
-        # ALL rungs must be terminal (completed/stopped/scratched) — posted rungs count as unresolved
-        all_resolved = all(
-            r.get('status') in ('completed', 'stopped', 'scratched')
-            for r in bot.get('rungs', [])
-        )
-        if all_resolved:
-            threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
+            # Check if ALL rungs are resolved → bot completion
+            all_resolved = all(
+                r.get('status') in ('completed', 'stopped', 'scratched')
+                for r in bot.get('rungs', [])
+            )
+            if all_resolved:
+                threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
 
-        save_state()
+            save_state()
         break
 
 

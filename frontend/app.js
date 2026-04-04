@@ -808,11 +808,6 @@ function getMarketLiquidity(market) {
     // Always use raw YES/NO depth + current dogSide — cached dogDepth/favDepth may be stale if sides flipped
     const _favDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.noDepth3 : _phObCache.yesDepth3) : 0;
     const _dogDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3) : 0;
-    // Sport detection for bonus
-    const _tk = market.ticker || '';
-    const _phTennis = _tk.startsWith('KXATP') || _tk.startsWith('KXWTA');
-    const _phNBA = _tk.includes('NBA');
-    const _phNHL = _tk.includes('NHL');
     // When depth cached: use contracts-per-level (much better than total depth)
     const _favPL = _phHasDepth ? (_phObCache.favPerLevel || Math.round(_favDepth / Math.max(1, 10))) : 0;
     // Fav liquidity (30 pts) — contracts-per-level when available, spread proxy otherwise
@@ -834,8 +829,8 @@ function getMarketLiquidity(market) {
         _phDogPts +
         // Hedge room (30 pts) — THE key factor: combined ≤97 = profitable, 98+ = disaster
         (hedgeRoom >= 6 ? 30 : hedgeRoom >= 5 ? 25 : hedgeRoom >= 3 ? 18 : hedgeRoom >= 2 ? 5 : 0) +
-        // Sport bonus (15 pts) — tennis proven 2x better
-        (_phTennis ? 15 : (_phNBA || _phNHL) ? 8 : 0) +
+        // Sport bonus — reserved, not enough data yet
+        0 +
         // Volume (10 pts) — proxy for activity level
         (vol >= 200 ? 10 : vol >= 100 ? 8 : vol >= 50 ? 5 : vol >= 20 ? 3 : 0) +
         // Fav gaps penalty
@@ -3215,9 +3210,8 @@ function displayOrderbookLadder(orderbook) {
     const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
     // Dog thinness bonus (10pts) — thin dog = easy fill
     const dogThinPts = dogDepth < 50 ? 10 : dogDepth < 200 ? 5 : 0;
-    // Sport bonus (15pts) — tennis proven 2x better than MLB/Other
-    const sportPts = _isTennis ? 15 : (_isNBA || _isNHL) ? 8 : 0;
     // Max safe qty: fav top-3 bids can absorb your hedge
+    const sportPts = 0; // reserved — not enough data with fixed system to weight by sport yet
     const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 2));
 
     const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + roomPts + gapPenalty + dogThinPts + sportPts)));

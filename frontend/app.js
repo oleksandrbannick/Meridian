@@ -3087,7 +3087,7 @@ async function fetchOrderbookForSidebar(ticker) {
         displayOrderbookLadder(data);
     } catch (error) {
         console.error('Error fetching orderbook:', error);
-        document.getElementById('orderbook-ladder').innerHTML = `<p style="color: #ff4444;">Network error</p>`;
+        document.getElementById('orderbook-ladder').innerHTML = `<p style="color: #ff4444;">${error.message || 'Network error'}</p>`;
     }
 }
 

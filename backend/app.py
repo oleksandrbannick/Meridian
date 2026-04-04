@@ -9329,13 +9329,30 @@ def _handle_phantom(bot_id, bot, actions):
                     _min_fav = max(3, int(qty * 1.5))
                     bot['_fav_depth'] = _fav_depth  # track for UI
                     if _fav_depth < _min_fav:
-                        print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth} (need ≥{_min_fav}) — skipping repost')
+                        _dry_count = bot.get('_fav_dry_count', 0) + 1
+                        bot['_fav_dry_count'] = _dry_count
+                        if _dry_count >= 3:
+                            # Sustained dryness — market is dying, stop the bot
+                            print(f'🛑 PHANTOM FAV DEAD: {bot_id} fav {fav_side} depth={_fav_depth} dry {_dry_count}x — stopping bot')
+                            bot_log('PHANTOM_FAV_DEAD_STOP', bot_id, {
+                                'fav_depth': _fav_depth, 'fav_bid': _fav_best, 'min_needed': _min_fav,
+                                'dry_count': _dry_count, 'qty': qty,
+                            })
+                            _safe_cancel(dog_order_id, f'phantom fav dead {bot_id}')
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            bot['_stop_reason'] = f'fav liquidity dried up ({_fav_depth} contracts, need {_min_fav})'
+                            save_state()
+                            return
+                        print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth} (need ≥{_min_fav}) — skip #{_dry_count}/3')
                         bot_log('PHANTOM_FAV_DRY_SKIP', bot_id, {
                             'fav_depth': _fav_depth, 'fav_bid': _fav_best, 'min_needed': _min_fav,
-                            'qty': qty, 'dog_bid': current_dog_bid, 'trigger': trigger_reason,
+                            'dry_count': _dry_count, 'qty': qty, 'dog_bid': current_dog_bid,
                         })
-                        bot['posted_at'] = now  # reset timer so we check again next cycle
+                        bot['posted_at'] = now
                         return
+                    else:
+                        bot['_fav_dry_count'] = 0  # fav is healthy, reset counter
 
                 # Track old order ID before overwriting (in case cancel fails)
                 all_dog_ids = bot.get('_all_dog_order_ids', [])
@@ -10243,14 +10260,30 @@ def _handle_phantom(bot_id, bot, actions):
                 _min_fav_r = max(3, int(qty * 1.5))
                 bot['_fav_depth'] = _fav_depth_r
                 if _fav_depth_r < _min_fav_r:
-                    print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth_r} (need ≥{_min_fav_r}) — delaying re-anchor')
+                    _dry_count_r = bot.get('_fav_dry_count', 0) + 1
+                    bot['_fav_dry_count'] = _dry_count_r
+                    if _dry_count_r >= 3:
+                        print(f'🛑 PHANTOM FAV DEAD: {bot_id} fav {fav_side} depth={_fav_depth_r} dry {_dry_count_r}x — stopping bot')
+                        bot_log('PHANTOM_FAV_DEAD_STOP', bot_id, {
+                            'fav_depth': _fav_depth_r, 'fav_bid': _fav_best_r, 'min_needed': _min_fav_r,
+                            'dry_count': _dry_count_r, 'qty': qty,
+                        })
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        bot['_stop_reason'] = f'fav liquidity dried up ({_fav_depth_r} contracts, need {_min_fav_r})'
+                        bot['repeat_count'] = 0
+                        save_state()
+                        return
+                    print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth_r} (need ≥{_min_fav_r}) — delay #{_dry_count_r}/3')
                     bot_log('PHANTOM_FAV_DRY_REANCHOR', bot_id, {
                         'fav_depth': _fav_depth_r, 'fav_bid': _fav_best_r, 'min_needed': _min_fav_r,
-                        'qty': qty, 'dog_bid': current_dog_bid,
+                        'dry_count': _dry_count_r, 'qty': qty,
                     })
-                    bot['waiting_repeat_since'] = now  # reset cooldown, try again next cycle
+                    bot['waiting_repeat_since'] = now
                     save_state()
                     return
+                else:
+                    bot['_fav_dry_count'] = 0  # healthy, reset
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 

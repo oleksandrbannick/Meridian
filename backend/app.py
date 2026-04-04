@@ -18793,6 +18793,14 @@ def _run_startup():
                         managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
                     if no_qty > 0:
                         managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + no_qty
+                elif cat == 'arb' or b.get('status') == 'both_posted':
+                    # Regular Arb (scanner-created): YES+NO on same ticker
+                    yes_qty = _safe_int(b.get('yes_fill_qty'))
+                    no_qty = _safe_int(b.get('no_fill_qty'))
+                    if yes_qty > 0:
+                        managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
+                    if no_qty > 0:
+                        managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + no_qty
 
             # Compare against Kalshi positions
             for pos in kalshi_positions:

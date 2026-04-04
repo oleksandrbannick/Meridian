@@ -3047,6 +3047,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         matched = None
         if order_id == bot.get('dog_order_id') and bot['status'] == 'dog_anchor_posted':
             matched = 'dog'
+        elif order_id in (bot.get('_all_dog_order_ids') or []) and bot['status'] == 'dog_anchor_posted':
+            # Cancel-race: old order filled after repost — recover the fill
+            matched = 'dog'
+            bot['dog_order_id'] = order_id  # restore old order ID so hedge can proceed
+            print(f'🔍 WS CANCEL-RACE CATCH: {bot_id} fill on old order {order_id[:12]}')
         elif order_id == bot.get('fav_order_id') and bot['status'] == 'fav_hedge_posted':
             matched = 'fav'
         if not matched:

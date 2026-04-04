@@ -12953,6 +12953,83 @@ def _run_monitor():
                     except Exception:
                         pass  # If API fails, proceed with normal monitoring
 
+                # ── WAITING_REPEAT for Regular Arb: re-post at current bid+1 ──
+                if bot.get('status') == 'waiting_repeat' and bot.get('bot_category') not in ('ladder_arb', 'anchor_dog', 'anchor_ladder'):
+                    wait_since = bot.get('waiting_repeat_since', now)
+                    if now < wait_since:
+                        continue  # still in linger period
+                    # Smart stop check
+                    if bot.get('_smart_stopped'):
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        save_state()
+                        continue
+                    # Fetch fresh prices
+                    try:
+                        api_read_limiter.wait()
+                        _ob = kalshi_client.get_market_orderbook(ticker)
+                        _yb = _best_bid(_ob, 'yes')
+                        _nb = _best_bid(_ob, 'no')
+                    except Exception as e:
+                        print(f'⚠ Regular arb repost OB fetch failed {bot_id}: {e}')
+                        continue
+                    if _yb <= 0 or _nb <= 0:
+                        continue  # no bids, wait
+                    _sug_yes = _yb + 1
+                    _sug_no = _nb + 1
+                    _combined = _sug_yes + _sug_no
+                    if _combined >= 100:
+                        # Market too tight — stop repeating
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        print(f'🛑 REGULAR ARB REPEAT STOP: {bot_id} combined {_combined}¢ ≥ 100¢ — no more room')
+                        bot_log('REGULAR_ARB_REPEAT_STOP', bot_id, {'combined': _combined, 'yes_bid': _yb, 'no_bid': _nb})
+                        save_state()
+                        continue
+                    # Post both orders at new prices
+                    try:
+                        api_rate_limiter.wait()
+                        _yes_ord = kalshi_client.create_order(ticker=ticker, side='yes', action='buy',
+                                                              count=qty, yes_price=_sug_yes, post_only=True)
+                        _yes_oid = _extract_order_id(_yes_ord, f'regular arb repost YES {bot_id}')
+                        if not _yes_oid:
+                            continue
+                        api_rate_limiter.wait()
+                        _no_ord = kalshi_client.create_order(ticker=ticker, side='no', action='buy',
+                                                             count=qty, no_price=_sug_no, post_only=True)
+                        _no_oid = _extract_order_id(_no_ord, f'regular arb repost NO {bot_id}')
+                        if not _no_oid:
+                            # Cancel orphan YES order
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(_yes_oid)
+                            except Exception:
+                                pass
+                            continue
+                        bot['yes_order_id'] = _yes_oid
+                        bot['no_order_id'] = _no_oid
+                        bot['yes_price'] = _sug_yes
+                        bot['no_price'] = _sug_no
+                        bot['profit_per'] = 100 - _sug_yes - _sug_no
+                        bot['arb_width'] = bot['profit_per']
+                        bot['status'] = 'both_posted'
+                        bot['posted_at'] = now
+                        bot['yes_fill_qty'] = 0
+                        bot['no_fill_qty'] = 0
+                        bot['_just_completed'] = False
+                        bot['_trade_recorded'] = False
+                        bot['repost_count'] = bot.get('repost_count', 0) + 1
+                        print(f'🔄 REGULAR ARB REPEAT: {bot_id} #{bot["repeats_done"]}/{bot["repeat_count"]} — YES {_sug_yes}¢ + NO {_sug_no}¢ = {_combined}¢ ({bot["profit_per"]}¢ width)')
+                        bot_log('REGULAR_ARB_REPEAT', bot_id, {
+                            'yes_price': _sug_yes, 'no_price': _sug_no,
+                            'combined': _combined, 'width': bot['profit_per'],
+                            'cycle': bot['repeats_done'], 'total': bot['repeat_count'],
+                        })
+                        save_state()
+                    except Exception as e:
+                        print(f'⚠ Regular arb repost failed {bot_id}: {e}')
+                    continue
+
                 # ── BOTH_POSTED: both orders are live simultaneously ─────────
                 if bot.get('status') == 'both_posted':
                     # Update live prices from WebSocket then fall through to

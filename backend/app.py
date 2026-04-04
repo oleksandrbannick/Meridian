@@ -7651,6 +7651,8 @@ def create_anchor_bot():
         # Smart pricing: always anchor_depth below bid — strict depth floor
         if live_dog_bid > 0:
             smart_price = max(1, live_dog_bid - anchor_depth)
+            if smart_price < 3:
+                return jsonify({'error': f'Dog price too low ({smart_price}¢) — bid {live_dog_bid}¢ minus depth {anchor_depth}¢ is below 3¢ floor. Reduce depth or wait for market to move.'}), 400
             print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} '
                   f'depth={anchor_depth}¢ → {smart_price}¢ (frontend sent {dog_price}¢)')
             dog_price = smart_price

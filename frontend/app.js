@@ -810,10 +810,10 @@ function getMarketLiquidity(market) {
     const _dogDepth = _phHasDepth ? (dogSide === 'yes' ? _phObCache.yesDepth3 : _phObCache.noDepth3) : 0;
     // When depth cached: use contracts-per-level (much better than total depth)
     const _favPL = _phHasDepth ? (_phObCache.favPerLevel || Math.round(_favDepth / Math.max(1, 10))) : 0;
-    // Fav liquidity (30 pts) — contracts-per-level when available, spread proxy otherwise
+    // Fav liquidity (40 pts) — contracts-per-level when available, spread proxy otherwise
     const _phFavPts = _phHasDepth
-        ? (_favPL >= 50 ? 30 : _favPL >= 20 ? 22 : _favPL >= 10 ? 14 : _favPL >= 5 ? 7 : 0)
-        : (spread <= 1 ? 30 : spread <= 2 ? 25 : spread <= 3 ? 18 : spread <= 5 ? 8 : 0);
+        ? (_favPL >= 50 ? 40 : _favPL >= 30 ? 33 : _favPL >= 20 ? 25 : _favPL >= 10 ? 16 : _favPL >= 5 ? 8 : 0)
+        : (spread <= 1 ? 40 : spread <= 2 ? 33 : spread <= 3 ? 22 : spread <= 5 ? 10 : 0);
     // Dog thinness bonus (10 pts) — thin dog = easy fill
     const _phDogPts = _phHasDepth
         ? (_dogDepth <= 50 ? 10 : _dogDepth <= 200 ? 5 : 0)
@@ -823,16 +823,14 @@ function getMarketLiquidity(market) {
         ? ((_phObCache.favGaps || 0) >= 3 ? -10 : (_phObCache.favGaps || 0) >= 2 ? -5 : 0)
         : 0;
     const phantomQuality = Math.round(Math.max(0, Math.min(100,
-        // Fav depth/contracts-per-level (30 pts)
+        // Fav depth/contracts-per-level (40 pts)
         _phFavPts +
         // Dog thinness bonus (10 pts)
         _phDogPts +
-        // Hedge room (30 pts) — THE key factor: combined ≤97 = profitable, 98+ = disaster
-        (hedgeRoom >= 6 ? 30 : hedgeRoom >= 5 ? 25 : hedgeRoom >= 3 ? 18 : hedgeRoom >= 2 ? 5 : 0) +
-        // Sport bonus — reserved, not enough data yet
-        0 +
-        // Volume (10 pts) — proxy for activity level
-        (vol >= 200 ? 10 : vol >= 100 ? 8 : vol >= 50 ? 5 : vol >= 20 ? 3 : 0) +
+        // Hedge room (35 pts) — THE key factor: combined ≤97 = profitable, 98+ = disaster
+        (hedgeRoom >= 6 ? 35 : hedgeRoom >= 5 ? 30 : hedgeRoom >= 3 ? 22 : hedgeRoom >= 2 ? 8 : 0) +
+        // Volume (15 pts) — proxy for activity level
+        (vol >= 200 ? 15 : vol >= 100 ? 12 : vol >= 50 ? 8 : vol >= 20 ? 4 : 0) +
         // Fav gaps penalty
         _phGapPenalty
     )));
@@ -3201,20 +3199,21 @@ function displayOrderbookLadder(orderbook) {
     const _isNHL = _obTk.includes('NHL');
 
     // ── CATCH SCORE (0-100) — based on actual trade performance data ──
-    // Fav contracts/level (35pts) — THE key factor, determines if hedge fills
+    // Fav contracts/level (45pts) — THE key factor, determines if hedge fills
     const _favPL = favAnalysis.perLevel;
-    const favPLpts = _favPL >= 50 ? 35 : _favPL >= 20 ? 25 : _favPL >= 10 ? 15 : _favPL >= 5 ? 8 : 0;
-    // Hedge room (30pts) — combined ≤97 = profitable, 98+ = disaster
-    const roomPts = hedgeRoom >= 6 ? 30 : hedgeRoom >= 5 ? 25 : hedgeRoom >= 3 ? 18 : hedgeRoom >= 2 ? 5 : 0;
+    const favPLpts = _favPL >= 50 ? 45 : _favPL >= 30 ? 38 : _favPL >= 20 ? 30 : _favPL >= 10 ? 20 : _favPL >= 5 ? 10 : 0;
+    // Hedge room (35pts) — combined ≤97 = profitable, 98+ = disaster
+    const roomPts = hedgeRoom >= 6 ? 35 : hedgeRoom >= 5 ? 30 : hedgeRoom >= 3 ? 22 : hedgeRoom >= 2 ? 8 : 0;
     // Fav gaps penalty (-15pts) — gaps mean sweeps crash through
     const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
-    // Dog thinness bonus (10pts) — thin dog = easy fill
-    const dogThinPts = dogDepth < 50 ? 10 : dogDepth < 200 ? 5 : 0;
+    // Dog thinness bonus (15pts) — thin dog = easy fill
+    const dogThinPts = dogDepth < 50 ? 15 : dogDepth < 200 ? 8 : 0;
+    // Fav dominance bonus (5pts) — fav much thicker than dog = safer
+    const favDomPts = favDepth > dogDepth * 3 ? 5 : 0;
     // Max safe qty: fav top-3 bids can absorb your hedge
-    const sportPts = 0; // reserved — not enough data with fixed system to weight by sport yet
     const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 2));
 
-    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + roomPts + gapPenalty + dogThinPts + sportPts)));
+    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + roomPts + gapPenalty + dogThinPts + favDomPts)));
     const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
     const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
 
@@ -3241,7 +3240,7 @@ function displayOrderbookLadder(orderbook) {
     }
 
     // Score breakdown tooltip
-    const _scoreBreakdown = `Fav depth: ${favPLpts}pts · Room: ${roomPts}pts · Gaps: ${gapPenalty}pts · Dog: ${dogThinPts}pts · Sport: ${sportPts}pts`;
+    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Room ${hedgeRoom}¢: ${roomPts}pts · Gaps: ${gapPenalty}pts · Dog: ${dogThinPts}pts · FavDom: ${favDomPts}pts`;
 
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">

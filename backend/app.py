@@ -3052,44 +3052,46 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if not matched:
             continue
 
-        qty_bot = bot.get('quantity', 1)
-        if matched == 'dog':
-            bot['dog_fill_qty'] = bot.get('dog_fill_qty', 0) + count
-            if bot['dog_side'] == 'yes':
-                bot['yes_fill_qty'] = bot['dog_fill_qty']
-            else:
-                bot['no_fill_qty'] = bot['dog_fill_qty']
-            if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
-                # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after
-                bot['_hedge_fired'] = True
-                bot['dog_filled_at'] = time.time()
-                bot['status'] = 'dog_filled'
-                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                break
-            elif bot['dog_fill_qty'] > 0 and not bot.get('_hedge_fired'):
-                # Partial fill — hedge FIRST, cancel remainder async (don't block hot path)
-                bot['_hedge_fired'] = True
-                bot['dog_filled_at'] = time.time()
-                bot['_original_qty'] = qty_bot  # preserve original for repeats
-                bot['_partial_hedge_qty'] = bot['dog_fill_qty']  # hedge this many
-                bot['status'] = 'dog_filled'
-                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                # Cancel unfilled remainder AFTER hedge is queued — async, not on hot path
-                _cancel_oid = bot.get('dog_order_id') if bot['dog_fill_qty'] < qty_bot else None
-                if _cancel_oid:
-                    threading.Thread(target=lambda oid=_cancel_oid: _safe_cancel(oid, f'partial_fill_{bot_id}'), daemon=True).start()
-                print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
-                break
-            print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
-        elif matched == 'fav':
-            bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
-            if bot['fav_side'] == 'yes':
-                bot['yes_fill_qty'] = bot['fav_fill_qty']
-            else:
-                bot['no_fill_qty'] = bot['fav_fill_qty']
-            print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
-            # Full fav fill will be handled by monitor on next cycle
-        save_state()
+        # Lock to prevent race with hedge thread modifying same bot
+        with ws_fill_lock:
+            qty_bot = bot.get('quantity', 1)
+            if matched == 'dog':
+                bot['dog_fill_qty'] = bot.get('dog_fill_qty', 0) + count
+                if bot['dog_side'] == 'yes':
+                    bot['yes_fill_qty'] = bot['dog_fill_qty']
+                else:
+                    bot['no_fill_qty'] = bot['dog_fill_qty']
+                if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
+                    # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after
+                    bot['_hedge_fired'] = True
+                    bot['dog_filled_at'] = time.time()
+                    bot['status'] = 'dog_filled'
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                    save_state()
+                    break
+                elif bot['dog_fill_qty'] > 0 and not bot.get('_hedge_fired'):
+                    # Partial fill — hedge FIRST, cancel remainder async (don't block hot path)
+                    bot['_hedge_fired'] = True
+                    bot['dog_filled_at'] = time.time()
+                    bot['_original_qty'] = qty_bot
+                    bot['_partial_hedge_qty'] = bot['dog_fill_qty']
+                    bot['status'] = 'dog_filled'
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                    _cancel_oid = bot.get('dog_order_id') if bot['dog_fill_qty'] < qty_bot else None
+                    if _cancel_oid:
+                        threading.Thread(target=lambda oid=_cancel_oid: _safe_cancel(oid, f'partial_fill_{bot_id}'), daemon=True).start()
+                    print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
+                    save_state()
+                    break
+                print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
+            elif matched == 'fav':
+                bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
+                if bot['fav_side'] == 'yes':
+                    bot['yes_fill_qty'] = bot['fav_fill_qty']
+                else:
+                    bot['no_fill_qty'] = bot['fav_fill_qty']
+                print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
+            save_state()
         break
 
     # ── Anchor-Ladder WS fill matching ──────────────────────────────

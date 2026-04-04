@@ -9381,7 +9381,7 @@ def _handle_phantom(bot_id, bot, actions):
                     'trigger': trigger_reason, 'repost_count': bot['dog_repost_count'],
                     'new_order_id': new_order_id[:12],
                     'precalc_hedge': bot.get('_precalc_hedge_price'),
-                    'anchor_depth': anchor_depth, 'spread': spread,
+                    'anchor_depth': anchor_depth, 'dog_ask': current_dog_ask,
                 })
                 _audit('PHANTOM_DOG_REPOST', bot_id, {
                     'ticker': ticker, 'old_price': old_price, 'new_price': actual_new_price,

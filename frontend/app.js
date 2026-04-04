@@ -3198,7 +3198,7 @@ function displayOrderbookLadder(orderbook) {
     const favPLpts = _favPL >= 50 ? 45 : _favPL >= 30 ? 38 : _favPL >= 20 ? 30 : _favPL >= 10 ? 20 : _favPL >= 5 ? 10 : 0;
     // Hedge room (35pts) — combined ≤97 = profitable, 98+ = disaster
     const roomPts = hedgeRoom >= 6 ? 35 : hedgeRoom >= 5 ? 30 : hedgeRoom >= 3 ? 22 : hedgeRoom >= 2 ? 8 : 0;
-    // Fav gaps penalty (-15pts) — gaps mean sweeps crash through
+    // Fav gaps penalty — gaps mean sweeps crash through, need wider depth floor
     const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
     // Dog thinness bonus (15pts) — thin dog = easy fill
     const dogThinPts = dogDepth < 50 ? 15 : dogDepth < 200 ? 8 : 0;

@@ -10013,16 +10013,23 @@ def _handle_phantom(bot_id, bot, actions):
         if current_fav_price <= 0:
             return
 
-        # Fetch current bid + ask (hedge_ticker for cross-market fav)
-        try:
-            api_read_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(hedge_ticker)
-            current_fav_bid = _best_bid(ob, fav_side)
-            current_fav_ask = _best_ask(ob, fav_side)
-        except Exception:
-            current_fav_bid = 0
-            current_fav_ask = 0
+        # Use WS bid data (same as display) — no API call, no rate limiter delay
+        if hedge_ticker != ticker:
+            current_fav_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) or bot.get(f'live_{fav_side}_bid', 0)
+        else:
+            current_fav_bid = bot.get(f'live_{fav_side}_bid', 0)
+        current_fav_ask = bot.get(f'live_{fav_side}_ask', 0)
 
+        if current_fav_bid <= 0:
+            # WS data missing — fallback to API
+            try:
+                api_read_limiter.wait()
+                ob = kalshi_client.get_market_orderbook(hedge_ticker)
+                current_fav_bid = _best_bid(ob, fav_side)
+                current_fav_ask = _best_ask(ob, fav_side)
+            except Exception:
+                current_fav_bid = 0
+                current_fav_ask = 0
         if current_fav_bid <= 0:
             return  # no fav bid — normal hedge timeout will handle bail
 

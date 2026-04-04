@@ -6152,11 +6152,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:${noFilled ? '#ff4444' : '#555'};font-size:8px;">${noFilled ? '✓' : hfq + '/' + rQty}</span>
                 </div>
                 <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
-                    ${rStage === 'pending_profit'
-                        ? `<span style="color:${midDist <= 5 ? '#00ff88' : '#ff4444'};font-size:8px;font-weight:700;">${midDist <= 5 ? '🟢' : '🔴'}${midDist}¢${driftStarted ? ' ' + driftCountdown + 's' : ''}</span>`
-                        : rStage === 'snapped'
-                        ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">⚡BID</span>`
-                        : ''}
+                    ${(() => {
+                        // Show live profit gap using hedge BID (what snap would fill at)
+                        const liveCombined = anchorPrice + (hedgeBid || hedgePrice);
+                        const liveProf = liveCombined > 0 ? (100 - liveCombined) : 0;
+                        const liveCol = liveProf >= 3 ? '#00ff88' : liveProf >= 0 ? '#ffaa00' : '#ff4444';
+                        const timerStr = driftStarted ? ` ${driftCountdown}s` : '';
+                        return `<span style="color:${liveCol};font-size:8px;font-weight:700;">${liveProf >= 0 ? '🟢' : '🔴'}${liveProf}¢${timerStr}</span>`;
+                    })()}
                     ${snapBtn ? snapBtn : `<span style="color:${profColor};font-size:9px;font-weight:700;">${profEst > 0 ? '+' : ''}${profEst}¢</span>`}
                 </div>
             </div>`;

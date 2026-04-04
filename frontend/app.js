@@ -3143,8 +3143,10 @@ function displayOrderbookLadder(orderbook) {
     function _analyzeSide(orders, bestBid) {
         let totalQty = 0, levels = 0, gaps = 0;
         const filledCents = new Set();
-        if (!bestBid) return { totalQty: 0, levels: 0, gaps: 0, perLevel: 0, top3Qty: 0 };
+        if (!bestBid) return { totalQty: 0, levels: 0, gaps: 0, perLevel: 0, top3Qty: 0, wallByDepth: {} };
         let top3Qty = 0, top3Count = 0;
+        // Wall analysis: contracts between bid and bid-N for each depth level
+        const wallByDepth = {};
         for (const o of orders) {
             const { price, qty } = parseOrderLevel(o);
             if (price < bestBid - DEPTH_WINDOW) continue;
@@ -3153,12 +3155,21 @@ function displayOrderbookLadder(orderbook) {
             filledCents.add(price);
             if (top3Count < 3) { top3Qty += qty; top3Count++; }
         }
+        // Build wall: how many contracts sit between bid and bid-depth (exclusive of bid-depth)
+        for (let d = 3; d <= 8; d++) {
+            let wall = 0;
+            for (const o of orders) {
+                const { price, qty } = parseOrderLevel(o);
+                if (price > bestBid - d && price <= bestBid) wall += qty;
+            }
+            wallByDepth[d] = wall;
+        }
         // Count gaps: missing cents between bestBid and bestBid - DEPTH_WINDOW
         for (let c = bestBid; c >= bestBid - DEPTH_WINDOW && c >= 1; c--) {
             if (!filledCents.has(c)) gaps++;
         }
         const perLevel = levels > 0 ? Math.round(totalQty / levels) : 0;
-        return { totalQty, levels, gaps, perLevel, top3Qty };
+        return { totalQty, levels, gaps, perLevel, top3Qty, wallByDepth };
     }
 
     const yesAnalysis = _analyzeSide(yesOrders, bestYesBid);
@@ -3221,6 +3232,7 @@ function displayOrderbookLadder(orderbook) {
             dogPerLevel: dogAnalysis.perLevel, favPerLevel: favAnalysis.perLevel,
             dogGaps: dogAnalysis.gaps, favGaps: favAnalysis.gaps,
             favTop3: favAnalysis.top3Qty, maxSafeQty,
+            dogWall: dogAnalysis.wallByDepth,
             hedgeRoom, catchScore,
             ts: Date.now()
         };
@@ -3933,14 +3945,27 @@ function updateAnchorPreview() {
             // Thick book per-level = stable, tight depth OK. Thin per-level = volatile, wider depth.
             let recDepth = 5;  // default
             let reasons = [];
+            const dogWall = _obCache.dogWall || {};
+            // Primary: fav contracts/level (how fast hedge fills)
             if (fpl >= 50) { recDepth = 3; reasons.push(`fav ${fpl}/lvl thick`); }
             else if (fpl >= 20) { recDepth = 4; reasons.push(`fav ${fpl}/lvl solid`); }
             else if (fpl >= 10) { recDepth = 5; reasons.push(`fav ${fpl}/lvl moderate`); }
             else if (fpl >= 5) { recDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
             else { recDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
+            // Dog wall check: need enough contracts protecting you at the chosen depth
+            // If the wall at recDepth is too thin (<30 contracts), widen until wall is adequate
+            const minWall = 30;  // need at least 30 contracts between you and the bid
+            while (recDepth < 8 && (dogWall[recDepth] || 0) < minWall) {
+                recDepth++;
+            }
+            if ((dogWall[recDepth] || 0) < minWall) {
+                reasons.push(`dog wall thin (${dogWall[recDepth]||0})`);
+            } else {
+                reasons.push(`wall: ${dogWall[recDepth]||0}`);
+            }
             // Gaps on fav side = sweeps crash through, need wider depth
-            if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} gaps`); }
-            else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} gaps`); }
+            if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} fav gaps`); }
+            else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} fav gaps`); }
             // Market balance: dog bid high = close match = volatile
             if (dogBid >= 35 && fpl < 50) { recDepth = Math.max(recDepth, 8); reasons.push('close match'); }
             else if (dogBid >= 35) { recDepth = Math.max(recDepth, 5); reasons.push('close match'); }

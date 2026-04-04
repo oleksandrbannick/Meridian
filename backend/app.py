@@ -13033,8 +13033,9 @@ def _run_monitor():
 
                 # ── BOTH_POSTED: both orders are live simultaneously ─────────
                 if bot.get('status') == 'both_posted':
-                    # Update live prices from WebSocket then fall through to
-                    # the normal fill-check / repost / timeout logic below.
+                    # Update live prices from WebSocket
+                    _bp_yb = 0
+                    _bp_nb = 0
                     try:
                         ws_p = ws_manager.get_price(ticker)
                         if ws_p:
@@ -13047,7 +13048,73 @@ def _run_monitor():
                             bot['last_price_update'] = now
                     except Exception:
                         pass
-                    # Don't continue — fall through to fill-check code below
+
+                    # ── Repost stale both_posted orders at current bid+1 ──
+                    _bp_age = (now - bot.get('posted_at', now)) / 60.0
+                    _bp_yf = bot.get('yes_fill_qty', 0)
+                    _bp_nf = bot.get('no_fill_qty', 0)
+                    if phase == 'live' and _bp_age >= REPOST_AFTER_MINUTES and _bp_yf == 0 and _bp_nf == 0:
+                        _sug_y = (_bp_yb + 1) if _bp_yb > 0 else bot['yes_price']
+                        _sug_n = (_bp_nb + 1) if _bp_nb > 0 else bot['no_price']
+                        _bp_combined = _sug_y + _sug_n
+                        if _bp_combined >= 100:
+                            # Market too tight — cancel both and stop
+                            for _oid_key in ('yes_order_id', 'no_order_id'):
+                                _oid = bot.get(_oid_key)
+                                if _oid:
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(_oid)
+                                    except Exception:
+                                        pass
+                            bot['status'] = 'completed'
+                            bot['completed_at'] = now
+                            print(f'🛑 BOTH_POSTED STOP: {bot_id} combined {_bp_combined}¢ ≥ 100 — no room')
+                            bot_log('BOTH_POSTED_MARKET_TIGHT', bot_id, {'combined': _bp_combined, 'yes_bid': _bp_yb, 'no_bid': _bp_nb})
+                            save_state()
+                            continue
+                        # Cancel old orders
+                        for _oid_key in ('yes_order_id', 'no_order_id'):
+                            _oid = bot.get(_oid_key)
+                            if _oid:
+                                try:
+                                    api_rate_limiter.wait()
+                                    kalshi_client.cancel_order(_oid)
+                                except Exception:
+                                    pass
+                        # Post fresh orders at bid+1
+                        try:
+                            api_rate_limiter.wait()
+                            _new_y = kalshi_client.create_order(ticker=ticker, side='yes', action='buy',
+                                                                count=qty, yes_price=_sug_y, post_only=True)
+                            _new_y_oid = _extract_order_id(_new_y, f'both_posted repost YES {bot_id}')
+                            if _new_y_oid:
+                                api_rate_limiter.wait()
+                                _new_n = kalshi_client.create_order(ticker=ticker, side='no', action='buy',
+                                                                    count=qty, no_price=_sug_n, post_only=True)
+                                _new_n_oid = _extract_order_id(_new_n, f'both_posted repost NO {bot_id}')
+                                if _new_n_oid:
+                                    bot['yes_order_id'] = _new_y_oid
+                                    bot['no_order_id'] = _new_n_oid
+                                    bot['yes_price'] = _sug_y
+                                    bot['no_price'] = _sug_n
+                                    bot['profit_per'] = 100 - _sug_y - _sug_n
+                                    bot['posted_at'] = now
+                                    bot['repost_count'] = bot.get('repost_count', 0) + 1
+                                    print(f'🔄 BOTH_POSTED REPOST: {bot_id} #{bot["repost_count"]} Y{_sug_y}+N{_sug_n}={_bp_combined}¢ ({bot["profit_per"]}¢ width)')
+                                    bot_log('BOTH_POSTED_REPOST', bot_id, {'yes': _sug_y, 'no': _sug_n, 'combined': _bp_combined, 'repost': bot['repost_count']})
+                                    save_state()
+                                else:
+                                    # Cancel orphan YES
+                                    try:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(_new_y_oid)
+                                    except Exception:
+                                        pass
+                        except Exception as _rp_e:
+                            print(f'⚠ both_posted repost failed {bot_id}: {_rp_e}')
+                        continue
+                    # Fall through to fill-check code below
 
                 # ── FAV-FIRST: favorite order posted, waiting for fill ────
                 if bot.get('status') == 'fav_posted':

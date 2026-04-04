@@ -3253,7 +3253,24 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
                 _apex_record_rung_pnl(bot_id, matched_rung)
             elif rung[fill_key] > 0 and rung.get('status', 'posted') == 'posted' and other_fill == 0:
-                # Anchor fill (any amount): start timer, track existing hedge order
+                # Anchor fill detected — verify it's real before proceeding
+                _anchor_oid = rung.get(f'{matched_side}_order_id')
+                if _anchor_oid:
+                    try:
+                        api_read_limiter.wait()
+                        _av = kalshi_client.get_order(_anchor_oid)
+                        _avd = _av.get('order', _av) if isinstance(_av, dict) else {}
+                        _real_fill = _parse_fill_count(_avd)
+                        if _real_fill <= 0:
+                            print(f'⚠ APEX GHOST FILL BLOCKED: {bot_id} rung#{matched_rung} WS reported {matched_side} fill but order has 0 actual fills — ignoring')
+                            bot_log('APEX_GHOST_FILL_BLOCKED', bot_id, {'rung_idx': matched_rung, 'side': matched_side, 'order_id': _anchor_oid}, level='WARN')
+                            rung[fill_key] = 0  # reset ghost fill
+                            save_state()
+                            return
+                        rung[fill_key] = _real_fill  # use verified count
+                    except Exception as _ve:
+                        print(f'⚠ Apex anchor verify failed {bot_id}: {_ve} — proceeding with WS fill')
+                # Verified anchor fill: start timer, track existing hedge order
                 rung['anchor_side'] = matched_side
                 rung['anchor_fill_at'] = time.time()
                 rung['status'] = 'anchor_filled'
@@ -6248,29 +6265,6 @@ def _apex_post_rung_hedge(bot_id, rung_idx):
         ticker = bot['ticker']
         _bot_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
 
-        # ── POSITION VERIFICATION: confirm anchor fill exists on Kalshi ──
-        try:
-            _anchor_oid = rung.get(f'{anchor_side}_order_id')
-            if _anchor_oid:
-                api_read_limiter.wait()
-                _anc_resp = kalshi_client.get_order(_anchor_oid)
-                _anc_data = _anc_resp.get('order', _anc_resp) if isinstance(_anc_resp, dict) else {}
-                _actual_fill = _parse_fill_count(_anc_data)
-                if _actual_fill <= 0:
-                    print(f'⚠ APEX GHOST FILL: {bot_id} rung#{rung_idx} anchor order {_anchor_oid[:12]} has 0 actual fills — resetting rung')
-                    bot_log('APEX_GHOST_FILL', bot_id, {'rung_idx': rung_idx, 'anchor_side': anchor_side, 'order_id': _anchor_oid, 'reported_fill': rung.get(f'{anchor_side}_fill_qty', 0)}, level='WARN')
-                    with ws_fill_lock:
-                        rung = active_bots.get(bot_id, {}).get('rungs', [{}] * (rung_idx + 1))[rung_idx]
-                        rung['status'] = 'posted'
-                        rung['anchor_side'] = None
-                        rung['anchor_fill_at'] = None
-                        rung[f'{anchor_side}_fill_qty'] = 0
-                        rung['time_stage'] = None
-                    save_state()
-                    return
-        except Exception as _ve:
-            print(f'⚠ Apex anchor verify failed {bot_id} rung#{rung_idx}: {_ve}')
-
         # Compute hedge price: full profit target
         target_hedge = 100 - anchor_price - width
         max_safe = _bot_ceiling - anchor_price
@@ -7645,16 +7639,11 @@ def create_anchor_bot():
             if dog_side not in ('yes', 'no'):
                 dog_side = 'no'
 
-        # Anchor depth: all depth shaved off dog, fav posts at bid
-        # Floor: 3¢ for 1¢ width, 5¢ for 2-3¢ width, width itself for wider
-        anchor_depth = int(data.get('anchor_depth', 0))  # 0 = auto-calculate
+        # Anchor depth: how far below market to post the dog anchor
+        # depth_floor IS the anchor_depth — post exactly that many cents from the market
+        anchor_depth = int(data.get('anchor_depth', 0))  # 0 = use target_width as depth
         if anchor_depth <= 0:
-            if target_width <= 1:
-                anchor_depth = 3
-            elif target_width <= 3:
-                anchor_depth = 5
-            else:
-                anchor_depth = max(5, target_width)
+            anchor_depth = max(3, target_width)  # depth = depth_floor, minimum 3¢
         fav_shave = 0  # fav always posts at bid, no shave needed
 
         # Smart pricing: anchor_depth below bid if tight spread (≤2c), below ask if broken spread

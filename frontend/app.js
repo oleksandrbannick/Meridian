@@ -5884,11 +5884,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const waitSec = favPostedAt > 0 ? Date.now()/1000 - favPostedAt : 0;
                     const secsLeft = Math.max(0, hedgeTimeout - waitSec);
                     const combined = avgDogPrice + favPrice;
+                    const liveCombined = avgDogPrice + Math.max(favPrice, favBid);
                     const atBid = favPrice >= favBid && favBid > 0;
-                    const atCeiling = combined > 100;
+                    const atCeiling = liveCombined > 100;
+                    const ceilingStart = bot._over_ceiling_since || 0;
+                    const ceilingElapsed = ceilingStart > 0 ? Date.now()/1000 - ceilingStart : 0;
+                    const ceilingSecsLeft = Math.max(0, 15 - ceilingElapsed);
                     const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
-                    const statusText = atBid ? 'AT BID' : 'SNAPPING TO BID';
+                    const statusText = atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
                     const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
+                    const timerVal = atCeiling && ceilingStart > 0 ? ceilingSecsLeft : secsLeft;
+                    const timerLabel = atCeiling && ceilingStart > 0 ? `⏱ ${Math.round(ceilingSecsLeft)}s` : `${Math.round(secsLeft)}s`;
+                    const timerCol = atCeiling ? '#ff4444' : secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff';
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
@@ -5897,7 +5904,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                             <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
-                            <span style="color:${secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff'};font-weight:700;font-family:monospace;font-size:12px;">${Math.round(secsLeft)}s</span>
+                            <span style="color:${timerCol};font-weight:700;font-family:monospace;font-size:12px;">${timerLabel}</span>
                         </div>
                     </div><div style="display:none;">`;
                 }

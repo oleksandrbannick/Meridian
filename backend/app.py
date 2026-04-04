@@ -9842,6 +9842,8 @@ def _handle_phantom(bot_id, bot, actions):
         if _is_halftime(ticker):
             bot['fav_posted_at'] = now  # reset timer so it restarts after halftime
             bot['fav_last_walk_at'] = now  # also pause walk-up timer
+            if bot.get('_over_ceiling_since'):
+                bot['_over_ceiling_since'] = now  # pause ceiling timer too
             actions.append({'bot_id': bot_id, 'action': 'anchor_fav_halftime_pause'})
             return
 
@@ -9867,61 +9869,74 @@ def _handle_phantom(bot_id, bot, actions):
             _live_fav_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) or _live_fav_bid
         _live_combined = dog_price + _live_fav_bid if _live_fav_bid > 0 else 999
         _best_combined = min(_posted_combined, _live_combined)
-        # Zone-based timeout:
-        #   combined <= 100¢: hold indefinitely (maker completion ~1¢ fee beats sellback ~5-10¢ loss)
-        #   combined > 100¢: 15s quick timeout, then sell back (can't fill profitably)
-        if _best_combined <= 100:
-            pass  # breakeven or better — hold for maker fill, never sell back
-        elif wait_s >= 15 and _at_bid and not _has_partial_fills:
-            bot_log('PHANTOM_TIMEOUT_CHECK', bot_id, {
-                'wait_s': round(wait_s, 1), 'timeout_s': hedge_timeout_s,
-                'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),
-                'fav_price': bot.get('fav_price'), 'dog_price': dog_price,
-                'fav_walk_count': bot.get('fav_walk_count', 0),
-            })
-            # Cancel hedge and verify — catches fills that happened before/during cancel
-            qty = bot.get('quantity', 1)
-            _verified_fills = _cancel_hedge_verified(bot, bot_id)
-            fav_filled = max(bot.get('fav_fill_qty', 0), _verified_fills)
-            bot['fav_fill_qty'] = fav_filled
-            if fav_filled > 0 and fav_filled < qty:
-                # Partial fav fill — record partial arb completion, sell back only the uncovered dogs
-                sell_qty = qty - fav_filled
-                print(f'⏰ PHANTOM TIMEOUT (PARTIAL): {bot_id} fav filled {fav_filled}/{qty} — selling back {sell_qty} dogs, recording {fav_filled} partial arb')
-                # Record the partial arb as profit
-                fav_price = bot.get('fav_price', 0)
-                profit_per = 100 - dog_price - fav_price
-                est_fee = kalshi_fee_cents(
-                    dog_price if bot['dog_side'] == 'yes' else fav_price,
-                    dog_price if bot['dog_side'] == 'no' else fav_price,
-                    fav_filled
-                )
-                net_profit = max(0, profit_per * fav_filled - est_fee)
-                session_pnl['gross_profit_cents'] += net_profit
-                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
-                _record_trade({
-                    'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': dog_price if bot['dog_side'] == 'yes' else fav_price,
-                    'no_price': dog_price if bot['dog_side'] == 'no' else fav_price,
-                    'quantity': fav_filled, 'profit_cents': net_profit, 'loss_cents': 0,
-                    'fee_cents': est_fee, 'result': 'anchor_partial_arb',
-                    'timestamp': now, 'placed_at': bot.get('created_at', now),
-                    'arb_width': bot.get('target_width', 0),
+        # Zone-based timeout with ceiling detection:
+        # Use max(posted_fav, live_bid) to detect when fav bid moved past ceiling.
+        # Our fav price is capped at max_fav_hold (=100-dog), so _posted_combined
+        # stays at 100 even when fav bid is 99¢ and our hedge at 87¢ can't fill.
+        _ceiling_combined = dog_price + max(_current_fav, _live_fav_bid) if _live_fav_bid > 0 else _posted_combined
+        if _ceiling_combined <= 100:
+            bot['_over_ceiling_since'] = None  # under ceiling — clear timer
+        else:
+            # Past ceiling — start/check 15s timer
+            if not bot.get('_over_ceiling_since'):
+                bot['_over_ceiling_since'] = now
+                print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢) — 15s timer started')
+                bot_log('PHANTOM_OVER_CEILING_START', bot_id, {
+                    'dog_price': dog_price, 'fav_price': _current_fav,
+                    'fav_bid': _live_fav_bid, 'ceiling_combined': _ceiling_combined,
                 })
-                # Now sell back only the uncovered dogs
-                bot['quantity'] = sell_qty  # temporarily set qty for sell-back
-                _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
-                bot['quantity'] = qty  # restore original qty
-            elif fav_filled >= qty:
-                # Fully filled during timeout check — complete normally
-                print(f'⏰ PHANTOM TIMEOUT: {bot_id} fav actually filled {fav_filled}/{qty} — completing')
-                # Let monitor handle completion on next cycle
-                bot['status'] = 'fav_hedge_posted'
             else:
-                # No fav fills — sell all dogs back
-                print(f'⏰ PHANTOM TIMEOUT: {bot_id} waited {wait_s:.0f}s, 0 fav fills — selling dog back')
-                _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
-            return
+                _ceiling_elapsed = now - bot['_over_ceiling_since']
+                if _ceiling_elapsed >= 15 and _at_bid and not _has_partial_fills:
+                    bot_log('PHANTOM_CEILING_TIMEOUT', bot_id, {
+                        'wait_s': round(wait_s, 1), 'ceiling_elapsed': round(_ceiling_elapsed, 1),
+                        'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),
+                        'fav_price': bot.get('fav_price'), 'dog_price': dog_price,
+                        'fav_bid': _live_fav_bid, 'ceiling_combined': _ceiling_combined,
+                    })
+                    # Cancel hedge and verify — catches fills that happened before/during cancel
+                    qty = bot.get('quantity', 1)
+                    _verified_fills = _cancel_hedge_verified(bot, bot_id)
+                    fav_filled = max(bot.get('fav_fill_qty', 0), _verified_fills)
+                    bot['fav_fill_qty'] = fav_filled
+                    if fav_filled > 0 and fav_filled < qty:
+                        # Partial fav fill — record partial arb completion, sell back only the uncovered dogs
+                        sell_qty = qty - fav_filled
+                        print(f'⏰ PHANTOM CEILING TIMEOUT (PARTIAL): {bot_id} fav filled {fav_filled}/{qty} — selling back {sell_qty} dogs, recording {fav_filled} partial arb')
+                        # Record the partial arb as profit
+                        fav_price = bot.get('fav_price', 0)
+                        profit_per = 100 - dog_price - fav_price
+                        est_fee = kalshi_fee_cents(
+                            dog_price if bot['dog_side'] == 'yes' else fav_price,
+                            dog_price if bot['dog_side'] == 'no' else fav_price,
+                            fav_filled
+                        )
+                        net_profit = max(0, profit_per * fav_filled - est_fee)
+                        session_pnl['gross_profit_cents'] += net_profit
+                        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
+                        _record_trade({
+                            'bot_id': bot_id, 'ticker': ticker,
+                            'yes_price': dog_price if bot['dog_side'] == 'yes' else fav_price,
+                            'no_price': dog_price if bot['dog_side'] == 'no' else fav_price,
+                            'quantity': fav_filled, 'profit_cents': net_profit, 'loss_cents': 0,
+                            'fee_cents': est_fee, 'result': 'anchor_partial_arb',
+                            'timestamp': now, 'placed_at': bot.get('created_at', now),
+                            'arb_width': bot.get('target_width', 0),
+                        })
+                        # Now sell back only the uncovered dogs
+                        bot['quantity'] = sell_qty  # temporarily set qty for sell-back
+                        _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+                        bot['quantity'] = qty  # restore original qty
+                    elif fav_filled >= qty:
+                        # Fully filled during timeout check — complete normally
+                        print(f'⏰ PHANTOM CEILING TIMEOUT: {bot_id} fav actually filled {fav_filled}/{qty} — completing')
+                        bot['status'] = 'fav_hedge_posted'
+                        bot['_over_ceiling_since'] = None
+                    else:
+                        # No fav fills — sell all dogs back
+                        print(f'⏰ PHANTOM CEILING TIMEOUT: {bot_id} over ceiling for {_ceiling_elapsed:.0f}s, 0 fav fills — selling dog back')
+                        _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+                    return
 
         # ── Phantom Walk + Snap System ──
         # Priority 1: Drop to bid if above it (instant)

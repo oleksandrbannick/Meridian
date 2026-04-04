@@ -6480,6 +6480,23 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         _bid_combined = anchor_price + hedge_bid if hedge_bid > 0 else 999
         _snap_cost = max(0, _bid_combined - 100)  # ¢ loss per contract from completing at bid
         _sellback_cost = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else anchor_price  # ¢ loss from selling anchor back
+
+        # Snap exhaustion: if we already snapped to bid and it hasn't filled within 60s,
+        # the market is dead for this price. Fall back to sellback.
+        _snap_exhaustion_s = 60
+        _first_timeout_snap = rung.get('_first_timeout_snap_at')
+        if _first_timeout_snap and (now - _first_timeout_snap) >= _snap_exhaustion_s:
+            # Snap has been sitting at bid for 60s+ post-timeout — force sellback
+            rung['_snap_reason'] = f'snap_exhausted_{int(now - _first_timeout_snap)}s'
+            print(f'⏰ APEX SNAP EXHAUSTED: {bot_id} rung#{rung_idx} ({width}c) snap at bid for {now - _first_timeout_snap:.0f}s, no fill → sellback')
+            bot_log('APEX_SNAP_EXHAUSTED', bot_id, {
+                'rung_idx': rung_idx, 'width': width,
+                'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
+                'hedge_bid': hedge_bid, 'snap_age_s': round(now - _first_timeout_snap, 1),
+            })
+            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
+            return
+
         # Snap is maker (low fees), sellback is taker (higher fees) — snap wins ties
         if hedge_bid > 0 and _snap_cost <= _sellback_cost:
             # Snap to bid — cheaper exit (or both profitable)
@@ -6487,6 +6504,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _uncapped_snap = min(hedge_bid, max(1, _max_hedge + 5))  # allow up to 105¢ combined
             rung['_snap_reason'] = f'timeout_snap_{_uncapped_snap}c'
             rung['_timeout_uncapped'] = True
+            if not _first_timeout_snap:
+                rung['_first_timeout_snap_at'] = now  # track when snap was first attempted post-timeout
             print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → snap to bid {_uncapped_snap}¢ (combined {anchor_price + _uncapped_snap}¢, snap_cost={_snap_cost}¢ vs sellback_cost={_sellback_cost}¢)')
             bot_log('APEX_TIMEOUT_SNAP', bot_id, {
                 'rung_idx': rung_idx, 'width': width,

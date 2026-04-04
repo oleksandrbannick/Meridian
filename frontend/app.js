@@ -352,14 +352,10 @@ async function navigateToMarket(eventTickerPrefix) {
         setTimeout(() => { card.style.boxShadow = ''; }, 2000);
     };
 
-    // 3. Load markets if needed (also re-applies filters, which now means show all)
-    if (allMarkets.length === 0) {
-        await loadMarkets();
-    } else {
-        applyFilters(); // re-render with reset filters
-    }
+    // 3. Always force a fresh market load so DOM is up-to-date
+    await loadMarkets();
 
-    // 4. Wait for display:block layout to be computed, then scroll
+    // 4. Wait for DOM to render, then find and scroll to card
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             const card = findCard();

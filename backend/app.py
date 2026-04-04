@@ -11669,7 +11669,7 @@ def _handle_apex(bot_id, bot, actions):
     yes_bid = bot.get('live_yes_bid', 0)
     no_bid = bot.get('live_no_bid', 0)
 
-    # ── Settlement guard: if market is closed/settled, cancel everything (every 30s) ──
+    # ── Settlement guard: if market is closed/settled/game over, cancel everything (every 30s) ──
     if now - bot.get('_last_settle_check', 0) >= 30:
         bot['_last_settle_check'] = now
         try:
@@ -11678,7 +11678,14 @@ def _handle_apex(bot_id, bot, actions):
             mkt_la_data = mkt_la.get('market', mkt_la) if isinstance(mkt_la, dict) else {}
             mkt_la_status = mkt_la_data.get('status', 'active')
             mkt_la_result = mkt_la_data.get('result', '')
-            if mkt_la_status not in ('active', 'open') or mkt_la_result:
+            # Also check if game is over (ESPN/milestones) — market may still be "active" on Kalshi
+            _game_over = _is_game_over_cached(ticker)
+            # For posted bots with zero fills, also clean up if market is inactive
+            _all_zero_fills = all(
+                (r.get('yes_fill_qty', 0) == 0 and r.get('no_fill_qty', 0) == 0)
+                for r in bot.get('rungs', [])
+            )
+            if mkt_la_status not in ('active', 'open') or mkt_la_result or (_game_over and _all_zero_fills):
                 # Cancel ALL orders across all rungs
                 for rung in bot.get('rungs', []):
                     for side in ('yes', 'no'):

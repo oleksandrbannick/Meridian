@@ -15178,6 +15178,9 @@ def _run_monitor():
             # Skip already terminal or genuinely active bots
             if _cs in ('completed', 'cancelled', 'error'):
                 continue
+            # NEVER clean bots waiting for settlement — they hold positions
+            if _cs in ('both_filled', 'one_leg_timeout', 'awaiting_settlement'):
+                continue
             if _cs in active_statuses and _cs != 'stopped':
                 # Active bot — only clean up when the market itself has closed/settled
                 _ticker = _cb.get('ticker', '')

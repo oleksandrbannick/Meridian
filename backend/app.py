@@ -14534,24 +14534,18 @@ def _run_monitor():
                             {'bot_id': bot_id, 'reason': 'scrape'})
                     else:
                         # both_filled enhancement — sell dead leg for extra profit
+                        # P&L is tracked at settlement time (not here) to avoid double-counting
                         recovery_cents = (sell_price or 0) * qty
                         bot['rebalancer_exit_reason'] = 'enhance'
                         bot[f'leg_{check_leg}_sold_early'] = True
                         bot[f'leg_{check_leg}_sell_price'] = sell_price
-                        session_pnl['gross_profit_cents'] += recovery_cents
-                        _record_trade({
-                            'bot_id': bot_id, 'type': 'middle',
-                            'ticker_a': bot.get('ticker_a'), 'ticker_b': bot.get('ticker_b'),
-                            'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
-                            'spread_a': bot.get('spread_a'), 'spread_b': bot.get('spread_b'),
-                            'qty': qty, 'filled_leg': check_leg,
-                            'fill_price': fill_price, 'sl_sell_price': sell_price,
-                            'recovery_cents': recovery_cents,
-                            'profit_cents': recovery_cents, 'loss_cents': 0,
-                            'result': 'rebalancer_enhance', 'timestamp': now_m,
-                            'note': f'rebalancer enhance: sold dead leg {check_leg.upper()} ({team_code}) '
-                                    f'at {sell_price}c (margin={margin} spread={check_spread})',
-                        }, bot)
+                        bot_log('REBALANCER_ENHANCE', bot_id, {
+                            'leg': check_leg, 'team': team_code,
+                            'fill_price': fill_price, 'sell_price': sell_price,
+                            'recovery_cents': recovery_cents, 'margin': margin,
+                        })
+                        print(f'💰 REBALANCER ENHANCE: {bot_id} sold dead leg {check_leg.upper()} '
+                              f'({team_code}) at {sell_price}c (+{recovery_cents}c recovery)')
                         _push_notification('rebalancer',
                             f'Rebalancer enhance: {bot_id} — sold dead leg {check_leg.upper()} '
                             f'at {sell_price}c (+{recovery_cents}c recovery)',
@@ -15018,8 +15012,20 @@ def _run_monitor():
                     leg_a_win = (result_a == 'no')
                     leg_b_win = (result_b == 'no')
                     middle_hit = leg_a_win and leg_b_win
-                    profit_a = (100 - fill_a) * qty_s if leg_a_win else (-fill_a * qty_s)
-                    profit_b = (100 - fill_b) * qty_s if leg_b_win else (-fill_b * qty_s)
+                    # Check if rebalancer sold a leg early
+                    leg_a_sold = bot.get('leg_a_sold_early', False)
+                    leg_b_sold = bot.get('leg_b_sold_early', False)
+                    sell_price_a = bot.get('leg_a_sell_price', 0)
+                    sell_price_b = bot.get('leg_b_sell_price', 0)
+                    # P&L: sold-early legs use actual sell price, not settlement result
+                    if leg_a_sold:
+                        profit_a = (sell_price_a - fill_a) * qty_s  # net of round-trip
+                    else:
+                        profit_a = (100 - fill_a) * qty_s if leg_a_win else (-fill_a * qty_s)
+                    if leg_b_sold:
+                        profit_b = (sell_price_b - fill_b) * qty_s  # net of round-trip
+                    else:
+                        profit_b = (100 - fill_b) * qty_s if leg_b_win else (-fill_b * qty_s)
                     # Maker fees on both NO legs (each is a posted limit order)
                     fee_a = _kalshi_side_fee_cents(fill_a, qty_s)
                     fee_b = _kalshi_side_fee_cents(fill_b, qty_s)
@@ -15027,8 +15033,8 @@ def _run_monitor():
                     total_profit = profit_a + profit_b - total_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
-                    bot['leg_a_result'] = 'win' if leg_a_win else 'loss'
-                    bot['leg_b_result'] = 'win' if leg_b_win else 'loss'
+                    bot['leg_a_result'] = 'sold_early' if leg_a_sold else ('win' if leg_a_win else 'loss')
+                    bot['leg_b_result'] = 'sold_early' if leg_b_sold else ('win' if leg_b_win else 'loss')
                     bot['middle_hit'] = middle_hit
                     if total_profit > 0:
                         session_pnl['gross_profit_cents'] += total_profit
@@ -15036,7 +15042,11 @@ def _run_monitor():
                     else:
                         session_pnl['gross_loss_cents'] += abs(total_profit)
                         session_pnl['stopped_bots'] += 1
-                    _record_trade({
+                    # Rebalancer info for trade card
+                    _rebal_sold_leg = 'a' if leg_a_sold else ('b' if leg_b_sold else None)
+                    _rebal_sell_price = sell_price_a if leg_a_sold else (sell_price_b if leg_b_sold else None)
+                    _rebal_recovery = (_rebal_sell_price or 0) * qty_s if _rebal_sold_leg else 0
+                    _trade_rec = {
                         'bot_id': bot_id, 'type': 'middle',
                         'ticker_a': ticker_a, 'ticker_b': ticker_b,
                         'team_a_name': bot.get('team_a_name'), 'team_b_name': bot.get('team_b_name'),
@@ -15051,12 +15061,21 @@ def _run_monitor():
                         'result': 'middle_hit' if middle_hit else ('arb_win' if (leg_a_win or leg_b_win) else 'loss'),
                         'timestamp': now_s,
                         'note': f'{"MIDDLE HIT" if middle_hit else ("partial win" if (leg_a_win or leg_b_win) else "both lost")} — A:{result_a} B:{result_b}',
-                    }, bot)
+                    }
+                    if _rebal_sold_leg:
+                        _trade_rec['rebalancer_sold_leg'] = _rebal_sold_leg
+                        _trade_rec['rebalancer_sell_price'] = _rebal_sell_price
+                        _trade_rec['rebalancer_recovery_cents'] = _rebal_recovery
+                        _trade_rec['note'] += f' | rebalancer sold leg {_rebal_sold_leg.upper()} at {_rebal_sell_price}c (+{_rebal_recovery}c)'
+                    _record_trade(_trade_rec, bot)
                     bot_log('MIDDLE_SETTLED', bot_id, {
                         'middle_hit': middle_hit, 'profit_cents': total_profit,
                         'leg_a_result': result_a, 'leg_b_result': result_b,
+                        'rebalancer_sold_leg': _rebal_sold_leg,
+                        'rebalancer_sell_price': _rebal_sell_price,
                     })
-                    print(f'📐 MIDDLE SETTLED: {bot_id} | middle_hit={middle_hit} | profit={total_profit}¢')
+                    print(f'📐 MIDDLE SETTLED: {bot_id} | middle_hit={middle_hit} | profit={total_profit}¢'
+                          f'{f" | rebalancer sold {_rebal_sold_leg.upper()} at {_rebal_sell_price}c" if _rebal_sold_leg else ""}')
                     actions.append({'bot_id': bot_id, 'action': 'middle_settled', 'profit_cents': total_profit, 'middle_hit': middle_hit})
                     save_state()
             except Exception as ms_err:

@@ -12498,19 +12498,20 @@ async function loadMiddleHistory() {
             return;
         }
 
-        listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;">${trades.slice(0,50).map(t => {
+        listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;">${trades.filter(t => t.result !== 'rebalancer_enhance').slice(0,50).map(t => {
             const dt = new Date(t.timestamp * 1000);
             const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
             const isPend  = t.status === 'pending';
             const isHit   = t.middle_hit === true;
             const isArbW  = t.result === 'arb_win';
             const isScrape  = t.result === 'rebalancer_scrape';
-            const isEnhance = t.result === 'rebalancer_enhance';
+            const isEnhance = false; // enhance is now merged into settlement card
+            const hasRebal  = !!t.rebalancer_sold_leg; // rebalancer info on settlement card
             const isLoss  = t.result === 'loss';
             const net = (t.profit_cents||0) - (t.loss_cents||0);
             const netCol = isPend ? '#ffaa00' : net >= 0 ? '#00ff88' : '#ff4444';
-            const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : isArbW ? '✅' : isEnhance ? '💰' : isScrape ? '🔄' : '⛔';
-            const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : isArbW ? 'ARB WIN' : isEnhance ? 'ENHANCED' : isScrape ? 'SOLD BACK' : 'LOSS';
+            const statusIcon  = isPend ? '⏳' : isHit ? '🎯' : (isArbW && hasRebal) ? '💰' : isArbW ? '✅' : isScrape ? '🔄' : '⛔';
+            const statusLabel = isPend ? 'PENDING' : isHit ? 'MIDDLE HIT' : (isArbW && hasRebal) ? 'ARB WIN + ENHANCED' : isArbW ? 'ARB WIN' : isScrape ? 'SOLD BACK' : 'LOSS';
             const borderCol   = isPend ? '#ffaa0033' : net >= 0 ? '#00ff8822' : '#ff444422';
             // Support both manual log format (leg1/leg2) and bot-automated format (ticker_a/b, team_a/b_name)
             const isBot = !t.leg1 && (t.ticker_a || t.team_a_name);
@@ -12532,8 +12533,8 @@ async function loadMiddleHistory() {
             } : (t.leg2 || {});
             const l1Res = l1.result;
             const l2Res = l2.result;
-            const l1Col = l1Res === 'win' ? '#00ff88' : l1Res === 'loss' ? '#ff4444' : '#8892a6';
-            const l2Col = l2Res === 'win' ? '#00ff88' : l2Res === 'loss' ? '#ff4444' : '#8892a6';
+            const l1Col = l1Res === 'win' ? '#00ff88' : l1Res === 'sold_early' ? '#ff8800' : l1Res === 'loss' ? '#ff4444' : '#8892a6';
+            const l2Col = l2Res === 'win' ? '#00ff88' : l2Res === 'sold_early' ? '#ff8800' : l2Res === 'loss' ? '#ff4444' : '#8892a6';
             // Header label: team names if bot trade, else generic
             const matchupLabel = isBot && t.team_a_name && t.team_b_name
                 ? `${t.team_a_name} vs ${t.team_b_name}`
@@ -12550,8 +12551,8 @@ async function loadMiddleHistory() {
                 ? `<span style="color:#8892a6;">Arb: break-even</span>`
                 : `<span style="color:#ffaa00;font-weight:700;">Cost: ${Math.abs(arbW)}¢</span>`;
             // Filled status
-            const l1Filled = l1Res === 'win' || l1Res === 'loss' || (priceA > 0 && l1Res !== null);
-            const l2Filled = l2Res === 'win' || l2Res === 'loss' || (priceB > 0 && l2Res !== null);
+            const l1Filled = l1Res === 'win' || l1Res === 'loss' || l1Res === 'sold_early' || (priceA > 0 && l1Res !== null);
+            const l2Filled = l2Res === 'win' || l2Res === 'loss' || l2Res === 'sold_early' || (priceB > 0 && l2Res !== null);
             // Bot ID
             const botIdHtml = t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
                 <span style="color:#3a4560;font-size:9px;font-family:monospace;">${(t.bot_id||'').slice(-12)}</span>
@@ -12642,18 +12643,22 @@ async function loadMiddleHistory() {
                     </div>`;
                 })() : `<!-- Side by side legs -->
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-                    ${[{l: l1, res: l1Res, col: l1Col, filled: l1Filled, pnl: l1Pnl, teamOwn: t.team_b_name, teamOpp: t.team_a_name, spread: t.spread_a, origLabel: `NO ${t.team_a_name||''} +${t.spread_a||'?'}`},
-                       {l: l2, res: l2Res, col: l2Col, filled: l2Filled, pnl: l2Pnl, teamOwn: t.team_a_name, teamOpp: t.team_b_name, spread: t.spread_b, origLabel: `NO ${t.team_b_name||''} +${t.spread_b||'?'}`}
+                    ${[{l: l1, res: l1Res, col: l1Col, filled: l1Filled, pnl: l1Pnl, teamOwn: t.team_b_name, teamOpp: t.team_a_name, spread: t.spread_a, origLabel: `NO ${t.team_a_name||''} +${t.spread_a||'?'}`, legKey: 'a'},
+                       {l: l2, res: l2Res, col: l2Col, filled: l2Filled, pnl: l2Pnl, teamOwn: t.team_a_name, teamOpp: t.team_b_name, spread: t.spread_b, origLabel: `NO ${t.team_b_name||''} +${t.spread_b||'?'}`, legKey: 'b'}
                     ].map((leg, idx) => {
+                        const isSoldEarly = leg.res === 'sold_early';
+                        const soldPrice = isSoldEarly && t.rebalancer_sold_leg === leg.legKey ? t.rebalancer_sell_price : null;
                         const fillPct = leg.filled ? 100 : 0;
-                        const fillCol = leg.filled ? (leg.res === 'win' ? '#00ff88' : '#ff4444') : '#333';
+                        const fillCol = leg.filled ? (leg.res === 'win' ? '#00ff88' : isSoldEarly ? '#ff8800' : '#ff4444') : '#333';
                         const borderC = leg.filled ? leg.col + '88' : '#1e274044';
                         // Reverse display: show "TeamOwn +spread" as main, original underneath
                         const mainLabel = leg.teamOwn ? `${leg.teamOwn} +${leg.spread||'?'}` : (leg.l.title || '—');
+                        // P&L for sold-early: (sell_price - buy_price) × qty
+                        const legPnl = isSoldEarly && soldPrice !== null ? (soldPrice - (parseInt(leg.l.price)||0)) * (leg.l.qty||1) : leg.pnl;
                         return `<div style="background:#0a0e1a;border:2px solid ${borderC};border-radius:8px;padding:10px;${!leg.filled ? 'opacity:0.5;' : ''}">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                                 <span style="color:#aa66ff;font-size:9px;font-weight:800;">NO</span>
-                                ${leg.filled ? `<span style="background:${leg.col}22;color:${leg.col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${leg.res === 'win' ? '✓ WON' : '✗ LOST'}</span>` : '<span style="color:#555;font-size:8px;">—</span>'}
+                                ${leg.filled ? `<span style="background:${leg.col}22;color:${leg.col};font-size:8px;font-weight:700;padding:1px 6px;border-radius:4px;">${leg.res === 'win' ? '✓ WON' : isSoldEarly ? '💰 SOLD' : '✗ LOST'}</span>` : '<span style="color:#555;font-size:8px;">—</span>'}
                             </div>
                             <div style="color:#fff;font-size:12px;font-weight:600;margin-bottom:2px;">${mainLabel}</div>
                             <div style="color:#555;font-size:8px;margin-bottom:6px;">${leg.origLabel}</div>
@@ -12667,17 +12672,23 @@ async function loadMiddleHistory() {
                                 </div>
                                 <span style="color:${fillCol};font-weight:700;font-size:9px;">${leg.filled ? (leg.l.qty||1)+'/'+(leg.l.qty||1)+' ✓' : '0/'+(leg.l.qty||'?')}</span>
                             </div>
-                            ${leg.pnl !== null ? `<div style="color:${leg.pnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${leg.pnl >= 0 ? '+' : ''}${leg.pnl}¢</div>` : ''}
+                            ${isSoldEarly && soldPrice !== null ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">
+                                <div style="color:#ff8800;font-size:9px;font-weight:800;margin-bottom:3px;">💰 REBALANCER SOLD</div>
+                                <div style="color:#fff;font-size:11px;font-weight:700;">@ ${soldPrice}¢ <span style="color:#8892a6;font-weight:400;">×${leg.l.qty||1}</span></div>
+                                <div style="color:${(soldPrice||0) > 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;margin-top:2px;">+${(soldPrice||0) * (leg.l.qty||1)}¢ recovered</div>
+                            </div>` : ''}
+                            ${!isSoldEarly && legPnl !== null ? `<div style="color:${legPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${legPnl >= 0 ? '+' : ''}${legPnl}¢</div>` : ''}
                         </div>`;
                     }).join('')}
                 </div>`}
                 <!-- Trade details -->
                 <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1e2740;align-items:center;">
-                    ${(isScrape || isEnhance)
-                        ? `<span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${isScrape ? 'Rebalancer exit' : 'Enhanced'}: ${net >= 0 ? '+' : ''}${net}¢</span>
+                    ${isScrape
+                        ? `<span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Rebalancer exit: ${net >= 0 ? '+' : ''}${net}¢</span>
                            <span style="color:#8892a6;">Bought @ ${t.fill_price||t.target_price||'?'}¢ · Sold @ ${t.sl_sell_price||'?'}¢</span>`
                         : `${arbLabel}
-                           ${totalCost > 0 ? `<span style="color:#8892a6;">Cost: ${totalCost}¢ ($${(totalCost * (l1.qty||1) / 100).toFixed(2)})</span>` : ''}`}
+                           ${hasRebal && t.rebalancer_recovery_cents ? `<span style="color:#ff8800;font-weight:700;">Recovery: +${t.rebalancer_recovery_cents}¢</span>` : ''}
+                           ${totalCost > 0 ? `<span style="color:#8892a6;">Cost/ct: ${totalCost}¢ ($${(totalCost * (l1.qty||1) / 100).toFixed(2)})</span>` : ''}`}
                     <span style="color:#8892a6;">×${l1.qty || t.qty || '?'}</span>
                 </div>
                 <div style="display:flex;gap:12px;font-size:10px;flex-wrap:wrap;margin-top:6px;color:#555;">

@@ -13049,11 +13049,64 @@ def _run_monitor():
                     except Exception:
                         pass
 
+                    # ── Poll fill status (backup for WS) — every 10s ──
+                    if now - bot.get('_last_bp_fill_poll', 0) >= 10:
+                        bot['_last_bp_fill_poll'] = now
+                        for _side, _oid_key, _fq_key in [('yes', 'yes_order_id', 'yes_fill_qty'), ('no', 'no_order_id', 'no_fill_qty')]:
+                            _oid = bot.get(_oid_key)
+                            if _oid and bot.get(_fq_key, 0) < qty:
+                                try:
+                                    api_read_limiter.wait()
+                                    _ord_resp = kalshi_client.get_order(_oid)
+                                    _ord_data = _ord_resp.get('order', _ord_resp) if isinstance(_ord_resp, dict) else {}
+                                    _filled = _parse_fill_count(_ord_data)
+                                    if _filled > bot.get(_fq_key, 0):
+                                        bot[_fq_key] = _filled
+                                        print(f'📊 BOTH_POSTED FILL POLL: {bot_id} {_side.upper()} {_filled}/{qty}')
+                                except Exception:
+                                    pass
+                        # Check if both filled → transition to completion
+                        if bot.get('yes_fill_qty', 0) >= qty and bot.get('no_fill_qty', 0) >= qty:
+                            print(f'✅ BOTH_POSTED COMPLETE (poll): {bot_id} both legs filled!')
+                            # WS handler will pick up completion, or trigger manually
+                            save_state()
+                            continue
+
                     # ── Repost stale both_posted orders at current bid+1 ──
                     _bp_age = (now - bot.get('posted_at', now)) / 60.0
                     _bp_yf = bot.get('yes_fill_qty', 0)
                     _bp_nf = bot.get('no_fill_qty', 0)
                     if phase == 'live' and _bp_age >= REPOST_AFTER_MINUTES and _bp_yf == 0 and _bp_nf == 0:
+                        # SAFETY: verify orders have 0 fills before cancelling (API check)
+                        _cancel_safe = True
+                        for _side, _oid_key, _fq_key in [('yes', 'yes_order_id', 'yes_fill_qty'), ('no', 'no_order_id', 'no_fill_qty')]:
+                            _oid = bot.get(_oid_key)
+                            if _oid:
+                                try:
+                                    api_read_limiter.wait()
+                                    _vresp = kalshi_client.get_order(_oid)
+                                    _vdata = _vresp.get('order', _vresp) if isinstance(_vresp, dict) else {}
+                                    _vfilled = _parse_fill_count(_vdata)
+                                    if _vfilled > 0:
+                                        bot[_fq_key] = _vfilled
+                                        _cancel_safe = False
+                                        print(f'⚠ BOTH_POSTED REPOST BLOCKED: {bot_id} {_side.upper()} has {_vfilled} fills — transitioning to one-filled')
+                                except Exception:
+                                    pass
+                        if not _cancel_safe:
+                            # One side filled — transition to yes_filled/no_filled for proper handling
+                            if bot.get('yes_fill_qty', 0) >= qty:
+                                bot['status'] = 'yes_filled'
+                                bot['first_fill_at'] = now
+                                bot['first_leg'] = 'yes'
+                            elif bot.get('no_fill_qty', 0) >= qty:
+                                bot['status'] = 'no_filled'
+                                bot['first_fill_at'] = now
+                                bot['first_leg'] = 'no'
+                            bot['posted_at'] = now
+                            save_state()
+                            continue
+
                         _sug_y = (_bp_yb + 1) if _bp_yb > 0 else bot['yes_price']
                         _sug_n = (_bp_nb + 1) if _bp_nb > 0 else bot['no_price']
                         _bp_combined = _sug_y + _sug_n
@@ -13073,7 +13126,7 @@ def _run_monitor():
                             bot_log('BOTH_POSTED_MARKET_TIGHT', bot_id, {'combined': _bp_combined, 'yes_bid': _bp_yb, 'no_bid': _bp_nb})
                             save_state()
                             continue
-                        # Cancel old orders
+                        # Cancel old orders (verified 0 fills above)
                         for _oid_key in ('yes_order_id', 'no_order_id'):
                             _oid = bot.get(_oid_key)
                             if _oid:

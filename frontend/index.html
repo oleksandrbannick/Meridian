@@ -580,11 +580,10 @@
                                     <strong style="color:#ffaa00;">Ghost label: Quality score 0–100</strong><br>
                                     Rates how likely the instant hedge catches. Based on actual trade performance data:<br>
                                     <div style="margin:4px 0 4px 8px;">
-                                        <span style="color:#cc66ff;">Hedge room (≥3¢ under 100)</span> → up to 30pts — THE key factor. Combined ≤97 = profitable, 98+ = losses<br>
-                                        <span style="color:#00ff88;">Fav depth (contracts/level)</span> → up to 30pts — thick book per-level = hedge fills fast. Open orderbook for real data<br>
-                                        <span style="color:#00aaff;">Dog thinness</span> → up to 10pts — thin dog = easy fills, less competition<br>
-                                        <span style="color:#ff9900;">Volume</span> → up to 10pts — more activity = more sweep opportunities<br>
-                                        <span style="color:#ff4444;">Gap penalty</span> → up to -10pts — missing cents on fav side = sweeps crash through
+                                        <span style="color:#00ff88;">Fav depth (contracts/level)</span> → up to 55pts — thick book per-level = hedge fills fast. Open orderbook for real data<br>
+                                        <span style="color:#00aaff;">Dog thinness</span> → up to 25pts — thin dog = sweeps reach your order easily<br>
+                                        <span style="color:#ff9900;">Volume</span> → up to 20pts — more sweeps = more fill opportunities<br>
+                                        <span style="color:#ff4444;">Gap penalty</span> → up to -10pts — missing cents on fav side, need wider depth floor
                                     </div>
                                     <strong style="color:#ffaa00;">Open orderbook for detailed analysis:</strong> contracts/level, gaps, max safe qty, depth floor recommendation<br><br>
                                     <span style="color:#00ff88;font-weight:700;">🟢 60+</span> = strong &nbsp;
@@ -3086,7 +3085,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260404205300"></script>
+    <script src="app.js?v=20260404213000"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

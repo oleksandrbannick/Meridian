@@ -3192,12 +3192,6 @@ function displayOrderbookLadder(orderbook) {
     // Hedge room: how much under 100¢ the combined price is
     const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
 
-    // Detect sport from ticker for sport bonus
-    const _obTk = ob._ticker || orderbook.ticker || '';
-    const _isTennis = _obTk.startsWith('KXATP') || _obTk.startsWith('KXWTA');
-    const _isNBA = _obTk.includes('NBA');
-    const _isNHL = _obTk.includes('NHL');
-
     // ── CATCH SCORE (0-100) — based on actual trade performance data ──
     // Fav contracts/level (45pts) — THE key factor, determines if hedge fills
     const _favPL = favAnalysis.perLevel;
@@ -3233,7 +3227,7 @@ function displayOrderbookLadder(orderbook) {
             dogPerLevel: dogAnalysis.perLevel, favPerLevel: favAnalysis.perLevel,
             dogGaps: dogAnalysis.gaps, favGaps: favAnalysis.gaps,
             favTop3: favAnalysis.top3Qty, maxSafeQty,
-            hedgeRoom, catchScore, sportPts,
+            hedgeRoom, catchScore,
             ts: Date.now()
         };
         _updateGhostPill(tk, catchScore);

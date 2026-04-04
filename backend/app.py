@@ -9161,7 +9161,7 @@ def _handle_phantom(bot_id, bot, actions):
             _anchor_depth = bot.get('anchor_depth', 5)
             _dog_price = bot.get('dog_price', 0)
             _depth_gap = ws_dog_bid - _dog_price if _dog_price > 0 else 999
-            if 0 <= _depth_gap and _depth_gap < _anchor_depth - 1:
+            if 0 <= _depth_gap and _depth_gap < _anchor_depth:
                 retreat_triggered = True
 
         if gap_triggered or timer_triggered or retreat_triggered:
@@ -9308,7 +9308,7 @@ def _handle_phantom(bot_id, bot, actions):
                 # Don't repost if price hasn't changed meaningfully
                 # Retreat also requires ≥2¢ move to avoid jitter (1¢ bid oscillation is noise)
                 _price_delta = abs(new_dog_price - bot['dog_price'])
-                if _price_delta <= 1 and not retreat_triggered:
+                if _price_delta < 1 and not retreat_triggered:
                     bot['posted_at'] = now
                     return
                 if retreat_triggered and _price_delta < 1:

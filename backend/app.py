@@ -9010,13 +9010,40 @@ def _handle_phantom(bot_id, bot, actions):
     if status == 'dog_anchor_posted':
         dog_order_id = bot.get('dog_order_id')
         if not dog_order_id:
-            # Lost order ID (e.g. restart during repost) — force transition to waiting_repeat to re-anchor
-            bot_log('PHANTOM_NO_DOG_ORDER_RECOVERY', bot_id, {'status': status, 'dog_price': bot.get('dog_price')}, level='WARN')
-            bot['status'] = 'waiting_repeat'
-            bot['waiting_repeat_since'] = now
-            print(f'🔄 PHANTOM RECOVERY: {bot_id} no dog order ID — re-entering waiting_repeat to repost')
-            save_state()
-            return
+            # Lost order ID — check old order IDs for cancel-race fills before giving up
+            _old_ids = bot.get('_all_dog_order_ids', [])
+            _race_filled = False
+            for _old_oid in _old_ids:
+                if not _old_oid:
+                    continue
+                try:
+                    api_read_limiter.wait()
+                    _old_resp = kalshi_client.get_order(_old_oid)
+                    _old_data = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
+                    _old_fills = _parse_fill_count(_old_data)
+                    if _old_fills > 0:
+                        print(f'🔍 PHANTOM CANCEL-RACE FILL: {bot_id} old order {_old_oid[:12]} has {_old_fills} fills!')
+                        bot['dog_order_id'] = _old_oid
+                        bot['dog_fill_qty'] = _old_fills
+                        if dog_side == 'yes':
+                            bot['yes_fill_qty'] = _old_fills
+                        else:
+                            bot['no_fill_qty'] = _old_fills
+                        dog_order_id = _old_oid
+                        _race_filled = True
+                        bot_log('PHANTOM_CANCEL_RACE_RECOVERED', bot_id, {
+                            'old_oid': _old_oid[:12], 'fills': _old_fills, 'qty': qty,
+                        })
+                        break
+                except Exception:
+                    pass
+            if not _race_filled:
+                bot_log('PHANTOM_NO_DOG_ORDER_RECOVERY', bot_id, {'status': status, 'dog_price': bot.get('dog_price')}, level='WARN')
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = now
+                print(f'🔄 PHANTOM RECOVERY: {bot_id} no dog order ID, no old fills — re-entering waiting_repeat')
+                save_state()
+                return
 
         api_read_limiter.wait()
         dog_resp = kalshi_client.get_order(dog_order_id)

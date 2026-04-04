@@ -9924,6 +9924,7 @@ function startBalancePoll() {
 // ─── Upgrade #3: Multi-Market Arb Scanner ─────────────────────────────────────
 
 let _scanModalSport    = 'all';
+let _scanMarketType    = 'markets';  // 'markets' | 'props' | 'all'
 let _middlesModalSport = 'all';
 let _middlesModalPhase = 'all';      // 'all' | 'live' | 'pregame'
 let _scanMode          = 'instarb';  // 'instarb' | 'anchor'
@@ -9963,6 +9964,17 @@ function setAnchorSignal(sig) {
     document.querySelectorAll('.anchor-signal-pill').forEach(el => el.classList.toggle('active', el.dataset.signal === sig));
 }
 
+function setScanMarketType(mtype) {
+    _scanMarketType = mtype;
+    document.querySelectorAll('.scan-mtype-pill').forEach(el => {
+        const isActive = el.dataset.mtype === mtype;
+        el.classList.toggle('active', isActive);
+        el.style.background = isActive ? '#00ff8822' : 'transparent';
+        el.style.color = isActive ? '#00ff88' : '#8892a6';
+        el.style.borderColor = isActive ? '#00ff8844' : '#2a3550';
+    });
+}
+
 function runScan() {
     if (_scanMode === 'anchor') anchorScan();
     else autoScanMarkets();
@@ -9980,17 +9992,19 @@ function openScanModal() {
 async function autoScanMarkets() {
     const minWidth = parseInt(document.getElementById('scan-min-width')?.value || '3');
     const sportParam = (_scanModalSport && _scanModalSport !== 'all') ? `&sport=${_scanModalSport}` : '';
+    const mtypeParam = `&market_type=${_scanMarketType}`;
     // Open modal first
     const modal = document.getElementById('scan-modal');
     if (modal) modal.classList.add('show');
     const countEl = document.getElementById('scan-count');
-    if (countEl) countEl.textContent = _scanModalSport === 'all' ? 'Scanning all sports (15-20s)…' : 'Scanning…';
+    const typeLabel = _scanMarketType === 'props' ? 'props' : _scanMarketType === 'all' ? 'all markets' : 'markets';
+    if (countEl) countEl.textContent = _scanModalSport === 'all' ? `Scanning ${typeLabel} (15-20s)…` : `Scanning ${typeLabel}…`;
     const results = document.getElementById('scan-results');
-    if (results) results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">⏳ ${_scanModalSport === 'all' ? 'Scanning all sports — this takes ~15 seconds…' : 'Scanning NCAAB markets…'}</p>`;
+    if (results) results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">⏳ Scanning ${typeLabel}${_scanModalSport !== 'all' ? ' · ' + _scanModalSport.toUpperCase() : ''}…</p>`;
     const controller = new AbortController();
     const scanTimeout = setTimeout(() => controller.abort(), 45000);
     try {
-        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}${sportParam}`, { signal: controller.signal });
+        const resp = await fetch(`${API_BASE}/bot/scan?min_width=${minWidth}${sportParam}${mtypeParam}`, { signal: controller.signal });
         clearTimeout(scanTimeout);
         const data = await resp.json();
         if (data.error) { showNotification(`❌ Scan failed: ${data.error}`); return; }

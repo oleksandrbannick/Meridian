@@ -17057,7 +17057,12 @@ def scan_arb_opportunities():
 
         min_width = max(1, int(request.args.get('min_width', 3)))
         sport_filter = request.args.get('sport', '')
-        print(f'🔍 scan_arb sport={sport_filter!r}', flush=True)
+        market_type = request.args.get('market_type', 'markets')  # 'all', 'markets', 'props'
+        print(f'🔍 scan_arb sport={sport_filter!r} type={market_type!r}', flush=True)
+
+        # Series classified by type for filtering
+        _PROP_KEYWORDS = ('PTS', 'REB', 'AST', '3PT', 'STL', 'BLK', 'MVP', 'GOAL', 'STGAME', 'BTTS',
+                          'TOP10', 'TOP5', 'MAKECUT', 'R1LEAD', 'R2LEAD', 'R3LEAD', 'H2H', 'TOUR')
 
         # Use the same series map as /api/markets
         SPORTS_SERIES = {
@@ -17096,29 +17101,48 @@ def scan_arb_opportunities():
             'cricket': ['KXIPL'],
         }
 
+        def _is_prop_series(s):
+            """Check if a series ticker is a player prop / exotic prop."""
+            s_upper = s.upper()
+            return any(kw in s_upper for kw in _PROP_KEYWORDS)
+
         if sport_filter and sport_filter.lower() not in ('', 'all'):
             series_to_fetch = SPORTS_SERIES.get(sport_filter.lower(), [])
+            # Apply market_type filter
+            if market_type == 'markets':
+                series_to_fetch = [s for s in series_to_fetch if not _is_prop_series(s)]
+            elif market_type == 'props':
+                series_to_fetch = [s for s in series_to_fetch if _is_prop_series(s)]
+            # 'all' = no filtering
         else:
-            # For "All" scans: only fetch game-winner, spread, total, and 1H series.
-            # Skip player props (PTS/REB/AST/3PT/STL/BLK) — they rarely have 2-sided
-            # arb liquidity and massively inflate fetch time.
-            ALL_SCAN_SERIES = [
+            # For "All" scans: default to markets only (games, spreads, totals).
+            # Props available via market_type='props' or 'all'.
+            ALL_MARKET_SERIES = [
                 'KXNBAGAME','KXNBASPREAD','KXNBATOTAL',
                 'KXNFLGAME','KXNFLSPREAD','KXNFLTOTAL',
-                'KXNHLGAME','KXNHLSPREAD','KXNHLTOTAL','KXNHLGOAL',
+                'KXNHLGAME','KXNHLSPREAD','KXNHLTOTAL',
                 'KXMLBGAME','KXMLBSPREAD','KXMLBTOTAL',
                 'KXMLSGAME','KXMLSSPREAD','KXMLSTOTAL',
                 'KXNCAAMBGAME','KXNCAAMBSPREAD','KXNCAAMBTOTAL',
                 'KXNCAAMB1HWINNER','KXNCAAMB1HSPREAD','KXNCAAMB1HTOTAL',
                 'KXNCAAWBGAME',
-                'KXEPLGAME','KXEPLSPREAD','KXEPLTOTAL','KXEPLGOAL',
-                'KXUCLGAME','KXUCLSPREAD','KXUCLTOTAL','KXUCLGOAL',
+                'KXEPLGAME','KXEPLSPREAD','KXEPLTOTAL',
+                'KXUCLGAME','KXUCLSPREAD','KXUCLTOTAL',
                 'KXATPMATCH','KXWTAMATCH',
                 'KXWBCGAME',
-                # KXVTBGAME, KXBSLGAME, KXABAGAME excluded — near-zero liquidity,
-                # bids sum nowhere near 100c, creates false arb signals
             ]
-            series_to_fetch = ALL_SCAN_SERIES
+            ALL_PROP_SERIES = [
+                'KXNBAPTS','KXNBAREB','KXNBAAST','KXNBA3PT','KXNBASTL','KXNBABLK','KXNBAMVP',
+                'KXNCAAMBPTS','KXNCAAMBREB','KXNCAAMBAST','KXNCAAMB3PT','KXNCAAMBSTL','KXNCAAMBBLK',
+                'KXNHLGOAL','KXMLBSTGAME',
+                'KXEPLGOAL','KXEPLBTTS','KXUCLGOAL','KXUCLBTTS','KXMLSBTTS',
+            ]
+            if market_type == 'props':
+                series_to_fetch = ALL_PROP_SERIES
+            elif market_type == 'all':
+                series_to_fetch = ALL_MARKET_SERIES + ALL_PROP_SERIES
+            else:  # 'markets' (default)
+                series_to_fetch = ALL_MARKET_SERIES
 
         # Fetch all open markets from each series (parallel, same pattern as /api/markets)
         def _fetch_arb_series(series):

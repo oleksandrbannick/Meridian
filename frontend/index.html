@@ -1437,12 +1437,17 @@
             </div>
             <!-- Row 3: mode-specific controls -->
             <div id="scan-instarb-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-                <span style="color:#8892a6;font-size:11px;font-weight:600;">Min Width¢:</span>
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Type:</span>
+                <button class="scan-mtype-pill active" data-mtype="markets" onclick="setScanMarketType('markets')" style="background:#00ff8822;color:#00ff88;border:1px solid #00ff8844;border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">Markets</button>
+                <button class="scan-mtype-pill" data-mtype="props" onclick="setScanMarketType('props')" style="background:transparent;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">Props</button>
+                <button class="scan-mtype-pill" data-mtype="all" onclick="setScanMarketType('all')" style="background:transparent;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All</button>
+                <span style="color:#333;font-size:11px;">|</span>
+                <span style="color:#8892a6;font-size:11px;font-weight:600;">Min¢:</span>
                 <input type="number" id="scan-min-width" min="1" max="20" value="3"
-                       style="width:52px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                       style="width:46px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">Qty:</span>
                 <input type="number" id="scan-qty" min="1" max="50" value="1"
-                       style="width:52px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
+                       style="width:46px;padding:5px;background:#0a0e1a;border:1px solid #2a3550;border-radius:6px;color:#fff;font-size:13px;font-weight:600;text-align:center;">
             </div>
             <div id="scan-anchor-controls" style="display:none;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
                 <span style="color:#8892a6;font-size:11px;font-weight:600;">Signal:</span>
@@ -3074,7 +3079,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=1775350005"></script>
+    <script src="app.js?v=1775350006"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

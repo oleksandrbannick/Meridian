@@ -9890,9 +9890,7 @@ def _handle_phantom(bot_id, bot, actions):
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                # Hard timeout: 45s regardless of _at_bid (amend may be failing with 409)
-                _hard_ceiling = _ceiling_elapsed >= 45
-                if (_ceiling_elapsed >= 15 and _at_bid and not _has_partial_fills) or _hard_ceiling:
+                if _ceiling_elapsed >= 15 and not _has_partial_fills:
                     bot_log('PHANTOM_CEILING_TIMEOUT', bot_id, {
                         'wait_s': round(wait_s, 1), 'ceiling_elapsed': round(_ceiling_elapsed, 1),
                         'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

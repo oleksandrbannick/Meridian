@@ -7678,11 +7678,20 @@ async function loadBots() {
                     }
                     return sum + estPnl;
                 }
-                const rawProfit = (b.profit_per ?? (100 - (b.yes_price || 0) - (b.no_price || 0))) * (b.quantity || 1);
-                // Subtract estimated maker fees
-                const yp = b.yes_price || 0, np = b.no_price || 0, q = b.quantity || 1;
-                const fee = (yp > 0 && np > 0) ? kalshiFeeCents(yp, np, q) : 0;
-                return sum + rawProfit - fee;
+                // Regular Arb (both_posted): use lifetime_pnl from completed runs, NOT theoretical profit
+                const lifetimePnl = b.lifetime_pnl ?? b.net_pnl_cents ?? 0;
+                const yFillCnt = b.yes_fill_qty || 0;
+                const nFillCnt = b.no_fill_qty || 0;
+                const bQty = b.quantity || 1;
+                if (yFillCnt >= bQty && nFillCnt >= bQty) {
+                    // Both filled on current run — count theoretical as locked
+                    const yp = b.yes_price || 0, np = b.no_price || 0;
+                    const rawProfit = (100 - yp - np) * bQty;
+                    const fee = (yp > 0 && np > 0) ? kalshiFeeCents(yp, np, bQty) : 0;
+                    return sum + lifetimePnl + rawProfit - fee;
+                }
+                // Not fully filled — only count completed runs' P&L
+                return sum + lifetimePnl;
             }, 0);
 
             const groupHeader = document.createElement('div');
@@ -8403,6 +8412,28 @@ async function loadBots() {
                     <span>${phase === 'live' ? '🔴 Live' : '⏳ Patient'}</span>
                 </div>
                 ${stopLossInfo}
+                ${(() => {
+                    // Run history for Regular Arb bots (non-Apex, non-Phantom)
+                    if (isLadderArb || isAnchorDog || isAnchorLadder) return '';
+                    const runHist = bot._run_history || [];
+                    const ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
+                    if (runHist.length === 0 && ltPnl === 0) return '';
+                    let html = '';
+                    if (runHist.length > 0) {
+                        html += '<div style="margin-top:6px;border-top:1px solid #1e2740;padding-top:4px;">';
+                        html += runHist.map((r, i) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;${i > 0 ? 'border-top:1px solid #1e274033;' : ''}font-size:10px;">
+                            <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
+                            <span style="color:#8892a6;">Y${r.dog_price || r.yes_price || '?'}¢ + N${r.fav_price || r.no_price || '?'}¢</span>
+                            <span style="color:#8892a6;">x${r.qty || bot.quantity || 1}</span>
+                            <span style="color:${(r.pnl||0) >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${(r.pnl||0) >= 0 ? '+' : ''}${r.pnl||0}¢</span>
+                        </div>`).join('');
+                        html += '</div>';
+                    }
+                    if (ltPnl !== 0 || runHist.length > 0) {
+                        html += `<div style="text-align:center;padding:3px 6px;margin-top:4px;font-size:10px;"><span style="color:${ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total P&L: ${ltPnl >= 0 ? '+' : ''}${ltPnl}¢</span></div>`;
+                    }
+                    return html;
+                })()}
                 ${waitRepeatInfo}
                 ${driftInfo}
                 <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${createdMin}m</div>`;

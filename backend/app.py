@@ -6050,6 +6050,7 @@ def create_bot():
             'live_yes_ask':     live_yes_ask,
             'live_no_ask':      live_no_ask,
             'last_price_update': time.time(),
+            'bot_category':     'arb',
             'market_type':      _detect_market_type(ticker),
             'spread_line':      _extract_spread_line(ticker),
             'timeout_min':      _late_game_timeout_min(ticker, yes_price >= no_price, arb_width if arb_width > 0 else profit_per),

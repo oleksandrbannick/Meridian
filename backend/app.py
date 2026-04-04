@@ -2935,6 +2935,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             continue
         if bot.get('type') == 'watch':
             continue
+        # Skip phantom/ladder bots — handled by dedicated anchor-dog/ladder sections below
+        if bot.get('bot_category') in ('anchor_dog', 'anchor_ladder'):
+            continue
         status = bot.get('status', '')
         if status in ('stopped', 'completed'):
             continue

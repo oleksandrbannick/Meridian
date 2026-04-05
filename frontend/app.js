@@ -3143,8 +3143,9 @@ function displayOrderbookLadder(orderbook) {
     function _analyzeSide(orders, bestBid) {
         let totalQty = 0, levels = 0, gaps = 0;
         const filledCents = new Set();
-        if (!bestBid) return { totalQty: 0, levels: 0, gaps: 0, perLevel: 0, top3Qty: 0, wallByDepth: {} };
+        if (!bestBid) return { totalQty: 0, levels: 0, gaps: 0, perLevel: 0, top3Qty: 0, top1Qty: 0, wallByDepth: {} };
         let top3Qty = 0, top3Count = 0;
+        let top1Qty = 0; // largest single level — detects concentrated walls
         // Wall analysis: contracts between bid and bid-N for each depth level
         const wallByDepth = {};
         for (const o of orders) {
@@ -3153,10 +3154,12 @@ function displayOrderbookLadder(orderbook) {
             totalQty += qty;
             levels++;
             filledCents.add(price);
+            if (qty > top1Qty) top1Qty = qty;
             if (top3Count < 3) { top3Qty += qty; top3Count++; }
         }
         // Build wall: how many contracts sit between bid and bid-depth (exclusive of bid-depth)
-        for (let d = 3; d <= 8; d++) {
+        // Range 3-12¢ so depth rec can look up deeper levels after gap adjustments
+        for (let d = 3; d <= 12; d++) {
             let wall = 0;
             for (const o of orders) {
                 const { price, qty } = parseOrderLevel(o);
@@ -3169,7 +3172,7 @@ function displayOrderbookLadder(orderbook) {
             if (!filledCents.has(c)) gaps++;
         }
         const perLevel = levels > 0 ? Math.round(totalQty / levels) : 0;
-        return { totalQty, levels, gaps, perLevel, top3Qty, wallByDepth };
+        return { totalQty, levels, gaps, perLevel, top3Qty, top1Qty, wallByDepth };
     }
 
     const yesAnalysis = _analyzeSide(yesOrders, bestYesBid);
@@ -3211,16 +3214,28 @@ function displayOrderbookLadder(orderbook) {
     const dogGapPenalty = dogAnalysis.gaps >= 3 ? -10 : dogAnalysis.gaps >= 2 ? -5 : 0;
     // Fav gaps penalty — hedge may miss levels
     const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
-    // Max safe qty: fav top-3 bids can absorb your hedge
-    const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 2));
+    // Fav concentration penalty — if 70%+ of depth is one wall, it's fragile
+    // One cancel/sweep of that level collapses the entire fav side
+    const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
+    const concPenalty = _favConc > 0.8 ? -12 : _favConc > 0.6 ? -6 : 0;
+    // Room penalty — maker so no fee on fills, but room = profit margin per contract
+    // Room + depth = actual profit. Room <= 1 means fav bid drop of 1¢ kills the trade
+    const roomPenalty = hedgeRoom <= 0 ? -20 : hedgeRoom === 1 ? -10 : hedgeRoom === 2 ? -4 : 0;
+    // Max safe qty: fav top-3 bids can absorb your hedge (conservative: /3 not /2)
+    const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 3));
 
-    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + favTop3Pts + favDomPts + favNoGapPts + dogGapPenalty + gapPenalty)));
+    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + favTop3Pts + favDomPts + favNoGapPts + dogGapPenalty + gapPenalty + concPenalty + roomPenalty)));
     const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
     const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
 
+    // Fill difficulty — how likely your anchor actually fills (separate from catch quality)
+    const fillDiff = dogDepth < 100 ? 'easy fill' : dogDepth < 500 ? 'moderate' : dogDepth < 2000 ? 'busy' : dogDepth < 10000 ? 'crowded' : 'packed';
+    const fillCol = dogDepth < 100 ? '#00ff88' : dogDepth < 500 ? '#00ff88' : dogDepth < 2000 ? '#ffaa00' : '#ff4444';
+
     // Quality notes
-    const dogNote = dogDepth < 50 ? 'thin — easy fill' : dogDepth < 200 ? 'moderate' : dogDepth < 500 ? 'busy' : 'crowded';
+    const dogNote = fillDiff;
     const favNote = _favPL >= 20 ? 'thick — easy catch' : _favPL >= 10 ? 'ok — hedge should catch' : _favPL >= 5 ? 'light — hedge may lag' : 'thin — hedge may miss';
+    const concWarning = _favConc > 0.6 ? ` · ⚠ ${Math.round(_favConc*100)}% in 1 lvl` : '';
 
     // Store for ghost score updates + depth rec + bot creation
     const depthPts = minDepth >= 500 ? 35 : minDepth >= 200 ? 30 : minDepth >= 100 ? 22 : minDepth >= 50 ? 14 : minDepth >= 20 ? 8 : 0;
@@ -3233,7 +3248,8 @@ function displayOrderbookLadder(orderbook) {
             dogDepth, favDepth, dogBid: dogBidPrice, favBid: favBidPrice,
             dogPerLevel: dogAnalysis.perLevel, favPerLevel: favAnalysis.perLevel,
             dogGaps: dogAnalysis.gaps, favGaps: favAnalysis.gaps,
-            favTop3: favAnalysis.top3Qty, maxSafeQty,
+            favTop3: favAnalysis.top3Qty, favTop1: favAnalysis.top1Qty,
+            favConc: _favConc, maxSafeQty,
             dogWall: dogAnalysis.wallByDepth,
             hedgeRoom, catchScore,
             ts: Date.now()
@@ -3242,7 +3258,7 @@ function displayOrderbookLadder(orderbook) {
     }
 
     // Score breakdown tooltip
-    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · NoGap: ${favNoGapPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts`;
+    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · NoGap: ${favNoGapPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts · Conc: ${concPenalty}pts · Room: ${roomPenalty}pts`;
 
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -3254,12 +3270,12 @@ function displayOrderbookLadder(orderbook) {
                 <div style="color:${dogCol};font-size:9px;font-weight:700;margin-bottom:2px;">DOG · ${dogSideLabel} @ ${dogBidPrice}¢</div>
                 <div style="color:${dogCol};font-weight:800;font-size:18px;">${dogDepth.toLocaleString()}</div>
                 <div style="color:${dogCol};font-size:8px;font-weight:600;">${dogAnalysis.perLevel}/lvl · ${dogAnalysis.gaps} gaps</div>
-                <div style="color:${dogCol};font-size:8px;">${dogNote}</div>
+                <div style="color:${fillCol};font-size:8px;font-weight:600;">${dogNote}</div>
             </div>
             <div style="text-align:center;background:${favCol}08;border:1px solid ${favCol}22;border-radius:6px;padding:6px;">
                 <div style="color:${favCol};font-size:9px;font-weight:700;margin-bottom:2px;">FAV · ${favSideLabel} @ ${favBidPrice}¢</div>
                 <div style="color:${favCol};font-weight:800;font-size:18px;">${favDepth.toLocaleString()}</div>
-                <div style="color:${favCol};font-size:8px;font-weight:600;">${favAnalysis.perLevel}/lvl · ${favAnalysis.gaps} gaps</div>
+                <div style="color:${favCol};font-size:8px;font-weight:600;">${favAnalysis.perLevel}/lvl · ${favAnalysis.gaps} gaps${concWarning}</div>
                 <div style="color:${favCol};font-size:8px;">${favNote}</div>
             </div>
         </div>
@@ -3949,6 +3965,7 @@ function updateAnchorPreview() {
             let recDepth = 5;  // default
             let reasons = [];
             const dogWall = _obCache.dogWall || {};
+            const favConc = _obCache.favConc || 0;
             // Primary: fav contracts/level (how fast hedge fills)
             if (fpl >= 50) { recDepth = 3; reasons.push(`fav ${fpl}/lvl thick`); }
             else if (fpl >= 20) { recDepth = 4; reasons.push(`fav ${fpl}/lvl solid`); }
@@ -3958,7 +3975,7 @@ function updateAnchorPreview() {
             // Dog wall check: need enough contracts protecting you at the chosen depth
             // If the wall at recDepth is too thin (<30 contracts), widen until wall is adequate
             const minWall = 30;  // need at least 30 contracts between you and the bid
-            while (recDepth < 8 && (dogWall[recDepth] || 0) < minWall) {
+            while (recDepth < 10 && (dogWall[recDepth] || 0) < minWall) {
                 recDepth++;
             }
             if ((dogWall[recDepth] || 0) < minWall) {
@@ -3967,31 +3984,44 @@ function updateAnchorPreview() {
                 reasons.push(`wall: ${dogWall[recDepth]||0}`);
             }
             // Dog gaps = sweeps skip cents, your anchor is closer to getting hit than it looks
-            if (dGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${dGaps} dog gaps`); }
-            else if (dGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${dGaps} dog gaps`); }
+            // Use absolute minimums — NOT additive (old code was Math.max(x, x+2) which always = x+2)
+            if (dGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${dGaps} dog gaps`); }
+            else if (dGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${dGaps} dog gaps`); }
+            else if (dGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${dGaps} dog gaps`); }
             // Fav gaps = hedge may miss levels, need wider depth for safety
-            if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} fav gaps`); }
-            else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} fav gaps`); }
+            if (fGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${fGaps} fav gaps`); }
+            else if (fGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${fGaps} fav gaps`); }
+            else if (fGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${fGaps} fav gaps`); }
+            // Dog crowd: if dog is packed, pull depth SHALLOWER — deeper = astronomically low fill prob
+            // Thin dog + thick fav = phantom sweet spot
+            if (dd > 10000) { recDepth = Math.max(3, recDepth - 1); reasons.push('packed dog'); }
+            else if (dd < 100) { reasons.push('thin dog — fast fill'); }
+            // Fav concentration: if 80%+ is one wall level, it's fragile — bump minimum depth
+            if (favConc > 0.8) { recDepth = Math.max(recDepth, 6); reasons.push(`fav ${Math.round(favConc*100)}% wall`); }
             // Fav/dog ratio: fav contracts absorbing vs dog contracts that must drop to fill you
-            // High ratio = fav dwarfs the sweep that reaches you, hedge is stable
-            // Low ratio = same flow that fills you also moves fav side, toxic fill risk
             const favTop3 = _obCache.favTop3 || 0;
-            const wallAtRec = dogWall[recDepth] || dogWall[Math.min(recDepth, 8)] || 0;
+            const wallAtRec = dogWall[Math.min(recDepth, 12)] || 0;
             if (wallAtRec > 0) {
                 const ratio = favTop3 / wallAtRec;
                 if (ratio >= 10) { recDepth = Math.max(recDepth - 1, 3); reasons.push(`fav/dog ${ratio.toFixed(0)}x safe`); }
-                else if (ratio < 2) { recDepth = recDepth + 1; reasons.push(`fav/dog ${ratio.toFixed(1)}x thin`); }
-                else if (ratio < 1) { recDepth = recDepth + 2; reasons.push(`fav/dog ${ratio.toFixed(1)}x danger`); }
+                else if (ratio < 2) { recDepth = Math.min(recDepth + 1, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x thin`); }
+                else if (ratio < 1) { recDepth = Math.min(recDepth + 2, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x danger`); }
             }
+            // Hard cap recDepth to wall data range
+            recDepth = Math.min(recDepth, 12);
             const recNote = reasons.join(' · ');
-            const recMatch = anchorDepth >= recDepth && anchorDepth <= recDepth + 2;
-            const recCol = recMatch ? '#00ff88' : '#ffaa00';
+            // Depth match: green = good, red = too shallow (risky), yellow = too deep (low fill prob)
+            const recCol = anchorDepth >= recDepth && anchorDepth <= recDepth + 3 ? '#00ff88'
+                : anchorDepth < recDepth ? '#ff4444' : '#ffaa00';
+            const depthWarnTxt = anchorDepth < recDepth ? ` <span style="color:#ff4444;font-weight:700;">⚠ too shallow!</span>`
+                : anchorDepth > recDepth + 3 ? ` <span style="color:#ffaa00;font-weight:700;">deep — lower fill prob</span>` : '';
             const thinWarn = fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
+            const concNote = favConc > 0.6 ? ` · <span style="color:#ff8800;">${Math.round(favConc*100)}% in 1 wall</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:${recCol}11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${recCol};font-weight:700;">📊 Rec: ${recDepth}¢+</span> ` +
-                `<span style="color:#8892a6;">${recNote}</span>${thinWarn}` +
+                `<span style="color:#8892a6;">${recNote}</span>${thinWarn}${depthWarnTxt}` +
                 `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
-                `dog ${dd.toLocaleString()} (${_obCache.dogPerLevel||0}/lvl) @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢` +
+                `dog ${dd.toLocaleString()} (${_obCache.dogPerLevel||0}/lvl) @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
                 `</div>` +
                 `<div style="margin-top:2px;color:#ffaa00;font-size:9px;font-weight:600;">Max safe qty: ${maxQty} <span style="color:#555;font-weight:400;">(fav top 3 bids: ${_obCache.favTop3||0})</span></div>` +
                 `</div>`;

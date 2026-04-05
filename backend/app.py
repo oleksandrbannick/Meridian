@@ -2319,6 +2319,14 @@ def load_state():
                 if len(_old_ids) > 1 or (_old_ids and _cur_oid and _old_ids != [_cur_oid]):
                     _bot['_all_dog_order_ids'] = [_cur_oid] if _cur_oid else []
                     _any_cleared = True
+                # Reset fill counts for dog_anchor_posted bots — monitor will
+                # re-detect real fills on first cycle via API verification
+                if _bot.get('status') == 'dog_anchor_posted' and _bot.get('dog_fill_qty', 0) > 0:
+                    _bot['dog_fill_qty'] = 0
+                    _bot['yes_fill_qty'] = 0
+                    _bot['no_fill_qty'] = 0
+                    _bot['dog_filled_at'] = None
+                    _any_cleared = True
                 if _any_cleared:
                     _transient_cleared += 1
                     print(f'🔧 STARTUP FIX: {_bid[:40]} cleared stuck thread flags + stale order IDs')

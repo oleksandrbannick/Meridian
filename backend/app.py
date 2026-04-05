@@ -2441,6 +2441,22 @@ class RateLimiter:
             # Sleep OUTSIDE the lock so priority callers aren't blocked
             time.sleep(sleep_time)
 
+    def try_wait(self):
+        """Non-blocking: return True if a token was available, False if burst exhausted.
+        Use this inside the monitor lock to avoid blocking the entire server."""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self._window_start
+            if elapsed >= 1.0:
+                self._window_start = now
+                self._count = 1
+                return True
+            effective_burst = self.burst - self.RESERVED_HEDGE_TOKENS
+            if self._count < effective_burst:
+                self._count += 1
+                return True
+            return False
+
 api_rate_limiter = RateLimiter(burst=10)  # Kalshi basic tier: 10 writes/s burst
 api_read_limiter = RateLimiter(burst=15)  # Kalshi basic tier: 20 reads/s (keep 5 headroom)
 
@@ -6409,11 +6425,11 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     hedge_oid = rung.get('hedge_order_id')
 
     # ── Poll hedge fill status (backup for WS misses) ──
+    # Uses try_wait() to NEVER block the monitor lock
     if hedge_oid:
-        if now - rung.get('_last_hedge_poll', 0) >= 5:
+        if now - rung.get('_last_hedge_poll', 0) >= 5 and api_read_limiter.try_wait():
             rung['_last_hedge_poll'] = now
             try:
-                api_read_limiter.wait()
                 resp = kalshi_client.get_order(hedge_oid)
                 ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
                 filled = _parse_fill_count(ord_data)
@@ -6442,30 +6458,31 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
 
     # Get live market prices — WS first, orderbook fallback every 15s
     # ALWAYS refresh periodically — WS can silently stop updating, leaving stale prices
+    # Uses try_wait() to NEVER block the monitor lock — skip if rate limit exhausted
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
     anchor_bid_live = bot.get(f'live_{anchor_side}_bid', 0)
-    _ob_stale = now - rung.get('_last_ob_fallback', 0) > 15  # refresh every 15s regardless
+    _ob_stale = now - rung.get('_last_ob_fallback', 0) > 15
     if hedge_bid <= 0 or anchor_bid_live <= 0 or _ob_stale:
         if now - rung.get('_last_ob_fallback', 0) > (10 if hedge_bid <= 0 else 15):
-            rung['_last_ob_fallback'] = now
-            try:
-                api_read_limiter.wait()
-                _ob = kalshi_client.get_market_orderbook(bot['ticker'])
-                _hb = _best_bid(_ob, hedge_side)
-                _ha = _best_ask(_ob, hedge_side)
-                _ab = _best_bid(_ob, anchor_side)
-                if _hb > 0:
-                    hedge_bid = _hb
-                    bot[f'live_{hedge_side}_bid'] = _hb
-                if _ha > 0:
-                    hedge_ask = _ha
-                    bot[f'live_{hedge_side}_ask'] = _ha
-                if _ab > 0:
-                    anchor_bid_live = _ab
-                    bot[f'live_{anchor_side}_bid'] = _ab
-            except Exception:
-                pass
+            if api_read_limiter.try_wait():  # non-blocking — skip if burst exhausted
+                rung['_last_ob_fallback'] = now
+                try:
+                    _ob = kalshi_client.get_market_orderbook(bot['ticker'])
+                    _hb = _best_bid(_ob, hedge_side)
+                    _ha = _best_ask(_ob, hedge_side)
+                    _ab = _best_bid(_ob, anchor_side)
+                    if _hb > 0:
+                        hedge_bid = _hb
+                        bot[f'live_{hedge_side}_bid'] = _hb
+                    if _ha > 0:
+                        hedge_ask = _ha
+                        bot[f'live_{hedge_side}_ask'] = _ha
+                    if _ab > 0:
+                        anchor_bid_live = _ab
+                        bot[f'live_{anchor_side}_bid'] = _ab
+                except Exception:
+                    pass
     current_hedge_price = rung.get('hedge_price', 0)
 
     # Hedge order lost? Repost at bid
@@ -6626,7 +6643,9 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
         # send original total so only the unfilled portion moves to new price.
         try:
             price_kwargs = {f'{hedge_side}_price': new_price}
-            api_rate_limiter.wait()
+            if not api_rate_limiter.try_wait():
+                return  # skip this snap cycle — will retry next tick
+
             amend_resp = kalshi_client.amend_order(hedge_oid, ticker=ticker, side=hedge_side,
                                      count=total_qty, action='buy', **price_kwargs)
             # Capture new order ID if Kalshi reassigned (amend = cancel+repost internally)
@@ -17770,13 +17789,18 @@ PNL_LOSS_RESULTS = (
     'arb_loss',  # anchor-ladder/dog: completed with negative P&L (fees exceeded spread)
     'rebalancer_scrape',  # meridian rebalancer sold a filled leg back
     'smart_exit',  # cross-market: sold losing leg to free capital
-    # timeout_exit_* removed — amend completes the arb, recorded as 'completed' now
+    'settled_loss',  # phantom: settled as loss (no yes/no suffix)
+    'ladder_sellback_ghost',  # phantom ladder: ghost fill sellback
+    'anchor_sellback_position_cleared',  # phantom: sellback with position already cleared
+    'apex_settled_loss',  # apex: market settled against hedge
+    'manual_exit_apex',  # apex: manual exit (zero P&L)
 )
 PNL_WIN_RESULTS = (
     'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
     'middle_hit', 'arb_win',  # middle bot results
     'take_profit_watch',  # straight bet take-profit hit
     'apex_rung',  # Apex 2.0 per-rung arb completion
+    'apex_settled_win',  # apex: market settled in favor of hedge
 )
 
 def _compute_pnl_bucket(trades, category=None):

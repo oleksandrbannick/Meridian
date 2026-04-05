@@ -3940,6 +3940,7 @@ function updateAnchorPreview() {
             const favBid = _obCache.favBid || 0;
             const fpl = _obCache.favPerLevel || 0;  // contracts per level on fav side
             const fGaps = _obCache.favGaps || 0;
+            const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
             // Depth rec based on contracts-per-level (not total depth)
             // Thick book per-level = stable, tight depth OK. Thin per-level = volatile, wider depth.
@@ -3963,7 +3964,10 @@ function updateAnchorPreview() {
             } else {
                 reasons.push(`wall: ${dogWall[recDepth]||0}`);
             }
-            // Gaps on fav side = sweeps crash through, need wider depth
+            // Dog gaps = sweeps skip cents, your anchor is closer to getting hit than it looks
+            if (dGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${dGaps} dog gaps`); }
+            else if (dGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${dGaps} dog gaps`); }
+            // Fav gaps = hedge may miss levels, need wider depth for safety
             if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} fav gaps`); }
             const recNote = reasons.join(' · ');

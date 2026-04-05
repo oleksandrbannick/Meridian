@@ -9294,19 +9294,6 @@ def _handle_phantom(bot_id, bot, actions):
                     if not _is_cross_drift:
                         _opp = 'yes' if dog_side == 'no' else 'no'
                         _opp_bid = _best_bid(ob, _opp)
-                        # If new dog side is also above 40¢, both sides are coin-flip — just stop
-                        if _opp_bid > 40:
-                            print(f'🛑 PHANTOM COIN-FLIP STOP: {bot_id} both sides >40¢ ({dog_side}@{current_dog_bid}¢, {_opp}@{_opp_bid}¢) — stopping')
-                            bot_log('PHANTOM_COINFLIP_STOP', bot_id, {
-                                'dog_side': dog_side, 'dog_bid': current_dog_bid,
-                                'opp_side': _opp, 'opp_bid': _opp_bid,
-                            })
-                            _safe_cancel(dog_order_id, f'phantom coinflip stop {bot_id}')
-                            bot['status'] = 'completed'
-                            bot['completed_at'] = now
-                            bot['_stop_reason'] = f'coin-flip: both sides >40¢'
-                            save_state()
-                            return
                         if _opp_bid > 0 and _opp_bid < current_dog_bid:
                             print(f'🔄 PHANTOM DRIFT FLIP: {bot_id} {dog_side}@{current_dog_bid}¢→fav, {_opp}@{_opp_bid}¢→dog')
                             _safe_cancel(dog_order_id, f'phantom drift flip {bot_id}')
@@ -9358,15 +9345,9 @@ def _handle_phantom(bot_id, bot, actions):
                 anchor_depth = bot.get('anchor_depth', 5)
                 new_dog_price = max(1, current_dog_bid - anchor_depth)
 
-                # Price ceiling: don't repost UP if new dog price > 40¢ (coin-flip territory)
-                if new_dog_price > 40 and new_dog_price > bot.get('dog_price', 0) and not retreat_triggered:
-                    print(f'🛡️ PHANTOM PRICE CAP: {bot_id} new_dog={new_dog_price}¢ > 40¢ — skipping repost up')
-                    bot_log('PHANTOM_PRICE_CAP_SKIP', bot_id, {
-                        'new_dog': new_dog_price, 'current_dog': bot.get('dog_price', 0),
-                        'dog_bid': current_dog_bid,
-                    })
-                    bot['posted_at'] = now
-                    return
+                # Hard price ceiling: dog never exceeds 40¢ — park there and wait
+                if new_dog_price > 40:
+                    new_dog_price = 40
 
                 # Price floor: don't repost at < 3¢ — no viable edge at that level
                 if new_dog_price < 3:

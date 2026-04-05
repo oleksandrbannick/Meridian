@@ -12807,6 +12807,7 @@ async function loadDogHistory() {
     const calPanel   = document.getElementById('dog-pnl-calendar-panel');
     const statsPanel = document.getElementById('dog-stats-panel');
     const widthPanel = document.getElementById('dog-width-panel');
+    const depthPanel = document.getElementById('dog-depth-panel');
     const listEl     = document.getElementById('dog-history-list');
     if (!listEl) return;
     try {
@@ -12835,6 +12836,7 @@ async function loadDogHistory() {
             const wins  = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n >= 0 && (t.profit_cents||0) > 0; }).length;
             const losses = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n < 0; }).length;
             const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.arb_width||0), 0) / trades.length).toFixed(1) : '—';
+            const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
             const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
             // Fetch /api/pnl for lifetime + daily cards
             let pnl = {};
@@ -12872,6 +12874,10 @@ async function loadDogHistory() {
                         <div style="color:#00aaff;font-size:24px;font-weight:800;">${avgWidth}¢</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Depth Floor</div>
+                        <div style="color:#ff66aa;font-size:24px;font-weight:800;">${avgDepth}¢</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Sellbacks</div>
                         <div style="color:#ff4444;font-size:24px;font-weight:800;">${sellbacks}</div>
                         <div style="color:#555;font-size:10px;margin-top:2px;">safety exits</div>
@@ -12905,6 +12911,35 @@ async function loadDogHistory() {
                 </div>`;
         }
 
+        // ── Depth Floor breakdown ──
+        if (depthPanel) {
+            const depthMap = {};
+            trades.forEach(t => {
+                const d = t.anchor_depth || 0;
+                if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0 };
+                const net = (t.profit_cents||0) - (t.loss_cents||0);
+                depthMap[d].net += net;
+                depthMap[d].count++;
+                if (net >= 0 && (t.profit_cents||0) > 0) depthMap[d].wins++;
+                else if (net < 0) depthMap[d].losses++;
+            });
+            const depths = Object.values(depthMap).sort((a,b) => a.depth - b.depth);
+            depthPanel.innerHTML = depths.length === 0 ? '' : `
+                <h4 style="color:#ff66aa;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Depth Floor Performance</h4>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;">
+                    ${depths.map(d => {
+                        const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
+                        const total = d.wins + d.losses;
+                        return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #1e2740;">
+                            <div style="color:#ff66aa;font-size:14px;font-weight:800;">${d.depth}¢</div>
+                            <div style="color:${dCol};font-size:12px;font-weight:700;">${d.net>=0?'+':''}${d.net}¢</div>
+                            <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
+                            <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
+                        </div>`;
+                    }).join('')}
+                </div>`;
+        }
+
         // ── Trade log ──
         if (trades.length === 0) {
             listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No Phantom trades yet. Deploy a Phantom bot to get started.</p>';
@@ -12931,6 +12966,7 @@ async function loadDogHistory() {
             const favPrice = t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?';
             const phaseBadge = t.game_phase ? `<span style="background:${t.game_phase==='live'?'#00ff8822':'#8892a622'};color:${t.game_phase==='live'?'#00ff88':'#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${t.game_phase.toUpperCase()}</span>` : '';
             const widthBadge = t.arb_width ? `<span style="color:#ffaa00;font-weight:700;">⇄ ${t.arb_width}¢</span>` : '';
+            const depthBadge = t.anchor_depth ? `<span style="color:#ff66aa;font-weight:700;">⬇ ${t.anchor_depth}¢</span>` : '';
             // Rungs detail for ladder trades
             const rungsHtml = (t.rungs_detail && t.rungs_detail.length > 1)
                 ? `<div style="color:#8892a6;font-size:9px;margin-top:2px;">${t.rungs_detail.map(r => `${r.price}¢×${r.qty}`).join(' · ')}</div>`
@@ -12944,6 +12980,7 @@ async function loadDogHistory() {
                         ${t.cross_market ? '<span style="background:#00ddff18;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;border:1px solid #00ddff44;">✕ CROSS</span>' : '<span style="background:#8892a612;color:#8892a6;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;">SAME MKT</span>'}
                         ${phaseBadge}
                         ${widthBadge}
+                        ${depthBadge}
                         ${t.repeat_cycle && t.repeat_total > 1 ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t.smart_mode ? 'Smart ' : ''}Run ${t.repeat_cycle}/${t.repeat_total}</span>` : ''}
                     </div>
                     <div style="text-align:right;">

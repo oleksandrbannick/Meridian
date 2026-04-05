@@ -2192,6 +2192,19 @@ def _migrate_006_dedup_rung_trades():
     removed = before - len(trade_history)
     print(f'📊 Migration 006: removed {removed} duplicate rung trades ({before} → {len(trade_history)})')
 
+def _migrate_007_backfill_anchor_depth():
+    """Backfill anchor_depth on historical phantom trades that lack it."""
+    global trade_history
+    updated = 0
+    for t in trade_history:
+        if t.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+            continue
+        if t.get('anchor_depth') is not None:
+            continue
+        t['anchor_depth'] = 5
+        updated += 1
+    print(f'📊 Migration 007: backfilled anchor_depth on {updated} phantom trades')
+
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
@@ -2199,6 +2212,7 @@ MIGRATIONS = [
     ('004_fix_completed_labels', _migrate_004_fix_completed_labels),
     ('005_fix_rebalancer_pnl', _migrate_005_fix_rebalancer_pnl),
     ('006_dedup_rung_trades', _migrate_006_dedup_rung_trades),
+    ('007_backfill_anchor_depth', _migrate_007_backfill_anchor_depth),
 ]
 
 def run_migrations():
@@ -3050,8 +3064,12 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         elif order_id in (bot.get('_all_dog_order_ids') or []) and bot['status'] == 'dog_anchor_posted':
             # Cancel-race: old order filled after repost — recover the fill
             matched = 'dog'
+            # Cancel the NEW order that replaced this one — otherwise it stays live and creates orphans
+            _current_oid = bot.get('dog_order_id')
+            if _current_oid and _current_oid != order_id:
+                threading.Thread(target=lambda oid=_current_oid: _safe_cancel(oid, f'cancel_race_cleanup_{bot_id}'), daemon=True).start()
             bot['dog_order_id'] = order_id  # restore old order ID so hedge can proceed
-            print(f'🔍 WS CANCEL-RACE CATCH: {bot_id} fill on old order {order_id[:12]}')
+            print(f'🔍 WS CANCEL-RACE CATCH: {bot_id} fill on old order {order_id[:12]}, cancelled new order {(_current_oid or "?")[:12]}')
         elif order_id == bot.get('fav_order_id') and bot['status'] == 'fav_hedge_posted':
             matched = 'fav'
         if not matched:
@@ -5040,6 +5058,7 @@ def _record_trade(record: dict, bot: dict = None):
         record.setdefault('dog_order_id', bot.get('dog_order_id'))
         record.setdefault('fav_order_id', bot.get('fav_order_id'))
         record.setdefault('hedge_order_id', bot.get('hedge_order_id'))
+        record.setdefault('anchor_depth', bot.get('anchor_depth'))
     trade_history.insert(0, record)
     # Crash-safe append — survives server crashes between save_state() calls
     try:
@@ -9412,6 +9431,31 @@ def _handle_phantom(bot_id, bot, actions):
                     print(f'⚠ REPOST ABORT: {bot_id} WS fill detected during cancel — hedge already firing')
                     save_state()
                     return
+                # Verify old order has 0 fills — catch race fills WS might have missed
+                try:
+                    api_read_limiter.wait()
+                    _old_resp = kalshi_client.get_order(dog_order_id)
+                    _old_data = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
+                    _old_fills = _parse_fill_count(_old_data)
+                    if _old_fills > 0:
+                        print(f'🔍 REPOST RACE CATCH: {bot_id} old order {dog_order_id[:12]} filled {_old_fills} during cancel!')
+                        bot['dog_fill_qty'] = _old_fills
+                        if dog_side == 'yes':
+                            bot['yes_fill_qty'] = _old_fills
+                        else:
+                            bot['no_fill_qty'] = _old_fills
+                        if _old_fills >= qty and not bot.get('_hedge_fired'):
+                            bot['_hedge_fired'] = True
+                            bot['dog_filled_at'] = time.time()
+                            bot['status'] = 'dog_filled'
+                            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                            bot_log('PHANTOM_REPOST_RACE_RECOVERED', bot_id, {
+                                'old_oid': dog_order_id[:12], 'fills': _old_fills, 'qty': qty,
+                            })
+                            save_state()
+                            return
+                except Exception as _rc_err:
+                    print(f'⚠ Repost race check failed: {_rc_err}')
 
                 new_resp, actual_new_price = create_order_maker(
                     ticker=ticker, side=dog_side, action='buy',
@@ -10018,7 +10062,8 @@ def _handle_phantom(bot_id, bot, actions):
                             'fee_cents': est_fee, 'result': 'anchor_partial_arb',
                             'timestamp': now, 'placed_at': bot.get('created_at', now),
                             'arb_width': bot.get('target_width', 0),
-                        })
+                            'bot_category': 'anchor_dog',
+                        }, bot)
                         # Now sell back only the uncovered dogs
                         bot['quantity'] = sell_qty  # temporarily set qty for sell-back
                         _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)

@@ -6440,13 +6440,14 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                     rung['hedge_order_id'] = None
                     hedge_oid = None
 
-    # Get live market prices — WS first, orderbook fallback if WS is empty
+    # Get live market prices — WS first, orderbook fallback every 15s
+    # ALWAYS refresh periodically — WS can silently stop updating, leaving stale prices
     hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
     hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
     anchor_bid_live = bot.get(f'live_{anchor_side}_bid', 0)
-    if hedge_bid <= 0 or anchor_bid_live <= 0:
-        # WS prices missing — fetch from orderbook so stop-loss can function
-        if now - rung.get('_last_ob_fallback', 0) > 10:  # throttle to every 10s
+    _ob_stale = now - rung.get('_last_ob_fallback', 0) > 15  # refresh every 15s regardless
+    if hedge_bid <= 0 or anchor_bid_live <= 0 or _ob_stale:
+        if now - rung.get('_last_ob_fallback', 0) > (10 if hedge_bid <= 0 else 15):
             rung['_last_ob_fallback'] = now
             try:
                 api_read_limiter.wait()

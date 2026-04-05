@@ -12828,33 +12828,31 @@ async function loadDogHistory() {
 
         // ── Stats panel ──
         if (statsPanel) {
-            const totalProfit = trades.reduce((s,t) => s + (t.profit_cents||0), 0);
-            const totalLoss   = trades.reduce((s,t) => s + (t.loss_cents||0), 0);
-            const totalFees   = trades.reduce((s,t) => s + (t.fee_cents||0), 0);
-            const net = totalProfit - totalLoss - totalFees;
-            const netCol = net >= 0 ? '#00ff88' : '#ff4444';
-            const wins  = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n >= 0 && (t.profit_cents||0) > 0; }).length;
-            const losses = trades.filter(t => { const n = (t.profit_cents||0) - (t.loss_cents||0); return n < 0; }).length;
-            const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
-            const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
-            const avgProfit = trades.length > 0 ? (net / trades.length).toFixed(1) : '—';
             const hedgeTrades = trades.filter(t => t.raw_hedge_ms != null);
             const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
-            // Fetch /api/pnl for lifetime + daily cards
+            const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
+            const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
+            // ALL stats from /api/pnl so they match Meet the Bots and calendar
             let pnl = {};
             try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
             const dLtNet = pnl.lifetime_dog_net_cents || 0;
             const dLtCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
             const dDNet = pnl.dog_net_cents || 0;
             const dDCol = dDNet >= 0 ? '#00ff88' : '#ff4444';
+            const ltWins = pnl.lifetime_dog_wins || 0;
+            const ltLosses = pnl.lifetime_dog_losses || 0;
+            const ltTotal = ltWins + ltLosses;
+            const ltWinRate = ltTotal > 0 ? Math.round(ltWins / ltTotal * 100) : 0;
+            const ltAvgProfit = ltTotal > 0 ? (dLtNet / ltTotal).toFixed(1) : '—';
+            const ltAvgCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
 
-            statsPanel.innerHTML = trades.length === 0
+            statsPanel.innerHTML = ltTotal === 0
                 ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
                 : `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&L</div>
                         <div style="color:${dLtCol};font-size:22px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.lifetime_dog_wins||0)}W / ${(pnl.lifetime_dog_losses||0)}L</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L</div>
@@ -12863,13 +12861,13 @@ async function loadDogHistory() {
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Win Rate</div>
-                        <div style="color:#ffaa00;font-size:22px;font-weight:800;">${wins+losses > 0 ? Math.round(wins/(wins+losses)*100) : 0}%</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${wins}W / ${losses}L</div>
+                        <div style="color:#ffaa00;font-size:22px;font-weight:800;">${ltWinRate}%</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Profit</div>
-                        <div style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-size:22px;font-weight:800;">${avgProfit === '—' ? '—' : (parseFloat(avgProfit) >= 0 ? '+' : '') + avgProfit + '¢'}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${trades.length} trades</div>
+                        <div style="color:${ltAvgCol};font-size:22px;font-weight:800;">${ltAvgProfit === '—' ? '—' : (parseFloat(ltAvgProfit) >= 0 ? '+' : '') + ltAvgProfit + '¢'}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltTotal} trades</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Depth Floor</div>

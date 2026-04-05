@@ -21493,11 +21493,12 @@ def claude_chat():
 
 @app.route('/api/bot/stats-by-type', methods=['GET'])
 def bot_stats_by_type():
-    """Return win rate, avg profit, total trades per bot category for legend cards."""
+    """Return win rate, avg profit, total trades per bot category for legend cards.
+    Uses _compute_pnl_bucket() so numbers match the history page exactly."""
     categories = {
-        'apex': lambda t: t.get('bot_category') in ('arb', 'ladder_arb') or (t.get('type') not in ('watch', 'middle') and t.get('bot_category') not in ('anchor_dog', 'anchor_ladder')),
+        'apex': lambda t: t.get('bot_category') in ('arb', 'ladder_arb', 'both_posted'),
         'phantom': lambda t: t.get('bot_category') in ('anchor_dog', 'anchor_ladder'),
-        'meridian': lambda t: t.get('type') == 'middle',
+        'meridian': lambda t: t.get('type') == 'middle' or t.get('bot_category') == 'middle',
         'scout': lambda t: t.get('type') == 'watch',
     }
     stats = {}
@@ -21506,14 +21507,13 @@ def bot_stats_by_type():
         if not trades:
             stats[cat] = {'trades': 0, 'win_rate': 0, 'avg_profit': 0, 'total_profit': 0}
             continue
-        # Win = net profit on the trade is positive (profit_cents already has fees deducted)
-        wins = sum(1 for t in trades if ((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0)) > 0)
-        total_profit = sum((t.get('profit_cents', 0) or 0) - (t.get('loss_cents', 0) or 0) for t in trades)
+        bucket = _compute_pnl_bucket(trades)
+        total = bucket['completed_bots'] + bucket['stopped_bots']
         stats[cat] = {
-            'trades': len(trades),
-            'win_rate': round(wins / len(trades) * 100) if trades else 0,
-            'avg_profit': round(total_profit / len(trades) / 100, 2) if trades else 0,
-            'total_profit': round(total_profit / 100, 2),
+            'trades': total,
+            'win_rate': round(bucket['completed_bots'] / total * 100) if total else 0,
+            'avg_profit': round(bucket['net_cents'] / total / 100, 2) if total else 0,
+            'total_profit': round(bucket['net_cents'] / 100, 2),
         }
     return jsonify(stats)
 

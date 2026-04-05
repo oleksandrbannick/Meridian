@@ -5755,7 +5755,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="color:${_combCol};font-weight:700;">${r.result !== 'sellback' ? _comb + '¢' : ''}</span>
                             <span style="color:#00aaff;font-weight:600;">x${r.qty || 1}</span>
                             <span>${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}${_ftStr ? ` <span style="color:${_ftCol};font-size:8px;">${_ftStr}</span>` : ''}</span>
-                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢${r.taker ? ' <span style="color:#ff8800;font-size:7px;font-weight:700;">TKR</span>' : ''}</span>
+                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢${r.taker ? ' <span style="background:#ff880022;color:#ff8800;font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;">TKR</span>' : ''}</span>
                         </div>`;
                     }).join('')}
                 </div>` : _runs > 1 ? `

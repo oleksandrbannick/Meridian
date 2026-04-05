@@ -3966,10 +3966,6 @@ function updateAnchorPreview() {
             // Gaps on fav side = sweeps crash through, need wider depth
             if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} fav gaps`); }
-            // Market balance: dog bid high = close match = volatile
-            // Thick books (fpl >= 50) absorb volatility — no close-match widening needed
-            if (dogBid >= 35 && fpl < 20) { recDepth = Math.max(recDepth, 8); reasons.push('close match · thin'); }
-            else if (dogBid >= 35 && fpl < 50) { recDepth = Math.max(recDepth, 6); reasons.push('close match'); }
             // Wide spread = more walk needed
             const totalBids = dogBid + favBid;
             if (totalBids > 0 && totalBids < 90) { recDepth = Math.max(recDepth, 7); reasons.push('wide spread'); }

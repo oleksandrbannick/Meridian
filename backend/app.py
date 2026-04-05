@@ -14006,6 +14006,9 @@ def _run_monitor():
                             loss = (entry - actual_sell) * qty
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
+                            bot['exit_price'] = actual_sell
+                            bot['exit_reason'] = 'stop_loss'
+                            bot['exit_pnl'] = -loss
                             session_pnl['gross_loss_cents'] += loss
                             session_pnl['stopped_bots'] += 1
                             _record_trade({
@@ -14039,6 +14042,9 @@ def _run_monitor():
                             profit = (actual_sell - entry) * qty
                             bot['status'] = 'completed'
                             bot['completed_at'] = now
+                            bot['exit_price'] = actual_sell
+                            bot['exit_reason'] = 'take_profit'
+                            bot['exit_pnl'] = profit
                             session_pnl['gross_profit_cents'] += profit
                             session_pnl['completed_bots'] += 1
                             _record_trade({

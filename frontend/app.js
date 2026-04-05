@@ -7399,11 +7399,23 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
     const watchScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
 
     const curBidNum = typeof liveBid === 'number' ? liveBid : 0;
-    const unrealizedPnl = orderFilled && curBidNum > 0 ? (curBidNum - entry) * watchQty : 0;
+    const isStopped = bot.status === 'stopped' || bot.status === 'completed';
+    const exitPrice = bot.exit_price || 0;
+    const exitReason = bot.exit_reason || '';
+    const exitPnl = bot.exit_pnl ?? (isStopped && exitPrice ? (exitPrice - entry) * watchQty : 0);
+    const unrealizedPnl = isStopped ? exitPnl : (orderFilled && curBidNum > 0 ? (curBidNum - entry) * watchQty : 0);
     const unrealColor = unrealizedPnl >= 0 ? '#00ff88' : '#ff4444';
 
     let fillStatusHtml = '';
-    if (!orderFilled) {
+    if (isStopped) {
+        if (exitReason === 'stop_loss') {
+            fillStatusHtml = `<span style="background:#ff444422;color:#ff4444;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">🛑 SL FIRED</span>`;
+        } else if (exitReason === 'take_profit') {
+            fillStatusHtml = `<span style="background:#00ff8822;color:#00ff88;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">✅ TP HIT</span>`;
+        } else {
+            fillStatusHtml = `<span style="background:#55555522;color:#888;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${bot.status === 'stopped' ? '🛑 STOPPED' : '✓ DONE'}</span>`;
+        }
+    } else if (!orderFilled) {
         fillStatusHtml = fillQty > 0
             ? `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">FILLING ${fillQty}/${watchQty}</span>`
             : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">PENDING</span>`;
@@ -7411,7 +7423,8 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
 
     const item = document.createElement('div');
     item.className = 'bot-item';
-    item.style.cssText = 'flex-direction:column;gap:8px;border-left:3px solid #00ff88;cursor:pointer;';
+    const _borderCol = isStopped ? (exitPnl >= 0 ? '#00ff88' : '#ff4444') : '#00ff88';
+    item.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${_borderCol};cursor:pointer;${isStopped ? 'opacity:0.75;' : ''}`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -7432,8 +7445,11 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;font-size:11px;color:#8892a6;">
             <div>Entry: <strong style="color:#fff;">${entry}¢</strong></div>
             <div>Qty: <strong style="color:#fff;">×${watchQty}</strong></div>
-            <div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
-            <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>
+            ${isStopped && exitPrice
+                ? `<div>Exit: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPrice}¢</strong></div>
+                   <div>P&L: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong></div>`
+                : `<div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
+                   <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>`}
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
             <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">

@@ -5731,16 +5731,20 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 </div>` : ''}
                 ${(bot._run_history || []).length > 0 ? `
                 <div style="margin-bottom:8px;">
-                    ${(() => { const _dogCol = bot.dog_side === 'yes' ? '#00ff88' : '#ff4444'; const _favCol = bot.dog_side === 'yes' ? '#ff4444' : '#00ff88'; return (bot._run_history || []).map((r, i) => `
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
+                    ${(bot._run_history || []).map((r, i) => {
+                        const _comb = (r.dog_price || 0) + (r.fav_price || 0);
+                        const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
+                        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
                             <span style="color:#556;font-weight:600;">#${r.run || i + 1}</span>
-                            <span>${r.result === 'sellback' ? `<span style="color:${_dogCol};font-weight:600;">${r.dog_price || '?'}¢</span> <span style="color:#ff4444;">→</span> <span style="color:#ffaa00;font-weight:600;">${r.fav_price || '?'}¢</span> <span style="color:#ff4444;font-size:8px;font-weight:700;">SB</span>` : `<span style="color:${_dogCol};font-weight:600;">${r.dog_price || '?'}¢</span> <span style="color:#556;">/</span> <span style="color:${_favCol};font-weight:600;">${r.fav_price || '?'}¢</span>`}</span>
+                            ${r.result === 'sellback'
+                                ? `<span style="color:#8892a6;">${r.dog_price || '?'}¢ <span style="color:#ff4444;">→</span> ${r.fav_price || '?'}¢ <span style="color:#ff4444;font-size:8px;font-weight:700;">SB</span></span>`
+                                : `<span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span> <span style="color:${_combCol};font-weight:700;">${_comb}¢</span>`}
                             <span style="color:#00aaff;font-weight:600;">x${r.qty || 1}</span>
                             ${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};font-size:9px;">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}
                             ${r.fill_time_ms != null ? `<span style="color:${r.fill_time_ms < 5000 ? '#00aaff' : r.fill_time_ms < 30000 ? '#ffaa00' : '#ff4444'};font-size:8px;" title="Hedge fill time">${r.fill_time_ms < 1000 ? (r.fill_time_ms/1000).toFixed(1)+'s' : r.fill_time_ms < 60000 ? Math.round(r.fill_time_ms/1000)+'s' : (r.fill_time_ms/60000).toFixed(1)+'m'}</span>` : ''}
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
-                        </div>
-                    `).join(''); })()}
+                        </div>`;
+                    }).join('')}
                 </div>` : _runs > 1 ? `
                 <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
@@ -6033,7 +6037,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
-            <span style="color:#00aaff;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
             <span style="color:#00aaff;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}

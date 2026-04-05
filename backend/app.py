@@ -3446,20 +3446,23 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # Ceiling handling: always post at max_hedge if breakeven is possible.
-        # Posting at max_hedge (breakeven) is always better than selling back at a loss.
+        # Ceiling handling: if fav bid is already past breakeven, don't hedge — sell back.
+        # Posting at breakeven when bid is above it means zero chance of fill.
+        _combined_at_bid = dog_price + fav_bid if fav_bid > 0 else 999
+        if _combined_at_bid > 100:
+            # Fav bid already over ceiling — hedge will never fill, sell back immediately
+            print(f'🚫 PHANTOM HEDGE SKIP: {bot_id} combined@bid={_combined_at_bid}¢ > 100 (dog={dog_price}¢ fav_bid={fav_bid}¢) — selling back')
+            bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
+                'dog_price': dog_price, 'fav_bid': fav_bid,
+                'max_hedge': max_hedge, 'combined_at_bid': _combined_at_bid,
+                'path': 'ws_fast',
+            })
+            bot['status'] = 'fav_hedge_posted'  # let monitor handle sellback
+            bot['fav_posted_at'] = time.time()
+            bot['_over_ceiling_since'] = time.time()  # start ceiling timer immediately
+            return
         if dog_price + hedge_price > 100:
-            if max_hedge < 1:
-                # Truly impossible — no viable hedge price
-                print(f'🚫 PHANTOM HEDGE SKIP: {bot_id} max_hedge={max_hedge}¢ < 1 — no viable hedge')
-                bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
-                    'dog_price': dog_price, 'fav_bid': fav_bid,
-                    'max_hedge': max_hedge, 'combined_at_bid': dog_price + fav_bid,
-                    'path': 'ws_fast',
-                })
-                bot['status'] = 'dog_filled'
-                return
-            # Post at max_hedge — breakeven fill beats sellback loss
+            # Bid is under ceiling but hedge price exceeds — cap at breakeven
             hedge_price = max(1, max_hedge)
             print(f'📌 PHANTOM HEDGE AT CEILING: {bot_id} capped to {hedge_price}¢ (combined={dog_price + hedge_price}¢ bid={fav_bid}¢) — posting and holding')
             bot_log('PHANTOM_HEDGE_AT_CEILING_POST', bot_id, {

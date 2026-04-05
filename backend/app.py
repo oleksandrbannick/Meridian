@@ -2934,7 +2934,7 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
 
 
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
-ws_fill_lock = threading.Lock()
+ws_fill_lock = threading.RLock()
 # ─── Late Anchor Amend Lock: serialize late anchor amend API calls ────────────
 # ─── Phantom Hedge Worker: pre-spawned thread for instant hedge placement ─────
 # Eliminates ~8ms thread spawn overhead. WS handler pushes jobs, worker executes

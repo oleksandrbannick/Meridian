@@ -3966,9 +3966,6 @@ function updateAnchorPreview() {
             // Gaps on fav side = sweeps crash through, need wider depth
             if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} fav gaps`); }
-            // Wide spread = more walk needed
-            const totalBids = dogBid + favBid;
-            if (totalBids > 0 && totalBids < 90) { recDepth = Math.max(recDepth, 7); reasons.push('wide spread'); }
             const recNote = reasons.join(' · ');
             const recMatch = anchorDepth >= recDepth && anchorDepth <= recDepth + 2;
             const recCol = recMatch ? '#00ff88' : '#ffaa00';

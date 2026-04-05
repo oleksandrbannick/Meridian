@@ -9896,6 +9896,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
                 'fill_time_ms': bot.get('hedge_fill_latency_ms'),
+                'taker': bool(bot.get('_fav_was_taker')),
                 'ts': time.time(),
             })
             if _will_repeat:
@@ -9908,6 +9909,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['dog_filled_at'] = None
                 bot['raw_hedge_ms'] = None
                 bot['hedge_latency_ms'] = None
+                bot['hedge_fill_latency_ms'] = None
+                bot['_fav_was_taker'] = False
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
                 bot['dog_fill_qty'] = 0
@@ -10160,14 +10163,14 @@ def _handle_phantom(bot_id, bot, actions):
 
         # ── Take-profit cross: hit the ask to lock in profit ──
         # When the hedge walks up chasing the bid, profit shrinks toward zero.
-        # If crossing the ask NOW still gives combined <= 98¢ (2¢+ profit),
+        # If crossing the ask NOW still gives combined <= 95¢ (5¢+ gross profit),
         # cross the spread and take the money instead of walking to breakeven.
-        # Ceiling 98: at combined=98, gross 2¢/contract, taker fee ~1¢, net ~1¢.
-        # Still far better than walking to 100 and losing fees on breakeven.
+        # Ceiling 95: at combined=95, gross 5¢/contract, taker fee ~1.3¢, net ~3.7¢.
         # Wait 1s — just enough for a fast maker fill, then cross.
-        TAKE_PROFIT_CEILING = 98
+        TAKE_PROFIT_CEILING = 95
         if (current_fav_ask > 0 and current_fav_ask > current_fav_price
-                and wait_s >= 1):
+                and wait_s >= 1
+                and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
             cross_combined = dog_price + current_fav_ask
             if cross_combined <= TAKE_PROFIT_CEILING:
                 # Cross the spread — cancel post_only order and place taker order
@@ -10175,13 +10178,27 @@ def _handle_phantom(bot_id, bot, actions):
                 try:
                     _phantom_drop_lock.acquire()
                     try:
-                        fav_order_id = bot.get('fav_order_id', fav_order_id)
+                        old_fav_order_id = bot.get('fav_order_id', fav_order_id)
                         # Step 1: Cancel the existing post_only order
                         api_rate_limiter.wait()
+                        _cancel_ok = False
                         try:
-                            kalshi_client.cancel_order(fav_order_id)
-                        except Exception:
-                            pass  # may already be filled/canceled
+                            kalshi_client.cancel_order(old_fav_order_id)
+                            _cancel_ok = True
+                        except Exception as _ce:
+                            # Cancel failed — order may be filled already. Verify before proceeding.
+                            try:
+                                api_read_limiter.wait()
+                                _chk = kalshi_client.get_order(old_fav_order_id)
+                                _chk_ord = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
+                                if _parse_fill_count(_chk_ord) >= qty:
+                                    bot['fav_fill_qty'] = qty
+                                    print(f'💰 PHANTOM TAKE PROFIT SKIP: {bot_id} fav already filled during cancel — completing next cycle')
+                                    return
+                            except Exception:
+                                pass
+                            print(f'⚠ PHANTOM {bot_id}: take-profit cancel failed ({_ce}) — aborting cross')
+                            return
                         # Step 2: Place new order at ask WITHOUT post_only (taker)
                         price_kwargs = {'yes_price': current_fav_ask} if fav_side == 'yes' else {'no_price': current_fav_ask}
                         api_rate_limiter.wait()
@@ -10190,6 +10207,8 @@ def _handle_phantom(bot_id, bot, actions):
                             count=qty, order_type='limit', **price_kwargs
                         )
                         new_order_id = resp.get('order', {}).get('order_id', '')
+                        # Track old order ID for orphan cleanup
+                        bot.setdefault('_all_hedge_order_ids', []).append(old_fav_order_id)
                         bot['fav_order_id'] = new_order_id
                     finally:
                         _phantom_drop_lock.release()

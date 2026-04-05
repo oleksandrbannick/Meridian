@@ -9840,7 +9840,30 @@ def _handle_phantom(bot_id, bot, actions):
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
-                _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
+                # Orphan guard: check Kalshi position before re-anchoring
+                _pos_qty = _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
+                if _pos_qty is not None and _pos_qty > 0:
+                    print(f'⚠ PHANTOM ORPHAN AT REPEAT: {bot_id} Kalshi shows {_pos_qty} {dog_side} on {ticker} — selling back before re-anchor')
+                    _audit('PHANTOM_ORPHAN_AT_REPEAT', bot_id, {
+                        'ticker': ticker, 'orphan_qty': _pos_qty, 'side': dog_side,
+                    })
+                    try:
+                        api_rate_limiter.wait()
+                        _sell_resp = kalshi_client.create_order(
+                            ticker=ticker, side=dog_side, action='sell',
+                            type='market', count=_pos_qty,
+                        )
+                        _sell_oid = _sell_resp.get('order', {}).get('order_id', '?')
+                        print(f'🔙 PHANTOM ORPHAN SOLD: {bot_id} sold {_pos_qty} {dog_side} at market → {_sell_oid}')
+                        _audit('PHANTOM_ORPHAN_SOLD', bot_id, {
+                            'ticker': ticker, 'qty': _pos_qty, 'side': dog_side,
+                            'order_id': _sell_oid,
+                        })
+                    except Exception as _sell_err:
+                        print(f'⚠ PHANTOM ORPHAN SELL FAILED: {bot_id} {_sell_err}')
+                        _audit('PHANTOM_ORPHAN_SELL_FAIL', bot_id, {
+                            'ticker': ticker, 'qty': _pos_qty, 'error': str(_sell_err)[:200],
+                        })
             else:
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'
@@ -18806,6 +18829,77 @@ def _run_startup():
                 print('⚠ config.json found but missing api_key_id or private key — skipping auto-login')
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
+
+    # ── Startup fill recovery: check phantom dog orders for fills missed during downtime ──
+    if kalshi_client:
+        try:
+            _fill_recovery_count = 0
+            for _bid, _bot in list(active_bots.items()):
+                if _bot.get('bot_category') != 'anchor_dog':
+                    continue
+                if _bot.get('status') != 'dog_anchor_posted':
+                    continue
+
+                # Collect all dog order IDs to check (current + old cancel-race orders)
+                _check_oids = set()
+                _cur_oid = _bot.get('dog_order_id')
+                if _cur_oid:
+                    _check_oids.add(_cur_oid)
+                for _old_oid in (_bot.get('_all_dog_order_ids') or []):
+                    if _old_oid:
+                        _check_oids.add(_old_oid)
+
+                if not _check_oids:
+                    continue
+
+                # Sum actual fills across all dog orders from Kalshi
+                _total_actual = 0
+                for _oid in _check_oids:
+                    try:
+                        api_read_limiter.wait()
+                        _ord_resp = kalshi_client.get_order(_oid)
+                        _ord_data = _ord_resp.get('order', _ord_resp) if isinstance(_ord_resp, dict) else {}
+                        _fills = _parse_fill_count(_ord_data)
+                        _total_actual += _fills
+                    except Exception:
+                        pass
+
+                _tracked = _bot.get('dog_fill_qty', 0)
+                _qty = _bot.get('quantity', 1)
+                if _total_actual > _tracked and _total_actual > 0:
+                    _hedge_qty = min(_total_actual, _qty)
+                    print(f'🔧 STARTUP FILL RECOVERY: {_bid} Kalshi={_total_actual} fills, tracked={_tracked} → hedging {_hedge_qty}')
+                    _bot['dog_fill_qty'] = _hedge_qty
+                    if _bot.get('dog_side') == 'yes':
+                        _bot['yes_fill_qty'] = _hedge_qty
+                    else:
+                        _bot['no_fill_qty'] = _hedge_qty
+                    _bot['_hedge_fired'] = True
+                    _bot['dog_filled_at'] = time.time()
+                    _bot['status'] = 'dog_filled'
+                    if _hedge_qty < _qty:
+                        _bot['_original_qty'] = _qty
+                        _bot['_partial_hedge_qty'] = _hedge_qty
+                    # Cancel remaining resting qty if partial fill
+                    if _cur_oid and _hedge_qty < _qty:
+                        threading.Thread(target=lambda oid=_cur_oid: _safe_cancel(oid, f'startup_recovery_{_bid}'), daemon=True).start()
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (_bid,)))
+                    save_state()
+                    _fill_recovery_count += 1
+                    _audit('STARTUP_FILL_RECOVERY', _bid, {
+                        'ticker': _bot.get('ticker'),
+                        'actual_fills': _total_actual,
+                        'tracked_fills': _tracked,
+                        'hedge_qty': _hedge_qty,
+                        'orders_checked': len(_check_oids),
+                    })
+
+            if _fill_recovery_count:
+                print(f'🔧 Recovered {_fill_recovery_count} phantom bot(s) with missed fills')
+            else:
+                print('✅ Startup fill recovery: no missed fills')
+        except Exception as _re:
+            print(f'⚠ Startup fill recovery failed: {_re}')
 
     # ── Validate bot order IDs against Kalshi — clear stale ones before orphan sweep ──
     if kalshi_client:

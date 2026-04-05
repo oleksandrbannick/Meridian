@@ -3197,22 +3197,24 @@ function displayOrderbookLadder(orderbook) {
     // Hedge room display (informational only — not used in score)
     const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
 
-    // ── CATCH SCORE (0-100) — can the hedge fill? will sweeps reach you? ──
-    // Fav contracts/level (55pts) — THE key factor, determines if hedge fills
+    // ── CATCH SCORE (0-100) — IF you fill, will the hedge catch? ──
+    // Fav contracts/level (50pts) — THE key factor, determines if hedge fills
     const _favPL = favAnalysis.perLevel;
-    const favPLpts = _favPL >= 50 ? 55 : _favPL >= 30 ? 45 : _favPL >= 20 ? 35 : _favPL >= 10 ? 22 : _favPL >= 5 ? 10 : 0;
-    // Dog thinness (25pts) — thin dog = sweeps reach your order easily
-    const dogThinPts = dogDepth < 50 ? 25 : dogDepth < 200 ? 18 : dogDepth < 500 ? 10 : dogDepth < 2000 ? 5 : 0;
-    // Fav gaps penalty — gaps mean sweeps crash through, need wider depth floor
+    const favPLpts = _favPL >= 50 ? 50 : _favPL >= 30 ? 42 : _favPL >= 20 ? 34 : _favPL >= 10 ? 22 : _favPL >= 5 ? 10 : 0;
+    // Fav top-3 liquidity (20pts) — enough contracts at top bids to absorb your hedge
+    const favTop3Pts = favAnalysis.top3Qty >= 500 ? 20 : favAnalysis.top3Qty >= 100 ? 15 : favAnalysis.top3Qty >= 30 ? 8 : 0;
+    // Fav dominance (15pts) — fav dwarfs dog = hedge stays stable even during sweeps
+    const favDomPts = favDepth > dogDepth * 5 ? 15 : favDepth > dogDepth * 3 ? 12 : favDepth > dogDepth * 2 ? 8 : favDepth > dogDepth ? 4 : 0;
+    // Fav no-gaps bonus (15pts) — clean book = reliable catch
+    const favNoGapPts = favAnalysis.gaps === 0 ? 15 : favAnalysis.gaps === 1 ? 8 : 0;
+    // Dog gaps penalty — gaps mean sweeps skip levels, toxic fill risk
+    const dogGapPenalty = dogAnalysis.gaps >= 3 ? -10 : dogAnalysis.gaps >= 2 ? -5 : 0;
+    // Fav gaps penalty — hedge may miss levels
     const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
-    // Fav dominance bonus (10pts) — fav much thicker than dog = hedge absorbs, dog sweeps easier
-    const favDomPts = favDepth > dogDepth * 3 ? 10 : favDepth > dogDepth * 2 ? 5 : 0;
-    // Fav top-3 liquidity (10pts) — enough contracts at top bids to absorb your hedge
-    const favTop3Pts = favAnalysis.top3Qty >= 100 ? 10 : favAnalysis.top3Qty >= 30 ? 5 : 0;
     // Max safe qty: fav top-3 bids can absorb your hedge
     const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 2));
 
-    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + dogThinPts + gapPenalty + favDomPts + favTop3Pts)));
+    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + favTop3Pts + favDomPts + favNoGapPts + dogGapPenalty + gapPenalty)));
     const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
     const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
 
@@ -3240,7 +3242,7 @@ function displayOrderbookLadder(orderbook) {
     }
 
     // Score breakdown tooltip
-    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Dog: ${dogThinPts}pts · Gaps: ${gapPenalty}pts · FavDom: ${favDomPts}pts · Top3: ${favTop3Pts}pts`;
+    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · NoGap: ${favNoGapPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts`;
 
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">

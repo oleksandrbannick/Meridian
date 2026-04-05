@@ -10160,13 +10160,12 @@ def _handle_phantom(bot_id, bot, actions):
 
         # ── Take-profit cross: hit the ask to lock in profit ──
         # When the hedge walks up chasing the bid, profit shrinks toward zero.
-        # If crossing the ask NOW still gives combined <= 97¢ (3¢+ profit),
+        # If crossing the ask NOW still gives combined <= 98¢ (2¢+ profit),
         # cross the spread and take the money instead of walking to breakeven.
-        # Ceiling 97 not 95: the ask is always 1-2¢ above bid, so 95 was
-        # unreachable on any market with a spread. 97 gives ~1¢ net after
-        # taker fee (7%) which is still better than walking to 100 and losing.
+        # Ceiling 98: at combined=98, gross 2¢/contract, taker fee ~1¢, net ~1¢.
+        # Still far better than walking to 100 and losing fees on breakeven.
         # Wait 1s — just enough for a fast maker fill, then cross.
-        TAKE_PROFIT_CEILING = 97
+        TAKE_PROFIT_CEILING = 98
         if (current_fav_ask > 0 and current_fav_ask > current_fav_price
                 and wait_s >= 1):
             cross_combined = dog_price + current_fav_ask

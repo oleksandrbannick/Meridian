@@ -2814,8 +2814,15 @@ function formatBotDisplayName(ticker, spreadLine) {
 
     // Detect market type from prefix
     let marketType = 'Moneyline';
+    let propType = '';  // PTS, REB, AST, etc.
     if (prefix.includes('SPREAD')) marketType = 'Spread';
     else if (prefix.includes('TOTAL')) marketType = 'Total';
+    else if (prefix.includes('PTS')) { marketType = 'Player Prop'; propType = 'Pts'; }
+    else if (prefix.includes('REB')) { marketType = 'Player Prop'; propType = 'Reb'; }
+    else if (prefix.includes('AST')) { marketType = 'Player Prop'; propType = 'Ast'; }
+    else if (prefix.includes('3PT')) { marketType = 'Player Prop'; propType = '3pt'; }
+    else if (prefix.includes('BLK')) { marketType = 'Player Prop'; propType = 'Blk'; }
+    else if (prefix.includes('STL')) { marketType = 'Player Prop'; propType = 'Stl'; }
     else if (prefix.includes('GAME') || prefix.includes('WIN') || prefix.includes('MONEYLINE')) marketType = 'Moneyline';
 
     // Parse teams from gameId: 26MAR02BOSMIL → BOS vs MIL
@@ -2847,7 +2854,36 @@ function formatBotDisplayName(ticker, spreadLine) {
 
     // Side label from suffix (team or spread/total detail)
     let sideLabel = '';
-    if (marketType === 'Spread') {
+    if (marketType === 'Player Prop') {
+        // Ticker: KXNBAPTS-26APR05CHAMIN-CHAMBRIDGESO-25
+        // parts[2] = "CHAMBRIDGESO" → strip team code (3 chars) → "BRIDGESO" → "BRIDGES" + "O"
+        // parts[3] = "25" → the line
+        const playerPart = parts.length >= 4 ? parts[2] : '';
+        const line = parts.length >= 4 ? parts[3] : suffix;
+        if (playerPart) {
+            // Strip leading team code (first 3 chars), then split O/U suffix
+            let playerRaw = playerPart.substring(3); // e.g. "BRIDGESO" or "CWHITE3"
+            let overUnder = '';
+            if (playerRaw.endsWith('O')) { overUnder = 'Over'; playerRaw = playerRaw.slice(0, -1); }
+            else if (playerRaw.endsWith('U')) { overUnder = 'Under'; playerRaw = playerRaw.slice(0, -1); }
+            // Title-case the name: "BRIDGES" → "Bridges", "CWHITE3" → "C. White"
+            // Handle names with leading initial (single char before uppercase): CWHITE → C. White
+            let playerName = playerRaw;
+            if (/^[A-Z][A-Z]/.test(playerRaw) && playerRaw.length > 3) {
+                // Check if it starts with a single-letter initial (e.g., CWHITE = C. White)
+                const restUpper = playerRaw.substring(1);
+                // If the 2nd+ chars form a recognizable name pattern, split as initial
+                playerName = playerRaw[0] + '. ' + restUpper.charAt(0) + restUpper.slice(1).toLowerCase();
+            } else {
+                playerName = playerRaw.charAt(0) + playerRaw.slice(1).toLowerCase();
+            }
+            // Remove trailing digits from name (jersey numbers in ticker)
+            playerName = playerName.replace(/\d+$/, '');
+            sideLabel = `${playerName} ${overUnder} ${line} ${propType}`.trim();
+        } else {
+            sideLabel = `${suffix} ${propType}`;
+        }
+    } else if (marketType === 'Spread') {
         // Use stored spread_line if available (e.g. "UTA -3.5")
         if (spreadLine) {
             sideLabel = spreadLine;
@@ -5695,16 +5731,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 </div>` : ''}
                 ${(bot._run_history || []).length > 0 ? `
                 <div style="margin-bottom:8px;">
-                    ${(bot._run_history || []).map((r, i) => `
+                    ${(() => { const _dogCol = bot.dog_side === 'yes' ? '#00ff88' : '#ff4444'; const _favCol = bot.dog_side === 'yes' ? '#ff4444' : '#00ff88'; return (bot._run_history || []).map((r, i) => `
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
-                            <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
-                            <span style="color:#8892a6;">${r.dog_price || '?'}¢ ${r.result === 'sellback' ? '<span style="color:#ff4444;">→</span> ' + (r.fav_price || '?') + '¢ <span style="color:#ff4444;font-size:8px;">SB</span>' : '/ ' + (r.fav_price || '?') + '¢'}</span>
-                            <span style="color:#8892a6;">x${r.qty || 1}</span>
+                            <span style="color:#556;font-weight:600;">#${r.run || i + 1}</span>
+                            <span>${r.result === 'sellback' ? `<span style="color:${_dogCol};font-weight:600;">${r.dog_price || '?'}¢</span> <span style="color:#ff4444;">→</span> <span style="color:#ffaa00;font-weight:600;">${r.fav_price || '?'}¢</span> <span style="color:#ff4444;font-size:8px;font-weight:700;">SB</span>` : `<span style="color:${_dogCol};font-weight:600;">${r.dog_price || '?'}¢</span> <span style="color:#556;">/</span> <span style="color:${_favCol};font-weight:600;">${r.fav_price || '?'}¢</span>`}</span>
+                            <span style="color:#00aaff;font-weight:600;">x${r.qty || 1}</span>
                             ${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};font-size:9px;">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}
                             ${r.fill_time_ms != null ? `<span style="color:${r.fill_time_ms < 5000 ? '#00aaff' : r.fill_time_ms < 30000 ? '#ffaa00' : '#ff4444'};font-size:8px;" title="Hedge fill time">${r.fill_time_ms < 1000 ? (r.fill_time_ms/1000).toFixed(1)+'s' : r.fill_time_ms < 60000 ? Math.round(r.fill_time_ms/1000)+'s' : (r.fill_time_ms/60000).toFixed(1)+'m'}</span>` : ''}
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
                         </div>
-                    `).join('')}
+                    `).join(''); })()}
                 </div>` : _runs > 1 ? `
                 <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
@@ -5997,8 +6033,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
-            <span style="color:#ffaa00;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
-            <span style="color:#8892a6;">×${qty}</span>
+            <span style="color:#00aaff;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
+            <span style="color:#00aaff;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             <span style="color:#555;">Hedge tgt: ≤${favCeiling}¢ → snap bid</span>

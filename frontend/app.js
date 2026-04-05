@@ -4108,7 +4108,11 @@ function updateAnchorPreview() {
     if (!previewEl) return;
 
     if (_anchorRungs.length === 0 || _anchorDogBid < 1) {
-        previewEl.innerHTML = '<div style="text-align:center;color:#555;font-size:11px;padding:8px;">Add rungs above to see preview</div>';
+        previewEl.innerHTML = `<div style="text-align:center;padding:16px 12px;">
+            <div style="margin-bottom:8px;filter:drop-shadow(0 0 12px #ff990066);">${botIconSvg('phantom', 48)}</div>
+            <div style="color:#ff9900;font-size:11px;font-weight:700;font-style:italic;margin-bottom:6px;">"Lurks deep. Strikes fast. Gone before they notice."</div>
+            <div style="color:#556;font-size:10px;">Set price and qty above to preview your anchor</div>
+        </div>`;
         return;
     }
 

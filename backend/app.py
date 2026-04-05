@@ -10045,7 +10045,8 @@ def _handle_phantom(bot_id, bot, actions):
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                if _ceiling_elapsed >= 15 and not _has_partial_fills:
+                _ceiling_timeout = 30 if _has_partial_fills else 15  # partial fills get more time
+                if _ceiling_elapsed >= _ceiling_timeout:
                     bot_log('PHANTOM_CEILING_TIMEOUT', bot_id, {
                         'wait_s': round(wait_s, 1), 'ceiling_elapsed': round(_ceiling_elapsed, 1),
                         'fav_filled': bot.get('fav_fill_qty', 0), 'qty': bot.get('quantity', 1),

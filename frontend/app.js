@@ -4026,18 +4026,25 @@ function updateAnchorPreview() {
             const fGaps = _obCache.favGaps || 0;
             const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
+            // Sport-specific volatility minimums
+            const _recSport = detectSport(_obTicker);
+            const _sportMinDepth = { 'Tennis': 7, 'Baseball': 4, 'Basketball': 4, 'Hockey': 5, 'Soccer': 5 }[_recSport] || 5;
             // Depth rec based on contracts-per-level (not total depth)
             // Thick book per-level = stable, tight depth OK. Thin per-level = volatile, wider depth.
-            let recDepth = 5;  // default
+            let recDepth = _sportMinDepth;  // sport-adjusted default
             let reasons = [];
+            if (_sportMinDepth > 5) reasons.push(`${_recSport.toLowerCase()}: min ${_sportMinDepth}¢`);
             const dogWall = _obCache.dogWall || {};
             const favConc = _obCache.favConc || 0;
             // Primary: fav contracts/level (how fast hedge fills)
-            if (fpl >= 50) { recDepth = 3; reasons.push(`fav ${fpl}/lvl thick`); }
-            else if (fpl >= 20) { recDepth = 4; reasons.push(`fav ${fpl}/lvl solid`); }
-            else if (fpl >= 10) { recDepth = 5; reasons.push(`fav ${fpl}/lvl moderate`); }
-            else if (fpl >= 5) { recDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
-            else { recDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
+            // Never go below sport minimum — tennis swings 10-15¢/game, basketball 3-4¢
+            let _fplDepth = 5;
+            if (fpl >= 50) { _fplDepth = 3; reasons.push(`fav ${fpl}/lvl thick`); }
+            else if (fpl >= 20) { _fplDepth = 4; reasons.push(`fav ${fpl}/lvl solid`); }
+            else if (fpl >= 10) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl moderate`); }
+            else if (fpl >= 5) { _fplDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
+            else { _fplDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
+            recDepth = Math.max(recDepth, _fplDepth);
             // Dog wall check: need enough contracts protecting you at the chosen depth
             // If the wall at recDepth is too thin (<30 contracts), widen until wall is adequate
             const minWall = 30;  // need at least 30 contracts between you and the bid

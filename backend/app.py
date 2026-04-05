@@ -9502,6 +9502,7 @@ def _handle_phantom(bot_id, bot, actions):
                     return
                 old_price = bot['dog_price']
                 bot['dog_order_id'] = new_order_id
+                bot.setdefault('_all_dog_order_ids', []).append(new_order_id)
                 bot['dog_price'] = actual_new_price
                 bot['posted_at'] = now
                 bot['_bid_at_post'] = current_dog_bid
@@ -10468,6 +10469,7 @@ def _handle_phantom(bot_id, bot, actions):
                 count=qty, price=new_dog_price
             )
             bot['dog_order_id'] = dog_resp['order']['order_id']
+            bot.setdefault('_all_dog_order_ids', []).append(bot['dog_order_id'])
             bot['dog_price'] = actual_price
             # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
             bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)

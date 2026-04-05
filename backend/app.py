@@ -12049,7 +12049,7 @@ def _handle_apex(bot_id, bot, actions):
                 for _nr in new_rungs:
                     if _nr.get('yes_order_id'): _repeat_oids.append(_nr['yes_order_id'])
                     if _nr.get('no_order_id'): _repeat_oids.append(_nr['no_order_id'])
-                bot['_all_placed_order_ids'] = _repeat_oids
+                bot['_all_placed_order_ids'] = list(set(bot.get('_all_placed_order_ids', []) + _repeat_oids))
                 bot['rungs'] = new_rungs
                 bot['total_rungs'] = len(new_rungs)
                 bot['posted_at'] = now
@@ -12182,7 +12182,7 @@ def _handle_apex(bot_id, bot, actions):
                         for _nr in new_rungs:
                             if _nr.get('yes_order_id'): _repost_oids.append(_nr['yes_order_id'])
                             if _nr.get('no_order_id'): _repost_oids.append(_nr['no_order_id'])
-                        bot['_all_placed_order_ids'] = _repost_oids
+                        bot['_all_placed_order_ids'] = list(set(bot.get('_all_placed_order_ids', []) + _repost_oids))
                         bot['rungs'] = new_rungs
                         bot['total_rungs'] = len(new_rungs)
                         bot['posted_at'] = now
@@ -12191,6 +12191,10 @@ def _handle_apex(bot_id, bot, actions):
                         bot['live_no_bid'] = fresh_no_bid
                         bot['yes_price'] = new_rungs[0]['yes_price']
                         bot['no_price'] = new_rungs[0]['no_price']
+                        # Track all group IDs so shutdown can cancel them all
+                        _old_gid = bot.get('_order_group_id')
+                        if _old_gid:
+                            bot.setdefault('_all_order_group_ids', []).append(_old_gid)
                         bot['_order_group_id'] = new_group_id
                         actions.append({'bot_id': bot_id, 'action': 'ladder_arb_reposted', 'repost_count': bot['repost_count']})
                         print(f'🔄 APEX REPOST: {bot_id} #{bot["repost_count"]} — {len(new_rungs)} rungs refreshed')
@@ -16854,6 +16858,14 @@ def cancel_bot(bot_id):
                     except Exception as e:
                         print(f'⚠ cancel_bot({bot_id}): group cancel failed: {e} — falling back to individual')
                         _larb_group_id = None  # trigger individual fallback below
+                # Also cancel all old order groups from prior reposts
+                for _old_gid in bot.get('_all_order_group_ids', []):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order_group(_old_gid)
+                        cancelled.append(f'OLD_GROUP_{_old_gid[:8]}')
+                    except Exception:
+                        pass
                 if not _larb_group_id:
                     for rung in bot.get('rungs', []):
                         for side in ('yes', 'no'):

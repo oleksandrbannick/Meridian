@@ -10171,28 +10171,39 @@ def _handle_phantom(bot_id, bot, actions):
                 and wait_s >= 1):
             cross_combined = dog_price + current_fav_ask
             if cross_combined <= TAKE_PROFIT_CEILING:
-                # Cross the spread — amend to ask price for instant taker fill
+                # Cross the spread — cancel post_only order and place taker order
+                # Amending a post_only order can't cross; must cancel + repost without post_only
                 try:
                     _phantom_drop_lock.acquire()
                     try:
                         fav_order_id = bot.get('fav_order_id', fav_order_id)
-                        amend_kwargs = {'yes_price': current_fav_ask} if fav_side == 'yes' else {'no_price': current_fav_ask}
+                        # Step 1: Cancel the existing post_only order
                         api_rate_limiter.wait()
-                        kalshi_client.amend_order(
-                            fav_order_id, ticker=hedge_ticker, side=fav_side,
-                            count=qty, **amend_kwargs
+                        try:
+                            kalshi_client.cancel_order(fav_order_id)
+                        except Exception:
+                            pass  # may already be filled/canceled
+                        # Step 2: Place new order at ask WITHOUT post_only (taker)
+                        price_kwargs = {'yes_price': current_fav_ask} if fav_side == 'yes' else {'no_price': current_fav_ask}
+                        api_rate_limiter.wait()
+                        resp = kalshi_client.create_order(
+                            ticker=hedge_ticker, side=fav_side, action='buy',
+                            count=qty, order_type='limit', **price_kwargs
                         )
+                        new_order_id = resp.get('order', {}).get('order_id', '')
+                        bot['fav_order_id'] = new_order_id
                     finally:
                         _phantom_drop_lock.release()
                     _profit = 100 - cross_combined
                     walk_count = bot.get('fav_walk_count', 0) + 1
-                    print(f'💰 PHANTOM TAKE PROFIT: {bot_id} cross ask {current_fav_price}¢→{current_fav_ask}¢ '
-                          f'(combined={cross_combined}¢ profit={_profit}¢/ea bid={current_fav_bid}¢ wait={wait_s:.1f}s)')
+                    print(f'💰 PHANTOM TAKE PROFIT: {bot_id} cancel+cross ask {current_fav_price}¢→{current_fav_ask}¢ '
+                          f'(combined={cross_combined}¢ profit={_profit}¢/ea bid={current_fav_bid}¢ wait={wait_s:.1f}s order={new_order_id[-8:]})')
                     bot_log('PHANTOM_TAKE_PROFIT_CROSS', bot_id, {
                         'old_price': current_fav_price, 'cross_price': current_fav_ask,
                         'fav_bid': current_fav_bid, 'fav_ask': current_fav_ask,
                         'dog_price': dog_price, 'combined': cross_combined,
                         'profit_per_contract': _profit, 'wait_s': round(wait_s, 1),
+                        'new_order_id': new_order_id,
                     })
                     bot['fav_price'] = current_fav_ask
                     bot['fav_walk_count'] = walk_count

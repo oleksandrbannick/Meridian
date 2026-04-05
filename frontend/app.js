@@ -3983,30 +3983,39 @@ function updateAnchorPreview() {
             } else {
                 reasons.push(`wall: ${dogWall[recDepth]||0}`);
             }
-            // Dog gaps = sweeps skip cents, your anchor is closer to getting hit than it looks
-            // Use absolute minimums — NOT additive (old code was Math.max(x, x+2) which always = x+2)
-            if (dGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${dGaps} dog gaps`); }
-            else if (dGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${dGaps} dog gaps`); }
-            else if (dGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${dGaps} dog gaps`); }
+            // Dog gaps — on THIN books, gaps mean sweeps skip levels (anchor exposed).
+            // On PACKED books (10k+), gaps are noise — thousands of contracts surround each gap.
+            if (dd < 5000) {
+                if (dGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${dGaps} dog gaps`); }
+                else if (dGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${dGaps} dog gaps`); }
+                else if (dGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${dGaps} dog gaps`); }
+            } else if (dGaps >= 3) {
+                reasons.push(`${dGaps} dog gaps (packed — minor)`);
+            }
             // Fav gaps = hedge may miss levels, need wider depth for safety
             if (fGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${fGaps} fav gaps`); }
-            // Dog crowd: if dog is packed, pull depth SHALLOWER — deeper = astronomically low fill prob
-            // Thin dog + thick fav = phantom sweet spot
-            if (dd > 10000) { recDepth = Math.max(3, recDepth - 1); reasons.push('packed dog'); }
-            else if (dd < 100) { reasons.push('thin dog — fast fill'); }
             // Fav concentration: if 80%+ is one wall level, it's fragile — bump minimum depth
             if (favConc > 0.8) { recDepth = Math.max(recDepth, 6); reasons.push(`fav ${Math.round(favConc*100)}% wall`); }
-            // Fav/dog ratio: fav contracts absorbing vs dog contracts that must drop to fill you
+            // ── Sweep impact check ──
+            // The sweep that reaches your depth must eat through dogWall[recDepth] contracts.
+            // If that sweep dwarfs the fav top-3, the fill event is too large — fav side
+            // may degrade (MM pulls, price impact). Pull depth shallower until the sweep
+            // is within the fav's absorption capacity.
             const favTop3 = _obCache.favTop3 || 0;
-            const wallAtRec = dogWall[Math.min(recDepth, 12)] || 0;
-            if (wallAtRec > 0) {
-                const ratio = favTop3 / wallAtRec;
-                if (ratio >= 10) { recDepth = Math.max(recDepth - 1, 3); reasons.push(`fav/dog ${ratio.toFixed(0)}x safe`); }
-                else if (ratio < 1) { recDepth = Math.min(recDepth + 2, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x danger`); }
-                else if (ratio < 2) { recDepth = Math.min(recDepth + 1, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x thin`); }
+            if (favTop3 > 0) {
+                while (recDepth > 3 && (dogWall[recDepth] || 0) > favTop3 * 2) {
+                    recDepth--;
+                }
+                const sweepAtRec = dogWall[Math.min(recDepth, 12)] || 0;
+                const sweepRatio = favTop3 / Math.max(1, sweepAtRec);
+                if (sweepRatio >= 3) { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k < fav — safe`); }
+                else if (sweepRatio >= 1) { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k ≈ fav`); }
+                else { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k > fav ${Math.round(favTop3/1000)}k`); }
             }
+            // Thin dog bonus: easy fill, can go shallower
+            if (dd < 100) { reasons.push('thin dog — fast fill'); }
             // Hard cap recDepth to wall data range
             recDepth = Math.min(recDepth, 12);
             const recNote = reasons.join(' · ');

@@ -9768,7 +9768,13 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            fee = kalshi_fee_cents(yes_p, no_p, qty)
+            # If fav leg crossed the ask (take-profit), use taker fee for that leg
+            if bot.get('_fav_was_taker'):
+                fav_p = actual_fav_price
+                dog_p_for_fee = dog_price
+                fee = _kalshi_side_fee_cents(dog_p_for_fee, qty) + _kalshi_taker_side_fee_cents(fav_p, qty)
+            else:
+                fee = kalshi_fee_cents(yes_p, no_p, qty)
             net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included
@@ -10188,6 +10194,7 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['fav_price'] = current_fav_ask
                     bot['fav_walk_count'] = walk_count
                     bot['fav_last_walk_at'] = now
+                    bot['_fav_was_taker'] = True  # flag for fee tracking
                     if fav_side == 'yes':
                         bot['yes_price'] = current_fav_ask
                     else:

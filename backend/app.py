@@ -3450,16 +3450,16 @@ def _execute_phantom_hedge(bot_id):
         # Posting at breakeven when bid is above it means zero chance of fill.
         _combined_at_bid = dog_price + fav_bid if fav_bid > 0 else 999
         if _combined_at_bid > 100:
-            # Fav bid already over ceiling — hedge will never fill, sell back immediately
-            print(f'🚫 PHANTOM HEDGE SKIP: {bot_id} combined@bid={_combined_at_bid}¢ > 100 (dog={dog_price}¢ fav_bid={fav_bid}¢) — selling back')
+            # Fav bid already over ceiling — hedge will never fill, sell back instantly
+            print(f'🚫 PHANTOM HEDGE SKIP+SELLBACK: {bot_id} combined@bid={_combined_at_bid}¢ > 100 (dog={dog_price}¢ fav_bid={fav_bid}¢) — instant sellback')
             bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
                 'dog_price': dog_price, 'fav_bid': fav_bid,
                 'max_hedge': max_hedge, 'combined_at_bid': _combined_at_bid,
                 'path': 'ws_fast',
             })
-            bot['status'] = 'fav_hedge_posted'  # let monitor handle sellback
-            bot['fav_posted_at'] = time.time()
-            bot['_over_ceiling_since'] = time.time()  # start ceiling timer immediately
+            bot['status'] = 'fav_hedge_posted'
+            bot['fav_price'] = fav_bid
+            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, _combined_at_bid, [])
             return
         if dog_price + hedge_price > 100:
             # Bid is under ceiling but hedge price exceeds — cap at breakeven

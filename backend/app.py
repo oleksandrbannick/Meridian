@@ -2306,13 +2306,22 @@ def load_state():
                 # Clear ALL transient thread flags — threads are dead after restart
                 _any_cleared = False
                 for _flag in ('_completion_in_progress', '_ws_fill_handling', '_bot_completed',
-                              '_completion_repeat_processed', '_sweep_thread_running'):
+                              '_completion_repeat_processed', '_sweep_thread_running',
+                              '_hedge_fired'):
                     if _bot.get(_flag):
                         _bot[_flag] = False
                         _any_cleared = True
+                # Clear stale old order IDs — on restart, WS reconnection can replay
+                # fills for old orders and trigger phantom hedges for positions that
+                # don't exist. Keep ONLY the current dog_order_id.
+                _old_ids = _bot.get('_all_dog_order_ids', [])
+                _cur_oid = _bot.get('dog_order_id')
+                if len(_old_ids) > 1 or (_old_ids and _cur_oid and _old_ids != [_cur_oid]):
+                    _bot['_all_dog_order_ids'] = [_cur_oid] if _cur_oid else []
+                    _any_cleared = True
                 if _any_cleared:
                     _transient_cleared += 1
-                    print(f'🔧 STARTUP FIX: {_bid[:40]} cleared stuck thread flags')
+                    print(f'🔧 STARTUP FIX: {_bid[:40]} cleared stuck thread flags + stale order IDs')
             if _transient_cleared:
                 print(f'🔧 Cleared {_transient_cleared} stuck transient flags on startup')
             # Write a backup on startup so we can always recover

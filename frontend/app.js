@@ -12838,6 +12838,9 @@ async function loadDogHistory() {
             const avgWidth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.arb_width||0), 0) / trades.length).toFixed(1) : '—';
             const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
             const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
+            const avgProfit = trades.length > 0 ? (net / trades.length).toFixed(1) : '—';
+            const hedgeTrades = trades.filter(t => t.raw_hedge_ms != null);
+            const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
             // Fetch /api/pnl for lifetime + daily cards
             let pnl = {};
             try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
@@ -12848,38 +12851,43 @@ async function loadDogHistory() {
 
             statsPanel.innerHTML = trades.length === 0
                 ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
-                : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+                : `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&L</div>
-                        <div style="color:${dLtCol};font-size:24px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
+                        <div style="color:${dLtCol};font-size:22px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.lifetime_dog_wins||0)}W / ${(pnl.lifetime_dog_losses||0)}L</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key||''}</span></div>
-                        <div style="color:${dDCol};font-size:24px;font-weight:800;">${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}</div>
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L</div>
+                        <div style="color:${dDCol};font-size:22px;font-weight:800;">${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.dog_wins||0)}W / ${(pnl.dog_losses||0)}L today</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Net P&L</div>
-                        <div style="color:${netCol};font-size:24px;font-weight:800;">${net>=0?'+':''}$${(net/100).toFixed(2)}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${trades.length} trades</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Win Rate</div>
-                        <div style="color:#ffaa00;font-size:24px;font-weight:800;">${wins+losses > 0 ? Math.round(wins/(wins+losses)*100) : 0}%</div>
+                        <div style="color:#ffaa00;font-size:22px;font-weight:800;">${wins+losses > 0 ? Math.round(wins/(wins+losses)*100) : 0}%</div>
                         <div style="color:#555;font-size:10px;margin-top:2px;">${wins}W / ${losses}L</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Profit</div>
+                        <div style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-size:22px;font-weight:800;">${avgProfit === '—' ? '—' : (parseFloat(avgProfit) >= 0 ? '+' : '') + avgProfit + '¢'}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${trades.length} trades</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Width</div>
-                        <div style="color:#00aaff;font-size:24px;font-weight:800;">${avgWidth}¢</div>
+                        <div style="color:#00aaff;font-size:22px;font-weight:800;">${avgWidth}¢</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Depth Floor</div>
-                        <div style="color:#ff66aa;font-size:24px;font-weight:800;">${avgDepth}¢</div>
+                        <div style="color:#ff66aa;font-size:22px;font-weight:800;">${avgDepth}¢</div>
+                    </div>
+                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Hedge Speed</div>
+                        <div style="color:#00ffcc;font-size:22px;font-weight:800;">${avgHedgeMs === '—' ? '—' : avgHedgeMs + 'ms'}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${hedgeTrades.length} samples</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Sellbacks</div>
-                        <div style="color:#ff4444;font-size:24px;font-weight:800;">${sellbacks}</div>
+                        <div style="color:#ff4444;font-size:22px;font-weight:800;">${sellbacks}</div>
                         <div style="color:#555;font-size:10px;margin-top:2px;">safety exits</div>
                     </div>
                 </div>`;

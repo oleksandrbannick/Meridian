@@ -4004,8 +4004,8 @@ function updateAnchorPreview() {
             if (wallAtRec > 0) {
                 const ratio = favTop3 / wallAtRec;
                 if (ratio >= 10) { recDepth = Math.max(recDepth - 1, 3); reasons.push(`fav/dog ${ratio.toFixed(0)}x safe`); }
-                else if (ratio < 2) { recDepth = Math.min(recDepth + 1, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x thin`); }
                 else if (ratio < 1) { recDepth = Math.min(recDepth + 2, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x danger`); }
+                else if (ratio < 2) { recDepth = Math.min(recDepth + 1, 12); reasons.push(`fav/dog ${ratio.toFixed(1)}x thin`); }
             }
             // Hard cap recDepth to wall data range
             recDepth = Math.min(recDepth, 12);

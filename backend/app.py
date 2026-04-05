@@ -3123,7 +3123,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['dog_filled_at'] = time.time()
                     bot['status'] = 'dog_filled'
                     _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                    save_state()
+                    # Skip save_state — json.dump GIL contention blocks hedge worker (deferred to hedge fn line 3508)
                     break
                 elif bot['dog_fill_qty'] > 0 and not bot.get('_hedge_fired'):
                     # Partial fill — hedge FIRST, cancel remainder async (don't block hot path)
@@ -3137,7 +3137,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     if _cancel_oid:
                         threading.Thread(target=lambda oid=_cancel_oid: _safe_cancel(oid, f'partial_fill_{bot_id}'), daemon=True).start()
                     print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
-                    save_state()
+                    # Skip save_state — deferred to hedge fn (line 3508)
                     break
                 print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
             elif matched == 'fav':

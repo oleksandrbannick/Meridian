@@ -6667,6 +6667,7 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
             _new_oid = _amend_ord.get('order_id', '')
             if _new_oid and _new_oid != hedge_oid:
                 rung['hedge_order_id'] = _new_oid
+                bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
                 hedge_oid = _new_oid
             rung['hedge_price'] = new_price
             print(f'  📌 HEDGE AMEND: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining}rem (oid={str(hedge_oid)[:12]})')
@@ -6741,6 +6742,9 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
         new_oid = (resp.get('order', resp) if isinstance(resp, dict) else resp).get('order_id', '')
         rung['hedge_order_id'] = new_oid
         rung['hedge_price'] = new_price
+        # Track for cleanup on bot cancel
+        if new_oid:
+            bot.setdefault('_all_placed_order_ids', []).append(new_oid)
         print(f'  🆕 HEDGE POST: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining} (oid={new_oid[:12]})')
         save_state()
     except Exception as e:

@@ -4092,8 +4092,8 @@ function updateAnchorPreview() {
                 : anchorDepth > recDepth + 3 ? ` <span style="color:#ffaa00;font-weight:700;">deep — lower fill prob</span>` : '';
             const thinWarn = fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
             const concNote = favConc > 0.6 ? ` · <span style="color:#ff8800;">${Math.round(favConc*100)}% in 1 wall</span>` : '';
-            depthRec = `<div style="margin-top:3px;padding:3px 6px;background:${recCol}11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
-                `<span style="color:${recCol};font-weight:700;">📊 Rec: ${recDepth}¢+</span> ` +
+            depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
+                `<span style="color:#ff66aa;font-weight:700;">📊 Rec: ${recDepth}¢+</span> ` +
                 `<span style="color:#8892a6;">${recNote}</span>${thinWarn}${depthWarnTxt}` +
                 `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
                 `dog ${dd.toLocaleString()} (${_obCache.dogPerLevel||0}/lvl) @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
@@ -4101,7 +4101,7 @@ function updateAnchorPreview() {
                 `<div style="margin-top:2px;color:#ffaa00;font-size:9px;font-weight:600;">Max safe qty: ${maxQty} <span style="color:#555;font-weight:400;">(fav top 3 bids: ${_obCache.favTop3||0})</span></div>` +
                 `</div>`;
         }
-        shaveInfo.innerHTML = `<span style="color:#ffaa00;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;
+        shaveInfo.innerHTML = `<span style="color:#ff66aa;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;
     }
 
     const previewEl = document.getElementById('anchor-preview-content');

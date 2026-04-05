@@ -10151,6 +10151,55 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
+        # ── Take-profit cross: hit the ask to lock in profit ──
+        # When the hedge walks up chasing the bid, profit shrinks toward zero.
+        # If crossing the ask NOW still gives combined <= 95¢ (5¢+ profit),
+        # just cross the spread and take the guaranteed money instead of
+        # risking the walk eating it all the way to breakeven.
+        # Wait 3s after hedge post to give maker order a chance first.
+        TAKE_PROFIT_CEILING = 95
+        if (current_fav_ask > 0 and current_fav_ask > current_fav_price
+                and wait_s >= 3):
+            cross_combined = dog_price + current_fav_ask
+            if cross_combined <= TAKE_PROFIT_CEILING:
+                # Cross the spread — amend to ask price for instant taker fill
+                try:
+                    _phantom_drop_lock.acquire()
+                    try:
+                        fav_order_id = bot.get('fav_order_id', fav_order_id)
+                        amend_kwargs = {'yes_price': current_fav_ask} if fav_side == 'yes' else {'no_price': current_fav_ask}
+                        api_rate_limiter.wait()
+                        kalshi_client.amend_order(
+                            fav_order_id, ticker=hedge_ticker, side=fav_side,
+                            count=qty, **amend_kwargs
+                        )
+                    finally:
+                        _phantom_drop_lock.release()
+                    _profit = 100 - cross_combined
+                    walk_count = bot.get('fav_walk_count', 0) + 1
+                    print(f'💰 PHANTOM TAKE PROFIT: {bot_id} cross ask {current_fav_price}¢→{current_fav_ask}¢ '
+                          f'(combined={cross_combined}¢ profit={_profit}¢/ea bid={current_fav_bid}¢ wait={wait_s:.1f}s)')
+                    bot_log('PHANTOM_TAKE_PROFIT_CROSS', bot_id, {
+                        'old_price': current_fav_price, 'cross_price': current_fav_ask,
+                        'fav_bid': current_fav_bid, 'fav_ask': current_fav_ask,
+                        'dog_price': dog_price, 'combined': cross_combined,
+                        'profit_per_contract': _profit, 'wait_s': round(wait_s, 1),
+                    })
+                    bot['fav_price'] = current_fav_ask
+                    bot['fav_walk_count'] = walk_count
+                    bot['fav_last_walk_at'] = now
+                    if fav_side == 'yes':
+                        bot['yes_price'] = current_fav_ask
+                    else:
+                        bot['no_price'] = current_fav_ask
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'anchor_fav_take_profit_cross',
+                                    'old_price': current_fav_price, 'new_price': current_fav_ask,
+                                    'combined': cross_combined})
+                except Exception as e:
+                    print(f'❌ PHANTOM {bot_id}: take-profit cross failed: {e}')
+                return
+
         # Walk target: always bid — phantom needs ceiling margin, walk handles the rest
         walk_target = current_fav_bid
 

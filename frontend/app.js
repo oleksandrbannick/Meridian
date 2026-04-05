@@ -12898,22 +12898,26 @@ async function loadDogHistory() {
             const widthMap = {};
             trades.forEach(t => {
                 const w = t.arb_width || 0;
-                if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0 };
+                if (w <= 0) return;
+                if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0 };
                 const net = (t.profit_cents||0) - (t.loss_cents||0);
                 widthMap[w].net += net;
-                if (net >= 0) widthMap[w].wins++; else widthMap[w].losses++;
+                widthMap[w].count++;
+                if (net >= 0 && (t.profit_cents||0) > 0) widthMap[w].wins++; else if (net < 0) widthMap[w].losses++;
             });
             const widths = Object.values(widthMap).sort((a,b) => a.width - b.width);
             widthPanel.innerHTML = widths.length === 0 ? '' : `
                 <h4 style="color:#ffaa00;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Width Performance</h4>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
                     ${widths.map(w => {
                         const wCol = w.net >= 0 ? '#00ff88' : '#ff4444';
                         const total = w.wins + w.losses;
+                        const avg = w.count > 0 ? (w.net / w.count).toFixed(1) : '0';
                         return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #1e2740;">
                             <div style="color:#ffaa00;font-size:14px;font-weight:800;">${w.width}¢</div>
-                            <div style="color:${wCol};font-size:12px;font-weight:700;">${w.net>=0?'+':''}${w.net}¢</div>
+                            <div style="color:${wCol};font-size:13px;font-weight:700;">${w.net>=0?'+':''}$${(w.net/100).toFixed(2)}</div>
                             <div style="color:#555;font-size:10px;">${w.wins}W/${w.losses}L${total > 0 ? ' · ' + Math.round(w.wins/total*100) + '%' : ''}</div>
+                            <div style="color:#3a4560;font-size:9px;">${w.count} trades · avg ${avg}¢</div>
                         </div>`;
                     }).join('')}
                 </div>`;
@@ -12924,6 +12928,7 @@ async function loadDogHistory() {
             const depthMap = {};
             trades.forEach(t => {
                 const d = t.anchor_depth || 0;
+                if (d <= 0) return;
                 if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0 };
                 const net = (t.profit_cents||0) - (t.loss_cents||0);
                 depthMap[d].net += net;
@@ -12934,15 +12939,16 @@ async function loadDogHistory() {
             const depths = Object.values(depthMap).sort((a,b) => a.depth - b.depth);
             depthPanel.innerHTML = depths.length === 0 ? '' : `
                 <h4 style="color:#ff66aa;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Depth Floor Performance</h4>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
                     ${depths.map(d => {
                         const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
                         const total = d.wins + d.losses;
+                        const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
                         return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #1e2740;">
                             <div style="color:#ff66aa;font-size:14px;font-weight:800;">${d.depth}¢</div>
-                            <div style="color:${dCol};font-size:12px;font-weight:700;">${d.net>=0?'+':''}${d.net}¢</div>
+                            <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
                             <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
-                            <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
+                            <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
                         </div>`;
                     }).join('')}
                 </div>`;
@@ -12992,15 +12998,15 @@ async function loadDogHistory() {
                         ${t.repeat_cycle && t.repeat_total > 1 ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t.smart_mode ? 'Smart ' : ''}Run ${t.repeat_cycle}/${t.repeat_total}</span>` : ''}
                     </div>
                     <div style="text-align:right;">
-                        <div style="color:${netCol};font-weight:800;font-size:16px;">${net>=0?'+':''}${net}¢</div>
-                        <div style="color:${netCol};font-size:10px;font-weight:600;">${statusLabel}</div>
+                        <div style="color:${netCol};font-weight:800;font-size:16px;">${net>=0?'+':''}$${(Math.abs(net)/100).toFixed(2)}</div>
+                        <div style="color:${netCol};font-size:10px;font-weight:600;">${statusLabel} · ${net>=0?'+':''}${net}¢</div>
                     </div>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                     <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${dogCol}22;">
                         <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">👻 ANCHOR · BOUGHT</div>
                         <div style="color:${dogCol};font-weight:700;font-size:12px;">${dogSide.toUpperCase()} @ ${dogPrice}¢</div>
-                        <div style="color:#8892a6;font-size:10px;">×${t.quantity||1}</div>
+                        <div style="color:#8892a6;font-size:10px;">×${t.quantity||1}${typeof dogPrice === 'number' ? ` · $${((t.quantity||1) * dogPrice / 100).toFixed(2)}` : ''}</div>
                         ${rungsHtml}
                     </div>
                     <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${isSellback ? '#ff444422' : favCol+'22'};">
@@ -13018,6 +13024,7 @@ async function loadDogHistory() {
                 </div>
                 <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;">
                     <span style="color:#555;">${dateStr}</span>
+                    ${t.anchor_depth ? `<span style="color:#ff66aa;">Depth: ${t.anchor_depth}¢</span>` : ''}
                     ${t.fee_cents ? `<span style="color:#8892a6;">Fee: ${t.fee_cents}¢</span>` : ''}
                     ${t.fill_duration_s != null ? `<span style="color:#8892a6;">Fill: ${t.fill_duration_s}s</span>` : ''}
                     ${(() => { const lat = t.hedge_latency_ms != null ? t.hedge_latency_ms : t.hedge_fill_latency_ms; const raw = t.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> raw ${raw.toFixed(1)}ms</span>` : ''); })()}

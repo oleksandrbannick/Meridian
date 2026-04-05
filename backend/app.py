@@ -14910,8 +14910,9 @@ def _run_monitor():
                             if bid_a > 0 and bid_b > 0:
                                 cur_price_a = bot.get('target_price_a') or bot.get('target_price', 49)
                                 cur_price_b = bot.get('target_price_b') or bot.get('target_price', 49)
-                                # Original combined cost the user selected
+                                # Original combined cost the user selected — hard cap at 98¢
                                 target_cost = bot.get('_original_cost') or (cur_price_a + cur_price_b)
+                                target_cost = min(target_cost, 98)
 
                                 total_bid = bid_a + bid_b
                                 shave = max(0, total_bid - target_cost)
@@ -15472,6 +15473,8 @@ def create_middle_bot():
             return jsonify({'error': 'Missing required fields: ticker_a, ticker_b'}), 400
         if not (1 <= target_price_a <= 99) or not (1 <= target_price_b <= 99):
             return jsonify({'error': f'Prices out of range (1-99): A={target_price_a} B={target_price_b}'}), 400
+        if target_price_a + target_price_b >= 100:
+            return jsonify({'error': f'Combined cost {target_price_a}+{target_price_b}={target_price_a+target_price_b}¢ >= 100¢ — guaranteed loss. Max combined is 98¢ for 2¢ arb.'}), 400
         if qty < 1:
             return jsonify({'error': 'qty must be at least 1'}), 400
 

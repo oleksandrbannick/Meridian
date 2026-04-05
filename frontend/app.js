@@ -11133,6 +11133,7 @@ async function launchMiddleBot() {
         return;
     }
     if (pA < 1 || pA > 90 || pB < 1 || pB > 90) { alert('Prices must be 1–90¢'); return; }
+    if (pA + pB >= 100) { alert(`Combined cost ${pA}+${pB}=${pA+pB}¢ >= 100¢ — guaranteed loss. Lower your prices.`); return; }
     if (qty < 1) { alert('Quantity must be at least 1'); return; }
 
     const guaranteed   = (100 - pA - pB) * qty;

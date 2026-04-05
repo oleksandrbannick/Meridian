@@ -3970,6 +3970,17 @@ function updateAnchorPreview() {
             // Fav gaps = hedge may miss levels, need wider depth for safety
             if (fGaps >= 3) { recDepth = Math.max(recDepth, recDepth + 2); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 2) { recDepth = Math.max(recDepth, recDepth + 1); reasons.push(`${fGaps} fav gaps`); }
+            // Fav/dog ratio: fav contracts absorbing vs dog contracts that must drop to fill you
+            // High ratio = fav dwarfs the sweep that reaches you, hedge is stable
+            // Low ratio = same flow that fills you also moves fav side, toxic fill risk
+            const favTop3 = _obCache.favTop3 || 0;
+            const wallAtRec = dogWall[recDepth] || dogWall[Math.min(recDepth, 8)] || 0;
+            if (wallAtRec > 0) {
+                const ratio = favTop3 / wallAtRec;
+                if (ratio >= 10) { recDepth = Math.max(recDepth - 1, 3); reasons.push(`fav/dog ${ratio.toFixed(0)}x safe`); }
+                else if (ratio < 2) { recDepth = recDepth + 1; reasons.push(`fav/dog ${ratio.toFixed(1)}x thin`); }
+                else if (ratio < 1) { recDepth = recDepth + 2; reasons.push(`fav/dog ${ratio.toFixed(1)}x danger`); }
+            }
             const recNote = reasons.join(' · ');
             const recMatch = anchorDepth >= recDepth && anchorDepth <= recDepth + 2;
             const recCol = recMatch ? '#00ff88' : '#ffaa00';

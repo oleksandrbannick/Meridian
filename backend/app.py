@@ -10032,7 +10032,9 @@ def _handle_phantom(bot_id, bot, actions):
         # Our fav price is capped at max_fav_hold (=100-dog), so _posted_combined
         # stays at 100 even when fav bid is 99¢ and our hedge at 87¢ can't fill.
         _ceiling_combined = dog_price + max(_current_fav, _live_fav_bid) if _live_fav_bid > 0 else _posted_combined
-        if _ceiling_combined <= 100:
+        # At 100¢ with partial fills = breakeven with risk, no reason to wait
+        _at_breakeven_with_partials = _ceiling_combined >= 100 and _has_partial_fills
+        if _ceiling_combined < 100 or (_ceiling_combined == 100 and not _has_partial_fills):
             bot['_over_ceiling_since'] = None  # under ceiling — clear timer
         else:
             # Past ceiling — start/check 15s timer

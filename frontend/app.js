@@ -12875,8 +12875,8 @@ async function loadDogHistory() {
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Trades</div>
-                        <div style="color:#8892a6;font-size:22px;font-weight:800;">${trades.length}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${wins}W / ${losses}L</div>
+                        <div style="color:#8892a6;font-size:22px;font-weight:800;">${ltTotal}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
                     </div>
                     <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
                         <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Hedge Speed</div>

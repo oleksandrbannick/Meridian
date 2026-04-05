@@ -12911,24 +12911,44 @@ def _run_monitor():
                     if _b.get('_cross_settled_qty_fav', 0) <= 0:
                         _b['_cross_settled_qty_fav'] = _actual_qty
                     _cross_fixed += 1
-            # Dog flip detection: cancel smart exit if dog side flipped
-            # Skip for cross-market — dog_bid > fav_bid is normal (teams are opponents)
+            # Dog flip detection: cancel smart exit if the "loser" is now winning
             _trigger = _b.get('_smart_exit_trigger')
             _is_cross_chk = _ht and _ht != _b.get('ticker')
-            if _trigger and not _b.get('_smart_exit_sold') and ws_manager and not _is_cross_chk:
-                _dog_side_chk = _b.get('dog_side', 'no')
-                _ws_dog_chk = ws_manager.get_price(_b['ticker'])
-                _ws_fav_chk = ws_manager.get_price(_ht)
-                _dog_bid_chk = (_ws_dog_chk or {}).get(f'{_dog_side_chk}_bid', 0)
-                _fav_side_chk = _b.get('fav_side', 'yes' if _dog_side_chk == 'no' else 'no')
-                _fav_bid_chk = (_ws_fav_chk or {}).get(f'{_fav_side_chk}_bid', 0)
-                if _dog_bid_chk > 0 and _fav_bid_chk > 0 and _dog_bid_chk > _fav_bid_chk:
-                    # Dog is now favored — smart exit would sell the wrong side
+            if _trigger and not _b.get('_smart_exit_sold') and ws_manager:
+                _flip_cancel = False
+                if _is_cross_chk:
+                    # Cross-market: check if the trigger's loser ticker is now the winner (bid > 50¢)
+                    _loser_tk = _trigger.get('ticker', '')
+                    _winner_tk = _trigger.get('winner_ticker', '')
+                    if _loser_tk and _winner_tk:
+                        # Get the YES bid for each — the one above 50¢ is winning
+                        _ws_loser = ws_manager.get_price(_loser_tk)
+                        _ws_winner = ws_manager.get_price(_winner_tk)
+                        _loser_yes = (_ws_loser or {}).get('yes_bid', 0)
+                        _winner_yes = (_ws_winner or {}).get('yes_bid', 0)
+                        if _loser_yes > 0 and _winner_yes > 0 and _loser_yes > _winner_yes:
+                            _flip_cancel = True
+                            print(f'🔄 SMART EXIT CANCELLED (cross flip): {_bid[:40]} loser={_loser_tk.split("-")[-1]} {_loser_yes}¢ > winner={_winner_tk.split("-")[-1]} {_winner_yes}¢')
+                            bot_log('SMART_EXIT_DOG_FLIP_CANCEL', _bid, {
+                                'loser_bid': _loser_yes, 'winner_bid': _winner_yes,
+                                'loser_ticker': _loser_tk, 'winner_ticker': _winner_tk,
+                            })
+                else:
+                    # Same-market: original check — dog bid > fav bid means dog is now favored
+                    _dog_side_chk = _b.get('dog_side', 'no')
+                    _ws_dog_chk = ws_manager.get_price(_b['ticker'])
+                    _ws_fav_chk = ws_manager.get_price(_ht)
+                    _dog_bid_chk = (_ws_dog_chk or {}).get(f'{_dog_side_chk}_bid', 0)
+                    _fav_side_chk = _b.get('fav_side', 'yes' if _dog_side_chk == 'no' else 'no')
+                    _fav_bid_chk = (_ws_fav_chk or {}).get(f'{_fav_side_chk}_bid', 0)
+                    if _dog_bid_chk > 0 and _fav_bid_chk > 0 and _dog_bid_chk > _fav_bid_chk:
+                        _flip_cancel = True
+                        print(f'🔄 SMART EXIT CANCELLED (dog flip): {_bid[:40]} dog={_dog_bid_chk}¢ > fav={_fav_bid_chk}¢')
+                        bot_log('SMART_EXIT_DOG_FLIP_CANCEL', _bid, {
+                            'dog_bid': _dog_bid_chk, 'fav_bid': _fav_bid_chk,
+                        })
+                if _flip_cancel:
                     _b['_smart_exit_trigger'] = None
-                    print(f'🔄 SMART EXIT CANCELLED (dog flip): {_bid[:40]} dog={_dog_bid_chk}¢ > fav={_fav_bid_chk}¢')
-                    bot_log('SMART_EXIT_DOG_FLIP_CANCEL', _bid, {
-                        'dog_bid': _dog_bid_chk, 'fav_bid': _fav_bid_chk,
-                    })
                     _trigger = None  # skip execution below
 
             # Auto smart exit: check price trigger

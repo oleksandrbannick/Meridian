@@ -3260,10 +3260,40 @@ function displayOrderbookLadder(orderbook) {
     // Score breakdown tooltip
     const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · NoGap: ${favNoGapPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts · Conc: ${concPenalty}pts · Room: ${roomPenalty}pts`;
 
+    // ── Verdict: plain-language summary of whether this market is good for phantom ──
+    const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
+    const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
+    let verdict = '', verdictCol = '';
+    if (catchScore >= 70 && dogDepth < 2000) {
+        verdict = 'Prime phantom market — thick fav, thin dog, hedge will catch fast';
+        verdictCol = '#00ff88';
+    } else if (catchScore >= 70) {
+        verdict = 'Strong catch but dog is crowded — fills will be rare';
+        verdictCol = '#00cc66';
+    } else if (catchScore >= 40 && hedgeRoom >= 3 && dogDepth < 5000) {
+        verdict = 'Decent setup — hedge should catch, reasonable fill probability';
+        verdictCol = '#ffaa00';
+    } else if (catchScore >= 40 && hedgeRoom <= 1) {
+        verdict = 'Tight market — fav mirrors dog moves, profit margin thin';
+        verdictCol = '#ff8800';
+    } else if (catchScore >= 40) {
+        verdict = 'OK catch but watch depth — sweep may strand the hedge';
+        verdictCol = '#ffaa00';
+    } else if (hedgeRoom <= 1) {
+        verdict = 'Avoid — spread too tight, hedge will fill at breakeven';
+        verdictCol = '#ff4444';
+    } else {
+        verdict = 'Weak — fav side too thin or gappy, hedge may miss';
+        verdictCol = '#ff4444';
+    }
+
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>
             <span style="color:${catchCol};font-weight:800;font-size:12px;" title="${_scoreBreakdown}">${botIconImg('phantom', 14)} ${catchLabel} ${catchScore}</span>
+        </div>
+        <div style="padding:5px 8px;background:${verdictCol}11;border:1px solid ${verdictCol}33;border-radius:5px;margin-bottom:6px;">
+            <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
@@ -3279,9 +3309,9 @@ function displayOrderbookLadder(orderbook) {
                 <div style="color:${favCol};font-size:8px;">${favNote}</div>
             </div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
-            <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${hedgeRoom >= 3 ? '#00ff88' : '#ff4444'};font-weight:700;">${hedgeRoom}¢</span></span>
-            <span style="color:#8892a6;font-size:9px;">Max qty: <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span> <span style="color:#555;">(fav top3: ${favAnalysis.top3Qty})</span></span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
+            <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${roomCol};font-weight:700;">${hedgeRoom}¢</span> <span style="color:${roomCol};">${roomLabel}</span></span>
+            <span style="color:#8892a6;font-size:9px;">Max qty: <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span></span>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');

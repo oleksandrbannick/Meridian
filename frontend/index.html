@@ -3074,7 +3074,7 @@
             const totalEl = document.getElementById('legend-stat-total');
             if (tradesEl) tradesEl.textContent = s.trades ?? '--';
             if (wrEl) { wrEl.textContent = s.trades ? s.win_rate + '%' : '--'; wrEl.style.color = (s.win_rate||0) >= 50 ? '#00ff88' : '#ff4444'; }
-            if (avgEl) { avgEl.textContent = s.trades ? '$' + s.avg_profit : '--'; avgEl.style.color = (s.avg_profit||0) >= 0 ? '#00ff88' : '#ff4444'; }
+            if (avgEl) { const _ac = s.trades ? (s.avg_profit * 100).toFixed(1) + '¢' : '--'; avgEl.textContent = _ac; avgEl.style.color = (s.avg_profit||0) >= 0 ? '#00ff88' : '#ff4444'; }
             if (totalEl) { totalEl.textContent = s.trades ? '$' + s.total_profit : '--'; totalEl.style.color = (s.total_profit||0) >= 0 ? '#00ff88' : '#ff4444'; }
         };
 
@@ -3085,7 +3085,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260405095700"></script>
+    <script src="app.js?v=20260405100700"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

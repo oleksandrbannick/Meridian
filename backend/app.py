@@ -12912,8 +12912,10 @@ def _run_monitor():
                         _b['_cross_settled_qty_fav'] = _actual_qty
                     _cross_fixed += 1
             # Dog flip detection: cancel smart exit if dog side flipped
+            # Skip for cross-market — dog_bid > fav_bid is normal (teams are opponents)
             _trigger = _b.get('_smart_exit_trigger')
-            if _trigger and not _b.get('_smart_exit_sold') and ws_manager:
+            _is_cross_chk = _ht and _ht != _b.get('ticker')
+            if _trigger and not _b.get('_smart_exit_sold') and ws_manager and not _is_cross_chk:
                 _dog_side_chk = _b.get('dog_side', 'no')
                 _ws_dog_chk = ws_manager.get_price(_b['ticker'])
                 _ws_fav_chk = ws_manager.get_price(_ht)

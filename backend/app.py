@@ -16962,6 +16962,22 @@ def cancel_bot(bot_id):
                 fav_side = bot.get('fav_side', 'yes')
                 dog_fill = bot.get('dog_fill_qty', 0)
                 fav_fill = bot.get('fav_fill_qty', 0)
+                _hedge_ticker = bot.get('hedge_ticker', ticker) or ticker
+                _is_cross_cancel = _hedge_ticker != ticker
+                # For cross-market awaiting_settlement, use accumulated settled qty
+                if _is_cross_cancel:
+                    _settled_dog = bot.get('_cross_settled_qty_dog', 0)
+                    _settled_fav = bot.get('_cross_settled_qty_fav', 0)
+                    # Smart exit may have already sold one side
+                    if bot.get('_smart_exit_sold'):
+                        _se = bot['_smart_exit_sold']
+                        if _se.get('ticker') == ticker:
+                            _settled_dog = max(0, _settled_dog - _se.get('qty', 0))
+                        else:
+                            _settled_fav = max(0, _settled_fav - _se.get('qty', 0))
+                    # Use the larger of current fills and accumulated settled qty
+                    dog_fill = max(dog_fill, _settled_dog)
+                    fav_fill_cross = max(bot.get('fav_fill_qty', 0), _settled_fav)
                 # Cancel unfilled dog order
                 if dog_fill < qty and bot.get('dog_order_id'):
                     try:
@@ -16986,8 +17002,27 @@ def cancel_bot(bot_id):
                         cancelled.append(f'FAV_{fav_side.upper()}')
                     except Exception as e:
                         print(f'⚠ cancel_bot({bot_id}): cancel fav order failed: {e}')
-                # Sell back filled dog leg if fav isn't filled
-                if dog_fill > 0 and fav_fill < qty:
+                # Cross-market: sell positions on BOTH tickers
+                if _is_cross_cancel and dog_fill > 0:
+                    sold, sell_info = execute_sell(ticker, dog_side, dog_fill,
+                                                   reason=f'cancel_anchor_dog_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'{dog_side.upper()} {dog_fill}x (dog on {ticker.split("-")[-1]})')
+                        sp = (sell_info or {}).get('actual_fill_price', 0)
+                        sell_prices[dog_side] = sp
+                    else:
+                        warnings.append(f'FAILED to sell {dog_side.upper()} {dog_fill}x on {ticker} — position may still be open!')
+                if _is_cross_cancel and fav_fill_cross > 0:
+                    sold, sell_info = execute_sell(_hedge_ticker, fav_side, fav_fill_cross,
+                                                   reason=f'cancel_anchor_fav_{bot_id}')
+                    if sold:
+                        sold_positions.append(f'{fav_side.upper()} {fav_fill_cross}x (fav on {_hedge_ticker.split("-")[-1]})')
+                        sp = (sell_info or {}).get('actual_fill_price', 0)
+                        sell_prices[fav_side] = sp
+                    else:
+                        warnings.append(f'FAILED to sell {fav_side.upper()} {fav_fill_cross}x on {_hedge_ticker} — position may still be open!')
+                # Same-market: sell back filled dog leg if fav isn't filled
+                elif not _is_cross_cancel and dog_fill > 0 and fav_fill < qty:
                     sold, sell_info = execute_sell(ticker, dog_side, dog_fill,
                                                    reason=f'cancel_anchor_dog_{bot_id}')
                     if sold:
@@ -16997,7 +17032,7 @@ def cancel_bot(bot_id):
                     else:
                         warnings.append(f'FAILED to sell {dog_side.upper()} {dog_fill}x — position may still be open!')
                 # If both legs filled, it's a completed arb (auto-netted)
-                elif dog_fill >= qty and fav_fill >= qty:
+                elif not _is_cross_cancel and dog_fill >= qty and fav_fill >= qty:
                     already_cleared_sides.add('yes')
                     already_cleared_sides.add('no')
                     sold_positions.append(f'ARB_ALREADY_NETTED {qty}x')

@@ -6576,6 +6576,17 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             # Snap to bid — cheaper exit (or both profitable)
             _max_hedge = 100 - anchor_price
             _uncapped_snap = min(hedge_bid, max(1, _max_hedge + 5))  # allow up to 105¢ combined
+            # If snap price is below bid, order can never fill — skip to sellback
+            if _uncapped_snap < hedge_bid:
+                rung['_snap_reason'] = f'timeout_snap_unreachable_{_uncapped_snap}c_bid_{hedge_bid}c'
+                print(f'⏰ APEX SNAP UNREACHABLE: {bot_id} rung#{rung_idx} ({width}c) snap={_uncapped_snap}¢ < bid={hedge_bid}¢ — sellback instead')
+                bot_log('APEX_SNAP_UNREACHABLE', bot_id, {
+                    'rung_idx': rung_idx, 'width': width,
+                    'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
+                    'snap_price': _uncapped_snap, 'combined': anchor_price + _uncapped_snap,
+                })
+                _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
+                return
             rung['_snap_reason'] = f'timeout_snap_{_uncapped_snap}c'
             rung['_timeout_uncapped'] = True
             if not _first_timeout_snap:

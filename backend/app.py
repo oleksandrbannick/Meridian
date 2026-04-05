@@ -18901,6 +18901,23 @@ def _run_startup():
     except Exception as e:
         print(f'⚠ Auto-login at startup failed (non-fatal): {e}')
 
+    # ── Startup: clear stale phantom fills from prior session ──
+    # If a phantom has dog_fill_qty > 0 but _hedge_fired was never set,
+    # the fills are from a previous process and the hedge never ran.
+    # Clear them so the bot starts fresh — the old positions are orphans.
+    for _bid, _bot in list(active_bots.items()):
+        if _bot.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+            continue
+        if _bot.get('status') != 'dog_anchor_posted':
+            continue
+        _stale_fills = _bot.get('dog_fill_qty', 0)
+        if _stale_fills > 0 and not _bot.get('_hedge_fired'):
+            print(f'🧹 STARTUP: clearing stale fills on {_bid}: dog_fill_qty={_stale_fills} (hedge never fired)')
+            _bot['dog_fill_qty'] = 0
+            _bot['yes_fill_qty'] = 0
+            _bot['no_fill_qty'] = 0
+            save_state()
+
     # ── Startup fill recovery: check phantom dog orders for fills missed during downtime ──
     if kalshi_client:
         try:

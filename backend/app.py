@@ -9932,37 +9932,47 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 # Orphan guard: check Kalshi position before re-anchoring
-                _pos_qty = _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
-                if _pos_qty is not None and _pos_qty > 0:
-                    print(f'⚠ PHANTOM ORPHAN AT REPEAT: {bot_id} Kalshi shows {_pos_qty} {dog_side} on {ticker} — selling back before re-anchor')
-                    _audit('PHANTOM_ORPHAN_AT_REPEAT', bot_id, {
-                        'ticker': ticker, 'orphan_qty': _pos_qty, 'side': dog_side,
-                    })
-                    try:
-                        api_rate_limiter.wait()
-                        _sell_resp = kalshi_client.create_order(
-                            ticker=ticker, side=dog_side, action='sell',
-                            type='market', count=_pos_qty,
-                        )
-                        _sell_oid = _sell_resp.get('order', {}).get('order_id', '?')
-                        print(f'🔙 PHANTOM ORPHAN SOLD: {bot_id} sold {_pos_qty} {dog_side} at market → {_sell_oid}')
-                        _audit('PHANTOM_ORPHAN_SOLD', bot_id, {
-                            'ticker': ticker, 'qty': _pos_qty, 'side': dog_side,
-                            'order_id': _sell_oid,
+                # Skip for cross-market bots — their dog positions are legitimately held for settlement
+                if not _is_cross:
+                    _pos_qty = _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
+                    if _pos_qty is not None and _pos_qty > 0:
+                        print(f'⚠ PHANTOM ORPHAN AT REPEAT: {bot_id} Kalshi shows {_pos_qty} {dog_side} on {ticker} — selling back before re-anchor')
+                        _audit('PHANTOM_ORPHAN_AT_REPEAT', bot_id, {
+                            'ticker': ticker, 'orphan_qty': _pos_qty, 'side': dog_side,
                         })
-                    except Exception as _sell_err:
-                        print(f'⚠ PHANTOM ORPHAN SELL FAILED: {bot_id} {_sell_err}')
-                        _audit('PHANTOM_ORPHAN_SELL_FAIL', bot_id, {
-                            'ticker': ticker, 'qty': _pos_qty, 'error': str(_sell_err)[:200],
-                        })
+                        try:
+                            api_rate_limiter.wait()
+                            _sell_resp = kalshi_client.create_order(
+                                ticker=ticker, side=dog_side, action='sell',
+                                order_type='market', count=_pos_qty,
+                            )
+                            _sell_oid = _sell_resp.get('order', {}).get('order_id', '?')
+                            print(f'🔙 PHANTOM ORPHAN SOLD: {bot_id} sold {_pos_qty} {dog_side} at market → {_sell_oid}')
+                            _audit('PHANTOM_ORPHAN_SOLD', bot_id, {
+                                'ticker': ticker, 'qty': _pos_qty, 'side': dog_side,
+                                'order_id': _sell_oid,
+                            })
+                        except Exception as _sell_err:
+                            print(f'⚠ PHANTOM ORPHAN SELL FAILED: {bot_id} {_sell_err}')
+                            _audit('PHANTOM_ORPHAN_SELL_FAIL', bot_id, {
+                                'ticker': ticker, 'qty': _pos_qty, 'error': str(_sell_err)[:200],
+                            })
             else:
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'
                     bot['awaiting_since'] = now
-                    print(f'⏳ PHANTOM AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot["hedge_ticker"]}')
+                    # Clear per-cycle fills — they're already in _cross_settled_qty_*
+                    # Prevents double-counting in position breakdown
+                    bot['dog_fill_qty'] = 0
+                    bot['fav_fill_qty'] = 0
+                    bot['yes_fill_qty'] = 0
+                    bot['no_fill_qty'] = 0
+                    print(f'⏳ PHANTOM AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot["hedge_ticker"]} dog={bot.get("_cross_settled_qty_dog",0)}x fav={bot.get("_cross_settled_qty_fav",0)}x')
                     bot_log('PHANTOM_AWAITING_SETTLEMENT', bot_id, {
                         'ticker': ticker, 'hedge_ticker': bot['hedge_ticker'],
-                        'qty': bot.get('dog_fill_qty', qty), 'pnl': net_pnl,
+                        'qty_dog': bot.get('_cross_settled_qty_dog', 0),
+                        'qty_fav': bot.get('_cross_settled_qty_fav', 0),
+                        'pnl': net_pnl,
                     })
                 else:
                     bot['status'] = 'completed'
@@ -18745,9 +18755,11 @@ def get_active_positions():
                         _add(t, fav_side, 'phantom', net_fav)
                 else:
                     # Cross-market: dog on ticker, fav on hedge_ticker (separate positions)
-                    # Current cycle fills + accumulated from previous completed runs
-                    _total_dog = dog_fills + _cross_settled_dog
-                    _total_fav = fav_qty + _cross_settled_fav
+                    # _cross_settled includes ALL completed runs. Only add current cycle
+                    # fills if bot is mid-cycle (not yet accumulated into settled qty).
+                    _in_cycle = _bstatus in ('dog_filled', 'fav_hedge_posted', 'dog_anchor_posted')
+                    _total_dog = (_cross_settled_dog + dog_fills) if _in_cycle else max(_cross_settled_dog, dog_fills)
+                    _total_fav = (_cross_settled_fav + fav_qty) if _in_cycle else max(_cross_settled_fav, fav_qty)
                     if _total_dog > 0:
                         _add(t, dog_side, 'phantom', _total_dog)
                     if _total_fav > 0:

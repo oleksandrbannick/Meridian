@@ -5701,6 +5701,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="color:#8892a6;">${r.dog_price || '?'}¢ ${r.result === 'sellback' ? '<span style="color:#ff4444;">→</span> ' + (r.fav_price || '?') + '¢ <span style="color:#ff4444;font-size:8px;">SB</span>' : '/ ' + (r.fav_price || '?') + '¢'}</span>
                             <span style="color:#8892a6;">x${r.qty || 1}</span>
                             ${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};font-size:9px;">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}
+                            ${r.fill_time_ms != null ? `<span style="color:${r.fill_time_ms < 5000 ? '#00aaff' : r.fill_time_ms < 30000 ? '#ffaa00' : '#ff4444'};font-size:8px;" title="Hedge fill time">${r.fill_time_ms < 1000 ? (r.fill_time_ms/1000).toFixed(1)+'s' : r.fill_time_ms < 60000 ? Math.round(r.fill_time_ms/1000)+'s' : (r.fill_time_ms/60000).toFixed(1)+'m'}</span>` : ''}
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
                         </div>
                     `).join('')}
@@ -12270,6 +12271,12 @@ async function loadTradeHistoryList() {
                     parts.push(`<span style="color:#8892a6;"><strong style="color:${otherLeg==='YES'?'#00ff88':'#ff4444'}">${otherLeg}</strong> @ <strong style="color:#fff">${secondFillPrice}¢</strong>${isTimeoutExit && originalPending && originalPending !== secondFillPrice ? ` <span style="color:#555">(was ${originalPending}¢)</span>` : ''}</span>`);
                     parts.push(`<span style="color:#8892a6;">Total: <strong style="color:${totalCost <= 100 ? '#00ff88' : '#ff4444'}">${totalCost}¢</strong>/100¢</span>`);
                     if (durStr) parts.push(`<span style="color:#8892a6;">Fill: <strong style="color:#fff;">${durStr}</strong></span>`);
+                    if (t.hedge_fill_latency_ms > 0) {
+                        const _hfm = t.hedge_fill_latency_ms;
+                        const _hfStr = _hfm < 1000 ? `${(_hfm/1000).toFixed(1)}s` : _hfm < 60000 ? `${Math.round(_hfm/1000)}s` : `${(_hfm/60000).toFixed(1)}m`;
+                        const _hfCol = _hfm < 5000 ? '#00aaff' : _hfm < 30000 ? '#ffaa00' : '#ff4444';
+                        parts.push(`<span style="color:${_hfCol};">Hedge fill: <strong>${_hfStr}</strong></span>`);
+                    }
                     if (isTimeoutExit && t.timeout_min) parts.push(`<span style="color:#8892a6;">⏱ ${t.timeout_min}m timeout</span>`);
                     if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
                 }

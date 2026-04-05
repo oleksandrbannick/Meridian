@@ -9895,6 +9895,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'qty': qty,
                 'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'fill_time_ms': bot.get('hedge_fill_latency_ms'),
                 'ts': time.time(),
             })
             if _will_repeat:
@@ -11645,6 +11646,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 'qty': hedge_qty,
                 'raw_hedge_ms': bot.get('raw_hedge_ms'),
                 'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                'fill_time_ms': bot.get('hedge_fill_latency_ms'),
                 'straggler_sold': _strag_sold,
                 'straggler_loss': _strag_loss_total,
                 'ts': time.time(),
@@ -12760,6 +12762,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'qty': qty,
         'raw_hedge_ms': bot.get('raw_hedge_ms'),
         'hedge_latency_ms': bot.get('hedge_latency_ms'),
+        'fill_time_ms': bot.get('hedge_fill_latency_ms'),
         'ts': now,
     })
 

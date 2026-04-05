@@ -14934,10 +14934,27 @@ def _run_monitor():
                                         kalshi_client.cancel_order(_oid)
                                     except Exception:
                                         pass
+                            # Check if either leg filled — if so, settle it instead of silently dropping
+                            _filled_leg = None
+                            if bot.get('leg_a_filled') or bot.get('leg_a_fill_price'):
+                                _filled_leg = 'a'
+                            elif bot.get('leg_b_filled') or bot.get('leg_b_fill_price'):
+                                _filled_leg = 'b'
+                            if _filled_leg:
+                                # One leg filled — transition to one_leg_timeout so settlement logic handles it
+                                bot['status'] = 'one_leg_timeout'
+                                bot['filled_leg'] = _filled_leg
+                                print(f'📐 MIDDLE MARKET DEAD (FILLED): {bot_id} — leg {_filled_leg} filled, settling via one_leg_timeout')
+                                bot_log('MIDDLE_MARKET_DEAD_WITH_FILL', bot_id, {
+                                    'filled_leg': _filled_leg,
+                                    'fill_price': bot.get(f'leg_{_filled_leg}_fill_price'),
+                                })
+                                save_state()
+                                continue  # will be picked up by one_leg_timeout settler next cycle
                             bot['status'] = 'completed'
                             bot['completed_at'] = now_m
                             bot['result'] = 'market_dead_unfilled'
-                            print(f'📐 MIDDLE MARKET DEAD: {bot_id} — markets inactive, cancelling')
+                            print(f'📐 MIDDLE MARKET DEAD: {bot_id} — markets inactive, no fills, cancelling')
                             actions.append({'bot_id': bot_id, 'action': 'middle_market_dead'})
                             save_state()
                             continue

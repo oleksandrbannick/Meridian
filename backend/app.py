@@ -7206,7 +7206,7 @@ def _check_apex_rung_completions(bot_id, bot):
 
 def _cancel_with_retry(oid, max_retries=2):
     """Cancel an order with rate limiting + retry on 429.
-    Returns True on success, False on failure. Logs last error for debugging."""
+    Returns True on success, 'filled' if order was filled (not cancelled), False on failure."""
     _last_err = None
     for attempt in range(max_retries + 1):
         try:
@@ -7216,13 +7216,21 @@ def _cancel_with_retry(oid, max_retries=2):
         except Exception as e:
             _last_err = e
             err_str = str(e)
-            # 404 = already cancelled/filled — treat as success
+            # 404 = already gone — but was it cancelled or FILLED?
             if '404' in err_str:
+                try:
+                    api_read_limiter.wait()
+                    _chk = kalshi_client.get_order(oid)
+                    _od = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
+                    if _parse_fill_count(_od) > 0:
+                        print(f'⚡ _cancel_with_retry({oid[:12]}): order was FILLED, not cancelled')
+                        return 'filled'
+                except Exception:
+                    pass
                 return True
             if '429' in err_str and attempt < max_retries:
                 time.sleep(0.5)
                 continue
-            # Log the actual error so we can debug orphans
             print(f'⚠ _cancel_with_retry({oid[:12]}) failed after {attempt+1} attempts: {err_str[:200]}')
     return False
 
@@ -12273,8 +12281,14 @@ def _handle_apex(bot_id, bot, actions):
                     for side in ('yes', 'no'):
                         oid = rung.get(f'{side}_order_id')
                         if oid:
-                            _cancel_with_retry(oid)
+                            _cr = _cancel_with_retry(oid)
+                            if _cr == 'filled':
+                                # Order filled during cancel — DON'T wipe, abort repost
+                                _fill_during_cancel = True
+                                break
                             rung[f'{side}_order_id'] = None
+                    if _fill_during_cancel:
+                        break
                 if _fill_during_cancel:
                     # Fill arrived during cancel — abort repost, go to active
                     bot['status'] = 'ladder_arb_active'

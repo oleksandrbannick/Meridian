@@ -2205,6 +2205,22 @@ def _migrate_007_backfill_anchor_depth():
         updated += 1
     print(f'📊 Migration 007: backfilled anchor_depth on {updated} phantom trades')
 
+def _migrate_008_fix_sport_labels():
+    """Fix sport labels for ATP/WTA Challenger tickers that mapped to 'Other'."""
+    global trade_history
+    updated = 0
+    for t in trade_history:
+        ticker = (t.get('ticker') or '').upper()
+        series = ticker.split('-')[0] if ticker else ''
+        if t.get('sport') == 'Other' and ('CHALLENGERMATCH' in series or 'CHALLENGE' in series):
+            if 'ATP' in series:
+                t['sport'] = 'Tennis'
+                updated += 1
+            elif 'WTA' in series:
+                t['sport'] = 'Tennis'
+                updated += 1
+    print(f'📊 Migration 008: fixed sport labels on {updated} trades (Challenger → Tennis)')
+
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
@@ -2213,6 +2229,7 @@ MIGRATIONS = [
     ('005_fix_rebalancer_pnl', _migrate_005_fix_rebalancer_pnl),
     ('006_dedup_rung_trades', _migrate_006_dedup_rung_trades),
     ('007_backfill_anchor_depth', _migrate_007_backfill_anchor_depth),
+    ('008_fix_sport_labels', _migrate_008_fix_sport_labels),
 ]
 
 def run_migrations():
@@ -5074,7 +5091,7 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
         'KXNCAAFGAME':'NCAAF','KXNCAAFSPREAD':'NCAAF','KXNCAAFTOTAL':'NCAAF',
         'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL',
         'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL',
-        'KXATPMATCH':'Tennis','KXWTAMATCH':'Tennis',
+        'KXATPMATCH':'Tennis','KXATPCHALLENGERMATCH':'Tennis','KXWTAMATCH':'Tennis','KXWTACHALLENGERMATCH':'Tennis',
         'KXWBCGAME':'WBC','KXVTBGAME':'Volleyball','KXBSLGAME':'Basketball','KXABAGAME':'ABA',
     }
     record['sport'] = _SPORT_MAP.get(series, 'Other')

@@ -13108,81 +13108,140 @@ async function loadDogHistory() {
             return;
         }
 
-        listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px;">${trades.slice(0,50).map(t => {
-            const dt = new Date(t.timestamp * 1000);
-            const dateStr = dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-            const net = (t.profit_cents||0) - (t.loss_cents||0);
-            const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
-            const isWin = net > 0;
-            const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
-            const icon = isSellback ? (isWin ? '🔄✅' : '🔄') : isWin ? '✅' : '⛔';
-            const statusLabel = isSellback ? (isWin ? 'SELLBACK +' : 'SELLBACK') : isWin ? 'COMPLETED' : 'LOSS';
-            const borderCol = net > 0 ? '#00ff8822' : net < 0 ? '#ff444422' : '#1e2740';
-            const teamName = formatBotDisplayName(t.ticker||'', '');
-            const dogSide = t.dog_side || t.first_leg || (t.exit_via === 'sell_back_yes' ? 'yes' : t.exit_via === 'sell_back_no' ? 'no' : 'no');
-            const favSide = dogSide === 'yes' ? 'no' : 'yes';
-            const dogCol = dogSide === 'yes' ? '#00ff88' : '#ff4444';
-            const favCol = favSide === 'yes' ? '#00ff88' : '#ff4444';
-            // Use explicit dog_price/fav_price fields, fall back to yes/no_price
-            const dogPrice = t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?';
-            const favPrice = t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?';
-            const phaseBadge = t.game_phase ? `<span style="background:${t.game_phase==='live'?'#00ff8822':'#8892a622'};color:${t.game_phase==='live'?'#00ff88':'#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${t.game_phase.toUpperCase()}</span>` : '';
-            const depthBadge = t.anchor_depth ? `<span style="color:#ff66aa;font-weight:700;">⬇ ${t.anchor_depth}¢</span>` : '';
-            // Rungs detail for ladder trades
-            const rungsHtml = (t.rungs_detail && t.rungs_detail.length > 1)
-                ? `<div style="color:#8892a6;font-size:9px;margin-top:2px;">${t.rungs_detail.map(r => `${r.price}¢×${r.qty}`).join(' · ')}</div>`
-                : '';
-            return `<div style="background:#0f1419;border:1px solid ${borderCol};border-radius:10px;padding:14px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 3px #ffaa0044);"><path d="M12 2C8 2 5 5 5 9c0 2 .8 3.5 2 4.5V16c0 1 .5 2 1.5 2.5L10 22h4l1.5-3.5C16.5 18 17 17 17 16v-2.5c1.2-1 2-2.5 2-4.5 0-4-3-7-7-7z" fill="#ffaa0022" stroke="#ffaa00" stroke-width="1.5"/><circle cx="9.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><circle cx="14.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/></svg>
-                        <span style="font-size:14px;">${icon}</span>
-                        <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
-                        ${t.cross_market ? '<span style="background:#00ddff18;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;border:1px solid #00ddff44;">✕ CROSS</span>' : '<span style="background:#8892a612;color:#8892a6;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;">SAME MKT</span>'}
-                        ${phaseBadge}
-                        ${depthBadge}
-                        ${t.repeat_cycle && t.repeat_total > 1 ? `<span style="background:#aa66ff22;color:#aa66ff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${t.smart_mode ? 'Smart ' : ''}Run ${t.repeat_cycle}/${t.repeat_total}</span>` : ''}
-                    </div>
-                    <div style="text-align:right;">
-                        <div style="color:${netCol};font-weight:800;font-size:16px;">${net>=0?'+':''}$${(Math.abs(net)/100).toFixed(2)}</div>
-                        <div style="color:${netCol};font-size:10px;font-weight:600;">${statusLabel} · ${net>=0?'+':''}${net}¢</div>
-                    </div>
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                    <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${dogCol}22;">
-                        <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">👻 ANCHOR · BOUGHT</div>
-                        <div style="color:${dogCol};font-weight:700;font-size:12px;">${dogSide.toUpperCase()} @ ${dogPrice}¢</div>
-                        <div style="color:#8892a6;font-size:10px;">×${t.quantity||1}${typeof dogPrice === 'number' ? ` · $${((t.quantity||1) * dogPrice / 100).toFixed(2)}` : ''}</div>
-                        ${rungsHtml}
-                    </div>
-                    <div style="background:#0a0e1a;border-radius:8px;padding:10px;border:1px solid ${isSellback ? '#ff444422' : favCol+'22'};">
-                        <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:4px;">${isSellback ? '🔙 SOLD BACK' : '⭐ FAV HEDGE'}${t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
-                        ${isSellback
-                            ? `<div style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:700;font-size:12px;">${t.sell_back_price > 0 ? dogSide.toUpperCase() + ' sold @ ' + t.sell_back_price + '¢' : 'Sell failed — full loss'}</div>
-                               <div style="color:${net > 0 ? '#00ff88' : '#ff6644'};font-size:10px;">Dog cost: ${dogPrice}¢ · ${net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢'}</div>
-                               <div style="color:#8892a6;font-size:9px;margin-top:2px;">Fav ${favSide.toUpperCase()} was ${favPrice}¢</div>
-                               ${t.raw_hedge_ms != null || t.hedge_latency_ms != null ? `<div style="margin-top:2px;font-size:9px;">${t.raw_hedge_ms != null ? `<span style="color:${t.raw_hedge_ms < 5 ? '#00ffcc' : t.raw_hedge_ms < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡ raw ${t.raw_hedge_ms.toFixed(1)}ms</span>` : ''}${t.hedge_latency_ms != null ? ` <span style="color:#8892a6;">rt ${Math.round(t.hedge_latency_ms)}ms</span>` : ''}</div>` : ''}`
-                            : `<div style="color:${favCol};font-weight:700;font-size:12px;">${favSide.toUpperCase()} @ ${favPrice}¢</div>
-                               <div style="color:#00ff88;font-size:10px;">Total: ${typeof dogPrice === 'number' && typeof favPrice === 'number' ? dogPrice + favPrice : '?'}¢ · Profit: +${t.profit_cents||0}¢</div>
-                               ${t.raw_hedge_ms != null || t.hedge_latency_ms != null ? `<div style="margin-top:3px;font-size:10px;">${t.raw_hedge_ms != null ? `<span style="color:${t.raw_hedge_ms < 5 ? '#00ffcc' : t.raw_hedge_ms < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡ raw ${t.raw_hedge_ms.toFixed(1)}ms</span>` : ''}${t.hedge_latency_ms != null ? ` <span style="color:${t.hedge_latency_ms < 100 ? '#00ff88' : t.hedge_latency_ms < 300 ? '#ffaa00' : '#ff4444'};font-weight:700;">rt ${Math.round(t.hedge_latency_ms)}ms</span>` : ''}</div>` : ''}`
-                        }
-                    </div>
-                </div>
-                <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;">
-                    <span style="color:#555;">${dateStr}</span>
-                    ${t.anchor_depth ? `<span style="color:#ff66aa;">Depth: ${t.anchor_depth}¢</span>` : ''}
-                    ${t.fee_cents ? `<span style="color:#8892a6;">Fee: ${t.fee_cents}¢</span>` : ''}
-                    ${t.fill_duration_s != null ? `<span style="color:#8892a6;">Fill: ${t.fill_duration_s}s</span>` : ''}
-                    ${(() => { const lat = t.hedge_latency_ms != null ? t.hedge_latency_ms : t.hedge_fill_latency_ms; const raw = t.raw_hedge_ms; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> raw ${raw.toFixed(1)}ms</span>` : ''); })()}
-                    ${isSellback && t.hard_ceiling_total ? `<span style="color:#ff6644;">Ceiling: ${t.hard_ceiling_total}¢</span>` : ''}
-                    ${t.rungs_filled ? `<span style="color:#8892a6;">Rungs: ${t.rungs_filled}/${t.rungs_total||'?'}</span>` : ''}
-                </div>
-                ${t.bot_id ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span style="color:#3a4560;font-size:9px;font-family:monospace;">${(t.bot_id||'').slice(-12)}</span><button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button></div>` : ''}
-            </div>`;
-        }).join('')}</div>`;
+        // Sport emoji map
+        const _sportIcon = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+
+        // Sport filter
+        const sportCounts = {};
+        trades.forEach(t => { const s = t.sport || 'Other'; sportCounts[s] = (sportCounts[s]||0) + 1; });
+        const sportKeys = Object.keys(sportCounts).sort((a,b) => sportCounts[b] - sportCounts[a]);
+
+        listEl.innerHTML = `
+        <div id="phantom-sport-filter" style="display:flex;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
+            <button onclick="filterPhantomLog('all')" data-sport="all" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All (${trades.length})</button>
+            ${sportKeys.map(s => `<button onclick="filterPhantomLog('${s}')" data-sport="${s}" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">${_sportIcon[s]||''}${s} (${sportCounts[s]})</button>`).join('')}
+        </div>
+        <div id="phantom-trade-list" style="display:flex;flex-direction:column;gap:6px;"></div>`;
+
+        // Render trades function (called by filter)
+        window._phantomAllTrades = trades;
+        window._phantomSportIcon = _sportIcon;
+        filterPhantomLog('all');
     } catch (e) {
         if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
     }
+}
+
+function filterPhantomLog(sport) {
+    // Update button styles
+    document.querySelectorAll('#phantom-sport-filter .phantom-sport-btn').forEach(btn => {
+        if (btn.getAttribute('data-sport') === sport) {
+            btn.style.background = 'rgba(255,102,170,0.12)';
+            btn.style.color = '#ff66aa';
+            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
+        } else {
+            btn.style.background = 'transparent';
+            btn.style.color = '#5a6484';
+            btn.style.boxShadow = 'none';
+        }
+    });
+    const trades = window._phantomAllTrades || [];
+    const _sportIcon = window._phantomSportIcon || {};
+    const filtered = sport === 'all' ? trades : trades.filter(t => (t.sport||'Other') === sport);
+    const container = document.getElementById('phantom-trade-list');
+    if (!container) return;
+
+    container.innerHTML = filtered.slice(0, 50).map(t => {
+        const dt = new Date(t.timestamp * 1000);
+        const timeStr = dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+        const dateStr = dt.toLocaleDateString([], {month:'short',day:'numeric'});
+        const net = (t.profit_cents||0) - (t.loss_cents||0);
+        const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
+        const isWin = net > 0;
+        const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
+        const borderCol = net > 0 ? 'rgba(0,255,136,0.08)' : net < 0 ? 'rgba(255,68,68,0.08)' : '#1e2740';
+        const teamName = formatBotDisplayName(t.ticker||'', '');
+        const sportName = t.sport || 'Other';
+        const sportEmoji = _sportIcon[sportName] || '';
+        const dogSide = t.dog_side || t.first_leg || 'no';
+        const favSide = dogSide === 'yes' ? 'no' : 'yes';
+        const dogPrice = t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?';
+        const favPrice = t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?';
+        const combined = (typeof dogPrice === 'number' && typeof favPrice === 'number') ? dogPrice + favPrice : null;
+        const qty = t.quantity || 1;
+        const taker = t.taker ? 'TKR' : 'MKR';
+        const takerCol = t.taker ? '#ff8800' : '#00ff88';
+
+        // Speed badges
+        const rawMs = t.raw_hedge_ms;
+        const rtMs = t.hedge_latency_ms != null ? t.hedge_latency_ms : t.hedge_fill_latency_ms;
+        const rawCol = rawMs != null ? (rawMs < 1 ? '#00ffcc' : rawMs < 5 ? '#00ff88' : rawMs < 15 ? '#ffaa00' : '#ff4444') : '';
+
+        // Status pill
+        let statusText, statusBg, statusFg;
+        if (isSellback) {
+            statusText = 'SELLBACK'; statusBg = 'rgba(255,68,68,0.12)'; statusFg = '#ff4444';
+        } else if (isWin) {
+            statusText = 'COMPLETED'; statusBg = 'rgba(0,255,136,0.1)'; statusFg = '#00ff88';
+        } else {
+            statusText = 'LOSS'; statusBg = 'rgba(255,68,68,0.12)'; statusFg = '#ff4444';
+        }
+
+        return `<div style="background:#0c1018;border:1px solid ${borderCol};border-radius:10px;padding:12px 14px;${net > 0 ? 'border-left:3px solid #00ff8844;' : net < 0 ? 'border-left:3px solid #ff444444;' : ''}">
+            <!-- Row 1: Sport + Match + P&L -->
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                    <span style="font-size:16px;flex-shrink:0;">${sportEmoji || '👻'}</span>
+                    <div style="min-width:0;">
+                        <div style="color:#fff;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${teamName}</div>
+                        <div style="display:flex;gap:5px;align-items:center;margin-top:2px;flex-wrap:wrap;">
+                            <span style="background:${statusBg};color:${statusFg};padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;">${statusText}</span>
+                            ${t.cross_market ? '<span style="background:#00ddff12;color:#00ddff;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;border:1px solid #00ddff33;">CROSS</span>' : ''}
+                            ${t.repeat_cycle && t.repeat_total > 1 ? `<span style="background:#aa66ff15;color:#aa66ff;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:600;">${t.smart_mode ? 'S' : ''}${t.repeat_cycle}/${t.repeat_total}</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align:right;flex-shrink:0;margin-left:8px;">
+                    <div style="color:${netCol};font-weight:800;font-size:18px;line-height:1;">${net>=0?'+':''}$${(Math.abs(net)/100).toFixed(2)}</div>
+                    <div style="color:${netCol};font-size:10px;font-weight:600;opacity:0.8;">${net>=0?'+':''}${net}¢</div>
+                </div>
+            </div>
+
+            <!-- Row 2: Trade details grid -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px;">
+                <div style="background:#0a0e1a;border-radius:6px;padding:6px 8px;text-align:center;">
+                    <div style="color:#5a6484;font-size:8px;text-transform:uppercase;letter-spacing:.04em;">Anchor</div>
+                    <div style="color:#ffaa00;font-size:13px;font-weight:700;">${dogPrice}¢</div>
+                    <div style="color:#5a6484;font-size:9px;">${dogSide.toUpperCase()} x${qty}</div>
+                </div>
+                <div style="background:#0a0e1a;border-radius:6px;padding:6px 8px;text-align:center;">
+                    <div style="color:#5a6484;font-size:8px;text-transform:uppercase;letter-spacing:.04em;">${isSellback ? 'Sold' : 'Hedge'}</div>
+                    <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:13px;font-weight:700;">${isSellback ? (t.sell_back_price||'?') : favPrice}¢</div>
+                    <div style="color:#5a6484;font-size:9px;">${favSide.toUpperCase()}${isSellback ? ' back' : ''}</div>
+                </div>
+                <div style="background:#0a0e1a;border-radius:6px;padding:6px 8px;text-align:center;">
+                    <div style="color:#5a6484;font-size:8px;text-transform:uppercase;letter-spacing:.04em;">Combined</div>
+                    <div style="color:${combined && combined <= 98 ? '#00ff88' : combined && combined <= 100 ? '#ffaa00' : '#ff4444'};font-size:13px;font-weight:700;">${combined != null ? combined + '¢' : '—'}</div>
+                    <div style="color:#5a6484;font-size:9px;">${t.fee_cents ? 'fee ' + t.fee_cents + '¢' : ''}</div>
+                </div>
+                <div style="background:#0a0e1a;border-radius:6px;padding:6px 8px;text-align:center;">
+                    <div style="color:#5a6484;font-size:8px;text-transform:uppercase;letter-spacing:.04em;">Depth</div>
+                    <div style="color:#ff66aa;font-size:13px;font-weight:700;">${t.anchor_depth || '?'}¢</div>
+                    <div style="color:#5a6484;font-size:9px;">${t.game_phase||'—'}</div>
+                </div>
+            </div>
+
+            <!-- Row 3: Footer stats -->
+            <div style="display:flex;gap:10px;align-items:center;font-size:10px;padding-top:6px;border-top:1px solid #141a24;flex-wrap:wrap;">
+                <span style="color:#3a4560;">${dateStr} ${timeStr}</span>
+                ${rawMs != null ? `<span style="color:${rawCol};font-weight:700;">⚡${rawMs.toFixed(1)}ms</span>` : ''}
+                ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}
+                ${t.fill_duration_s != null ? `<span style="color:#5a6484;">fill ${t.fill_duration_s}s</span>` : ''}
+                <span style="color:${takerCol};font-weight:600;font-size:9px;background:${takerCol}15;padding:1px 5px;border-radius:3px;">${taker}</span>
+                <span style="color:#3a4560;font-size:9px;">${sportName}</span>
+            </div>
+        </div>`;
+    }).join('');
 }
 
 // ── Middle log modal ─────────────────────────────────────────────────────────

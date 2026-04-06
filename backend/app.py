@@ -6540,26 +6540,33 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     _game_phase = bot.get('game_phase', 'live')
     # Game-phase-aware timeout: hold indefinitely until final period, then tighten
     _rung_timeout = 999999  # default: no timeout (pregame + most of game)
-    try:
-        _gc = _get_game_context(ticker)
-        if _gc:
-            _period = _gc.get('period', 0)
-            _clock_secs = _parse_clock_seconds(_gc.get('clock', ''))
-            _series = ticker.split('-')[0].upper() if ticker else ''
-            _rule = None
-            for _pref, _r in _LATE_GAME_RULES.items():
-                if _series.startswith(_pref):
-                    _rule = _r
-                    break
-            if _rule and _period >= _rule['final']:
-                if _clock_secs is not None and _clock_secs <= 120:
-                    _rung_timeout = 30   # last 2 min: aggressive 30s
-                elif _clock_secs is not None and _clock_secs <= 300:
-                    _rung_timeout = 90   # last 5 min: 90s
-                else:
-                    _rung_timeout = 180  # early in final period: 3 min
-    except Exception:
-        pass  # ESPN unavailable — keep default (no timeout)
+    # Throttle ESPN check to every 30s per bot (don't hammer ESPN every 2s)
+    _last_gc_check = bot.get('_last_game_context_check', 0)
+    if now - _last_gc_check >= 30:
+        bot['_last_game_context_check'] = now
+        try:
+            _gc = _get_game_context(ticker)
+            if _gc:
+                bot['_cached_game_period'] = _gc.get('period', 0)
+                bot['_cached_game_clock'] = _gc.get('clock', '')
+        except Exception:
+            pass
+    _period = bot.get('_cached_game_period', 0)
+    _clock_secs = _parse_clock_seconds(bot.get('_cached_game_clock', ''))
+    _series = ticker.split('-')[0].upper() if ticker else ''
+    _rule = None
+    for _pref, _r in _LATE_GAME_RULES.items():
+        if _series.startswith(_pref):
+            _rule = _r
+            break
+    if _rule and _period >= _rule['final']:
+        if _clock_secs is not None and _clock_secs <= 120:
+            _rung_timeout = 30   # last 2 min: aggressive 30s
+        elif _clock_secs is not None and _clock_secs <= 300:
+            _rung_timeout = 90   # last 5 min: 90s
+        else:
+            _rung_timeout = 180  # early in final period: 3 min
+        rung['_snap_timer'] = _rung_timeout  # update display
     _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
 
     # Update frontend display fields

@@ -5778,11 +5778,11 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _comb = (typeof _yp === 'number' && typeof _np === 'number') ? _yp + _np : 0;
                         const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
-                            <span style="color:#8892a6;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
+                            <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
                             <span style="display:flex;align-items:center;gap:3px;">
-                                <span style="color:#00ff88;font-weight:700;">${_yp}¢</span>
+                                <span style="color:#ccd6e0;font-weight:700;">${_yp}¢</span>
                                 <span style="color:#3a4560;">+</span>
-                                <span style="color:#ff4444;font-weight:700;">${_np}¢</span>
+                                <span style="color:#ccd6e0;font-weight:700;">${_np}¢</span>
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
                             </span>
                             <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
@@ -6083,7 +6083,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
             <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
             ${(() => { const _yb = bot.live_yes_bid || 0, _nb = bot.live_no_bid || 0; const _room = (_yb && _nb) ? 100 - _yb - _nb : -1; return _room >= 0 ? `<span style="color:${_room >= 4 ? '#00ff88' : _room >= 2 ? '#ffaa00' : '#ff4444'};font-weight:${_room <= 1 ? 700 : 400};font-size:9px;">${_room <= 1 ? '⚠ ' : ''}Room:${_room}¢</span>` : ''; })()}
-            <span style="color:#00aaff;">×${qty}</span>
+            <span style="color:#00e5ff;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             <span style="color:#555;">Hedge tgt: ≤${favCeiling}¢ → snap bid</span>
@@ -6170,20 +6170,21 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             let html = '';
             if (_rh.length > 0) {
                 html += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;">';
+                const _dogSide = bot.dog_side || 'no';
+                const _dogCol3 = '#ccd6e0';
+                const _favCol3 = '#ccd6e0';
                 html += _rh.map((r, i) => {
-                    const _yp = r.yes_price || (r.dog_side === 'yes' ? r.dog_price : r.fav_price) || '?';
-                    const _np = r.no_price || (r.dog_side === 'no' ? r.dog_price : r.fav_price) || '?';
-                    const _comb2 = (typeof _yp === 'number' && typeof _np === 'number') ? _yp + _np : 0;
+                    const _comb2 = (r.dog_price || 0) + (r.fav_price || 0);
                     const _combCol2 = _comb2 <= 96 ? '#00ff88' : _comb2 <= 98 ? '#ffaa00' : '#ff4444';
                     const _isSB2 = r.result === 'sellback';
-                    const _rawCol2 = r.raw_hedge_ms != null ? (r.raw_hedge_ms <= 1 ? '#00ffcc' : r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444') : '';
                     return '<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
-                    + '<span style="color:#8892a6;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
+                    + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
                     + '<span style="display:flex;align-items:center;gap:3px;">'
-                    + '<span style="color:#00ff88;font-weight:700;">' + _yp + '¢</span>'
-                    + '<span style="color:#3a4560;">+</span>'
-                    + '<span style="color:#ff4444;font-weight:700;">' + _np + '¢</span>'
-                    + (_comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
+                    + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '¢</span>'
+                    + '<span style="color:#3a4560;">' + (_isSB2 ? '→' : '+') + '</span>'
+                    + '<span style="color:' + (_isSB2 ? '#ffaa00' : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
+                    + (!_isSB2 && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
+                    + (_isSB2 ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">SB</span>' : '')
                     + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
@@ -8708,9 +8709,9 @@ async function loadBots() {
                     if (runHist.length > 0) {
                         html += '<div style="margin-top:6px;border-top:1px solid #1e2740;padding-top:4px;">';
                         html += runHist.map((r, i) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;${i > 0 ? 'border-top:1px solid #1e274033;' : ''}font-size:10px;">
-                            <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
-                            <span style="color:#8892a6;">Y${r.dog_price || r.yes_price || '?'}¢ + N${r.fav_price || r.no_price || '?'}¢</span>
-                            <span style="color:#8892a6;">x${r.qty || bot.quantity || 1}</span>
+                            <span style="color:#00e5ff;font-weight:600;">#${r.run || i + 1}</span>
+                            <span style="color:#ccd6e0;">Y${r.dog_price || r.yes_price || '?'}¢ + N${r.fav_price || r.no_price || '?'}¢</span>
+                            <span style="color:#00e5ff;">x${r.qty || bot.quantity || 1}</span>
                             <span style="color:${(r.pnl||0) >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${(r.pnl||0) >= 0 ? '+' : ''}${r.pnl||0}¢</span>
                         </div>`).join('');
                         html += '</div>';

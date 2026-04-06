@@ -10175,9 +10175,10 @@ def _handle_phantom(bot_id, bot, actions):
         # When the hedge walks up chasing the bid, profit shrinks toward zero.
         # If crossing the ask NOW still gives combined <= 95¢ (5¢+ gross profit),
         # cross the spread and take the money instead of walking to breakeven.
-        # Ceiling 95: at combined=95, gross 5¢/contract, taker fee ~1.3¢, net ~3.7¢.
-        # Wait 1s — just enough for a fast maker fill, then cross.
-        TAKE_PROFIT_CEILING = 95
+        # Ceiling 98: try maker first (1s), then cross as taker if combined <= 98.
+        # At 98¢ combined: gross 2¢/contract, taker fee ~0.7¢, net ~1.3¢.
+        # Better than sitting at bid and risking sellback (-10-20¢/contract).
+        TAKE_PROFIT_CEILING = 98
         if (current_fav_ask > 0 and current_fav_ask > current_fav_price
                 and wait_s >= 1
                 and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
@@ -12526,10 +12527,72 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     ticker = bot['ticker']
     dog_side = bot['dog_side']
     qty = bot.get('quantity', 1)
+    fav_side = bot.get('fav_side', '')
+    hedge_ticker = bot.get('hedge_ticker', ticker)
+
+    # ── Race condition fix: hedge partially filled before cancel ──
+    # If _hedge_fills > 0, those fav contracts are already bought. We must only
+    # sell back the UNMATCHED dog contracts, and record the matched pairs as arbs.
+    if _hedge_fills > 0 and _hedge_fills < qty:
+        matched_qty = _hedge_fills
+        fav_price = bot.get('fav_price', fav_bid)
+        if fav_side == 'yes':
+            yes_p, no_p = fav_price, dog_price
+        else:
+            yes_p, no_p = dog_price, fav_price
+        _matched_pnl = (100 - yes_p - no_p) * matched_qty
+        _matched_fee = kalshi_fee_cents(yes_p, no_p, matched_qty)
+        _matched_net = _matched_pnl - _matched_fee
+        if _matched_net >= 0:
+            session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _matched_net
+        else:
+            session_pnl['gross_loss_cents'] += abs(_matched_net)
+        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _matched_net
+        _record_trade({
+            'bot_id': bot_id, 'ticker': ticker,
+            'yes_price': yes_p, 'no_price': no_p,
+            'quantity': matched_qty,
+            'profit_cents': _matched_net if _matched_net >= 0 else 0,
+            'loss_cents': abs(_matched_net) if _matched_net < 0 else 0,
+            'fee_cents': _matched_fee,
+            'result': 'anchor_race_fill',
+            'exit_via': 'sellback_partial_hedge',
+            'dog_side': dog_side, 'fav_side': fav_side,
+            'dog_price': dog_price, 'fav_price': fav_price,
+            'timestamp': now,
+            'fill_source': 'sellback_race_condition',
+            'bot_category': 'anchor_dog',
+            'cross_market': bot.get('cross_market', False),
+            'hedge_ticker': hedge_ticker,
+        }, bot)
+        print(f'⚡ PHANTOM SELLBACK RACE FIX: {bot_id} hedge had {matched_qty} fills before cancel — '
+              f'recording as arb (dog={dog_price}¢ fav={fav_price}¢ net={_matched_net}¢), '
+              f'selling back remaining {qty - matched_qty}')
+        bot_log('PHANTOM_SELLBACK_RACE_FILLS', bot_id, {
+            'hedge_fills': matched_qty, 'fav_price': fav_price,
+            'dog_price': dog_price, 'matched_pnl': _matched_net,
+            'remaining_sellback': qty - matched_qty,
+        })
+        qty = qty - matched_qty  # only sell back the unmatched dog contracts
+    elif _hedge_fills >= qty:
+        # ALL hedge contracts filled before cancel — this is a full arb, not a sellback
+        fav_price = bot.get('fav_price', fav_bid)
+        bot['fav_fill_qty'] = qty
+        print(f'⚡ PHANTOM SELLBACK RACE FIX: {bot_id} ALL {qty} hedge fills arrived before cancel — '
+              f'completing as full arb instead of sellback')
+        bot_log('PHANTOM_SELLBACK_RACE_FULL', bot_id, {
+            'hedge_fills': _hedge_fills, 'qty': qty,
+            'fav_price': fav_price, 'dog_price': dog_price,
+        })
+        save_state()
+        actions.append({'bot_id': bot_id, 'action': 'sellback_race_full_arb'})
+        return
+
     bot_log('PHANTOM_SELLBACK_START', bot_id, {
         'dog_price': dog_price, 'fav_bid': fav_bid, 'total_cost': total_cost,
         'qty': qty, 'dog_side': dog_side, 'ticker': ticker,
         'sellback_attempts': bot.get('_sellback_attempts', 0),
+        'hedge_fills_detected': _hedge_fills,
     })
 
     # Verify actual fill by checking the dog order on Kalshi (not positions —

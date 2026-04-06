@@ -4047,9 +4047,12 @@ function updateAnchorPreview() {
             recDepth = Math.max(recDepth, _fplDepth);
             // Dog wall check: need enough contracts protecting you at the chosen depth
             // If the wall at recDepth is too thin (<30 contracts), widen until wall is adequate
+            // Skip on packed books (5k+ dog depth) — thousands at every level, gaps are noise
             const minWall = 30;  // need at least 30 contracts between you and the bid
-            while (recDepth < 10 && (dogWall[recDepth] || 0) < minWall) {
-                recDepth++;
+            if (dd < 5000) {
+                while (recDepth < 10 && (dogWall[recDepth] || 0) < minWall) {
+                    recDepth++;
+                }
             }
             if ((dogWall[recDepth] || 0) < minWall) {
                 reasons.push(`dog wall thin (${dogWall[recDepth]||0})`);

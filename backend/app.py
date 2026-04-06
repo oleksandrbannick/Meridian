@@ -7490,6 +7490,17 @@ def create_ladder_arb_bot():
         for spec_idx, spec in enumerate(rung_specs):
             try:
                 if yes_results[spec_idx] is None or no_results[spec_idx] is None:
+                    # Cancel the surviving side to prevent orphan
+                    _orphan_r = yes_results[spec_idx] if no_results[spec_idx] is None else no_results[spec_idx]
+                    if _orphan_r:
+                        try:
+                            _ooid = _orphan_r[0].get('order', {}).get('order_id', '')
+                            if _ooid:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(_ooid)
+                                print(f'  🧹 Rung {spec_idx+1}: cancelled orphan {_ooid[:12]}')
+                        except Exception:
+                            pass
                     print(f'  ⚠ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ SKIPPED (batch partial failure)')
                     continue
                 yr, yes_actual = yes_results[spec_idx]
@@ -12171,6 +12182,17 @@ def _handle_apex(bot_id, bot, actions):
                 for idx, spec in enumerate(valid_specs):
                     try:
                         if yes_results[idx] is None or no_results[idx] is None:
+                            # One side failed — cancel the other to prevent orphan
+                            _orphan_result = yes_results[idx] if no_results[idx] is None else no_results[idx]
+                            if _orphan_result:
+                                try:
+                                    _orphan_oid = _orphan_result[0].get('order', {}).get('order_id', '')
+                                    if _orphan_oid:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(_orphan_oid)
+                                        print(f'🧹 APEX ORPHAN PREVENTED: cancelled {_orphan_oid[:12]} (other side failed)')
+                                except Exception:
+                                    pass
                             continue
                         yr, ya = yes_results[idx]
                         nr, na = no_results[idx]
@@ -12306,6 +12328,15 @@ def _handle_apex(bot_id, bot, actions):
                         for idx, spec in enumerate(valid_specs):
                             try:
                                 if yes_results[idx] is None or no_results[idx] is None:
+                                    _orphan_r = yes_results[idx] if no_results[idx] is None else no_results[idx]
+                                    if _orphan_r:
+                                        try:
+                                            _ooid = _orphan_r[0].get('order', {}).get('order_id', '')
+                                            if _ooid:
+                                                api_rate_limiter.wait()
+                                                kalshi_client.cancel_order(_ooid)
+                                        except Exception:
+                                            pass
                                     continue
                                 yr, ya = yes_results[idx]
                                 nr, na = no_results[idx]

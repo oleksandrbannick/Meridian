@@ -6384,7 +6384,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         const liveCombined = anchorPrice + (hedgeBid || hedgePrice);
                         const liveProf = liveCombined > 0 ? (100 - liveCombined) : 0;
                         const liveCol = liveProf >= 3 ? '#00ff88' : liveProf >= 0 ? '#ffaa00' : '#ff4444';
-                        const timerStr = driftStarted ? ` ${driftCountdown}s` : '';
+                        const timerStr = (hasTimer && driftStarted) ? ` ${driftCountdown}s` : '';
                         return `<span style="color:${liveCol};font-size:8px;font-weight:700;">${liveProf >= 0 ? '🟢' : '🔴'}${liveProf}¢${timerStr}</span>`;
                     })()}
                     ${snapBtn ? snapBtn : `<span style="color:${profColor};font-size:9px;font-weight:700;">${profEst > 0 ? '+' : ''}${profEst}¢</span>`}

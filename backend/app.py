@@ -6489,9 +6489,13 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
                     pass
     current_hedge_price = rung.get('hedge_price', 0)
 
-    # Hedge order lost? Repost at bid
+    # Hedge order lost? Repost — capped at target during normal game, uncapped after timeout
     if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty and not rung.get('_sellback_pending'):
-        repost_price = hedge_bid if hedge_bid > 0 else max(1, 100 - anchor_price - width)
+        target_hedge = rung.get('target_hedge_price', 0) or max(1, 100 - anchor_price - width)
+        if rung.get('_timeout_uncapped'):
+            repost_price = hedge_bid if hedge_bid > 0 else target_hedge
+        else:
+            repost_price = min(hedge_bid, target_hedge) if hedge_bid > 0 else target_hedge
         _apex_snap_hedge(bot_id, bot, rung, rung_idx, repost_price)
         return
 
@@ -6533,24 +6537,12 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 
-    # ── PROFIT SNAP: if combined at bid is profitable, snap to bid to fill faster ──
-    # Don't wait forever at target width — if the bid has moved and combined ≤ 98¢,
-    # snap the hedge up to bid. Still maker, still profitable, just fills faster.
-    if hedge_bid > 0 and current_hedge_price > 0 and hedge_bid > current_hedge_price:
-        _profit_combined = anchor_price + hedge_bid
-        if _profit_combined <= 98:  # still profitable after fees
-            _apex_snap_hedge(bot_id, bot, rung, rung_idx, hedge_bid)
-            rung['_snap_reason'] = f'profit_snap_{_profit_combined}c'
-            return
-
-    # ── HARD TIMEOUT: snap to bid or sell back, whichever is cheaper ──
-    # No drift-based stop-loss — anchor bid dropping doesn't affect hedge fill price.
-    # If hedge fills at target width, profit is guaranteed regardless of anchor bid.
-    # Timer varies by game phase: late game = shorter (prices converging fast).
+    # ── Compute game phase + rung age (needed for both profit snap delay and exit timeout) ──
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
+    _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
     _game_phase = bot.get('game_phase', 'live')
-    # Game-phase-aware timeout: hold indefinitely until final period, then tighten
-    _rung_timeout = 999999  # default: no timeout (pregame + most of game)
+    _rung_timeout = 999999  # default: no exit timeout (pregame + most of game)
+    _profit_snap_delay = 120  # default: wait 120s before profit snap in normal game
     # Throttle ESPN check to every 30s per bot (don't hammer ESPN every 2s)
     _last_gc_check = bot.get('_last_game_context_check', 0)
     if now - _last_gc_check >= 30:
@@ -6573,12 +6565,28 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     if _rule and _period >= _rule['final']:
         if _clock_secs is not None and _clock_secs <= 120:
             _rung_timeout = 30   # last 2 min: aggressive 30s
+            _profit_snap_delay = 10  # profit snap after 10s
         elif _clock_secs is not None and _clock_secs <= 300:
             _rung_timeout = 90   # last 5 min: 90s
+            _profit_snap_delay = 30  # profit snap after 30s
         else:
             _rung_timeout = 180  # early in final period: 3 min
+            _profit_snap_delay = 60  # profit snap after 60s
         rung['_snap_timer'] = _rung_timeout  # update display
-    _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
+
+    # ── PROFIT SNAP: if combined at bid is profitable AND rung has waited long enough ──
+    # Early game: be patient, wait for full-width fill. As game progresses, take profit faster.
+    if _rung_age >= _profit_snap_delay:
+        if hedge_bid > 0 and current_hedge_price > 0 and hedge_bid > current_hedge_price:
+            _profit_combined = anchor_price + hedge_bid
+            if _profit_combined <= 98:  # still profitable after fees
+                _apex_snap_hedge(bot_id, bot, rung, rung_idx, hedge_bid)
+                rung['_snap_reason'] = f'profit_snap_{_profit_combined}c_{int(_rung_age)}s'
+                return
+
+    # ── HARD TIMEOUT: snap to bid or sell back, whichever is cheaper ──
+    # No drift-based stop-loss — anchor bid dropping doesn't affect hedge fill price.
+    # If hedge fills at target width, profit is guaranteed regardless of anchor bid.
 
     # Update frontend display fields
     anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)

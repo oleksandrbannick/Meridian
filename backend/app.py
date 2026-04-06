@@ -7726,7 +7726,7 @@ def create_anchor_bot():
         # depth_floor IS the anchor_depth — post exactly that many cents from the market
         anchor_depth = int(data.get('anchor_depth', 0))  # 0 = use target_width as depth
         if anchor_depth <= 0:
-            anchor_depth = max(3, target_width)  # depth = depth_floor, minimum 3¢
+            anchor_depth = max(5, target_width)  # depth = depth_floor, minimum 5¢ — deeper dogs catch real dumps, not noise
         fav_shave = 0  # fav always posts at bid, no shave needed
 
         # Smart pricing: always anchor_depth below bid — strict depth floor

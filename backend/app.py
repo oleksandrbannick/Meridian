@@ -12120,9 +12120,14 @@ def _handle_apex(bot_id, bot, actions):
                 _ooid = _old_r.get(f'{_os}_order_id')
                 if _ooid:
                     _cancel_with_retry(_ooid)
-            _hooid = _old_r.get('hedge_order_id')
-            if _hooid:
-                _cancel_with_retry(_hooid)
+            for _ok in ('hedge_order_id', 'anchor_order_id', '_old_hedge_oid'):
+                _ooid = _old_r.get(_ok)
+                if _ooid:
+                    _cancel_with_retry(_ooid)
+            # Cancel any tracked order IDs from reposts/amends
+            for _ooid in _old_r.get('_all_order_ids', []):
+                if _ooid:
+                    _cancel_with_retry(_ooid)
         # Fetch fresh orderbook and repost
         try:
             api_read_limiter.wait()

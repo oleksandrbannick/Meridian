@@ -8897,7 +8897,9 @@ async function showBotDetail(botId) {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">`;
             html += `<div>Entry: <strong style="color:#fff;">${bot.entry_price||'?'}¢</strong></div>`;
             html += `<div>Live bid: <strong style="color:#00ff88;">${bot.live_bid||'?'}¢</strong></div>`;
-            html += `<div>SL: <strong style="color:#ff4444;">${(bot.entry_price||50) - (bot.stop_loss_cents||5)}¢</strong></div>`;
+            html += bot.stop_loss_cents > 0
+                ? `<div>SL: <strong style="color:#ff4444;">${(bot.entry_price||50) - bot.stop_loss_cents}¢</strong></div>`
+                : `<div>SL: <strong style="color:#666;">none</strong></div>`;
             if (bot.take_profit_cents > 0) html += `<div>TP: <strong style="color:#00ff88;">${(bot.entry_price||50) + bot.take_profit_cents}¢</strong></div>`;
             html += `</div>`;
         } else if (isApex) {

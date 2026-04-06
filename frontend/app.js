@@ -3582,12 +3582,14 @@ function setTradeMode(mode) {
         iconEl.textContent = '◎';
         titleEl.textContent = 'Scout';
         subtitleEl.textContent = 'Limit Order';
+        if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('scout-form-ghost'), 'scout');
     } else if (mode === 'middle') {
         if (middleSection) middleSection.style.display = 'block';
         if (middleBtn) { middleBtn.style.background = '#aa66ff22'; middleBtn.style.color = '#aa66ff'; middleBtn.style.borderBottom = '2px solid #aa66ff'; }
         iconEl.textContent = '◈';
         titleEl.textContent = 'Meridian Bot';
         subtitleEl.textContent = 'Dual-Spread Automation';
+        if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('meridian-form-ghost'), 'meridian');
         updateMiddleBotCalc();
     } else if (mode === 'anchor') {
         if (anchorSection) anchorSection.style.display = 'block';
@@ -3595,6 +3597,7 @@ function setTradeMode(mode) {
         iconEl.textContent = '🎯';
         titleEl.textContent = 'Phantom Bot';
         subtitleEl.textContent = 'Volatility Capture · Maker Only';
+        if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('phantom-form-ghost'), 'phantom');
         // Restore last-used phantom settings from localStorage (or default to 0)
         let _savedPhantom = null;
         try { _savedPhantom = JSON.parse(localStorage.getItem('phantom_settings')); } catch (e) {}
@@ -3630,6 +3633,7 @@ function setTradeMode(mode) {
         iconEl.textContent = '⚡';
         titleEl.textContent = 'Apex Bot';
         subtitleEl.textContent = 'Settlement Arbitrage Engine';
+        if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('apex-form-ghost'), 'apex');
         // Recalculate arb prices when switching to arb mode
         recalcArbPrices();
     }
@@ -4117,7 +4121,7 @@ function updateAnchorPreview() {
     const previewEl = document.getElementById('anchor-preview-content');
     if (!previewEl) return;
 
-    if (_anchorRungs.length === 0 || _anchorDogBid < 1) {
+    if (_anchorRungs.length === 0) {
         previewEl.innerHTML = `<div style="text-align:center;padding:16px 12px;">
             <div style="margin-bottom:8px;filter:drop-shadow(0 0 12px #ff990066);">${botIconSvg('phantom', 48)}</div>
             <div style="color:#ff9900;font-size:11px;font-weight:700;font-style:italic;margin-bottom:6px;">"Lurks deep. Strikes fast. Gone before they notice."</div>

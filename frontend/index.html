@@ -973,6 +973,10 @@
 
                 <!-- ═══════ STRAIGHT BET SECTION ═══════ -->
                 <div id="straight-section">
+                    <div style="background:#0a0e1a;border:1px solid #00ff8844;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#6a7488;line-height:1.4;display:flex;align-items:center;gap:10px;">
+                        <canvas id="scout-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
+                        <div><strong style="color:#00ff88;">◎ Scout:</strong> Places a single limit order where you see edge. Optional stop-loss and take-profit. No hedging — just a clean position with smart exits.</div>
+                    </div>
                     <!-- Side selector -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
                         <button id="straight-yes-btn" onclick="setStraightSide('yes')"
@@ -1166,8 +1170,9 @@
                         </div>
                     </div>
                     <div id="bot-game-phase-display" style="display:none;">🔄 Auto</div>
-                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00aaff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;">
-                        <strong style="color:#00aaff;">△ Apex 2.0</strong> — Posts YES+NO per rung. On fill: <span style="color:#00ff88;">30s at target</span> → <span style="color:#ffaa00;">snap to bid+1</span>. Each rung is an independent scalp. Reposts every 1 min if no fills.
+                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00aaff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;display:flex;align-items:center;gap:10px;">
+                        <canvas id="apex-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
+                        <div><strong style="color:#00aaff;">△ Apex 2.0</strong> — Posts YES+NO per rung. On fill: <span style="color:#00ff88;">30s at target</span> → <span style="color:#ffaa00;">snap to bid+1</span>. Each rung is an independent scalp. Reposts every 1 min if no fills.</div>
                     </div>
 
                     <!-- All-widths stats preview (shown inline when multiple selected) -->
@@ -1182,8 +1187,9 @@
 
                 <!-- ═══════ MIDDLE BOT SECTION ═══════ -->
                 <div id="middle-bot-section" style="display:none;">
-                    <div style="background:#0a0e1a;border:1px solid #aa66ff44;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#6a7488;line-height:1.5;">
-                        <strong style="color:#aa66ff;">◈ Meridian Bot:</strong> Posts NO on both spread markets at target price. Game volatility fills both — guaranteed profit floor + middle bonus if both NOs win. Stop-loss exits filled leg if the other stalls.
+                    <div style="background:#0a0e1a;border:1px solid #aa66ff44;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#6a7488;line-height:1.5;display:flex;align-items:center;gap:10px;">
+                        <canvas id="meridian-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
+                        <div><strong style="color:#aa66ff;">◈ Meridian Bot:</strong> Posts NO on both spread markets at target price. Game volatility fills both — guaranteed profit floor + middle bonus if both NOs win. Stop-loss exits filled leg if the other stalls.</div>
                     </div>
                     <!-- Two-column leg display -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
@@ -1304,8 +1310,9 @@
 
                 <!-- ═══════ ANCHOR DOG SECTION (LADDER) ═══════ -->
                 <div id="anchor-section" style="display:none;">
-                    <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#6a7488;line-height:1.4;">
-                        <strong style="color:#ffaa00;">👻 Phantom Bot:</strong> Posts stealth limit deep below market. When a whale dumps and your anchor fills, instantly hedges the fav. Walk-up system bumps fav price +1¢/20s if snap-back is slow. Halftime-aware.
+                    <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#6a7488;line-height:1.4;display:flex;align-items:center;gap:10px;">
+                        <canvas id="phantom-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
+                        <div><strong style="color:#ffaa00;">👻 Phantom Bot:</strong> Posts stealth limit deep below market. When a whale dumps and your anchor fills, instantly hedges the fav. Walk-up system bumps fav price +1¢/20s if snap-back is slow. Halftime-aware.</div>
                     </div>
                     <!-- Cross-market toggle (moneyline only) -->
                     <div id="anchor-cross-market-row" style="display:none; margin-bottom:12px;">
@@ -2907,6 +2914,7 @@
         }
 
         // Draw large ghost for legend (48x48, same style as welcome ghost)
+        window.drawLegendBot = drawLegendBot;
         function drawLegendBot(canvas, type) {
             if (!canvas) return;
             const c = canvas.getContext('2d');
@@ -3085,7 +3093,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260406023000"></script>
+    <script src="app.js?v=20260406024000"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

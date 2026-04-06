@@ -5784,6 +5784,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 <span style="color:#3a4560;">+</span>
                                 <span style="color:#ccd6e0;font-weight:700;">${_np}¢</span>
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
+                                ${r.taker ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>` : ''}
                             </span>
                             <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
@@ -6185,6 +6186,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="color:' + (_isSB2 ? '#ffaa00' : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
                     + (!_isSB2 && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
                     + (_isSB2 ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">SB</span>' : '')
+                    + (r.taker ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>' : '')
                     + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'

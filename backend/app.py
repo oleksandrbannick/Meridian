@@ -10101,10 +10101,10 @@ def _handle_phantom(bot_id, bot, actions):
         _ceiling_combined = dog_price + max(_current_fav, _live_fav_bid) if _live_fav_bid > 0 else _posted_combined
         # At 100¢ with partial fills = breakeven with risk, no reason to wait
         _at_breakeven_with_partials = _ceiling_combined >= WALK_CEILING and _has_partial_fills
-        if _ceiling_combined <= WALK_CEILING:
-            bot['_over_ceiling_since'] = None  # within walk ceiling — clear timer
+        if _ceiling_combined < WALK_CEILING:
+            bot['_over_ceiling_since'] = None  # under walk ceiling — clear timer
         else:
-            # Past walk ceiling (>103¢) — start/check 2s timer, bail fast
+            # At or past walk ceiling (>=103¢) — start/check 2s timer, bail fast
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
                 print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢ ceiling={WALK_CEILING}¢) — 2s timer started')

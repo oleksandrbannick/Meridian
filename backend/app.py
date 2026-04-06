@@ -6538,7 +6538,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     # Timer varies by game phase: late game = shorter (prices converging fast).
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
     _game_phase = bot.get('game_phase', 'live')
-    _rung_timeout = 120 if _game_phase == 'pregame' else 999999  # no timeout during live game — hold until endgame
+    _rung_timeout = 999999  # no timeout — pregame waits for game, live game holds for fill
     _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
 
     # Update frontend display fields

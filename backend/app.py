@@ -21929,9 +21929,17 @@ def bot_stats_by_type():
         'meridian': lambda t: t.get('type') == 'middle' or t.get('bot_category') == 'middle',
         'scout': lambda t: t.get('type') == 'watch',
     }
+    # Apply PNL resets so numbers match history page exactly
+    reset_filtered = []
+    for t in trade_history:
+        day = _trade_day_key(t)
+        day_reset = _pnl_reset_for_day(day)
+        if day_reset > 0 and (t.get('timestamp') or 0) < day_reset:
+            continue
+        reset_filtered.append(t)
     stats = {}
     for cat, filter_fn in categories.items():
-        trades = [t for t in trade_history if filter_fn(t)]
+        trades = [t for t in reset_filtered if filter_fn(t)]
         if not trades:
             stats[cat] = {'trades': 0, 'win_rate': 0, 'avg_profit': 0, 'total_profit': 0}
             continue

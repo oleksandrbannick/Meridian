@@ -5775,17 +5775,19 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${(bot._run_history || []).map((r, i) => {
                         const _comb = (r.dog_price || 0) + (r.fav_price || 0);
                         const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
-                        const _ftStr = r.fill_time_ms != null ? (r.fill_time_ms < 1000 ? (r.fill_time_ms/1000).toFixed(1)+'s' : r.fill_time_ms < 60000 ? Math.round(r.fill_time_ms/1000)+'s' : (r.fill_time_ms/60000).toFixed(1)+'m') : '';
-                        const _ftCol = r.fill_time_ms != null ? (r.fill_time_ms < 5000 ? '#00aaff' : r.fill_time_ms < 30000 ? '#ffaa00' : '#ff4444') : '';
-                        return `<div style="display:grid;grid-template-columns:24px 90px 36px 40px 46px auto;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
-                            <span style="color:#556;font-weight:600;">#${r.run || i + 1}</span>
-                            <span>${r.result === 'sellback'
-                                ? `<span style="color:#8892a6;">${r.dog_price || '?'}¢</span> <span style="color:#ff4444;">→</span> <span style="color:#ffaa00;">${r.fav_price || '?'}¢</span> <span style="color:#ff4444;font-size:8px;font-weight:700;">SB</span>`
-                                : `<span style="color:#8892a6;">${r.dog_price || '?'}¢ / ${r.fav_price || '?'}¢</span>`}</span>
-                            <span style="color:${_combCol};font-weight:700;">${r.result !== 'sellback' ? _comb + '¢' : ''}</span>
-                            <span style="color:#00aaff;font-weight:600;">x${r.qty || 1}</span>
-                            <span>${r.raw_hedge_ms != null ? `<span style="color:${r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444'};">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}${_ftStr ? ` <span style="color:${_ftCol};font-size:8px;">${_ftStr}</span>` : ''}</span>
-                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢${r.taker ? ' <span style="background:#ff880022;color:#ff8800;font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;">TKR</span>' : ''}</span>
+                        const _isSB = r.result === 'sellback';
+                        const _rawCol = r.raw_hedge_ms != null ? (r.raw_hedge_ms <= 1 ? '#00ffcc' : r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444') : '';
+                        return `<div style="display:grid;grid-template-columns:22px 1fr 38px 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
+                            <span style="color:#3a4560;font-weight:600;font-size:10px;">#${r.run || i + 1}</span>
+                            <span style="display:flex;align-items:center;gap:3px;">
+                                <span style="color:#ffaa00;font-weight:700;">${r.dog_price || '?'}¢</span>
+                                <span style="color:#3a4560;font-size:9px;">${_isSB ? '→' : '+'}</span>
+                                <span style="color:${_isSB ? '#ff4444' : '#00aaff'};font-weight:700;">${r.fav_price || '?'}¢</span>
+                                ${!_isSB ? `<span style="color:#3a4560;font-size:9px;">=</span><span style="color:${_combCol};font-weight:700;font-size:10px;">${_comb}¢</span>` : `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;">SB</span>`}
+                            </span>
+                            <span style="color:#00ddff;font-weight:700;">x${r.qty || 1}</span>
+                            <span>${r.raw_hedge_ms != null ? `<span style="color:${_rawCol};font-size:10px;">⚡${r.raw_hedge_ms.toFixed(1)}</span>` : ''}</span>
+                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢${r.taker ? ' <span style="background:#ff880018;color:#ff8800;font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;">TKR</span>' : ''}</span>
                         </div>`;
                     }).join('')}
                 </div>` : _runs > 1 ? `

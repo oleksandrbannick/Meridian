@@ -5785,7 +5785,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 <span style="color:#ff4444;font-weight:700;">${_np}¢</span>
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
                             </span>
-                            <span style="color:#00ddff;font-weight:700;">x${r.qty || 1}</span>
+                            <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
                         </div>`;
                     }).join('')}
@@ -6185,7 +6185,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="color:#ff4444;font-weight:700;">' + _np + '¢</span>'
                     + (_comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
                     + '</span>'
-                    + '<span style="color:#00ddff;font-weight:700;">x' + (r.qty || 1) + '</span>'
+                    + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>';
                 }).join('');

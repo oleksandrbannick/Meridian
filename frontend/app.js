@@ -7394,7 +7394,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
 function _renderWatchBotCard(bot, botId, container, gameScores) {
     const side = bot.side || 'yes';
     const entry = bot.entry_price || 50;
-    const sl = bot.stop_loss_cents || 5;
+    const sl = bot.stop_loss_cents || 0;
     const tp = bot.take_profit_cents || 0;
     const liveBid = bot.live_bid || '?';
     const watchQty = bot.quantity || 1;
@@ -7458,8 +7458,8 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             ${isStopped && exitPrice
                 ? `<div>Exit: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPrice}¢</strong></div>
                    <div>P&L: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong></div>`
-                : `<div>Live bid: <strong style="color:${typeof liveBid === 'number' && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
-                   <div>SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>`}
+                : `<div>Live bid: <strong style="color:${typeof liveBid === 'number' && sl > 0 && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
+                   <div>${sl > 0 ? `SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>` : `SL: <strong style="color:#666;">none</strong>`}${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>`}
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
             <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">

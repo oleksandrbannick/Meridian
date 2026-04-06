@@ -6538,7 +6538,28 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     # Timer varies by game phase: late game = shorter (prices converging fast).
     anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
     _game_phase = bot.get('game_phase', 'live')
-    _rung_timeout = 999999  # no timeout — pregame waits for game, live game holds for fill
+    # Game-phase-aware timeout: hold indefinitely until final period, then tighten
+    _rung_timeout = 999999  # default: no timeout (pregame + most of game)
+    try:
+        _gc = _get_game_context(ticker)
+        if _gc:
+            _period = _gc.get('period', 0)
+            _clock_secs = _parse_clock_seconds(_gc.get('clock', ''))
+            _series = ticker.split('-')[0].upper() if ticker else ''
+            _rule = None
+            for _pref, _r in _LATE_GAME_RULES.items():
+                if _series.startswith(_pref):
+                    _rule = _r
+                    break
+            if _rule and _period >= _rule['final']:
+                if _clock_secs is not None and _clock_secs <= 120:
+                    _rung_timeout = 30   # last 2 min: aggressive 30s
+                elif _clock_secs is not None and _clock_secs <= 300:
+                    _rung_timeout = 90   # last 5 min: 90s
+                else:
+                    _rung_timeout = 180  # early in final period: 3 min
+    except Exception:
+        pass  # ESPN unavailable — keep default (no timeout)
     _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
 
     # Update frontend display fields

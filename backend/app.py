@@ -6418,6 +6418,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     4. Delta-adjusted stop-loss: combined > 100 + threshold → taker exit
     5. Dead market: bid=0 for 30s → exit"""
     now = time.time()
+    ticker = bot.get('ticker', '')
     anchor_side = rung.get('anchor_side')
     if not anchor_side:
         return

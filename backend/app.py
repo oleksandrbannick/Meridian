@@ -10260,11 +10260,18 @@ def _handle_phantom(bot_id, bot, actions):
                             print(f'⚠ PHANTOM {bot_id}: take-profit cancel failed ({_ce}) — aborting cross')
                             return
                         # Step 2: Place new order at ask WITHOUT post_only (taker)
+                        # CRITICAL: subtract already-filled qty from the cancelled maker order
+                        # to avoid double-buying (5 filled maker + 10 taker = 5 orphaned)
+                        _already_filled = bot.get('fav_fill_qty', 0)
+                        _remaining = qty - _already_filled
+                        if _remaining <= 0:
+                            print(f'💰 PHANTOM TAKE PROFIT SKIP: {bot_id} already fully filled ({_already_filled}/{qty}) — no taker needed')
+                            return
                         price_kwargs = {'yes_price': current_fav_ask} if fav_side == 'yes' else {'no_price': current_fav_ask}
                         api_rate_limiter.wait()
                         resp = kalshi_client.create_order(
                             ticker=hedge_ticker, side=fav_side, action='buy',
-                            count=qty, order_type='limit', **price_kwargs
+                            count=_remaining, order_type='limit', **price_kwargs
                         )
                         new_order_id = resp.get('order', {}).get('order_id', '')
                         # Track old order ID for orphan cleanup

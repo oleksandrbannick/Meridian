@@ -6308,10 +6308,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const anchorPrice = r[anchorSide + '_price'] || 0;
             const elapsed = r.anchor_fill_at ? Math.round((Date.now()/1000) - r.anchor_fill_at) : 0;
             const midDist = r._midpoint_dist || 0;
-            const snapTimer = r._snap_timer || 60;
+            const snapTimer = r._snap_timer;  // null = no timer (early game), number = active timer
+            const hasTimer = snapTimer != null && snapTimer < 999999;
             const driftStarted = r._drift_started_at;
             const driftElapsed = driftStarted ? Math.round((Date.now()/1000) - driftStarted) : 0;
-            const driftCountdown = driftStarted ? Math.max(0, snapTimer - driftElapsed) : 0;
+            const driftCountdown = (driftStarted && hasTimer) ? Math.max(0, snapTimer - driftElapsed) : 0;
             const combined = anchorPrice + hedgePrice;
             const profEst = combined > 0 ? (100 - combined) : 0;
             const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
@@ -6329,10 +6330,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;animation:botPulse 0.5s infinite;">⚡ BURST</span>`;
                 } else if (midDist <= 5) {
                     stageHTML = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟢 ${midDist}¢</span>`;
-                } else if (driftStarted) {
+                } else if (hasTimer) {
                     stageHTML = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 ${midDist}¢ ${driftCountdown}s</span>`;
                 } else {
-                    stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟡 ${midDist}¢</span>`;
+                    stageHTML = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟢 PATIENT ${midDist}¢</span>`;
                 }
             } else if (rStage === 'snapped') {
                 if (isBurst) {

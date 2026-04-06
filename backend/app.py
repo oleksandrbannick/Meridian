@@ -9855,6 +9855,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'game_context': _get_game_context(ticker),
                 'fill_source': 'anchor_dog',
                 'bot_category': 'anchor_dog',
+                'taker': bool(bot.get('_fav_was_taker')),
                 'cross_market': bot.get('cross_market', False),
                 'hedge_ticker': bot.get('hedge_ticker', ''),
             }, bot)

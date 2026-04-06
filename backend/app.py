@@ -6533,6 +6533,16 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
             return
 
+    # ── PROFIT SNAP: if combined at bid is profitable, snap to bid to fill faster ──
+    # Don't wait forever at target width — if the bid has moved and combined ≤ 98¢,
+    # snap the hedge up to bid. Still maker, still profitable, just fills faster.
+    if hedge_bid > 0 and current_hedge_price > 0 and hedge_bid > current_hedge_price:
+        _profit_combined = anchor_price + hedge_bid
+        if _profit_combined <= 98:  # still profitable after fees
+            _apex_snap_hedge(bot_id, bot, rung, rung_idx, hedge_bid)
+            rung['_snap_reason'] = f'profit_snap_{_profit_combined}c'
+            return
+
     # ── HARD TIMEOUT: snap to bid or sell back, whichever is cheaper ──
     # No drift-based stop-loss — anchor bid dropping doesn't affect hedge fill price.
     # If hedge fills at target width, profit is guaranteed regardless of anchor bid.

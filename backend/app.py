@@ -6573,7 +6573,7 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)
     _drop_now = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else 0
     rung['_midpoint_dist'] = _drop_now
-    rung['_snap_timer'] = _rung_timeout
+    rung['_snap_timer'] = _rung_timeout if _rung_timeout < 999999 else None  # only show when active
     rung['_drift_started_at'] = anchor_filled_at if anchor_filled_at else None
     rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
 
@@ -12408,6 +12408,31 @@ def _handle_apex(bot_id, bot, actions):
         if bot.get('_bot_completed'):
             bot['status'] = 'completed'
             return
+
+        # Settlement check: if market is inactive/settled, stop all rungs
+        if now - bot.get('_last_settle_check_active', 0) >= 30:
+            bot['_last_settle_check_active'] = now
+            try:
+                if api_read_limiter.try_wait():
+                    _mkt = kalshi_client.get_market(ticker)
+                    _md = _mkt.get('market', _mkt) if isinstance(_mkt, dict) else {}
+                    _ms = _md.get('status', 'active')
+                    if _ms not in ('active', 'open'):
+                        print(f'🏁 APEX MARKET DEAD: {bot_id} market={_ms} — cancelling all orders')
+                        for _r in bot.get('rungs', []):
+                            for _k in ('yes_order_id', 'no_order_id', 'hedge_order_id'):
+                                _oid = _r.get(_k)
+                                if _oid:
+                                    try: kalshi_client.cancel_order(_oid)
+                                    except: pass
+                            if _r.get('status') not in ('completed', 'stopped'):
+                                _r['status'] = 'stopped'
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        save_state()
+                        return
+            except Exception:
+                pass
 
         any_active = False
         all_resolved = True

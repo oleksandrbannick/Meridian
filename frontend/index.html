@@ -1366,20 +1366,20 @@
                     </div>
                     <!-- Depth Floor -->
                     <div style="margin-bottom:12px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                            <label style="color:#ff66aa;font-weight:700;font-size:11px;letter-spacing:.05em;">DEPTH FLOOR (anchor below bid)</label>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <label style="color:#ff66aa;font-weight:700;font-size:11px;letter-spacing:.05em;">DEPTH FLOOR</label>
                             <span id="anchor-depth-display" style="color:#ff66aa;font-weight:800;font-size:13px;">5¢</span>
                         </div>
-                        <input type="range" id="anchor-depth" min="3" max="20" value="5" step="1" oninput="initAnchorDogPrices()"
-                            style="width:100%;accent-color:#ff66aa;">
-                        <div style="display:flex;gap:4px;margin-top:4px;">
-                            <button onclick="document.getElementById('anchor-depth').value=3;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">3¢</button>
-                            <button onclick="document.getElementById('anchor-depth').value=5;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">5¢</button>
-                            <button onclick="document.getElementById('anchor-depth').value=8;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">8¢</button>
-                            <button onclick="document.getElementById('anchor-depth').value=10;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">10¢</button>
-                            <button onclick="document.getElementById('anchor-depth').value=15;initAnchorDogPrices()" style="flex:1;padding:4px;background:#1e2740;border:1px solid #2a3550;border-radius:4px;color:#8892a6;font-size:10px;font-weight:600;cursor:pointer;">15¢</button>
+                        <input type="hidden" id="anchor-depth" value="5">
+                        <div id="depth-floor-buttons" style="display:flex;gap:0;border-radius:10px;overflow:hidden;border:1px solid rgba(255,102,170,0.25);">
+                            <button onclick="setDepthFloor(5)" data-depth="5" class="depth-btn depth-btn-active" style="flex:1;padding:10px 0;background:rgba(255,102,170,0.15);border:none;color:#ff66aa;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;position:relative;">5¢</button>
+                            <button onclick="setDepthFloor(6)" data-depth="6" class="depth-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-left:1px solid rgba(255,102,170,0.15);color:#5a6484;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;">6¢</button>
+                            <button onclick="setDepthFloor(7)" data-depth="7" class="depth-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-left:1px solid rgba(255,102,170,0.15);color:#5a6484;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;">7¢</button>
+                            <button onclick="setDepthFloor(8)" data-depth="8" class="depth-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-left:1px solid rgba(255,102,170,0.15);color:#5a6484;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;">8¢</button>
+                            <button onclick="setDepthFloor(10)" data-depth="10" class="depth-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-left:1px solid rgba(255,102,170,0.15);color:#5a6484;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;">10¢</button>
+                            <button onclick="setDepthFloor(15)" data-depth="15" class="depth-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-left:1px solid rgba(255,102,170,0.15);color:#5a6484;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;">15¢</button>
                         </div>
-                        <div id="anchor-shave-info" style="color:#555;font-size:9px;margin-top:3px;"></div>
+                        <div id="anchor-shave-info" style="color:#555;font-size:9px;margin-top:6px;"></div>
                     </div>
                     <!-- Repeat / Smart Mode -->
                     <div style="margin-bottom:12px;">
@@ -3093,7 +3093,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260406024000"></script>
+    <script src="app.js?v=20260406053000"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

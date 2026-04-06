@@ -3602,7 +3602,9 @@ function setTradeMode(mode) {
         let _savedPhantom = null;
         try { _savedPhantom = JSON.parse(localStorage.getItem('phantom_settings')); } catch (e) {}
         const depthEl = document.getElementById('anchor-depth');
-        if (depthEl) depthEl.value = _savedPhantom?.depth ?? 0;
+        const _restoredDepth = Math.max(5, _savedPhantom?.depth ?? 5);
+        if (depthEl) depthEl.value = _restoredDepth;
+        if (typeof setDepthFloor === 'function') setDepthFloor(_restoredDepth);
         // Restore repeat count + smart mode
         const repeatEl = document.getElementById('anchor-repeat-count');
         if (repeatEl && _savedPhantom?.repeatCount != null) repeatEl.value = _savedPhantom.repeatCount;
@@ -3780,6 +3782,27 @@ function setCrossMarketSide(side) {
         initAnchorDogPrices();
     });
 })();
+
+function setDepthFloor(value) {
+    const hiddenInput = document.getElementById('anchor-depth');
+    if (hiddenInput) hiddenInput.value = value;
+    // Update button states
+    document.querySelectorAll('#depth-floor-buttons .depth-btn').forEach(btn => {
+        const btnDepth = parseInt(btn.getAttribute('data-depth'));
+        if (btnDepth === value) {
+            btn.style.background = 'rgba(255,102,170,0.15)';
+            btn.style.color = '#ff66aa';
+            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
+        } else {
+            btn.style.background = 'transparent';
+            btn.style.color = '#5a6484';
+            btn.style.boxShadow = 'none';
+        }
+    });
+    const display = document.getElementById('anchor-depth-display');
+    if (display) display.textContent = `${value}¢`;
+    initAnchorDogPrices();
+}
 
 function initAnchorDogPrices() {
     if (!currentArbMarket) return;

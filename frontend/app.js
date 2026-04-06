@@ -6171,13 +6171,24 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             let html = '';
             if (_rh.length > 0) {
                 html += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;">';
-                html += _rh.map((r, i) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #1a254033;' : '') + 'font-size:10px;">'
-                    + '<span style="color:#555;font-weight:600;">#' + (r.run || i + 1) + '</span>'
-                    + '<span style="color:#8892a6;">' + (r.dog_price || '?') + '¢ ' + (r.result === 'sellback' ? '<span style="color:#ff4444;">→</span> ' + (r.fav_price || '?') + '¢ <span style="color:#ff4444;font-size:8px;">SB</span>' : '/ ' + (r.fav_price || '?') + '¢') + '</span>'
-                    + '<span style="color:#8892a6;">x' + (r.qty || 1) + '</span>'
-                    + (r.raw_hedge_ms != null ? '<span style="color:' + (r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444') + ';font-size:9px;">⚡' + r.raw_hedge_ms.toFixed(1) + '</span>' : '')
-                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:700;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
-                    + '</div>').join('');
+                html += _rh.map((r, i) => {
+                    const _comb2 = (r.dog_price || 0) + (r.fav_price || 0);
+                    const _combCol2 = _comb2 <= 96 ? '#00ff88' : _comb2 <= 98 ? '#ffaa00' : '#ff4444';
+                    const _isSB2 = r.result === 'sellback';
+                    const _rawCol2 = r.raw_hedge_ms != null ? (r.raw_hedge_ms <= 1 ? '#00ffcc' : r.raw_hedge_ms <= 5 ? '#00ff88' : r.raw_hedge_ms <= 15 ? '#ffaa00' : '#ff4444') : '';
+                    return '<div style="display:grid;grid-template-columns:22px 1fr 38px 38px 50px;align-items:center;padding:4px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
+                    + '<span style="color:#3a4560;font-weight:600;font-size:10px;">#' + (r.run || i + 1) + '</span>'
+                    + '<span style="display:flex;align-items:center;gap:3px;">'
+                    + '<span style="color:#ffaa00;font-weight:700;">' + (r.dog_price || '?') + '¢</span>'
+                    + '<span style="color:#3a4560;font-size:9px;">' + (_isSB2 ? '→' : '+') + '</span>'
+                    + '<span style="color:' + (_isSB2 ? '#ff4444' : '#00aaff') + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
+                    + (_isSB2 ? '<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;">SB</span>' : '<span style="color:#3a4560;font-size:9px;">=</span><span style="color:' + _combCol2 + ';font-weight:700;font-size:10px;">' + _comb2 + '¢</span>')
+                    + '</span>'
+                    + '<span style="color:#00ddff;font-weight:700;">x' + (r.qty || 1) + '</span>'
+                    + (r.raw_hedge_ms != null ? '<span style="color:' + _rawCol2 + ';font-size:10px;">⚡' + r.raw_hedge_ms.toFixed(1) + '</span>' : '<span></span>')
+                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢' + (r.taker ? ' <span style="background:#ff880018;color:#ff8800;font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;">TKR</span>' : '') + '</span>'
+                    + '</div>';
+                }).join('');
                 html += '</div>';
             }
             if ((status === 'awaiting_settlement' || status === 'completed' || status === 'stopped') && _isCross && _crossQtyDog > 0) {

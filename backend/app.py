@@ -13507,10 +13507,11 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
             loss_cents = dog_price * qty
             print(f'💀 PHANTOM SELLBACK SETTLED LOSS: {bot_id} | dog {dog_side} lost, -{dog_price * qty}¢')
         else:
-            # Can't determine — record 0 (conservative fallback)
-            print(f'🔙 PHANTOM SELLBACK: {bot_id} | position cleared, market result unknown — recording 0')
-            loss_cents = 0
-            sell_price = dog_price
+            # Position gone but can't determine winner — assume worst case (dog lost)
+            # Real loss = dog_price × qty. Better to overstate loss than hide it.
+            sell_price = 0
+            loss_cents = dog_price * qty
+            print(f'⚠ PHANTOM SELLBACK: {bot_id} | position cleared, market result unknown — recording worst-case loss {loss_cents}¢')
     else:
         loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
 

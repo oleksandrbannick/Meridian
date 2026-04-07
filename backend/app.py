@@ -9644,20 +9644,7 @@ def _handle_phantom(bot_id, bot, actions):
                     if _fav_depth < _min_fav:
                         _dry_count = bot.get('_fav_dry_count', 0) + 1
                         bot['_fav_dry_count'] = _dry_count
-                        if _dry_count >= 3:
-                            # Sustained dryness — market is dying, stop the bot
-                            print(f'🛑 PHANTOM FAV DEAD: {bot_id} fav {fav_side} depth={_fav_depth} dry {_dry_count}x — stopping bot')
-                            bot_log('PHANTOM_FAV_DEAD_STOP', bot_id, {
-                                'fav_depth': _fav_depth, 'fav_bid': _fav_best, 'min_needed': _min_fav,
-                                'dry_count': _dry_count, 'qty': qty,
-                            })
-                            _safe_cancel(dog_order_id, f'phantom fav dead {bot_id}')
-                            bot['status'] = 'completed'
-                            bot['completed_at'] = now
-                            bot['_stop_reason'] = f'fav liquidity dried up ({_fav_depth} contracts, need {_min_fav})'
-                            save_state()
-                            return
-                        print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth} (need ≥{_min_fav}) — skip #{_dry_count}/3')
+                        print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth} (need ≥{_min_fav}) — skip #{_dry_count}, waiting')
                         bot_log('PHANTOM_FAV_DRY_SKIP', bot_id, {
                             'fav_depth': _fav_depth, 'fav_bid': _fav_best, 'min_needed': _min_fav,
                             'dry_count': _dry_count, 'qty': qty, 'dog_bid': current_dog_bid,
@@ -10879,8 +10866,7 @@ def _handle_phantom(bot_id, bot, actions):
                 _drift_stop = True
                 _drift_reason = f'price_too_low_{new_dog_price}c'
             elif new_dog_price > 40:
-                _drift_stop = True
-                _drift_reason = f'price_too_high_{new_dog_price}c'
+                new_dog_price = 40  # park at ceiling, don't stop
             if _drift_stop:
                 bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
                     'dog_bid': current_dog_bid, 'new_dog_price': new_dog_price,
@@ -10907,19 +10893,7 @@ def _handle_phantom(bot_id, bot, actions):
                 if _fav_depth_r < _min_fav_r:
                     _dry_count_r = bot.get('_fav_dry_count', 0) + 1
                     bot['_fav_dry_count'] = _dry_count_r
-                    if _dry_count_r >= 3:
-                        print(f'🛑 PHANTOM FAV DEAD: {bot_id} fav {fav_side} depth={_fav_depth_r} dry {_dry_count_r}x — stopping bot')
-                        bot_log('PHANTOM_FAV_DEAD_STOP', bot_id, {
-                            'fav_depth': _fav_depth_r, 'fav_bid': _fav_best_r, 'min_needed': _min_fav_r,
-                            'dry_count': _dry_count_r, 'qty': qty,
-                        })
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        bot['_stop_reason'] = f'fav liquidity dried up ({_fav_depth_r} contracts, need {_min_fav_r})'
-                        bot['repeat_count'] = 0
-                        save_state()
-                        return
-                    print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth_r} (need ≥{_min_fav_r}) — delay #{_dry_count_r}/3')
+                    print(f'🛡️ PHANTOM FAV DRY: {bot_id} fav {fav_side} depth={_fav_depth_r} (need ≥{_min_fav_r}) — delay #{_dry_count_r}, waiting')
                     bot_log('PHANTOM_FAV_DRY_REANCHOR', bot_id, {
                         'fav_depth': _fav_depth_r, 'fav_bid': _fav_best_r, 'min_needed': _min_fav_r,
                         'dry_count': _dry_count_r, 'qty': qty,

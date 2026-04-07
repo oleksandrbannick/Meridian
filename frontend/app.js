@@ -3326,43 +3326,94 @@ function displayOrderbookLadder(orderbook) {
     const _isRiskySport = ['NBA', 'MLB'].includes(_scoreSport);
     const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
     const _favIsThick = _favPL >= 20;
+    const _favIsThin = _favPL < 5;
+    const _favIsLight = _favPL >= 5 && _favPL < 10;
     const _dogIsPacked = dogDepth >= 5000;
-    if (catchScore >= 70 && dogDepth < 2000) {
-        verdict = `Prime phantom market${_isGreatSport ? ' — ' + _scoreSport + ' prints' : ''}`;
+    const _dogIsThin = dogDepth < 300;
+    const _favGappy = favAnalysis.gaps >= 3;
+    const _dogGappy = dogAnalysis.gaps >= 3;
+    const _tightRoom = hedgeRoom <= 1;
+    const _okRoom = hedgeRoom >= 2 && hedgeRoom <= 3;
+    const _wideRoom = hedgeRoom >= 4;
+    // Build a specific verdict from the actual conditions
+    if (catchScore >= 70) {
+        if (_dogIsThin && _isGreatSport) {
+            verdict = `${_scoreSport} + thin dog + thick fav — ideal phantom setup`;
+        } else if (_dogIsThin) {
+            verdict = 'Thin dog + thick fav — fast fills, hedge catches easy';
+        } else if (_dogIsPacked) {
+            verdict = 'Hedge will catch but dog is crowded — fills will be slow';
+        } else {
+            verdict = `Strong phantom market${_isGreatSport ? ' — ' + _scoreSport + ' is consistent' : ''}`;
+        }
         verdictCol = '#00ff88';
-    } else if (catchScore >= 70) {
-        verdict = 'Strong catch but dog is crowded — fills will be slow';
-        verdictCol = '#00cc66';
-    } else if (catchScore >= 50 && hedgeRoom >= 3) {
-        verdict = 'Good setup — hedge should catch';
-        verdictCol = '#00ccff';
-    } else if (catchScore >= 50 && hedgeRoom <= 1) {
-        verdict = 'Decent book but tight spread — thin margin';
-        verdictCol = '#ff8800';
-    } else if (catchScore >= 35 && !_isBadSport) {
-        verdict = 'OK — watch the depth, use wider floor';
-        verdictCol = '#ffaa00';
-    } else if (_isBadSport) {
-        verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
-        verdictCol = '#ff4444';
-    } else if (_isRiskySport && _favIsThick && _dogIsPacked) {
-        verdict = `${_scoreSport} — thick book but packed dog (slow fills) + sport risk`;
-        verdictCol = '#ff8800';
-    } else if (_favIsThick && _dogIsPacked) {
-        verdict = 'Thick fav but dog is packed — fills will be very slow';
-        verdictCol = '#ff8800';
-    } else if (hedgeRoom <= 1) {
-        verdict = 'Avoid — spread too tight, no profit margin';
-        verdictCol = '#ff4444';
-    } else if (_favPL < 5) {
-        verdict = 'Weak — fav too thin, hedge may miss';
-        verdictCol = '#ff4444';
-    } else if (favAnalysis.gaps >= 3) {
-        verdict = 'Weak — fav side too gappy, unreliable catch';
-        verdictCol = '#ff4444';
+    } else if (catchScore >= 50) {
+        if (_tightRoom) {
+            verdict = `Good book but only ${hedgeRoom}¢ room — thin profit margin`;
+            verdictCol = '#ff8800';
+        } else if (_isRiskySport && _dogIsPacked) {
+            verdict = `${_scoreSport} — hedge catches but dog packed + sport volatile`;
+            verdictCol = '#ffaa00';
+        } else if (_dogIsPacked) {
+            verdict = `Fav is solid but dog packed (${Math.round(dogDepth/1000)}k) — slow anchor fills`;
+            verdictCol = '#ffaa00';
+        } else if (_isGreatSport) {
+            verdict = `${_scoreSport} + decent book — should work at ${_sportMinDepth || 5}¢+ depth`;
+            verdictCol = '#00ccff';
+        } else {
+            verdict = `Good setup — ${_favPL}/lvl fav, use ${_sportMinDepth || 5}¢+ depth`;
+            verdictCol = '#00ccff';
+        }
+    } else if (catchScore >= 35) {
+        if (_isBadSport) {
+            verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
+            verdictCol = '#ff4444';
+        } else if (_isRiskySport && _dogIsPacked) {
+            verdict = `${_scoreSport} + packed dog — slow fills, use 6¢+ depth`;
+            verdictCol = '#ff8800';
+        } else if (_favGappy) {
+            verdict = `${favAnalysis.gaps} fav gaps — hedge may skip levels, use wider depth`;
+            verdictCol = '#ffaa00';
+        } else if (_tightRoom) {
+            verdict = `Only ${hedgeRoom}¢ room — any fav bid move kills profit`;
+            verdictCol = '#ff8800';
+        } else if (_favIsLight) {
+            verdict = `Fav only ${_favPL}/lvl — hedge may lag on fast moves`;
+            verdictCol = '#ffaa00';
+        } else {
+            verdict = `Marginal — ${_scoreSport || 'this sport'} + book structure drag score down`;
+            verdictCol = '#ffaa00';
+        }
     } else {
-        verdict = 'Low score — check gaps, sport, and dog depth';
-        verdictCol = '#ff4444';
+        // WEAK < 35
+        if (_isBadSport) {
+            verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
+            verdictCol = '#ff4444';
+        } else if (_isRiskySport && _favIsThick && _dogIsPacked) {
+            verdict = `${_scoreSport} — thick fav but packed dog (${Math.round(dogDepth/1000)}k) + sport risk`;
+            verdictCol = '#ff8800';
+        } else if (_isRiskySport && _favIsThick) {
+            verdict = `${_scoreSport} — fav catches but sport volatility + gaps drag score`;
+            verdictCol = '#ff8800';
+        } else if (_favIsThin) {
+            verdict = `Fav only ${_favPL}/lvl — too thin to reliably catch the hedge`;
+            verdictCol = '#ff4444';
+        } else if (_favGappy) {
+            verdict = `${favAnalysis.gaps} gaps on fav — hedge will miss levels, unreliable`;
+            verdictCol = '#ff4444';
+        } else if (_tightRoom) {
+            verdict = `Only ${hedgeRoom}¢ room — hedge fills at breakeven, no profit`;
+            verdictCol = '#ff4444';
+        } else if (_dogIsPacked && _favIsThick) {
+            verdict = `Dog packed (${Math.round(dogDepth/1000)}k) — anchor won't fill. Fav is fine.`;
+            verdictCol = '#ff8800';
+        } else if (_dogIsPacked) {
+            verdict = `Dog packed (${Math.round(dogDepth/1000)}k) + fav ${_favPL}/lvl — slow fills, weak catch`;
+            verdictCol = '#ff4444';
+        } else {
+            verdict = `Low score — ${_favPL}/lvl fav, ${favAnalysis.gaps} gaps, ${hedgeRoom}¢ room`;
+            verdictCol = '#ff4444';
+        }
     }
 
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">

@@ -1375,6 +1375,30 @@ def get_orderbook(ticker):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/orderbook/<ticker>/live', methods=['GET'])
+def get_live_orderbook(ticker):
+    """Get live orderbook from WS mirror (no REST call). Includes OBI + VAMP signals."""
+    ob = _local_orderbooks.get(ticker)
+    if not ob:
+        return jsonify({'error': 'No live orderbook — subscribe first', 'ticker': ticker}), 404
+    with ob._lock:
+        age = time.time() - ob.last_update_ts
+        return jsonify({
+            'ticker': ticker,
+            'yes_top5': sorted(ob.yes.items(), key=lambda x: -x[0])[:5],
+            'no_top5': sorted(ob.no.items(), key=lambda x: -x[0])[:5],
+            'yes_levels': len(ob.yes),
+            'no_levels': len(ob.no),
+            'obi': round(ob.get_weighted_obi(), 3),
+            'vamp_yes': ob.get_vamp('yes'),
+            'vamp_no': ob.get_vamp('no'),
+            'yes_best_bid': ob._yes_top3[0][0] if ob._yes_top3 else 0,
+            'no_best_bid': ob._no_top3[0][0] if ob._no_top3 else 0,
+            'age_ms': round(age * 1000, 1),
+            'seq': ob.last_seq,
+        })
+
+
 @app.route('/api/prices/batch', methods=['POST'])
 def get_batch_prices():
     """Batch-fetch best bid/ask prices for multiple tickers using orderbook + WS cache.
@@ -2478,6 +2502,178 @@ class RateLimiter:
 api_rate_limiter = RateLimiter(burst=10)  # Kalshi basic tier: 10 writes/s burst
 api_read_limiter = RateLimiter(burst=15)  # Kalshi basic tier: 20 reads/s (keep 5 headroom)
 
+# ─── LocalOrderbook: real-time depth mirror from WS orderbook_delta ───────────
+from collections import deque as _deque
+
+class LocalOrderbook:
+    """Maintains a real-time mirror of a market's order book from WS deltas.
+    Thread-safe: WS thread writes, monitor/signal threads read."""
+
+    def __init__(self, ticker):
+        self.ticker = ticker
+        self.yes = {}   # {price_cents: qty_float}  — resting YES buy orders
+        self.no = {}    # {price_cents: qty_float}  — resting NO buy orders
+        self.last_seq = 0
+        self.last_update_ts = 0.0
+        self._lock = threading.Lock()
+        # Rolling depth history for vanishing-liquidity detection (last 20 snapshots)
+        self._yes_depth_history = _deque(maxlen=20)
+        self._no_depth_history = _deque(maxlen=20)
+        # Cached top levels (updated on every delta for fast OBI reads)
+        self._yes_top3 = []   # [(price_cents, qty), ...] sorted descending
+        self._no_top3 = []
+
+    def seed(self, msg):
+        """Initialize from orderbook_snapshot. Replaces entire book."""
+        with self._lock:
+            self.yes = {}
+            for p, q in msg.get('yes_dollars_fp', []):
+                cents = int(round(float(p) * 100))
+                self.yes[cents] = float(q)
+            self.no = {}
+            for p, q in msg.get('no_dollars_fp', []):
+                cents = int(round(float(p) * 100))
+                self.no[cents] = float(q)
+            self.last_seq = msg.get('seq', 0)
+            self.last_update_ts = time.time()
+            self._rebuild_top3()
+            self._snapshot_depth()
+
+    def update(self, msg):
+        """Apply a single orderbook_delta. Returns True if top-of-book changed."""
+        side = msg.get('side', '')
+        cents = int(round(float(msg.get('price_dollars', 0)) * 100))
+        delta = float(msg.get('delta_fp', 0))
+        seq = msg.get('seq', 0)
+
+        with self._lock:
+            if seq and seq <= self.last_seq:
+                return False  # duplicate/out-of-order
+            self.last_seq = seq
+            self.last_update_ts = time.time()
+
+            book = self.yes if side == 'yes' else self.no
+            old_qty = book.get(cents, 0.0)
+            new_qty = old_qty + delta
+            if new_qty <= 0:
+                book.pop(cents, None)
+            else:
+                book[cents] = new_qty
+
+            # Check if this delta touches the top 3 levels
+            top3 = self._yes_top3 if side == 'yes' else self._no_top3
+            top_changed = (not top3 or cents >= top3[-1][0] if len(top3) < 3
+                           else cents >= top3[2][0])
+            if top_changed:
+                self._rebuild_top3()
+            return top_changed
+
+    def _rebuild_top3(self):
+        """Rebuild cached top-3 bid levels for both sides (highest price = best bid)."""
+        self._yes_top3 = sorted(self.yes.items(), key=lambda x: -x[0])[:3]
+        self._no_top3 = sorted(self.no.items(), key=lambda x: -x[0])[:3]
+
+    def _snapshot_depth(self):
+        """Record current top-level depth for vanishing-liquidity history."""
+        now = time.time()
+        yes_depth = sum(q for _, q in self._yes_top3)
+        no_depth = sum(q for _, q in self._no_top3)
+        self._yes_depth_history.append((now, yes_depth))
+        self._no_depth_history.append((now, no_depth))
+
+    def get_best_bid(self, side):
+        """Get best (highest) bid price in cents for a side. 0 if empty."""
+        with self._lock:
+            top = self._yes_top3 if side == 'yes' else self._no_top3
+            return top[0][0] if top else 0
+
+    def get_best_ask(self, side):
+        """Derive the best ask for a side from the opposite side's best bid.
+        In Kalshi binary: YES ask = 100 - NO bid, NO ask = 100 - YES bid."""
+        opp = 'no' if side == 'yes' else 'yes'
+        opp_bid = self.get_best_bid(opp)
+        return (100 - opp_bid) if opp_bid > 0 else 0
+
+    def get_depth_at_levels(self, side, n=3):
+        """Get top N levels as [(price_cents, qty), ...] sorted best-first."""
+        with self._lock:
+            top = self._yes_top3 if side == 'yes' else self._no_top3
+            return list(top[:n])
+
+    def get_total_depth(self, side, n=3):
+        """Sum of quantity across top N levels."""
+        return sum(q for _, q in self.get_depth_at_levels(side, n))
+
+    def get_weighted_obi(self, depth=3):
+        """Weighted Order Book Imbalance across top N levels.
+        Returns -1.0 (NO pressure) to +1.0 (YES pressure). 0 = balanced.
+        Weights: [1.0, 0.5, 0.25] — top level matters most."""
+        weights = [1.0, 0.5, 0.25]
+        with self._lock:
+            yes_sum = sum(q * weights[i] for i, (_, q) in enumerate(self._yes_top3[:depth]))
+            no_sum = sum(q * weights[i] for i, (_, q) in enumerate(self._no_top3[:depth]))
+        total = yes_sum + no_sum
+        if total == 0:
+            return 0.0
+        return (yes_sum - no_sum) / total
+
+    def get_vamp(self, side):
+        """Volume-Weighted Average Mid Price for a side.
+        VAMP = (BidPrice * AskQty + AskPrice * BidQty) / (BidQty + AskQty)
+        More sensitive to 'smart money' depth than simple mid."""
+        with self._lock:
+            bid_top = self._yes_top3 if side == 'yes' else self._no_top3
+            # Ask side = opposite book's best bid inverted
+            opp_top = self._no_top3 if side == 'yes' else self._yes_top3
+        if not bid_top or not opp_top:
+            return 0
+        bid_price, bid_qty = bid_top[0]
+        ask_price = 100 - opp_top[0][0]  # derive ask from opposite bid
+        ask_qty = opp_top[0][1]
+        denom = bid_qty + ask_qty
+        if denom == 0:
+            return (bid_price + ask_price) // 2
+        return round((bid_price * ask_qty + ask_price * bid_qty) / denom)
+
+    def detect_vanishing_liquidity(self, side, threshold=0.5, window_s=3.0):
+        """GHOST TRIGGER: Returns True if top-3 depth dropped >threshold (50%)
+        compared to the average over the last window_s seconds, without a trade.
+        Call this after every delta update."""
+        now = time.time()
+        with self._lock:
+            history = self._yes_depth_history if side == 'yes' else self._no_depth_history
+            current_depth = sum(q for _, q in (self._yes_top3 if side == 'yes' else self._no_top3))
+
+        if len(history) < 3:
+            return False
+        # Average depth over the window
+        recent = [(ts, d) for ts, d in history if now - ts <= window_s]
+        if not recent:
+            return False
+        avg_depth = sum(d for _, d in recent) / len(recent)
+        if avg_depth <= 0:
+            return False
+        # Did depth drop below threshold of the average?
+        return current_depth < avg_depth * (1.0 - threshold)
+
+    def record_depth_snapshot(self):
+        """Call periodically (every ~200ms) to build depth history for vanishing-liquidity."""
+        with self._lock:
+            self._snapshot_depth()
+
+
+# Registry of local orderbooks — {ticker: LocalOrderbook}
+_local_orderbooks = {}
+_local_orderbooks_lock = threading.Lock()
+
+def _get_or_create_orderbook(ticker):
+    """Get or create a LocalOrderbook for a ticker."""
+    with _local_orderbooks_lock:
+        if ticker not in _local_orderbooks:
+            _local_orderbooks[ticker] = LocalOrderbook(ticker)
+        return _local_orderbooks[ticker]
+
+
 # ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
 import websocket as _ws_lib
 
@@ -2659,7 +2855,7 @@ class KalshiWSManager:
 
         with self._lock:
             # Market-data channels (need market_tickers)
-            for channel in ['ticker']:
+            for channel in ['ticker', 'orderbook_delta']:
                 cmd = {
                     'id': self._next_id(),
                     'cmd': 'subscribe',
@@ -2696,7 +2892,7 @@ class KalshiWSManager:
         # Use update_subscription to add to existing sids
         with self._lock:
             for channel, sid in self._sids.items():
-                if channel in ('ticker', 'fill', 'user_orders'):
+                if channel in ('ticker', 'orderbook_delta', 'fill', 'user_orders'):
                     cmd = {
                         'id': self._next_id(),
                         'cmd': 'update_subscription',
@@ -2719,6 +2915,24 @@ class KalshiWSManager:
             sid = data.get('msg', {}).get('sid') or data.get('sid')
             if sid and channel:
                 self._sids[channel] = sid
+            return
+
+        # ── Orderbook depth mirror (LocalOrderbook) ──
+        if msg_type == 'orderbook_snapshot':
+            ticker = msg.get('market_ticker', '')
+            if ticker:
+                ob = _get_or_create_orderbook(ticker)
+                ob.seed(msg)
+            return
+
+        if msg_type == 'orderbook_delta':
+            ticker = msg.get('market_ticker', '')
+            if ticker:
+                ob = _get_or_create_orderbook(ticker)
+                top_changed = ob.update(msg)
+                # Record depth snapshot periodically for vanishing-liquidity detection
+                if top_changed:
+                    ob.record_depth_snapshot()
             return
 
         if msg_type == 'ticker':

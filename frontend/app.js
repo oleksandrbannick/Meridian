@@ -13465,14 +13465,6 @@ async function loadDogHistory() {
         const depthKeys = Object.keys(depthCounts).map(Number).sort((a,b) => a - b);
 
         listEl.innerHTML = `
-        <div id="phantom-sport-filter" style="display:flex;gap:0;margin-bottom:8px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
-            <button onclick="selectPhantomSport('all')" data-sport="all" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All (${trades.length})</button>
-            ${sportKeys.map(s => `<button onclick="selectPhantomSport('${s}')" data-sport="${s}" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">${_sportIcon[s]||''}${s} (${sportCounts[s]})</button>`).join('')}
-        </div>
-        ${depthKeys.length > 0 ? `<div id="phantom-depth-filter" style="display:flex;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
-            <button onclick="selectPhantomDepth('all')" data-depth="all" class="phantom-depth-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All</button>
-            ${depthKeys.map(d => `<button onclick="selectPhantomDepth(${d})" data-depth="${d}" class="phantom-depth-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">⬇${d}¢ (${depthCounts[d]})</button>`).join('')}
-        </div>` : ''}
         <div id="phantom-trade-list" style="display:flex;flex-direction:column;gap:10px;"></div>`;
 
         window._phantomSportIcon = _sportIcon;
@@ -13483,32 +13475,6 @@ async function loadDogHistory() {
 }
 
 function filterPhantomLog() {
-    // Update sport button styles
-    document.querySelectorAll('#phantom-sport-filter .phantom-sport-btn').forEach(btn => {
-        if (btn.getAttribute('data-sport') === _phantomActiveSport) {
-            btn.style.background = 'rgba(255,102,170,0.12)';
-            btn.style.color = '#ff66aa';
-            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
-        } else {
-            btn.style.background = 'transparent';
-            btn.style.color = '#5a6484';
-            btn.style.boxShadow = 'none';
-        }
-    });
-    // Update depth button styles
-    document.querySelectorAll('#phantom-depth-filter .phantom-depth-btn').forEach(btn => {
-        const btnDepth = btn.getAttribute('data-depth');
-        const isActive = btnDepth === 'all' ? _phantomActiveDepth === 'all' : Number(btnDepth) === _phantomActiveDepth;
-        if (isActive) {
-            btn.style.background = 'rgba(255,102,170,0.12)';
-            btn.style.color = '#ff66aa';
-            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
-        } else {
-            btn.style.background = 'transparent';
-            btn.style.color = '#5a6484';
-            btn.style.boxShadow = 'none';
-        }
-    });
     const trades = window._phantomAllTrades || [];
     const _sportIcon = window._phantomSportIcon || {};
     const filtered = _applyPhantomFilters(trades);

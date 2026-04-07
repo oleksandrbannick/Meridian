@@ -3325,6 +3325,7 @@ function displayOrderbookLadder(orderbook) {
     const _isBadSport = ['MLB'].includes(_scoreSport);
     const _isRiskySport = ['NBA', 'MLB'].includes(_scoreSport);
     const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
+    const _sportMinDepth = { 'Tennis': 5, 'NBA': 6, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_scoreSport] || 5;
     const _favIsThick = _favPL >= 20;
     const _favIsThin = _favPL < 5;
     const _favIsLight = _favPL >= 5 && _favPL < 10;

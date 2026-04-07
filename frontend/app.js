@@ -4053,22 +4053,25 @@ function updateAnchorPreview() {
             const fGaps = _obCache.favGaps || 0;
             const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
-            // Sport-specific volatility minimums
+            // Sport-specific minimums — calibrated from 972 phantom trades:
+            // NBA@5c: 52% WR, -7c/trade (losing). NBA@6c: 80% WR, +59c/trade.
+            // MLB@5c: 52% WR, -10c/trade (losing). Tennis@5c: 60% WR, +6.5c/trade (fine).
+            // NHL@5c: 33% WR (losing). NHL@8c: 86% WR, +80c/trade.
             const _recSport = detectSport(_obTicker);
-            const _sportMinDepth = { 'Tennis': 7, 'Baseball': 4, 'Basketball': 4, 'Hockey': 5, 'Soccer': 5 }[_recSport] || 5;
-            // Depth rec based on contracts-per-level (not total depth)
-            // Thick book per-level = stable, tight depth OK. Thin per-level = volatile, wider depth.
-            let recDepth = _sportMinDepth;  // sport-adjusted default
+            const _sportMinDepth = { 'Tennis': 5, 'Baseball': 6, 'Basketball': 6, 'Hockey': 7, 'Soccer': 5 }[_recSport] || 5;
+            // Liquidity-based depth: fav contracts/level determines how fast hedge fills.
+            // Thin book = wider depth needed (slow fill, price can move against you).
+            let recDepth = _sportMinDepth;
             let reasons = [];
             if (_sportMinDepth > 5) reasons.push(`${_recSport.toLowerCase()}: min ${_sportMinDepth}¢`);
             const dogWall = _obCache.dogWall || {};
             const favConc = _obCache.favConc || 0;
-            // Primary: fav contracts/level (how fast hedge fills)
-            // Never go below sport minimum — tennis swings 10-15¢/game, basketball 3-4¢
+            // Primary: fav contracts/level (liquidity = fill probability)
+            // More liquid = tighter depth OK. Thin = wider for safety.
             let _fplDepth = 5;
-            if (fpl >= 50) { _fplDepth = 3; reasons.push(`fav ${fpl}/lvl thick`); }
-            else if (fpl >= 20) { _fplDepth = 4; reasons.push(`fav ${fpl}/lvl solid`); }
-            else if (fpl >= 10) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl moderate`); }
+            if (fpl >= 50) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl thick`); }
+            else if (fpl >= 20) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl solid`); }
+            else if (fpl >= 10) { _fplDepth = 6; reasons.push(`fav ${fpl}/lvl moderate`); }
             else if (fpl >= 5) { _fplDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
             else { _fplDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
             recDepth = Math.max(recDepth, _fplDepth);
@@ -4108,7 +4111,7 @@ function updateAnchorPreview() {
             // is within the fav's absorption capacity.
             const favTop3 = _obCache.favTop3 || 0;
             if (favTop3 > 0) {
-                while (recDepth > 3 && (dogWall[recDepth] || 0) > favTop3 * 2) {
+                while (recDepth > _sportMinDepth && (dogWall[recDepth] || 0) > favTop3 * 2) {
                     recDepth--;
                 }
                 const sweepAtRec = dogWall[Math.min(recDepth, 12)] || 0;
@@ -4117,8 +4120,17 @@ function updateAnchorPreview() {
                 else if (sweepRatio >= 1) { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k ≈ fav`); }
                 else { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k > fav ${Math.round(favTop3/1000)}k`); }
             }
-            // Thin dog bonus: easy fill, can go shallower
+            // Thin dog bonus: easy fill, can go shallower (but never below sport min)
             if (dd < 100) { reasons.push('thin dog — fast fill'); }
+            // Qty check: if user's qty exceeds fav liquidity, need wider depth for safety
+            const _userQty = parseInt(document.getElementById('scan-anchor-qty')?.value) || 1;
+            if (_userQty > maxQty && maxQty > 0) {
+                const _qtyBump = _userQty > maxQty * 3 ? 2 : 1;
+                recDepth = Math.max(recDepth, recDepth + _qtyBump);
+                reasons.push(`qty ${_userQty} > safe ${maxQty}`);
+            }
+            // Hard floor: never below 5¢ regardless of any reduction
+            recDepth = Math.max(recDepth, 5);
             // Hard cap recDepth to wall data range
             recDepth = Math.min(recDepth, 12);
             const recNote = reasons.join(' · ');
@@ -6134,10 +6146,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const combined = avgDogPrice + favPrice;
                     const liveCombined = avgDogPrice + Math.max(favPrice, favBid);
                     const atBid = favPrice >= favBid && favBid > 0;
-                    const atCeiling = liveCombined > 100;
+                    const atCeiling = liveCombined >= 103;
                     const ceilingStart = bot._over_ceiling_since || 0;
                     const ceilingElapsed = ceilingStart > 0 ? Date.now()/1000 - ceilingStart : 0;
-                    const ceilingSecsLeft = Math.max(0, 15 - ceilingElapsed);
+                    const ceilingSecsLeft = Math.max(0, 2 - ceilingElapsed);
                     const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
                     const statusText = atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
                     const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';

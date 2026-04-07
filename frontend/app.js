@@ -6173,10 +6173,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const combined = avgDogPrice + favPrice;
                     const liveCombined = avgDogPrice + Math.max(favPrice, favBid);
                     const atBid = favPrice >= favBid && favBid > 0;
-                    const atCeiling = liveCombined >= 103;
+                    const atCeiling = liveCombined >= 100;
                     const ceilingStart = bot._over_ceiling_since || 0;
                     const ceilingElapsed = ceilingStart > 0 ? Date.now()/1000 - ceilingStart : 0;
-                    const ceilingSecsLeft = Math.max(0, 2 - ceilingElapsed);
+                    const ceilingSecsLeft = Math.max(0, 3 - ceilingElapsed);
                     const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
                     const statusText = atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
                     const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';

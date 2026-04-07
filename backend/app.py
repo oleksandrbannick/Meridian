@@ -10258,13 +10258,18 @@ def _handle_phantom(bot_id, bot, actions):
         _ceiling_combined = dog_price + max(_current_fav, _live_fav_bid) if _live_fav_bid > 0 else _posted_combined
         # At 100¢ with partial fills = breakeven with risk, no reason to wait
         _at_breakeven_with_partials = _ceiling_combined >= WALK_CEILING and _has_partial_fills
-        if _ceiling_combined < WALK_CEILING:
-            bot['_over_ceiling_since'] = None  # under breakeven — clear timer
+        # Ceiling TIMER triggers at 102¢+ (2¢ past breakeven).
+        # The walk caps fav at 100¢ combined, but the live bid can push past that.
+        # At 100-101¢ the maker order is still near the bid — let it fill.
+        # At 102¢+ the bid has moved away — start the exit timer.
+        _CEILING_TRIGGER = 102
+        if _ceiling_combined < _CEILING_TRIGGER:
+            bot['_over_ceiling_since'] = None  # under trigger — clear timer
         else:
-            # At or past breakeven (>=100¢) — 3s maker window, then taker/sellback
+            # At or past 102¢ — 3s maker window, then taker/sellback
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
-                print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢ ceiling={WALK_CEILING}¢) — 3s timer started')
+                print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢ trigger={_CEILING_TRIGGER}¢) — 3s timer started')
                 bot_log('PHANTOM_OVER_CEILING_START', bot_id, {
                     'dog_price': dog_price, 'fav_price': _current_fav,
                     'fav_bid': _live_fav_bid, 'ceiling_combined': _ceiling_combined,

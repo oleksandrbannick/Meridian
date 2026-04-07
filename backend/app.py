@@ -13002,6 +13002,25 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     # positions are aggregate across all bots on the same ticker)
     dog_oid = bot.get('dog_order_id')
     _order_actual_fills = None
+    if not dog_oid:
+        # No dog order ID — ghost fill (WS matched fill to wrong order)
+        print(f'👻 PHANTOM GHOST FILL: {bot_id} has no dog_order_id — WS false fill, cleaning up')
+        bot_log('PHANTOM_GHOST_FILL', bot_id, {
+            'dog_price': dog_price, 'qty': qty, 'dog_side': dog_side,
+        }, level='WARN')
+        _record_trade({
+            'bot_id': bot_id, 'result': 'ghost_fill',
+            'ticker': ticker, 'dog_side': dog_side, 'fav_side': bot.get('fav_side', ''),
+            'dog_price': 0, 'fav_price': 0, 'profit_cents': 0, 'net_pnl_cents': 0,
+            'quantity': 0, 'sell_price': 0, 'loss_cents': 0, 'fee_cents': 0,
+            'timestamp': now, 'fill_source': 'ghost_fill_cleanup',
+            'bot_category': 'anchor_dog',
+            'note': 'WS reported fill but no dog_order_id — ghost fill',
+        }, bot)
+        _phantom_set_final_status(bot, bot_id)
+        save_state()
+        actions.append({'bot_id': bot_id, 'action': 'ghost_fill_cleanup'})
+        return
     if dog_oid:
         try:
             api_read_limiter.wait()

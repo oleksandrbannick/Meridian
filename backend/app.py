@@ -3579,11 +3579,11 @@ def _execute_phantom_hedge(bot_id):
                 # Taker fee is 4x maker — at 40 qty, taker costs 35-50¢ extra.
                 # Patient maker fills save real money; only cross when it's worth it.
                 if _tp_combined <= 93:       # 7¢+ spread — very patient
-                    _maker_wait = 5.0
+                    _maker_wait = 15.0
                 elif _tp_combined <= 95:     # 5-7¢ spread — patient
-                    _maker_wait = 3.0
+                    _maker_wait = 10.0
                 elif _tp_combined <= 97:     # 3-5¢ spread — moderate
-                    _maker_wait = 2.0
+                    _maker_wait = 5.0
                 else:                        # 2¢ or thinner — not worth taker fee
                     return                   # skip taker entirely, let maker sit
                 time.sleep(_maker_wait)
@@ -10474,11 +10474,11 @@ def _handle_phantom(bot_id, bot, actions):
         # the monitor beating the delayed taker thread.
         _skip_take_profit = False
         if _posted_combined <= 93:
-            _min_wait_for_taker = 8.0   # WS waits 5s — give extra margin
+            _min_wait_for_taker = 20.0  # WS waits 15s
         elif _posted_combined <= 95:
-            _min_wait_for_taker = 5.0   # WS waits 3s
+            _min_wait_for_taker = 14.0  # WS waits 10s
         elif _posted_combined <= 97:
-            _min_wait_for_taker = 4.0   # WS waits 2s
+            _min_wait_for_taker = 8.0   # WS waits 5s
         else:
             _skip_take_profit = True    # 98¢+ — never taker, just maker
             _min_wait_for_taker = 999

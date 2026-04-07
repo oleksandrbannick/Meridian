@@ -5896,13 +5896,17 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _depFloor = bot.anchor_depth || 0;
                         const _isSellback = r.result === 'loss' || r.result === 'sellback' || r.pnl < 0;
                         const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
-                        // Depth badge: only on wins — shows "caught Xc" (how much of the drop you captured)
+                        // Depth badge: always show captured/floor ratio
+                        // Wins: green/yellow "7/6" — Sellbacks: red "SB -3/6"
                         let _depBadge = '';
-                        if (!_isSellback && _depFloor > 0 && _depCap > 0) {
-                            const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
-                            _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢ caught</span>`;
-                        } else if (_isSellback) {
-                            _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB</span>`;
+                        if (_depFloor > 0 && _comb > 0) {
+                            if (!_isSellback) {
+                                const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
+                                _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}/${_depFloor}</span>`;
+                            } else {
+                                const _overBy = _comb > 100 ? -((_comb - 100)) : _depCap;
+                                _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB ${_overBy}/${_depFloor}</span>`;
+                            }
                         }
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>

@@ -4202,13 +4202,14 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     else:
         loss_cents = (avg_price - sell_price) * total_fill_qty if sell_price else avg_price * total_fill_qty
 
-    # Fee tracked for info — Kalshi already deducted at fill time
+    # Calculate fees: maker fee on original buy (post_only) + taker fee on sell (crosses spread)
     buy_fee = sum(
         _kalshi_side_fee_cents(r['price'], r.get('fill_qty', 0))
         for r in bot.get('rungs', []) if r.get('fill_qty', 0) > 0
     )
     sell_fee = _kalshi_taker_side_fee_cents(sell_price, total_fill_qty) if sell_price else 0
     total_fees = buy_fee + sell_fee
+    loss_cents += total_fees
 
     # Handle profitable sellbacks (sell_price > avg_price minus fees)
     if loss_cents < 0:
@@ -4529,7 +4530,7 @@ def _execute_ws_completion(bot_id):
         # Estimate P&L from posted prices for smart mode (actual verified later)
         _est_yes = bot.get('yes_price', 50)
         _est_no = bot.get('no_price', 50)
-        _est_pnl = (100 - _est_yes - _est_no) * qty  # Kalshi deducts fees at fill time
+        _est_pnl = (100 - _est_yes - _est_no) * qty - kalshi_fee_cents(_est_yes, _est_no, qty)
         _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _est_pnl)
         will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
@@ -4568,7 +4569,7 @@ def _execute_ws_completion(bot_id):
             real_yes = actual_yes if actual_yes else bot['yes_price']
             real_no  = actual_no  if actual_no  else bot['no_price']
             fee = kalshi_fee_cents(real_yes, real_no, qty)
-            profit_cents = (100 - real_yes - real_no) * qty  # Kalshi deducts fees at fill time — don't double-count
+            profit_cents = (100 - real_yes - real_no) * qty - fee
 
             session_pnl['gross_profit_cents'] += profit_cents
             session_pnl['completed_bots']     += 1
@@ -7078,10 +7079,11 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
             loss_per = max(0, anchor_price - sell_price) if sell_price > 0 else anchor_price
             profit_cents = 0
             loss_cents = loss_per * qty
-            # Fee tracked for info — Kalshi already deducted at fill time
+            # Add fees
             buy_fee = _kalshi_side_fee_cents(anchor_price, qty)
             sell_fee = _kalshi_side_fee_cents(sell_price, qty) if sell_price > 0 else 0
             total_fees = buy_fee + sell_fee
+            loss_cents += total_fees
             yes_price = anchor_price if anchor_side == 'yes' else sell_price
             no_price = anchor_price if anchor_side == 'no' else sell_price
             result_type = 'apex_stop'
@@ -7097,12 +7099,12 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
                 hedged_pnl = (100 - anchor_price - h_price) * hedged_qty
             # Sold-back portion loss
             sellback_loss = max(0, anchor_price - sell_price) * sell_qty if sell_price > 0 else anchor_price * sell_qty
-            # Fee tracked for info — Kalshi already deducted at fill time
+            # Fees
             buy_fee = _kalshi_side_fee_cents(anchor_price, qty)
             hedge_fee = _kalshi_side_fee_cents(rung.get('hedge_price', 0), hedged_qty) if hedged_qty > 0 else 0
             sell_fee = _kalshi_side_fee_cents(sell_price, sell_qty) if sell_price > 0 else 0
             total_fees = buy_fee + hedge_fee + sell_fee
-            net = hedged_pnl - sellback_loss  # Don't subtract fees — already deducted by Kalshi
+            net = hedged_pnl - sellback_loss - total_fees
             profit_cents = max(0, net)
             loss_cents = max(0, -net)
             yes_price = anchor_price if anchor_side == 'yes' else (sell_price or 0)
@@ -7121,11 +7123,14 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
             hedge_fee = _kalshi_side_fee_cents(hedge_fill_price, qty)
             total_fees = buy_fee + hedge_fee
             if spread > 0:
-                profit_cents = spread * qty  # Kalshi deducts fees at fill time
+                profit_cents = spread * qty - total_fees
                 loss_cents = 0
+                if profit_cents < 0:
+                    loss_cents = abs(profit_cents)
+                    profit_cents = 0
             else:
                 profit_cents = 0
-                loss_cents = abs(spread) * qty  # Kalshi deducts fees at fill time
+                loss_cents = abs(spread) * qty + total_fees
             # Show ACTUAL fill prices, not original posted prices
             if anchor_side == 'yes':
                 yes_price = anchor_price
@@ -7243,7 +7248,7 @@ def _record_rung_completion(bot_id, bot, rung):
         rung_hedge_fee = _kalshi_side_fee_cents(hedge_price_val, rq)
 
     fee = anchor_fee + rung_hedge_fee
-    net_pnl = pnl_cents  # Kalshi deducts fees at fill time — don't double-count
+    net_pnl = pnl_cents - fee
 
     if net_pnl >= 0:
         session_pnl['gross_profit_cents'] += net_pnl
@@ -8274,8 +8279,8 @@ def simulate_ladder():
                 r['qty']
             ) for r in rungs
         )
-        total_arb_cost = avg_dog_price + hedge_price  # Kalshi deducts fees at fill time
-        net_profit = (100 - avg_dog_price - hedge_price) * total_qty
+        total_arb_cost = avg_dog_price + hedge_price + est_fees
+        net_profit = (100 - avg_dog_price - hedge_price) * total_qty - est_fees
         hard_ceiling_hit = total_arb_cost > HARD_CEILING_CENTS
 
         scenarios.append({
@@ -8306,8 +8311,8 @@ def simulate_ladder():
                 partial_avg if dog_side == 'no' else h_price,
                 partial_qty
             )
-            p_cost = partial_avg + h_price  # Kalshi deducts fees at fill time
-            p_net = (100 - partial_avg - h_price) * partial_qty
+            p_cost = partial_avg + h_price + p_fees
+            p_net = (100 - partial_avg - h_price) * partial_qty - p_fees
             scenarios.append({
                 'name': f'Only rung #{i+1} fills ({rung["price"]}¢ × {rung["qty"]})',
                 'rungs_filled': 1,
@@ -8974,7 +8979,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
                 no_p = bot['no_price']
                 filled_qty = bot.get(f'{filled_leg}_fill_qty') or qty
                 fee = kalshi_fee_cents(yes_p, no_p, filled_qty)
-                pnl_cents = (100 - yes_p - no_p) * filled_qty  # Kalshi deducts fees at fill time
+                pnl_cents = (100 - yes_p - no_p) * filled_qty - fee
                 if pnl_cents >= 0:
                     session_pnl['gross_profit_cents'] += pnl_cents
                 else:
@@ -9946,14 +9951,14 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            # Fee tracked for informational purposes — Kalshi already deducted at fill time
+            # If fav leg crossed the ask (take-profit), use taker fee for that leg
             if bot.get('_fav_was_taker'):
                 fav_p = actual_fav_price
                 dog_p_for_fee = dog_price
                 fee = _kalshi_side_fee_cents(dog_p_for_fee, qty) + _kalshi_taker_side_fee_cents(fav_p, qty)
             else:
                 fee = kalshi_fee_cents(yes_p, no_p, qty)
-            net_pnl = pnl_cents  # Don't subtract fee — already deducted by Kalshi
+            net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included
             dog_fill_at = bot.get('dog_filled_at')
@@ -10363,7 +10368,7 @@ def _handle_phantom(bot_id, bot, actions):
                             dog_price if bot['dog_side'] == 'no' else fav_price,
                             fav_filled
                         )
-                        net_profit = max(0, profit_per * fav_filled)  # Kalshi deducts fees at fill time
+                        net_profit = max(0, profit_per * fav_filled - est_fee)
                         session_pnl['gross_profit_cents'] += net_profit
                         bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
                         _record_trade({
@@ -11870,14 +11875,14 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * hedge_qty
-            # Fee tracked for info — Kalshi already deducted at fill time
+            # Fee: dog side per-rung (different prices), fav side once (single order)
             _dog_fee = sum(
                 _kalshi_side_fee_cents(r['price'], r.get('fill_qty', 0))
                 for r in bot['rungs'] if r.get('fill_qty', 0) > 0
             )
             _fav_fee = _kalshi_side_fee_cents(actual_fav_price, hedge_qty)
             fee = _dog_fee + _fav_fee
-            net_pnl = pnl_cents  # Don't subtract fee — already deducted by Kalshi
+            net_pnl = pnl_cents - fee
 
             filled_rung_count = len([r for r in bot['rungs'] if r.get('fill_qty', 0) > 0])
             filled_rungs_detail = [
@@ -12140,7 +12145,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                             avg_dog if dog_side == 'no' else fav_price,
                             _partial_fav
                         )
-                        _partial_net = max(0, _partial_profit_per * _partial_fav)  # Kalshi deducts fees at fill time
+                        _partial_net = max(0, _partial_profit_per * _partial_fav - _partial_fee)
                         session_pnl['gross_profit_cents'] += _partial_net
                         bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _partial_net
                         _record_trade({
@@ -12323,9 +12328,9 @@ def _handle_apex(bot_id, bot, actions):
                             _s_won = (_s_anchor == mkt_la_result)
                             _s_fee = _kalshi_side_fee_cents(_s_ap, _s_qty)
                             if _s_won:
-                                _s_net = (100 - _s_ap) * _s_qty  # Kalshi deducts fees at fill time
+                                _s_net = (100 - _s_ap) * _s_qty - _s_fee
                             else:
-                                _s_net = -(_s_ap * _s_qty)  # Kalshi deducts fees at fill time
+                                _s_net = -(_s_ap * _s_qty + _s_fee)
                             _s_rung['_net_pnl'] = _s_net
                             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _s_net
                             if _s_net >= 0:
@@ -12923,7 +12928,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
             yes_p, no_p = dog_price, fav_price
         _matched_pnl = (100 - yes_p - no_p) * matched_qty
         _matched_fee = kalshi_fee_cents(yes_p, no_p, matched_qty)
-        _matched_net = _matched_pnl  # Kalshi deducts fees at fill time
+        _matched_net = _matched_pnl - _matched_fee
         if _matched_net >= 0:
             session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _matched_net
         else:
@@ -13058,7 +13063,12 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
             except Exception as _pe_err:
                 print(f'✅ PHANTOM SELLBACK CLEARED: {bot_id} position gone — could not check market: {_pe_err}')
             _pe_fee = _kalshi_side_fee_cents(dog_price, qty)
-            # Fee tracked for info — Kalshi already deducted at fill time
+            _pe_loss += _pe_fee
+            if _pe_profit > 0:
+                _pe_profit -= _pe_fee
+                if _pe_profit < 0:
+                    _pe_loss = abs(_pe_profit)
+                    _pe_profit = 0
             if _pe_profit > 0:
                 session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _pe_profit
                 bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _pe_profit
@@ -13141,12 +13151,13 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     else:
         loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
 
-    # Fee tracked for info — Kalshi already deducted at fill time
+    # Calculate fees: maker fee on original buy (post_only) + taker fee on sell (crosses spread)
     buy_fee = _kalshi_side_fee_cents(dog_price, qty)
     sell_fee = _kalshi_taker_side_fee_cents(sell_price, qty) if sell_price else 0
     total_fees = buy_fee + sell_fee
+    loss_cents += total_fees
 
-    # Handle profitable sellbacks (sell_price > dog_price)
+    # Handle profitable sellbacks (sell_price > dog_price minus fees)
     if loss_cents < 0:
         profit_cents = abs(loss_cents)
         loss_cents = 0
@@ -13422,7 +13433,7 @@ def _run_monitor():
                                 # Record in P&L
                                 _se_revenue = _sell_price * _exit_qty
                                 _se_fee = _kalshi_taker_side_fee_cents(_sell_price, _exit_qty)
-                                _se_net = _se_revenue  # Kalshi deducts fees at fill time
+                                _se_net = _se_revenue - _se_fee
                                 session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _se_net
                                 _record_trade({
                                     'bot_id': _bid, 'ticker': _loser_ticker,
@@ -13595,7 +13606,7 @@ def _run_monitor():
                                     real_yes = actual_yes if actual_yes else bot['yes_price']
                                     real_no  = actual_no  if actual_no  else bot['no_price']
                                     _settle_fee = kalshi_fee_cents(real_yes, real_no, qty)
-                                    profit_cents = (100 - real_yes - real_no) * qty  # Kalshi deducts fees at fill time
+                                    profit_cents = (100 - real_yes - real_no) * qty - _settle_fee
                                     bot['status'] = 'completed'
                                     bot['completed_at'] = now
                                     orig_repeat_count = bot.get('repeat_count', 0)
@@ -13628,7 +13639,7 @@ def _run_monitor():
                                 if mkt_result == 'yes':
                                     # YES won — our YES position pays out 100¢ each
                                     _sfee = _kalshi_side_fee_cents(bot['yes_price'], yes_f)
-                                    profit = (100 - bot['yes_price']) * yes_f  # Kalshi deducts fees at fill time
+                                    profit = (100 - bot['yes_price']) * yes_f - _sfee
                                     bot['status'] = 'completed'
                                     bot['completed_at'] = now
                                     session_pnl['gross_profit_cents'] += profit
@@ -13653,7 +13664,7 @@ def _run_monitor():
                                     bot['status'] = 'stopped'
                                     bot['stopped_at'] = now
                                     _sfee = _kalshi_side_fee_cents(bot['yes_price'], yes_f)
-                                    loss = bot['yes_price'] * yes_f  # Kalshi deducts fees at fill time
+                                    loss = bot['yes_price'] * yes_f + _sfee
                                     session_pnl['gross_loss_cents'] += loss
                                     session_pnl['stopped_bots'] += 1
                                     _record_trade({
@@ -13684,7 +13695,7 @@ def _run_monitor():
                                 if mkt_result == 'no':
                                     # NO won — our NO position pays out 100¢ each
                                     _sfee = _kalshi_side_fee_cents(bot['no_price'], no_f)
-                                    profit = (100 - bot['no_price']) * no_f  # Kalshi deducts fees at fill time
+                                    profit = (100 - bot['no_price']) * no_f - _sfee
                                     bot['status'] = 'completed'
                                     bot['completed_at'] = now
                                     session_pnl['gross_profit_cents'] += profit
@@ -13709,7 +13720,7 @@ def _run_monitor():
                                     bot['status'] = 'stopped'
                                     bot['stopped_at'] = now
                                     _sfee = _kalshi_side_fee_cents(bot['no_price'], no_f)
-                                    loss = bot['no_price'] * no_f  # Kalshi deducts fees at fill time
+                                    loss = bot['no_price'] * no_f + _sfee
                                     session_pnl['gross_loss_cents'] += loss
                                     session_pnl['stopped_bots'] += 1
                                     _record_trade({
@@ -14786,7 +14797,7 @@ def _run_monitor():
                         real_yes = actual_yes if actual_yes else bot['yes_price']
                         real_no  = actual_no  if actual_no  else bot['no_price']
                         fee = kalshi_fee_cents(real_yes, real_no, qty)
-                        profit_cents = (100 - real_yes - real_no) * qty  # Kalshi deducts fees at fill time
+                        profit_cents = (100 - real_yes - real_no) * qty - fee
 
                         if profit_cents >= 0:
                             session_pnl['gross_profit_cents'] += profit_cents
@@ -15282,7 +15293,7 @@ def _run_monitor():
                         buy_fee = _kalshi_side_fee_cents(fill_price, qty)
                         sell_fee = _kalshi_taker_side_fee_cents(sell_price, qty) if sell_price else 0
                         scrape_fees = buy_fee + sell_fee
-                        _scrape_net = (fill_price - (sell_price or fill_price)) * qty  # Kalshi deducts fees at fill time
+                        _scrape_net = (fill_price - (sell_price or fill_price)) * qty + scrape_fees
                         _scrape_profit = max(0, -_scrape_net)  # positive when sold higher than bought
                         _scrape_loss = max(0, _scrape_net)     # positive when lost money
                         bot['status'] = 'stopped'
@@ -15827,7 +15838,7 @@ def _run_monitor():
                     fee_a = _kalshi_side_fee_cents(fill_a, qty_s)
                     fee_b = _kalshi_side_fee_cents(fill_b, qty_s)
                     total_fee = fee_a + fee_b
-                    total_profit = profit_a + profit_b  # Kalshi deducts fees at fill time
+                    total_profit = profit_a + profit_b - total_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
                     bot['leg_a_result'] = 'sold_early' if leg_a_sold else ('win' if leg_a_win else 'loss')
@@ -15899,7 +15910,7 @@ def _run_monitor():
                     qty_s = bot.get('qty', 1)
                     fill_price = bot.get(f'leg_{filled_leg}_fill_price') or bot.get('target_price', 49)
                     one_leg_fee = _kalshi_side_fee_cents(fill_price, qty_s)
-                    profit = (100 - fill_price) * qty_s if filled_leg_win else (-fill_price * qty_s)  # Kalshi deducts fees at fill time
+                    profit = ((100 - fill_price) * qty_s if filled_leg_win else (-fill_price * qty_s)) - one_leg_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
                     bot[f'leg_{filled_leg}_result'] = 'win' if filled_leg_win else 'loss'
@@ -16864,26 +16875,26 @@ def settle_middle(trade_id):
             trade['middle_hit'] = middle_hit
             trade['status'] = 'settled'
 
-            # Fee tracked for info — Kalshi already deducted at fill time
+            # Fees: maker fee on each NO leg
             fee = _kalshi_side_fee_cents(p1, qty) + _kalshi_side_fee_cents(p2, qty)
             if middle_hit:
-                profit = round(((100 - p1) + (100 - p2)) * qty)
+                profit = round(((100 - p1) + (100 - p2)) * qty - fee)
                 trade['profit_cents'] = profit
                 trade['loss_cents']   = 0
                 trade['result']       = 'middle_hit'
             elif r1 == 'win':
-                net = round((100 - p1) * qty - p2 * qty)
+                net = round((100 - p1) * qty - p2 * qty - fee)
                 trade['profit_cents'] = max(0, net)
                 trade['loss_cents']   = max(0, -net)
                 trade['result']       = 'arb_win' if net >= 0 else 'loss'
             elif r2 == 'win':
-                net = round((100 - p2) * qty - p1 * qty)
+                net = round((100 - p2) * qty - p1 * qty - fee)
                 trade['profit_cents'] = max(0, net)
                 trade['loss_cents']   = max(0, -net)
                 trade['result']       = 'arb_win' if net >= 0 else 'loss'
             else:
                 trade['profit_cents'] = 0
-                trade['loss_cents']   = round((p1 + p2) * qty)
+                trade['loss_cents']   = round((p1 + p2) * qty + fee)
                 trade['result']       = 'loss'
 
             save_state()
@@ -17860,7 +17871,7 @@ def cancel_bot(bot_id):
                     actual_no_fill  = sell_prices.get('no', entry_no)
                     exit_qty = min(yes_sold_qty, no_sold_qty)
                     fee = kalshi_fee_cents(actual_yes_fill, actual_no_fill, exit_qty)
-                    profit = (100 - actual_yes_fill - actual_no_fill) * exit_qty  # Kalshi deducts fees at fill time
+                    profit = (100 - actual_yes_fill - actual_no_fill) * exit_qty - fee
                     trade_result = ('amended' if profit < 0 else 'completed') if arb_completed_via_amend else 'manual_exit_completed'
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
@@ -18589,11 +18600,8 @@ def get_pnl():
                     sell_price = b.get('leg_a_sell_price', 0) if leg_a_sold else b.get('leg_b_sell_price', 0)
                     sold_fill = pa if leg_a_sold else pb
                     kept_fill = pb if leg_a_sold else pa
-                    # Sold leg P&L = (sell_price - buy_price) * qty
-                    # Kept leg P&L = (100 - buy_price) * qty (assuming it wins)
                     locked_profit = (sell_price - sold_fill + 100 - kept_fill) * q
                 else:
-                    # Normal: minimum profit = (100 - pa - pb) per contract
                     locked_profit = (100 - pa - pb) * q
                 mid_unrealized_cents += locked_profit
                 mid_unrealized_count += 1

@@ -5917,7 +5917,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
                                 ${r.taker ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>` : ''}
                                 ${_depBadge}
-                                ${_hedgeMs != null ? `<span style="color:#555;font-size:8px;margin-left:2px;">⚡${_hedgeMs < 1 ? _hedgeMs.toFixed(1) : Math.round(_hedgeMs)}ms</span>` : ''}
+                                ${_hedgeMs != null ? `<span style="color:${_hedgeMs < 1 ? '#00ffcc' : _hedgeMs < 5 ? '#00ff88' : '#ffaa00'};font-size:8px;font-weight:700;margin-left:2px;">⚡${_hedgeMs < 1 ? _hedgeMs.toFixed(1) : Math.round(_hedgeMs)}ms</span>` : ''}
                             </span>
                             <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>

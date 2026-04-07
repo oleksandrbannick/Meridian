@@ -3549,16 +3549,25 @@ def _execute_phantom_hedge(bot_id):
                 pass
         threading.Thread(target=_verify_dog_price, daemon=True).start()
 
-        # ── Delayed taker cross: 1s maker window, then grab ask if profitable ──
+        # ── Delayed taker cross: tiered maker window, then grab ask if profitable ──
+        # Wider spreads = more room to wait as maker (saves 40-50¢ taker fee per round)
         _tp_bot_id = bot_id
         _tp_dog_price = dog_price
         _tp_fav_side = fav_side
         _tp_fav_order_id = fav_order_id
         _tp_hedge_ticker = hedge_ticker
         _tp_qty = qty
+        _tp_combined = dog_price + actual_fav_price  # combined at time of posting
         def _delayed_taker_cross():
             try:
-                time.sleep(1.0)  # 1s maker window
+                # Tiered maker window based on combined cost at hedge post time
+                if _tp_combined <= 94:       # 6¢+ spread — patient maker
+                    _maker_wait = 3.0
+                elif _tp_combined <= 96:     # 4-6¢ spread — moderate patience
+                    _maker_wait = 2.0
+                else:                        # 3¢ or thinner — grab it quick
+                    _maker_wait = 1.0
+                time.sleep(_maker_wait)
                 _b = active_bots.get(_tp_bot_id)
                 if not _b or _b.get('status') != 'fav_hedge_posted':
                     return  # bot completed/cancelled/status changed
@@ -3619,11 +3628,12 @@ def _execute_phantom_hedge(bot_id):
                         _b['no_price'] = _ask
                     save_state()
                     _profit = 100 - _cross_comb
-                    print(f'💰 PHANTOM FAST TAKER: {_tp_bot_id} crossed ask {_ask}¢ (combined={_cross_comb}¢ profit={_profit}¢/ea) after 1s maker window')
+                    print(f'💰 PHANTOM FAST TAKER: {_tp_bot_id} crossed ask {_ask}¢ (combined={_cross_comb}¢ profit={_profit}¢/ea) after {_maker_wait}s maker window')
                     bot_log('PHANTOM_FAST_TAKER_CROSS', _tp_bot_id, {
                         'cross_price': _ask, 'combined': _cross_comb,
                         'dog_price': _tp_dog_price, 'profit_per': _profit,
                         'maker_price': actual_fav_price,
+                        'maker_wait_s': _maker_wait,
                     })
                 finally:
                     if _phantom_drop_lock.locked():
@@ -10433,8 +10443,11 @@ def _handle_phantom(bot_id, bot, actions):
         # At 98¢ combined: gross 2¢/contract, taker fee ~0.7¢, net ~1.3¢.
         # Better than sitting at bid and risking sellback (-10-20¢/contract).
         TAKE_PROFIT_CEILING = 98
+        # Tiered wait: match the WS delayed taker window — wide spreads get more maker time
+        _posted_combined = dog_price + current_fav_price
+        _min_wait_for_taker = 3.0 if _posted_combined <= 94 else (2.0 if _posted_combined <= 96 else 1.0)
         if (current_fav_ask > 0 and current_fav_ask > current_fav_price
-                and wait_s >= 1
+                and wait_s >= _min_wait_for_taker
                 and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
             cross_combined = dog_price + current_fav_ask
             if cross_combined <= TAKE_PROFIT_CEILING:

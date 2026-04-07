@@ -5811,16 +5811,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${(bot._run_history || []).length > 0 ? `
                 <div style="margin-bottom:8px;">
                     ${(bot._run_history || []).map((r, i) => {
-                        const _yp = r.yes_price || (r.dog_side === 'yes' ? r.dog_price : r.fav_price) || '?';
-                        const _np = r.no_price || (r.dog_side === 'no' ? r.dog_price : r.fav_price) || '?';
-                        const _comb = (typeof _yp === 'number' && typeof _np === 'number') ? _yp + _np : 0;
+                        const _dp = r.dog_price || '?';
+                        const _fp = r.fav_price || '?';
+                        const _comb = (typeof _dp === 'number' && typeof _fp === 'number') ? _dp + _fp : 0;
                         const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
                             <span style="display:flex;align-items:center;gap:3px;">
-                                <span style="color:#ccd6e0;font-weight:700;">${_yp}¢</span>
+                                <span style="color:#ffaa00;font-weight:700;">${_dp}¢</span>
                                 <span style="color:#3a4560;">+</span>
-                                <span style="color:#ccd6e0;font-weight:700;">${_np}¢</span>
+                                <span style="color:#00aaff;font-weight:700;">${_fp}¢</span>
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
                                 ${r.taker ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>` : ''}
                             </span>
@@ -5834,6 +5834,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
                     ${(_crossQtyDog > 0 || _crossQtyFav > 0) ? `<span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x'}</strong></span>` : ''}
                     <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
+                    ${bot.anchor_depth ? `<span>Depth: <strong style="color:#ff66aa;">${bot.anchor_depth}¢</strong></span>` : ''}
                     ${bot.smart_mode ? `<span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>` : ''}
                 </div>
                 ${(bot.live_yes_bid != null || bot.live_no_bid != null) ? `

@@ -2674,6 +2674,24 @@ def _get_or_create_orderbook(ticker):
         return _local_orderbooks[ticker]
 
 
+def _obi_snapshot(bot):
+    """Capture OBI + depth at this moment for a phantom bot. Returns dict or None."""
+    ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
+    dog_side = bot.get('dog_side', 'no')
+    fav_side = bot.get('fav_side', 'yes')
+    lob = _local_orderbooks.get(ticker) or _local_orderbooks.get(bot.get('ticker', ''))
+    if not lob or lob.last_update_ts <= 0:
+        return None
+    return {
+        'obi': round(lob.get_weighted_obi(), 3),
+        'dog_depth': round(lob.get_total_depth(dog_side, 3)),
+        'fav_depth': round(lob.get_total_depth(fav_side, 3)),
+        'dog_best_bid': lob.get_best_bid(dog_side),
+        'fav_best_bid': lob.get_best_bid(fav_side),
+        'age_ms': round((time.time() - lob.last_update_ts) * 1000),
+    }
+
+
 # ─── WebSocket Manager: real-time price/fill/order monitoring ─────────────────
 import websocket as _ws_lib
 
@@ -3755,12 +3773,15 @@ def _execute_phantom_hedge(bot_id):
         save_state()  # deferred from WS handler — save after hedge is posted
 
         print(f'👻 PHANTOM HEDGE: {bot_id} {fav_side.upper()} @{actual_fav_price}¢ | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
+        _obi_at_hedge = _obi_snapshot(bot)
+        bot['_obi_at_fill'] = _obi_at_hedge  # stash for trade record later
         bot_log('PHANTOM_WS_HEDGE_POSTED', bot_id, {
             'fav_side': fav_side, 'fav_price': actual_fav_price,
             'fav_bid': fav_bid, 'fav_ask': fav_ask, 'fav_spread': fav_spread,
             'fav_order_id': fav_order_id[:12], 'dog_price': dog_price,
             'combined': dog_price + actual_fav_price, 'qty': qty,
             'path': 'ws_fast',
+            'obi': _obi_at_hedge,
         })
         _audit('PHANTOM_WS_HEDGE_POSTED', bot_id, {
             'ticker': ticker, 'fav_side': fav_side, 'fav_price': actual_fav_price,
@@ -10220,6 +10241,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'taker': bool(bot.get('_fav_was_taker')),
                 'cross_market': bot.get('cross_market', False),
                 'hedge_ticker': bot.get('hedge_ticker', ''),
+                'obi_at_fill': bot.get('_obi_at_fill'),
             }, bot)
 
             # Only update session P&L and mark recorded AFTER successful trade record
@@ -13544,10 +13566,14 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'bot_category': 'anchor_dog',
         'cross_market': bot.get('cross_market', False),
         'hedge_ticker': bot.get('hedge_ticker', ''),
+        'obi_at_fill': bot.get('_obi_at_fill'),
+        'obi_at_sellback': _obi_snapshot(bot),
     }, bot)
     bot_log('ANCHOR_SELLBACK', bot_id, {
         'dog_price': dog_price, 'sell_price': sell_price,
         'loss_cents': loss_cents, 'fav_bid': fav_bid,
+        'obi_at_fill': bot.get('_obi_at_fill'),
+        'obi_at_sellback': _obi_snapshot(bot),
     })
     print(f'🔙 PHANTOM SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
     _audit('PHANTOM_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'sell_price': sell_price, 'qty': qty, 'sold': True})

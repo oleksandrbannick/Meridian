@@ -3576,12 +3576,16 @@ def _execute_phantom_hedge(bot_id):
         def _delayed_taker_cross():
             try:
                 # Tiered maker window based on combined cost at hedge post time
-                if _tp_combined <= 94:       # 6¢+ spread — patient maker
+                # Taker fee is 4x maker — at 40 qty, taker costs 35-50¢ extra.
+                # Patient maker fills save real money; only cross when it's worth it.
+                if _tp_combined <= 93:       # 7¢+ spread — very patient
+                    _maker_wait = 5.0
+                elif _tp_combined <= 95:     # 5-7¢ spread — patient
                     _maker_wait = 3.0
-                elif _tp_combined <= 96:     # 4-6¢ spread — moderate patience
+                elif _tp_combined <= 97:     # 3-5¢ spread — moderate
                     _maker_wait = 2.0
-                else:                        # 3¢ or thinner — grab it quick
-                    _maker_wait = 1.0
+                else:                        # 2¢ or thinner — not worth taker fee
+                    return                   # skip taker entirely, let maker sit
                 time.sleep(_maker_wait)
                 _b = active_bots.get(_tp_bot_id)
                 if not _b or _b.get('status') != 'fav_hedge_posted':
@@ -10464,8 +10468,18 @@ def _handle_phantom(bot_id, bot, actions):
         TAKE_PROFIT_CEILING = 98
         # Tiered wait: match the WS delayed taker window — wide spreads get more maker time
         _posted_combined = dog_price + current_fav_price
-        _min_wait_for_taker = 3.0 if _posted_combined <= 94 else (2.0 if _posted_combined <= 96 else 1.0)
-        if (current_fav_ask > 0 and current_fav_ask > current_fav_price
+        # Tiered wait matching WS delayed taker — patient maker saves 35-50¢/round
+        _skip_take_profit = False
+        if _posted_combined <= 93:
+            _min_wait_for_taker = 5.0
+        elif _posted_combined <= 95:
+            _min_wait_for_taker = 3.0
+        elif _posted_combined <= 97:
+            _min_wait_for_taker = 2.0
+        else:
+            _skip_take_profit = True  # 98¢+ combined — taker fee > profit
+            _min_wait_for_taker = 999
+        if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask > current_fav_price
                 and wait_s >= _min_wait_for_taker
                 and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
             cross_combined = dog_price + current_fav_ask

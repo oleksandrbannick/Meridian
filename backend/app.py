@@ -3789,18 +3789,10 @@ def _execute_phantom_hedge(bot_id):
         _tp_combined = dog_price + actual_fav_price  # combined at time of posting
         def _delayed_taker_cross():
             try:
-                # Tiered maker window based on combined cost at hedge post time
-                # Taker fee is 4x maker, but sellback losses ($1-5) dwarf fee savings.
-                # Data 04/07: 11 sellbacks at -$17 from ask drifting past 98 during window.
-                # Shorter windows + always attempt taker up to breakeven (100¢).
-                if _tp_combined <= 93:       # 7¢+ spread — patient but not too long
-                    _maker_wait = 3.0
-                elif _tp_combined <= 95:     # 5-7¢ spread — moderate
-                    _maker_wait = 2.0
-                elif _tp_combined <= 97:     # 3-5¢ spread — quick
-                    _maker_wait = 1.0
-                else:                        # 2¢ or thinner — still try, breakeven > sellback
-                    _maker_wait = 1.0
+                # 1s maker window for all tiers — data 04/07 proved 3s is too long.
+                # BAS phantom: market moved 12¢ in 3s, taker missed the window entirely.
+                # 1s gives maker a fair shot, then crosses before the ask escapes.
+                _maker_wait = 1.0
                 time.sleep(_maker_wait)
                 _b = active_bots.get(_tp_bot_id)
                 if not _b or _b.get('status') != 'fav_hedge_posted':
@@ -10670,18 +10662,10 @@ def _handle_phantom(bot_id, bot, actions):
         TAKE_PROFIT_CEILING = 100  # breakeven — even 0¢ profit taker beats a $1-5 sellback
         # Tiered wait: match the WS delayed taker window — wide spreads get more maker time
         _posted_combined = dog_price + current_fav_price
-        # Tiered wait matching WS delayed taker — must be HIGHER than WS sleeps
-        # to avoid the monitor beating the delayed taker thread.
-        # NOTE: monitor polls every ~2s, so wait_s starts at ~2 on first poll.
+        # Monitor taker: must wait longer than WS delayed taker (1s) to avoid racing it.
+        # Monitor polls every ~2s, so wait_s starts at ~2 on first poll — naturally after WS.
         _skip_take_profit = False
-        if _posted_combined <= 93:
-            _min_wait_for_taker = 5.0   # WS waits 3s
-        elif _posted_combined <= 95:
-            _min_wait_for_taker = 3.0   # WS waits 2s
-        elif _posted_combined <= 97:
-            _min_wait_for_taker = 2.0   # WS waits 1s
-        else:
-            _min_wait_for_taker = 2.0   # WS waits 1s — still try at breakeven
+        _min_wait_for_taker = 2.0  # WS fires at 1s, monitor catches at 2s+ as backup
         if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask >= current_fav_price
                 and wait_s >= _min_wait_for_taker
                 and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled

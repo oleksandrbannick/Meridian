@@ -5894,7 +5894,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
                         const _depCap = _comb > 0 ? 100 - _comb : 0;
                         const _depFloor = bot.anchor_depth || 0;
-                        const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
+                        const _isSellback = r.result === 'loss' || r.result === 'sellback' || r.pnl < 0;
+                        const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
+                        // Depth badge: only on wins — shows "caught Xc" (how much of the drop you captured)
+                        let _depBadge = '';
+                        if (!_isSellback && _depFloor > 0 && _depCap > 0) {
+                            const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
+                            _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢ caught</span>`;
+                        } else if (_isSellback) {
+                            _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB</span>`;
+                        }
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
                             <span style="display:flex;align-items:center;gap:3px;">
@@ -5903,7 +5912,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 <span style="color:#00aaff;font-weight:700;">${_fp}¢</span>
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
                                 ${r.taker ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>` : ''}
-                                ${_depFloor > 0 && _comb > 0 ? `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}/${_depFloor}</span>` : ''}
+                                ${_depBadge}
+                                ${_hedgeMs != null ? `<span style="color:#555;font-size:8px;margin-left:2px;">⚡${_hedgeMs < 1 ? _hedgeMs.toFixed(1) : Math.round(_hedgeMs)}ms</span>` : ''}
                             </span>
                             <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
@@ -11992,6 +12002,7 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDays = [];      // Array of YYYY-MM-DD strings, empty = full history
 let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
+let _phantomActiveDepth = 'all';   // Depth floor filter for Phantom history panels
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
@@ -13160,7 +13171,7 @@ function renderDogStatsAndDepth(trades, pnl) {
         const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
         const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
 
-        const isFiltered = _phantomActiveSport !== 'all';
+        const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all';
         let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
 
         if (isFiltered) {
@@ -13185,7 +13196,9 @@ function renderDogStatsAndDepth(trades, pnl) {
         const ltWinRate = ltTotal > 0 ? Math.round(ltWins / ltTotal * 100) : 0;
         const ltAvgProfit = ltTotal > 0 ? (dLtNet / ltTotal).toFixed(1) : '—';
         const ltAvgCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
-        const pnlLabel = isFiltered ? _phantomActiveSport : 'Lifetime';
+        const pnlLabel = isFiltered
+            ? (_phantomActiveSport !== 'all' ? _phantomActiveSport : 'All') + (_phantomActiveDepth !== 'all' ? ' · ' + _phantomActiveDepth + '¢' : '')
+            : 'Lifetime';
 
         // Depth capture ratio
         let captureRatio = 0, avgCapture = '—', avgFloorDisp = '—';
@@ -13344,17 +13357,36 @@ function renderDogSportBreakdown(allTrades) {
     }
 }
 
+function _applyPhantomFilters(trades) {
+    let f = trades;
+    if (_phantomActiveSport !== 'all') f = f.filter(t => (t.sport||'Other') === _phantomActiveSport);
+    if (_phantomActiveDepth !== 'all') f = f.filter(t => (t.anchor_depth||0) === _phantomActiveDepth);
+    return f;
+}
+
 function selectPhantomSport(sport) {
     // Toggle: clicking same sport deselects back to all
     if (sport === _phantomActiveSport && sport !== 'all') sport = 'all';
     _phantomActiveSport = sport;
 
     const allTrades = window._phantomAllTrades || [];
-    const filtered = sport === 'all' ? allTrades : allTrades.filter(t => (t.sport||'Other') === sport);
+    const filtered = _applyPhantomFilters(allTrades);
 
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
     renderDogSportBreakdown(allTrades);
-    filterPhantomLog(sport);
+    filterPhantomLog();
+}
+
+function selectPhantomDepth(depth) {
+    if (depth === _phantomActiveDepth && depth !== 'all') depth = 'all';
+    _phantomActiveDepth = depth;
+
+    const allTrades = window._phantomAllTrades || [];
+    const filtered = _applyPhantomFilters(allTrades);
+
+    renderDogStatsAndDepth(filtered, window._phantomPnl || {});
+    renderDogSportBreakdown(allTrades);
+    filterPhantomLog();
 }
 
 // ── Dog Bot history ──────────────────────────────────────────────────────────
@@ -13386,6 +13418,7 @@ async function loadDogHistory() {
         window._phantomPnl = pnl;
         window._phantomAllTrades = trades;
         _phantomActiveSport = 'all';
+        _phantomActiveDepth = 'all';
 
         renderDogStatsAndDepth(trades, pnl);
         renderDogSportBreakdown(trades);
@@ -13404,24 +13437,47 @@ async function loadDogHistory() {
         trades.forEach(t => { const s = t.sport || 'Other'; sportCounts[s] = (sportCounts[s]||0) + 1; });
         const sportKeys = Object.keys(sportCounts).sort((a,b) => sportCounts[b] - sportCounts[a]);
 
+        // Depth floor filter
+        const depthCounts = {};
+        trades.forEach(t => { const d = t.anchor_depth || 0; if (d > 0) depthCounts[d] = (depthCounts[d]||0) + 1; });
+        const depthKeys = Object.keys(depthCounts).map(Number).sort((a,b) => a - b);
+
         listEl.innerHTML = `
-        <div id="phantom-sport-filter" style="display:flex;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
+        <div id="phantom-sport-filter" style="display:flex;gap:0;margin-bottom:8px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
             <button onclick="selectPhantomSport('all')" data-sport="all" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All (${trades.length})</button>
             ${sportKeys.map(s => `<button onclick="selectPhantomSport('${s}')" data-sport="${s}" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">${_sportIcon[s]||''}${s} (${sportCounts[s]})</button>`).join('')}
         </div>
+        ${depthKeys.length > 0 ? `<div id="phantom-depth-filter" style="display:flex;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
+            <button onclick="selectPhantomDepth('all')" data-depth="all" class="phantom-depth-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All</button>
+            ${depthKeys.map(d => `<button onclick="selectPhantomDepth(${d})" data-depth="${d}" class="phantom-depth-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">⬇${d}¢ (${depthCounts[d]})</button>`).join('')}
+        </div>` : ''}
         <div id="phantom-trade-list" style="display:flex;flex-direction:column;gap:10px;"></div>`;
 
         window._phantomSportIcon = _sportIcon;
-        filterPhantomLog('all');
+        filterPhantomLog();
     } catch (e) {
         if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
     }
 }
 
-function filterPhantomLog(sport) {
-    // Update button styles
+function filterPhantomLog() {
+    // Update sport button styles
     document.querySelectorAll('#phantom-sport-filter .phantom-sport-btn').forEach(btn => {
-        if (btn.getAttribute('data-sport') === sport) {
+        if (btn.getAttribute('data-sport') === _phantomActiveSport) {
+            btn.style.background = 'rgba(255,102,170,0.12)';
+            btn.style.color = '#ff66aa';
+            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
+        } else {
+            btn.style.background = 'transparent';
+            btn.style.color = '#5a6484';
+            btn.style.boxShadow = 'none';
+        }
+    });
+    // Update depth button styles
+    document.querySelectorAll('#phantom-depth-filter .phantom-depth-btn').forEach(btn => {
+        const btnDepth = btn.getAttribute('data-depth');
+        const isActive = btnDepth === 'all' ? _phantomActiveDepth === 'all' : Number(btnDepth) === _phantomActiveDepth;
+        if (isActive) {
             btn.style.background = 'rgba(255,102,170,0.12)';
             btn.style.color = '#ff66aa';
             btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
@@ -13433,7 +13489,7 @@ function filterPhantomLog(sport) {
     });
     const trades = window._phantomAllTrades || [];
     const _sportIcon = window._phantomSportIcon || {};
-    const filtered = sport === 'all' ? trades : trades.filter(t => (t.sport||'Other') === sport);
+    const filtered = _applyPhantomFilters(trades);
     const container = document.getElementById('phantom-trade-list');
     if (!container) return;
 
@@ -13534,7 +13590,7 @@ function filterPhantomLog(sport) {
                 ${rawMs != null ? `<span style="color:${rawCol};font-weight:700;">⚡${rawMs.toFixed(1)}ms</span>` : ''}
                 ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}
                 ${t.fill_duration_s != null ? `<span style="color:#5a6484;">fill ${t.fill_duration_s}s</span>` : ''}
-                ${t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">⬇${t.anchor_depth}¢</span>` : ''}
+                ${t.anchor_depth && !isSellback && combined != null ? (() => { const _sc = 100 - combined; const _df = t.anchor_depth; const _cc = _sc >= _df ? '#00ff88' : _sc >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${_cc};font-weight:700;background:${_cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">⬇${_sc}¢/${_df}¢</span>`; })() : t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">⬇${t.anchor_depth}¢</span>` : ''}
                 <span style="color:${takerCol};font-weight:600;font-size:9px;background:${takerCol}15;padding:1px 5px;border-radius:3px;">${taker}</span>
                 <span style="color:#3a4560;font-size:9px;">${sportName}</span>
             </div>

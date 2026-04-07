@@ -10682,7 +10682,7 @@ def _handle_phantom(bot_id, bot, actions):
             _min_wait_for_taker = 2.0   # WS waits 1s
         else:
             _min_wait_for_taker = 2.0   # WS waits 1s — still try at breakeven
-        if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask > current_fav_price
+        if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask >= current_fav_price
                 and wait_s >= _min_wait_for_taker
                 and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
             cross_combined = dog_price + current_fav_ask

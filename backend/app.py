@@ -3576,16 +3576,17 @@ def _execute_phantom_hedge(bot_id):
         def _delayed_taker_cross():
             try:
                 # Tiered maker window based on combined cost at hedge post time
-                # Taker fee is 4x maker — at 40 qty, taker costs 35-50¢ extra.
-                # Patient maker fills save real money; only cross when it's worth it.
-                if _tp_combined <= 93:       # 7¢+ spread — very patient
-                    _maker_wait = 5.0
-                elif _tp_combined <= 95:     # 5-7¢ spread — patient
+                # Taker fee is 4x maker, but sellback losses ($1-5) dwarf fee savings.
+                # Data 04/07: 11 sellbacks at -$17 from ask drifting past 98 during window.
+                # Shorter windows + always attempt taker up to breakeven (100¢).
+                if _tp_combined <= 93:       # 7¢+ spread — patient but not too long
                     _maker_wait = 3.0
-                elif _tp_combined <= 97:     # 3-5¢ spread — moderate
+                elif _tp_combined <= 95:     # 5-7¢ spread — moderate
                     _maker_wait = 2.0
-                else:                        # 2¢ or thinner — not worth taker fee
-                    return                   # skip taker entirely, let maker sit
+                elif _tp_combined <= 97:     # 3-5¢ spread — quick
+                    _maker_wait = 1.0
+                else:                        # 2¢ or thinner — still try, breakeven > sellback
+                    _maker_wait = 1.0
                 time.sleep(_maker_wait)
                 _b = active_bots.get(_tp_bot_id)
                 if not _b or _b.get('status') != 'fav_hedge_posted':
@@ -3601,8 +3602,8 @@ def _execute_phantom_hedge(bot_id):
                 if _ask <= 0:
                     return  # no ask data
                 _cross_comb = _tp_dog_price + _ask
-                if _cross_comb > 98:
-                    return  # not profitable enough to cross
+                if _cross_comb > 100:
+                    return  # past breakeven — sellback territory
                 # Cross the spread: cancel maker, place taker at ask
                 _phantom_drop_lock.acquire()
                 try:
@@ -10452,23 +10453,21 @@ def _handle_phantom(bot_id, bot, actions):
         # Ceiling 98: try maker first (1s), then cross as taker if combined <= 98.
         # At 98¢ combined: gross 2¢/contract, taker fee ~0.7¢, net ~1.3¢.
         # Better than sitting at bid and risking sellback (-10-20¢/contract).
-        TAKE_PROFIT_CEILING = 98
+        TAKE_PROFIT_CEILING = 100  # breakeven — even 0¢ profit taker beats a $1-5 sellback
         # Tiered wait: match the WS delayed taker window — wide spreads get more maker time
         _posted_combined = dog_price + current_fav_price
-        # Tiered wait matching WS delayed taker — patient maker saves 35-50¢/round
+        # Tiered wait matching WS delayed taker — must be HIGHER than WS sleeps
+        # to avoid the monitor beating the delayed taker thread.
         # NOTE: monitor polls every ~2s, so wait_s starts at ~2 on first poll.
-        # These thresholds must be HIGHER than the WS taker sleeps to avoid
-        # the monitor beating the delayed taker thread.
         _skip_take_profit = False
         if _posted_combined <= 93:
-            _min_wait_for_taker = 8.0   # WS waits 5s
-        elif _posted_combined <= 95:
             _min_wait_for_taker = 5.0   # WS waits 3s
+        elif _posted_combined <= 95:
+            _min_wait_for_taker = 3.0   # WS waits 2s
         elif _posted_combined <= 97:
-            _min_wait_for_taker = 4.0   # WS waits 2s
+            _min_wait_for_taker = 2.0   # WS waits 1s
         else:
-            _skip_take_profit = True    # 98¢+ — never taker, just maker
-            _min_wait_for_taker = 999
+            _min_wait_for_taker = 2.0   # WS waits 1s — still try at breakeven
         if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask > current_fav_price
                 and wait_s >= _min_wait_for_taker
                 and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
@@ -12892,6 +12891,14 @@ def _cancel_hedge_verified(bot, bot_id):
     If cancel fails or order already filled, logs prominently and returns the fill count."""
     fav_oid = bot.get('fav_order_id')
     if not fav_oid:
+        # Even with no order ID, check WS-tracked fills as fallback
+        _ws_fills = bot.get('fav_fill_qty', 0)
+        if _ws_fills > 0:
+            print(f'⚠ HEDGE CANCEL NO OID BUT WS FILLS: {bot_id} fav_fill_qty={_ws_fills}')
+            bot_log('HEDGE_CANCEL_NO_OID_BUT_WS_FILLS', bot_id, {
+                'ws_fav_fill_qty': _ws_fills,
+            }, level='WARN')
+            return _ws_fills
         return 0
     filled_qty = 0
     # Attempt cancel
@@ -12938,6 +12945,19 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     qty = bot.get('quantity', 1)
     fav_side = bot.get('fav_side', '')
     hedge_ticker = bot.get('hedge_ticker', ticker)
+
+    # ── Safety net: cross-check WS-tracked fills if cancel verify returned 0 ──
+    if _hedge_fills == 0:
+        _ws_fav_fills = bot.get('fav_fill_qty', 0)
+        if _ws_fav_fills > 0:
+            print(f'⚠ PHANTOM SELLBACK FILL SAFETY NET: {bot_id} cancel_verified=0 but WS fav_fill_qty={_ws_fav_fills} — using WS count')
+            bot_log('PHANTOM_SELLBACK_FILL_SAFETY_NET', bot_id, {
+                'cancel_verified_fills': 0,
+                'ws_fav_fill_qty': _ws_fav_fills,
+                'fav_order_id': bot.get('fav_order_id'),
+                'fav_side': fav_side,
+            }, level='WARN')
+            _hedge_fills = _ws_fav_fills
 
     # ── Race condition fix: hedge partially filled before cancel ──
     # If _hedge_fills > 0, those fav contracts are already bought. We must only

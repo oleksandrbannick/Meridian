@@ -10469,15 +10469,18 @@ def _handle_phantom(bot_id, bot, actions):
         # Tiered wait: match the WS delayed taker window — wide spreads get more maker time
         _posted_combined = dog_price + current_fav_price
         # Tiered wait matching WS delayed taker — patient maker saves 35-50¢/round
+        # NOTE: monitor polls every ~2s, so wait_s starts at ~2 on first poll.
+        # These thresholds must be HIGHER than the WS taker sleeps to avoid
+        # the monitor beating the delayed taker thread.
         _skip_take_profit = False
         if _posted_combined <= 93:
-            _min_wait_for_taker = 5.0
+            _min_wait_for_taker = 8.0   # WS waits 5s — give extra margin
         elif _posted_combined <= 95:
-            _min_wait_for_taker = 3.0
+            _min_wait_for_taker = 5.0   # WS waits 3s
         elif _posted_combined <= 97:
-            _min_wait_for_taker = 2.0
+            _min_wait_for_taker = 4.0   # WS waits 2s
         else:
-            _skip_take_profit = True  # 98¢+ combined — taker fee > profit
+            _skip_take_profit = True    # 98¢+ — never taker, just maker
             _min_wait_for_taker = 999
         if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask > current_fav_price
                 and wait_s >= _min_wait_for_taker

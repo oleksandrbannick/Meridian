@@ -13303,8 +13303,6 @@ function renderDogStatsAndDepth(trades, pnl) {
             </div>`;
     }
 
-    }
-
     // ── Depth Floor breakdown (skip if just updating highlight) ──
     if (renderDogStatsAndDepth._skipDepth) return;
     // ── Depth Floor breakdown ──

@@ -7408,11 +7408,21 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 ? `<span style="color:#00ff88;font-weight:700;margin-left:10px;">🎯 IN THE MIDDLE</span>`
                 : `<span style="color:#555;margin-left:10px;">outside middle range</span>`)
             : '';
-        legStatusHtml = `<div style="background:${bothInRange && hasLiveScore ? '#00ff8818' : '#00ff8811'};border:1px solid ${bothInRange && hasLiveScore ? '#00ff8855' : '#00ff8833'};border-radius:5px;padding:6px 10px;font-size:11px;">
-            <span style="color:#00ff88;font-weight:700;">🔒 Both legs in — holding to settlement</span>
-            <span style="color:#8892a6;margin-left:10px;">NO: ${legAFill||'?'} + NO: ${legBFill||'?'} = ${(parseInt(legAFill)||0)+(parseInt(legBFill)||0)}¢/ct</span>
-            ${rangeHtml}
-        </div>`;
+        const legSoldEarly = bot.leg_a_sold_early || bot.leg_b_sold_early;
+        const soldLegLabel = legSoldEarly ? (bot.leg_a_sold_early ? (bot.team_a_name||'Leg A') : (bot.team_b_name||'Leg B')) : '';
+        const keptLegLabel = legSoldEarly ? (bot.leg_a_sold_early ? (bot.team_b_name||'Leg B') : (bot.team_a_name||'Leg A')) : '';
+        if (legSoldEarly) {
+            legStatusHtml = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:6px 10px;font-size:11px;">
+                <span style="color:#00aaff;font-weight:700;">💰 ${soldLegLabel} sold early — riding ${keptLegLabel} to settlement</span>
+                <span style="color:#8892a6;margin-left:10px;">NO: ${legAFill||'?'} + NO: ${legBFill||'?'} = ${(parseInt(legAFill)||0)+(parseInt(legBFill)||0)}¢/ct</span>
+            </div>`;
+        } else {
+            legStatusHtml = `<div style="background:${bothInRange && hasLiveScore ? '#00ff8818' : '#00ff8811'};border:1px solid ${bothInRange && hasLiveScore ? '#00ff8855' : '#00ff8833'};border-radius:5px;padding:6px 10px;font-size:11px;">
+                <span style="color:#00ff88;font-weight:700;">🔒 Both legs in — holding to settlement</span>
+                <span style="color:#8892a6;margin-left:10px;">NO: ${legAFill||'?'} + NO: ${legBFill||'?'} = ${(parseInt(legAFill)||0)+(parseInt(legBFill)||0)}¢/ct</span>
+                ${rangeHtml}
+            </div>`;
+        }
     }
 
     // ── Rebalancer status indicator ──
@@ -7420,12 +7430,30 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const rebalExitReason = bot.rebalancer_exit_reason;
     let rebalHtml = '';
     if (rebalExitReason) {
-        // Rebalancer already acted
+        // Rebalancer already acted — show sell details
         const reasonMap = { scrape: '🔄 SCRAPED', enhance: '💰 ENHANCED', ride: '🏇 RIDING TO SETTLE' };
         const reasonCol = { scrape: '#ff4444', enhance: '#00ff88', ride: '#00aaff' };
-        rebalHtml = `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:${(reasonCol[rebalExitReason]||'#aa66ff')}11;border:1px solid ${(reasonCol[rebalExitReason]||'#aa66ff')}33;border-radius:5px;font-size:10px;margin-top:4px;">
+        let rebalDetail = '';
+        const soldLegA = bot.leg_a_sold_early;
+        const soldLegB = bot.leg_b_sold_early;
+        if (soldLegA || soldLegB) {
+            const soldLeg = soldLegA ? 'a' : 'b';
+            const soldTeam = soldLeg === 'a' ? (bot.team_a_name||'Leg A') : (bot.team_b_name||'Leg B');
+            const soldSpread = soldLeg === 'a' ? (bot.spread_a||'') : (bot.spread_b||'');
+            const sellPrice = soldLeg === 'a' ? (bot.leg_a_sell_price||0) : (bot.leg_b_sell_price||0);
+            const buyPrice = soldLeg === 'a' ? (bot.leg_a_fill_price||targetA) : (bot.leg_b_fill_price||targetB);
+            const recovery = sellPrice * qty;
+            const pnlPerContract = sellPrice - buyPrice;
+            const pnlTotal = pnlPerContract * qty;
+            const pnlColor = pnlTotal >= 0 ? '#00ff88' : '#ff4444';
+            rebalDetail = `<span style="color:#8892a6;">Sold <strong style="color:#fff;">${soldTeam} ${soldSpread}</strong> at <strong style="color:#fff;">${sellPrice}¢</strong></span>
+                <span style="color:${pnlColor};font-weight:700;">${pnlTotal >= 0 ? '+' : ''}${pnlTotal}¢</span>
+                <span style="color:#555;">(+${recovery}¢ recovery)</span>`;
+        }
+        rebalHtml = `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:${(reasonCol[rebalExitReason]||'#aa66ff')}11;border:1px solid ${(reasonCol[rebalExitReason]||'#aa66ff')}33;border-radius:5px;font-size:10px;margin-top:4px;flex-wrap:wrap;">
             <span style="color:${reasonCol[rebalExitReason]||'#aa66ff'};font-weight:700;">${reasonMap[rebalExitReason]||rebalExitReason}</span>
             <span style="color:#8892a6;">Rebalancer took action</span>
+            ${rebalDetail}
         </div>`;
     } else if (status === 'one_filled' || status === 'both_filled') {
         // Show rebalancer plan

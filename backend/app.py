@@ -10511,15 +10511,15 @@ def _handle_phantom(bot_id, bot, actions):
                     print(f'❌ PHANTOM {bot_id}: take-profit cross failed: {e}')
                 return
 
-        # ── Breakeven exit: combined at bid > 101 → cross ask or sell back ──
-        # Maker had its chance at 99-101. Past 101 = bid moved away, exit now.
+        # ── Emergency exit: combined at bid > 101 → take the ask or sell back ──
+        # Maker had its chance at 99-101. At 101+ bid moved away — exit ASAP.
+        # Take the ask (1-2¢ loss) unless ask > 103 combined (sellback is cheaper).
         _be_combined_at_bid = dog_price + current_fav_bid if current_fav_bid > 0 else 0
         if _be_combined_at_bid > 101 and wait_s >= 2 and bot.get('fav_fill_qty', 0) < qty:
-            # Try taker cross at ask if combined ≤ 100
             if current_fav_ask > 0:
                 _be_cross = dog_price + current_fav_ask
-                if _be_cross <= 100:
-                    # Cross at the ask — breakeven exit
+                if _be_cross <= 103:
+                    # Take the ask — 1-3¢ loss per contract, way better than sellback
                     try:
                         _phantom_drop_lock.acquire()
                         try:
@@ -10533,7 +10533,7 @@ def _handle_phantom(bot_id, bot, actions):
                                     _chk = kalshi_client.get_order(old_fav_order_id)
                                     if _parse_fill_count(_chk.get('order', _chk) if isinstance(_chk, dict) else {}) >= qty:
                                         bot['fav_fill_qty'] = qty
-                                        print(f'💰 PHANTOM BE EXIT: {bot_id} filled during cancel')
+                                        print(f'💰 PHANTOM EXIT TAKER: {bot_id} filled during cancel')
                                         return
                                 except Exception:
                                     pass
@@ -10557,24 +10557,25 @@ def _handle_phantom(bot_id, bot, actions):
                                 if fav_side == 'yes': bot['yes_price'] = current_fav_ask
                                 else: bot['no_price'] = current_fav_ask
                                 save_state()
-                                print(f'💰 PHANTOM BREAKEVEN EXIT: {bot_id} crossed ask {current_fav_ask}¢ (combined={_be_cross}¢ bid={current_fav_bid}¢)')
-                                bot_log('PHANTOM_BREAKEVEN_CROSS', bot_id, {
+                                _loss = _be_cross - 100
+                                print(f'💰 PHANTOM EXIT TAKER: {bot_id} crossed ask {current_fav_ask}¢ (combined={_be_cross}¢ loss={_loss}¢/ea bid={current_fav_bid}¢)')
+                                bot_log('PHANTOM_EXIT_TAKER', bot_id, {
                                     'cross_price': current_fav_ask, 'combined': _be_cross,
                                     'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                                    'wait_s': round(wait_s, 1),
+                                    'loss_per': _loss, 'wait_s': round(wait_s, 1),
                                 })
-                                actions.append({'bot_id': bot_id, 'action': 'anchor_fav_breakeven_cross',
+                                actions.append({'bot_id': bot_id, 'action': 'anchor_fav_exit_taker',
                                                 'cross_price': current_fav_ask, 'combined': _be_cross})
                         finally:
                             if _phantom_drop_lock.locked():
                                 _phantom_drop_lock.release()
                     except Exception as e:
-                        print(f'❌ PHANTOM {bot_id}: breakeven cross failed: {e}')
+                        print(f'❌ PHANTOM {bot_id}: exit taker failed: {e}')
                     return
                 else:
-                    # Ask > 100 combined — can't cross profitably, sell back now
-                    print(f'⏰ PHANTOM BREAKEVEN SELLBACK: {bot_id} bid={current_fav_bid}¢ ask={current_fav_ask}¢ combined@ask={_be_cross}¢ > 100 — selling back')
-                    bot_log('PHANTOM_BREAKEVEN_SELLBACK', bot_id, {
+                    # Ask > 103 combined — selling back dog is cheaper than 4¢+ loss per contract
+                    print(f'⏰ PHANTOM EXIT SELLBACK: {bot_id} ask={current_fav_ask}¢ combined@ask={_be_cross}¢ > 103 — dog sellback cheaper')
+                    bot_log('PHANTOM_EXIT_SELLBACK', bot_id, {
                         'dog_price': dog_price, 'fav_bid': current_fav_bid,
                         'fav_ask': current_fav_ask, 'combined_at_ask': _be_cross,
                         'combined_at_bid': _be_combined_at_bid, 'wait_s': round(wait_s, 1),

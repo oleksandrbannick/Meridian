@@ -5838,19 +5838,19 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     ${bot.smart_mode ? `<span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>` : ''}
                 </div>
                 ${(bot.live_yes_bid != null || bot.live_no_bid != null) ? `
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;font-size:10px;">
+                <div style="display:grid;grid-template-columns:${_isCross ? '1fr 1fr' : '1fr'};gap:8px;margin-top:8px;font-size:10px;">
                     <div style="background:#060a14;border:1px solid #00ff8822;border-radius:6px;padding:6px 8px;text-align:center;">
                         <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.ticker || '').split('-').pop()} · YES/NO</div>
                         <span style="color:#00ff88;font-weight:700;">${bot.live_yes_bid ?? '?'}¢</span>
                         <span style="color:#555;"> / </span>
                         <span style="color:#ff4444;font-weight:700;">${bot.live_no_bid ?? '?'}¢</span>
                     </div>
-                    <div style="background:#060a14;border:1px solid #f7816622;border-radius:6px;padding:6px 8px;text-align:center;">
+                    ${_isCross ? `<div style="background:#060a14;border:1px solid #f7816622;border-radius:6px;padding:6px 8px;text-align:center;">
                         <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.hedge_ticker || '').split('-').pop()} · YES/NO</div>
                         <span style="color:#00ff88;font-weight:700;">${bot.live_hedge_yes_bid ?? '?'}¢</span>
                         <span style="color:#555;"> / </span>
                         <span style="color:#ff4444;font-weight:700;">${bot.live_hedge_no_bid ?? '?'}¢</span>
-                    </div>
+                    </div>` : ''}
                 </div>` : ''}
                 ${_triggerActive ? `<div style="text-align:center;margin-top:8px;padding:8px 12px;background:#64ffda22;border:2px solid #64ffda66;border-radius:8px;font-size:12px;color:#64ffda;font-weight:700;">
                     <div style="margin-bottom:4px;">SMART EXIT ARMED</div>

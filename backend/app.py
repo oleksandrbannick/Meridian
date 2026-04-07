@@ -8170,8 +8170,8 @@ def create_anchor_bot():
         # Smart pricing: always anchor_depth below bid — strict depth floor
         if live_dog_bid > 0:
             smart_price = max(1, live_dog_bid - anchor_depth)
-            if smart_price < 3:
-                return jsonify({'error': f'Dog price too low ({smart_price}¢) — bid {live_dog_bid}¢ minus depth {anchor_depth}¢ is below 3¢ floor. Reduce depth or wait for market to move.'}), 400
+            if smart_price < 2:
+                return jsonify({'error': f'Dog price too low ({smart_price}¢) — bid {live_dog_bid}¢ minus depth {anchor_depth}¢ is below 2¢ floor. Reduce depth or wait for market to move.'}), 400
             print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} '
                   f'depth={anchor_depth}¢ → {smart_price}¢ (frontend sent {dog_price}¢)')
             dog_price = smart_price
@@ -9828,8 +9828,8 @@ def _handle_phantom(bot_id, bot, actions):
                 if new_dog_price > 35:
                     new_dog_price = 35
 
-                # Price floor: don't repost at < 3¢ — no viable edge at that level
-                if new_dog_price < 3:
+                # Price floor: don't repost at < 2¢ — stop at 1¢
+                if new_dog_price < 2:
                     print(f'🛑 PHANTOM PRICE FLOOR: {bot_id} new_price={new_dog_price}¢ (bid={current_dog_bid}¢ depth={anchor_depth}¢) — too low, cancelling')
                     _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
                     _is_cross_pf = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
@@ -10200,13 +10200,10 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            # If fav leg crossed the ask (take-profit), use taker fee for that leg
-            if bot.get('_fav_was_taker'):
-                fav_p = actual_fav_price
-                dog_p_for_fee = dog_price
-                fee = _kalshi_side_fee_cents(dog_p_for_fee, qty) + _kalshi_taker_side_fee_cents(fav_p, qty)
-            else:
-                fee = kalshi_fee_cents(yes_p, no_p, qty)
+            # Always use maker fees for both legs — Kalshi often classifies limit-at-ask
+            # orders as maker (book shifted during ~24ms latency), and taker fee overcount
+            # was causing profitable trades to show as losses. 98¢ = breakeven baseline.
+            fee = kalshi_fee_cents(yes_p, no_p, qty)
             net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included
@@ -11082,7 +11079,7 @@ def _handle_phantom(bot_id, bot, actions):
             if current_dog_bid <= 1:
                 _drift_stop = True
                 _drift_reason = 'dog_dead'
-            elif new_dog_price < 3:
+            elif new_dog_price < 2:
                 _drift_stop = True
                 _drift_reason = f'price_too_low_{new_dog_price}c'
             elif new_dog_price > 35:

@@ -2253,57 +2253,14 @@
         // Draw mini ghost on chat header
         drawMiniGhost(document.getElementById('header-ghost-canvas'));
 
-        // ── Draggable FAB — touch + mouse, saves position ──
+        // ── FAB — pinned bottom-left, no drag (drag caused off-screen ghost on mobile) ──
         (function() {
             const fab = document.getElementById('claude-chat-fab');
-            const saved = JSON.parse(localStorage.getItem('claude_fab_pos') || 'null');
-            if (saved && saved.x >= 0 && saved.x < window.innerWidth - 30 && saved.y >= 0 && saved.y < window.innerHeight - 30) {
-                fab.style.left = saved.x + 'px';
-                fab.style.top = saved.y + 'px';
-            } else {
-                // Default: bottom-left on mobile
-                fab.style.left = '16px';
-                fab.style.bottom = '80px';
-                localStorage.removeItem('claude_fab_pos');
-            }
-            let dragging = false, startX, startY, fabX, fabY, moved = false;
-            function onStart(e) {
-                const t = e.touches ? e.touches[0] : e;
-                dragging = true; moved = false;
-                startX = t.clientX; startY = t.clientY;
-                const r = fab.getBoundingClientRect();
-                fabX = r.left; fabY = r.top;
-                fab.classList.add('dragging');
-                fab.style.right = 'auto'; fab.style.bottom = 'auto';
-                fab.style.left = fabX + 'px'; fab.style.top = fabY + 'px';
-            }
-            function onMove(e) {
-                if (!dragging) return;
-                const t = e.touches ? e.touches[0] : e;
-                const dx = t.clientX - startX, dy = t.clientY - startY;
-                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-                if (!moved) return;
-                e.preventDefault();
-                const nx = Math.max(0, Math.min(window.innerWidth - 60, fabX + dx));
-                const ny = Math.max(0, Math.min(window.innerHeight - 60, fabY + dy));
-                fab.style.left = nx + 'px'; fab.style.top = ny + 'px';
-            }
-            function onEnd() {
-                if (!dragging) return;
-                dragging = false;
-                fab.classList.remove('dragging');
-                const r = fab.getBoundingClientRect();
-                localStorage.setItem('claude_fab_pos', JSON.stringify({x: r.left, y: r.top}));
-                if (moved) { fab._wasDragged = true; setTimeout(() => fab._wasDragged = false, 100); }
-            }
-            fab.addEventListener('touchstart', onStart, {passive: true});
-            document.addEventListener('touchmove', onMove, {passive: false});
-            document.addEventListener('touchend', onEnd);
-            fab.addEventListener('mousedown', onStart);
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onEnd);
-            // Block click (open chat) if it was a drag
-            fab.addEventListener('click', function(e) { if (fab._wasDragged) e.stopImmediatePropagation(); }, true);
+            localStorage.removeItem('claude_fab_pos');  // clear stale drag positions
+            fab.style.left = '16px';
+            fab.style.bottom = '80px';
+            fab.style.right = 'auto';
+            fab.style.top = 'auto';
         })();
 
         const input = document.getElementById('claude-chat-input');
@@ -3098,7 +3055,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260407142000"></script>
+    <script src="app.js?v=20260407144700"></script>
     <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
 </body>
 </html>

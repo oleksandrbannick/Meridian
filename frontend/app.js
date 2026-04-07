@@ -6226,8 +6226,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 let label, color;
                 if (absObi < 0.15) { label = 'Balanced'; color = '#555'; }
                 else if (absObi < 0.3) { label = pressureTowardDog ? '→ Dog building' : '→ Fav building'; color = pressureTowardDog ? '#ffaa00' : '#00aaff'; }
-                else if (absObi < 0.6) { label = pressureTowardDog ? '⚡ Dog pressure' : '⚡ Fav pressure'; color = pressureTowardDog ? '#ff8800' : '#00aaff'; }
-                else { label = pressureTowardDog ? '🔥 Dog sweep!' : '🔥 Fav sweep!'; color = pressureTowardDog ? '#ff4444' : '#ff4444'; }
+                else if (absObi < 0.6) { label = pressureTowardDog ? '🔥 Dog pressure' : '⚡ Fav pressure'; color = pressureTowardDog ? '#ff8800' : '#00aaff'; }
+                else { label = pressureTowardDog ? '🛑 Dog sweep!' : '🛑 Fav sweep!'; color = pressureTowardDog ? '#ff4444' : '#ff4444'; }
                 const dogD = bot._dog_depth_top3 != null ? bot._dog_depth_top3 : '?';
                 const favD = bot._fav_depth_top3 != null ? bot._fav_depth_top3 : '?';
                 return `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | Dog depth: ${dogD} | Fav depth: ${favD}">OBI: ${label}</span>`;

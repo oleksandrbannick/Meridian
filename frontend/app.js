@@ -5892,6 +5892,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _fp = r.fav_price || '?';
                         const _comb = (typeof _dp === 'number' && typeof _fp === 'number') ? _dp + _fp : 0;
                         const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
+                        const _depCap = _comb > 0 ? 100 - _comb : 0;
+                        const _depFloor = bot.anchor_depth || 0;
+                        const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
                             <span style="display:flex;align-items:center;gap:3px;">
@@ -5900,6 +5903,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 <span style="color:#00aaff;font-weight:700;">${_fp}¢</span>
                                 ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
                                 ${r.taker ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>` : ''}
+                                ${_depFloor > 0 && _comb > 0 ? `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}/${_depFloor}</span>` : ''}
                             </span>
                             <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
@@ -11987,6 +11991,7 @@ function _renderMiniBreakdown(title, stats, labelMap) {
 // ─── P&L Calendar (OddsJam-style) ──────────────────────────────────────────────
 let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDays = [];      // Array of YYYY-MM-DD strings, empty = full history
+let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
@@ -13142,6 +13147,216 @@ async function loadMiddleHistory() {
     }
 }
 
+// ── Dog Bot history — helper functions ───────────────────────────────────────
+
+function renderDogStatsAndDepth(trades, pnl) {
+    const statsPanel = document.getElementById('dog-stats-panel');
+    const depthPanel = document.getElementById('dog-depth-panel');
+
+    // ── Stats panel ──
+    if (statsPanel) {
+        const hedgeTrades = trades.filter(t => t.raw_hedge_ms != null);
+        const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
+        const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
+        const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
+
+        const isFiltered = _phantomActiveSport !== 'all';
+        let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
+
+        if (isFiltered) {
+            dLtNet = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
+            dDNet = dLtNet;
+            ltWins = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) > 0).length;
+            ltLosses = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) < 0).length;
+            dDWins = ltWins;
+            dDLosses = ltLosses;
+        } else {
+            dLtNet = pnl.lifetime_dog_net_cents || 0;
+            dDNet = pnl.dog_net_cents || 0;
+            ltWins = pnl.lifetime_dog_wins || 0;
+            ltLosses = pnl.lifetime_dog_losses || 0;
+            dDWins = pnl.dog_wins || 0;
+            dDLosses = pnl.dog_losses || 0;
+        }
+
+        const dLtCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
+        const dDCol = dDNet >= 0 ? '#00ff88' : '#ff4444';
+        const ltTotal = ltWins + ltLosses;
+        const ltWinRate = ltTotal > 0 ? Math.round(ltWins / ltTotal * 100) : 0;
+        const ltAvgProfit = ltTotal > 0 ? (dLtNet / ltTotal).toFixed(1) : '—';
+        const ltAvgCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
+        const pnlLabel = isFiltered ? _phantomActiveSport : 'Lifetime';
+
+        // Depth capture ratio
+        let captureRatio = 0, avgCapture = '—', avgFloorDisp = '—';
+        const dcTrades = trades.filter(t => {
+            if (!t.anchor_depth || t.anchor_depth <= 0) return false;
+            const ds = t.dog_side || t.first_leg || 'no';
+            const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
+            const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price) || 0;
+            return dp > 0 && fp > 0;
+        });
+        if (dcTrades.length > 0) {
+            let totCap = 0, totFloor = 0;
+            dcTrades.forEach(t => {
+                const ds = t.dog_side || t.first_leg || 'no';
+                const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price);
+                const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price);
+                totCap += 100 - dp - fp;
+                totFloor += t.anchor_depth;
+            });
+            avgCapture = (totCap / dcTrades.length).toFixed(1);
+            avgFloorDisp = (totFloor / dcTrades.length).toFixed(1);
+            captureRatio = totFloor > 0 ? Math.round((totCap / totFloor) * 100) : 0;
+        }
+
+        // Total contracts
+        const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
+
+        statsPanel.innerHTML = ltTotal === 0 && !isFiltered
+            ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
+            : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${pnlLabel} P&L</div>
+                    <div style="color:${dLtCol};font-size:22px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
+                </div>
+                ${!isFiltered ? `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L</div>
+                    <div style="color:${dDCol};font-size:22px;font-weight:800;">${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${dDWins}W / ${dDLosses}L today</div>
+                </div>` : ''}
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Win Rate</div>
+                    <div style="color:#ffaa00;font-size:22px;font-weight:800;">${ltWinRate}%</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Profit</div>
+                    <div style="color:${ltAvgCol};font-size:22px;font-weight:800;">${ltAvgProfit === '—' ? '—' : (parseFloat(ltAvgProfit) >= 0 ? '+' : '') + ltAvgProfit + '¢'}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltTotal} trades</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Depth Floor</div>
+                    <div style="color:#ff66aa;font-size:22px;font-weight:800;">${avgDepth}¢</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Depth Capture</div>
+                    <div style="color:${captureRatio >= 90 ? '#00ff88' : captureRatio >= 70 ? '#ffaa00' : '#ff4444'};font-size:22px;font-weight:800;">${dcTrades.length > 0 ? captureRatio + '%' : '—'}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${avgCapture !== '—' ? avgCapture + '¢ / ' + avgFloorDisp + '¢' : ''}</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Contracts</div>
+                    <div style="color:#00ddff;font-size:22px;font-weight:800;">${totalContracts}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">total pushed</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Trades</div>
+                    <div style="color:#8892a6;font-size:22px;font-weight:800;">${ltTotal}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Hedge Speed</div>
+                    <div style="color:#00ffcc;font-size:22px;font-weight:800;">${avgHedgeMs === '—' ? '—' : avgHedgeMs + 'ms'}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${hedgeTrades.length} samples</div>
+                </div>
+                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Sellbacks</div>
+                    <div style="color:#ff4444;font-size:22px;font-weight:800;">${sellbacks}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">safety exits</div>
+                </div>
+            </div>`;
+    }
+
+    // ── Depth Floor breakdown ──
+    if (depthPanel) {
+        const depthMap = {};
+        trades.forEach(t => {
+            const d = t.anchor_depth || 0;
+            if (d <= 0) return;
+            if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0 };
+            const net = (t.profit_cents||0) - (t.loss_cents||0);
+            depthMap[d].net += net;
+            depthMap[d].count++;
+            if (net >= 0 && (t.profit_cents||0) > 0) depthMap[d].wins++;
+            else if (net < 0) depthMap[d].losses++;
+        });
+        const depths = Object.values(depthMap).sort((a,b) => a.depth - b.depth);
+        depthPanel.innerHTML = depths.length === 0 ? '' : `
+            <h4 style="color:#ff66aa;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Depth Floor Performance</h4>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
+                ${depths.map(d => {
+                    const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
+                    const total = d.wins + d.losses;
+                    const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                    return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#ff66aa;font-size:14px;font-weight:800;">${d.depth}¢</div>
+                        <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
+                        <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+    }
+}
+
+function renderDogSportBreakdown(allTrades) {
+    const sportBrkPanel = document.getElementById('dog-sport-breakdown-panel');
+    if (!sportBrkPanel) return;
+
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const sportPnl = {};
+    allTrades.forEach(t => {
+        const s = t.sport || 'Other';
+        if (!sportPnl[s]) sportPnl[s] = { net: 0, wins: 0, losses: 0, count: 0 };
+        const n = (t.profit_cents||0) - (t.loss_cents||0);
+        sportPnl[s].net += n;
+        sportPnl[s].count++;
+        if (n > 0) sportPnl[s].wins++;
+        else if (n < 0) sportPnl[s].losses++;
+    });
+    const sportEntries = Object.entries(sportPnl).sort((a,b) => b[1].net - a[1].net);
+
+    if (sportEntries.length > 0) {
+        const headingScope = selectedHistoryDays.length > 0 ? '' : ' (Lifetime)';
+        sportBrkPanel.innerHTML = `
+            <h4 style="color:#ff66aa;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">By Sport${headingScope}${_phantomActiveSport !== 'all' ? ` · <span style="color:#ff66aa;cursor:pointer;" onclick="selectPhantomSport('all')">Clear filter ✕</span>` : ''}</h4>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                ${sportEntries.map(([sport, d]) => {
+                    const isActive = _phantomActiveSport === sport;
+                    const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                    const icon = _si[sport] || '';
+                    const total = d.wins + d.losses;
+                    const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
+                    const borderCol = isActive ? '#ff66aa' : '#1e2740';
+                    const bgCol = isActive ? '#ff66aa12' : '#0f1419';
+                    return `<div onclick="selectPhantomSport('${sport}')" style="background:${bgCol};border-radius:8px;padding:12px 16px;border:1px solid ${borderCol};text-align:center;min-width:100px;flex:1;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                        <div style="font-size:16px;margin-bottom:2px;">${icon}</div>
+                        <div style="color:${isActive ? '#ff66aa' : '#8892a6'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
+                        <div style="color:${col};font-size:18px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net/100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
+                        <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+    } else {
+        sportBrkPanel.innerHTML = '';
+    }
+}
+
+function selectPhantomSport(sport) {
+    // Toggle: clicking same sport deselects back to all
+    if (sport === _phantomActiveSport && sport !== 'all') sport = 'all';
+    _phantomActiveSport = sport;
+
+    const allTrades = window._phantomAllTrades || [];
+    const filtered = sport === 'all' ? allTrades : allTrades.filter(t => (t.sport||'Other') === sport);
+
+    renderDogStatsAndDepth(filtered, window._phantomPnl || {});
+    renderDogSportBreakdown(allTrades);
+    filterPhantomLog(sport);
+}
+
 // ── Dog Bot history ──────────────────────────────────────────────────────────
 async function loadDogHistory() {
     const calPanel   = document.getElementById('dog-pnl-calendar-panel');
@@ -13165,140 +13380,15 @@ async function loadDogHistory() {
             } catch (_) { calPanel.innerHTML = ''; }
         }
 
-        // ── Stats panel ──
-        if (statsPanel) {
-            const hedgeTrades = trades.filter(t => t.raw_hedge_ms != null);
-            const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
-            const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
-            const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
-            // ALL stats from /api/pnl so they match Meet the Bots and calendar
-            let pnl = {};
-            try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
-            const dLtNet = pnl.lifetime_dog_net_cents || 0;
-            const dLtCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
-            const dDNet = pnl.dog_net_cents || 0;
-            const dDCol = dDNet >= 0 ? '#00ff88' : '#ff4444';
-            const ltWins = pnl.lifetime_dog_wins || 0;
-            const ltLosses = pnl.lifetime_dog_losses || 0;
-            const ltTotal = ltWins + ltLosses;
-            const ltWinRate = ltTotal > 0 ? Math.round(ltWins / ltTotal * 100) : 0;
-            const ltAvgProfit = ltTotal > 0 ? (dLtNet / ltTotal).toFixed(1) : '—';
-            const ltAvgCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
+        // Fetch P&L data and render panels
+        let pnl = {};
+        try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
+        window._phantomPnl = pnl;
+        window._phantomAllTrades = trades;
+        _phantomActiveSport = 'all';
 
-            statsPanel.innerHTML = ltTotal === 0
-                ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
-                : `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Lifetime P&L</div>
-                        <div style="color:${dLtCol};font-size:22px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L</div>
-                        <div style="color:${dDCol};font-size:22px;font-weight:800;">${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${(pnl.dog_wins||0)}W / ${(pnl.dog_losses||0)}L today</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Win Rate</div>
-                        <div style="color:#ffaa00;font-size:22px;font-weight:800;">${ltWinRate}%</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Profit</div>
-                        <div style="color:${ltAvgCol};font-size:22px;font-weight:800;">${ltAvgProfit === '—' ? '—' : (parseFloat(ltAvgProfit) >= 0 ? '+' : '') + ltAvgProfit + '¢'}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltTotal} trades</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Depth Floor</div>
-                        <div style="color:#ff66aa;font-size:22px;font-weight:800;">${avgDepth}¢</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Trades</div>
-                        <div style="color:#8892a6;font-size:22px;font-weight:800;">${ltTotal}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Hedge Speed</div>
-                        <div style="color:#00ffcc;font-size:22px;font-weight:800;">${avgHedgeMs === '—' ? '—' : avgHedgeMs + 'ms'}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${hedgeTrades.length} samples</div>
-                    </div>
-                    <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Sellbacks</div>
-                        <div style="color:#ff4444;font-size:22px;font-weight:800;">${sellbacks}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">safety exits</div>
-                    </div>
-                </div>`;
-        }
-
-        // ── Width breakdown ──
-        // ── Depth Floor breakdown ──
-        if (depthPanel) {
-            const depthMap = {};
-            trades.forEach(t => {
-                const d = t.anchor_depth || 0;
-                if (d <= 0) return;
-                if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0 };
-                const net = (t.profit_cents||0) - (t.loss_cents||0);
-                depthMap[d].net += net;
-                depthMap[d].count++;
-                if (net >= 0 && (t.profit_cents||0) > 0) depthMap[d].wins++;
-                else if (net < 0) depthMap[d].losses++;
-            });
-            const depths = Object.values(depthMap).sort((a,b) => a.depth - b.depth);
-            depthPanel.innerHTML = depths.length === 0 ? '' : `
-                <h4 style="color:#ff66aa;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Depth Floor Performance</h4>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
-                    ${depths.map(d => {
-                        const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
-                        const total = d.wins + d.losses;
-                        const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
-                        return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #1e2740;">
-                            <div style="color:#ff66aa;font-size:14px;font-weight:800;">${d.depth}¢</div>
-                            <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
-                            <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
-                            <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
-                        </div>`;
-                    }).join('')}
-                </div>`;
-        }
-
-        // ── Sport P&L breakdown (like Apex) ──
-        const sportBrkPanel = document.getElementById('dog-sport-breakdown-panel');
-        if (sportBrkPanel) {
-            const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
-            const sportPnl = {};
-            trades.forEach(t => {
-                const s = t.sport || 'Other';
-                if (!sportPnl[s]) sportPnl[s] = { net: 0, wins: 0, losses: 0, count: 0 };
-                const n = (t.profit_cents||0) - (t.loss_cents||0);
-                sportPnl[s].net += n;
-                sportPnl[s].count++;
-                if (n > 0) sportPnl[s].wins++;
-                else if (n < 0) sportPnl[s].losses++;
-            });
-            const sportEntries = Object.entries(sportPnl).sort((a,b) => b[1].net - a[1].net);
-            if (sportEntries.length > 0) {
-                sportBrkPanel.innerHTML = `
-                    <h4 style="color:#ff66aa;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">By Sport (Lifetime)</h4>
-                    <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                        ${sportEntries.map(([sport, d]) => {
-                            const col = d.net >= 0 ? '#00ff88' : '#ff4444';
-                            const icon = _si[sport] || '';
-                            const total = d.wins + d.losses;
-                            const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
-                            return `<div style="background:#0f1419;border-radius:8px;padding:12px 16px;border:1px solid #1e2740;text-align:center;min-width:100px;flex:1;">
-                                <div style="font-size:16px;margin-bottom:2px;">${icon}</div>
-                                <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
-                                <div style="color:${col};font-size:18px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net/100).toFixed(2)}</div>
-                                <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
-                                <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
-                            </div>`;
-                        }).join('')}
-                    </div>`;
-            } else {
-                sportBrkPanel.innerHTML = '';
-            }
-        }
+        renderDogStatsAndDepth(trades, pnl);
+        renderDogSportBreakdown(trades);
 
         // ── Trade log ──
         if (trades.length === 0) {
@@ -13316,13 +13406,11 @@ async function loadDogHistory() {
 
         listEl.innerHTML = `
         <div id="phantom-sport-filter" style="display:flex;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid #1e2740;">
-            <button onclick="filterPhantomLog('all')" data-sport="all" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All (${trades.length})</button>
-            ${sportKeys.map(s => `<button onclick="filterPhantomLog('${s}')" data-sport="${s}" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">${_sportIcon[s]||''}${s} (${sportCounts[s]})</button>`).join('')}
+            <button onclick="selectPhantomSport('all')" data-sport="all" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:rgba(255,102,170,0.12);border:none;color:#ff66aa;font-size:11px;font-weight:700;cursor:pointer;box-shadow:inset 0 -2px 0 #ff66aa;">All (${trades.length})</button>
+            ${sportKeys.map(s => `<button onclick="selectPhantomSport('${s}')" data-sport="${s}" class="phantom-sport-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-left:1px solid #1e2740;color:#5a6484;font-size:11px;font-weight:600;cursor:pointer;">${_sportIcon[s]||''}${s} (${sportCounts[s]})</button>`).join('')}
         </div>
         <div id="phantom-trade-list" style="display:flex;flex-direction:column;gap:10px;"></div>`;
 
-        // Render trades function (called by filter)
-        window._phantomAllTrades = trades;
         window._phantomSportIcon = _sportIcon;
         filterPhantomLog('all');
     } catch (e) {

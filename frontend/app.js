@@ -5902,10 +5902,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         if (_depFloor > 0 && _comb > 0) {
                             if (!_isSellback) {
                                 const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
-                                _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}/${_depFloor}</span>`;
+                                _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
                             } else {
                                 const _overBy = _comb > 100 ? -((_comb - 100)) : _depCap;
-                                _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB ${_overBy}/${_depFloor}</span>`;
+                                _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB ${_overBy}¢</span>`;
                             }
                         }
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
@@ -13324,8 +13324,11 @@ function renderDogStatsAndDepth(trades, pnl) {
                     const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
                     const total = d.wins + d.losses;
                     const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
-                    return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#ff66aa;font-size:14px;font-weight:800;">${d.depth}¢</div>
+                    const isActive = _phantomActiveDepth === d.depth;
+                    const borderCol = isActive ? '#ff66aa' : '#1e2740';
+                    const bgCol = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
+                    return `<div onclick="selectPhantomDepth(${d.depth})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s;">
+                        <div style="color:#ff66aa;font-size:14px;font-weight:800;">⬇${d.depth}¢</div>
                         <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
                         <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
@@ -13579,7 +13582,7 @@ function filterPhantomLog() {
                 ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}
                 ${t.fill_duration_s != null ? `<span style="color:#5a6484;">fill ${t.fill_duration_s}s</span>` : ''}
                 ${t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">Depth:${t.anchor_depth}¢</span>` : ''}
-                ${t.anchor_depth && combined != null ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB' : ''} ${_tw}/${_df}</span>`; })() : ''}
+                ${t.anchor_depth && combined != null ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB ' : ''}${_tw}¢</span>`; })() : ''}
                 <span style="color:${takerCol};font-weight:600;font-size:9px;background:${takerCol}15;padding:1px 5px;border-radius:3px;">${taker}</span>
                 <span style="color:#3a4560;font-size:9px;">${sportName}</span>
             </div>

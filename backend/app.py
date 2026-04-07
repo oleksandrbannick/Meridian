@@ -16622,6 +16622,18 @@ def list_bots():
                         bot['_price_source'] = 'rest'
                         bot['_price_age_s'] = _rp_age
 
+        # Enrich with LocalOrderbook depth signals (OBI, depth info)
+        if bot.get('bot_category') == 'anchor_dog' and bot.get('ticker'):
+            _ob_ticker = bot.get('hedge_ticker', bot['ticker'])
+            _lob = _local_orderbooks.get(_ob_ticker) or _local_orderbooks.get(bot['ticker'])
+            if _lob and _lob.last_update_ts > 0:
+                _dog_side = bot.get('dog_side', 'no')
+                _fav_side = bot.get('fav_side', 'yes')
+                bot['_obi'] = round(_lob.get_weighted_obi(), 2)
+                bot['_dog_depth_top3'] = round(_lob.get_total_depth(_dog_side, 3))
+                bot['_fav_depth_top3'] = round(_lob.get_total_depth(_fav_side, 3))
+                bot['_obi_age_ms'] = round((time.time() - _lob.last_update_ts) * 1000)
+
         # Middle bots — dual tickers (ticker_a / ticker_b)
         if bot.get('type') == 'middle':
             for leg in ('a', 'b'):

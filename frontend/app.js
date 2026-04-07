@@ -6214,6 +6214,24 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
             <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
             ${(() => { const _yb = bot.live_yes_bid || 0, _nb = bot.live_no_bid || 0; const _room = (_yb && _nb) ? 100 - _yb - _nb : -1; return _room >= 0 ? `<span style="color:${_room >= 4 ? '#00ff88' : _room >= 2 ? '#ffaa00' : '#ff4444'};font-weight:${_room <= 1 ? 700 : 400};font-size:9px;">${_room <= 1 ? '⚠ ' : ''}Room:${_room}¢</span>` : ''; })()}
+            ${bot._obi != null ? (() => {
+                const obi = bot._obi;
+                const absObi = Math.abs(obi);
+                const dogSide = bot.dog_side || 'no';
+                const favSide = bot.fav_side || 'yes';
+                // Positive OBI = YES pressure, negative = NO pressure
+                const pressureSide = obi > 0 ? 'yes' : obi < 0 ? 'no' : 'even';
+                const pressureTowardDog = pressureSide === dogSide;
+                const pressureTowardFav = pressureSide === favSide;
+                let label, color;
+                if (absObi < 0.15) { label = 'Balanced'; color = '#555'; }
+                else if (absObi < 0.3) { label = pressureTowardDog ? '→ Dog building' : '→ Fav building'; color = pressureTowardDog ? '#ffaa00' : '#00aaff'; }
+                else if (absObi < 0.6) { label = pressureTowardDog ? '⚡ Dog pressure' : '⚡ Fav pressure'; color = pressureTowardDog ? '#ff8800' : '#00aaff'; }
+                else { label = pressureTowardDog ? '🔥 Dog sweep!' : '🔥 Fav sweep!'; color = pressureTowardDog ? '#ff4444' : '#ff4444'; }
+                const dogD = bot._dog_depth_top3 != null ? bot._dog_depth_top3 : '?';
+                const favD = bot._fav_depth_top3 != null ? bot._fav_depth_top3 : '?';
+                return `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | Dog depth: ${dogD} | Fav depth: ${favD}">OBI: ${label}</span>`;
+            })() : ''}
             <span style="color:#00e5ff;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}

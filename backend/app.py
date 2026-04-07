@@ -2892,7 +2892,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         # Cap at ceiling
         dog_price = bot.get('dog_price') or bot.get('avg_fill_price') or 0
         if dog_price > 0:
-            max_fav = 100 - dog_price
+            max_fav = 103 - dog_price
             drop_target = min(drop_target, max_fav)
 
         if drop_target <= 0 or drop_target >= fav_price:
@@ -3374,8 +3374,8 @@ def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
     """Pre-calculate the hedge price so it's ready to fire instantly on dog fill.
     Returns the ceiling-capped hedge price or 0 if too low.
     This is a FALLBACK when no live bid is available — the WS path uses the actual bid."""
-    # Cap at 100¢ combined (breakeven) — fallback when no live bid
-    max_hedge = 100 - dog_price
+    # Cap at 103¢ combined — fallback when no live bid, still post the hedge
+    max_hedge = 103 - dog_price
     if max_hedge < 1:
         return 0
     return max_hedge
@@ -3422,8 +3422,8 @@ def _execute_phantom_hedge(bot_id):
         qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
-        # Ceiling: only block if combined > 100¢ (past breakeven)
-        max_hedge = 100 - dog_price
+        # Ceiling: only block if combined > 103¢ (hedge can still fill profitably at 100-103)
+        max_hedge = 103 - dog_price
 
         # Post at fav BID — maker order, first in queue with our speed
         # ALWAYS read from ws_manager first (real-time), fall back to bot cache
@@ -3467,9 +3467,9 @@ def _execute_phantom_hedge(bot_id):
         # Ceiling handling: if fav bid is already past breakeven, don't hedge — sell back.
         # Posting at breakeven when bid is above it means zero chance of fill.
         _combined_at_bid = dog_price + fav_bid if fav_bid > 0 else 999
-        if _combined_at_bid > 100:
-            # Fav bid already past breakeven — hedge can't fill profitably, sell back instantly
-            print(f'🚫 PHANTOM HEDGE SKIP+SELLBACK: {bot_id} combined@bid={_combined_at_bid}¢ > 100 (dog={dog_price}¢ fav_bid={fav_bid}¢) — instant sellback')
+        if _combined_at_bid > 103:
+            # Fav bid way past breakeven — hedge can't fill profitably, sell back instantly
+            print(f'🚫 PHANTOM HEDGE SKIP+SELLBACK: {bot_id} combined@bid={_combined_at_bid}¢ > 103 (dog={dog_price}¢ fav_bid={fav_bid}¢) — instant sellback')
             bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
                 'dog_price': dog_price, 'fav_bid': fav_bid,
                 'max_hedge': max_hedge, 'combined_at_bid': _combined_at_bid,
@@ -3766,8 +3766,8 @@ def _execute_phantom_ladder_hedge(bot_id):
 
         # At ceiling — only sell back if truly over ceiling, not at breakeven
         _ladder_combined = (avg_price or bot.get('dog_price', 0)) + hedge_price
-        if _ladder_combined > 100:
-            print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ > 100¢ — deferring to sellback')
+        if _ladder_combined > 103:
+            print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ > 103¢ — deferring to sellback')
             bot_log('PHANTOM_LADDER_HEDGE_AT_CEILING', bot_id, {
                 'avg_price': avg_price, 'hedge_price': hedge_price,
                 'combined': _ladder_combined, 'fav_bid': _fav_bid,
@@ -9360,8 +9360,8 @@ def _handle_phantom(bot_id, bot, actions):
             # Always post at fav bid — same as WS path
             hedge_price = fav_bid
             total_cost = actual_dog_price + hedge_price
-            if total_cost > 100:
-                print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
+            if total_cost > 103:
+                print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 103¢ — selling dog back')
                 bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
                     'dog_price': actual_dog_price, 'hedge_price': hedge_price,
                     'fav_bid': fav_bid, 'total_cost': total_cost,
@@ -9816,8 +9816,8 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         total_cost = dog_price + hedge_price
-        if total_cost > 100:
-            print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
+        if total_cost > 103:
+            print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 103¢ — selling dog back')
             bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
                 'dog_price': dog_price, 'hedge_price': hedge_price,
                 'fav_bid': fav_bid, 'total_cost': total_cost,

@@ -9740,9 +9740,6 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: dog_filled — dog filled but fav post failed, retry ──
     if status == 'dog_filled':
-        # Guard: don't re-enter sellback loop if already exhausted
-        if bot.get('_sellback_exhausted'):
-            return
         bot_log('PHANTOM_DOG_FILLED_POLL', bot_id, {
             'dog_price': bot['dog_price'], 'dog_side': dog_side,
             'fav_side': fav_side, '_hedge_fired': bot.get('_hedge_fired'),
@@ -9801,6 +9798,10 @@ def _handle_phantom(bot_id, bot, actions):
         except Exception as sett_err:
             # Non-fatal — fall through to normal retry
             pass
+
+        # Guard: if sellback already exhausted, don't retry — just wait for settlement
+        if bot.get('_sellback_exhausted'):
+            return
 
         # Retry posting the fav (hedge_ticker for cross-market)
         try:
@@ -13112,36 +13113,85 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
 
         # Max retry limit — don't retry forever, record the loss
         if _attempts >= 5:
-            loss_cents = dog_price * qty
-            buy_fee = _kalshi_side_fee_cents(dog_price, qty)
-            loss_cents += buy_fee
-            print(f'⚠ PHANTOM SELLBACK MAX RETRIES: {bot_id} failed {_attempts} times — recording {loss_cents}¢ loss (holding {qty}× {dog_side} @{dog_price}¢)')
+            # Check settlement first — if market settled, use actual result
+            _settled = False
+            try:
+                api_read_limiter.wait()
+                _mkt = kalshi_client.get_market(ticker)
+                _mkt_data = _mkt.get('market', _mkt) if isinstance(_mkt, dict) else {}
+                _mkt_status = _mkt_data.get('status', '').lower()
+                _mkt_result = _mkt_data.get('result', '').lower()
+                if _mkt_status in ('settled', 'finalized') and _mkt_result in ('yes', 'no'):
+                    _dog_won = (dog_side == _mkt_result)
+                    if _dog_won:
+                        _pnl = (100 - dog_price) * qty
+                        _fee = _kalshi_side_fee_cents(dog_price, qty)
+                        _pnl -= _fee
+                        session_pnl['gross_profit_cents'] += _pnl
+                        session_pnl['completed_bots'] += 1
+                        print(f'🏆 PHANTOM SELLBACK→SETTLED WIN: {bot_id} dog {dog_side}@{dog_price}¢ won — +{_pnl}¢')
+                    else:
+                        _loss = dog_price * qty + _kalshi_side_fee_cents(dog_price, qty)
+                        session_pnl['gross_loss_cents'] += _loss
+                        session_pnl['stopped_bots'] += 1
+                        _pnl = -_loss
+                        print(f'⚠ PHANTOM SELLBACK→SETTLED LOSS: {bot_id} dog {dog_side}@{dog_price}¢ lost — -{_loss}¢')
+                    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _pnl
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': dog_price if dog_side == 'yes' else 0,
+                        'no_price': dog_price if dog_side == 'no' else 0,
+                        'quantity': qty,
+                        'profit_cents': max(0, _pnl), 'loss_cents': max(0, -_pnl),
+                        'fee_cents': _kalshi_side_fee_cents(dog_price, qty),
+                        'result': f'settled_{"win" if _dog_won else "loss"}_{dog_side}',
+                        'exit_via': 'sellback_exhausted_settlement',
+                        'dog_side': dog_side, 'dog_price': dog_price,
+                        'timestamp': now, 'bot_category': 'anchor_dog',
+                        'note': f'sellback failed {_attempts}x, market settled {_mkt_result} — {"dog won" if _dog_won else "dog lost"}',
+                        'cross_market': bot.get('cross_market', False),
+                        'hedge_ticker': bot.get('hedge_ticker', ''),
+                    }, bot)
+                    _settled = True
+            except Exception:
+                pass
+
+            if not _settled:
+                # Market not settled yet — record worst-case loss (dog heading to 0)
+                loss_cents = dog_price * qty
+                buy_fee = _kalshi_side_fee_cents(dog_price, qty)
+                loss_cents += buy_fee
+                print(f'⚠ PHANTOM SELLBACK MAX RETRIES: {bot_id} failed {_attempts} times — recording {loss_cents}¢ loss (holding {qty}× {dog_side} @{dog_price}¢)')
+                session_pnl['gross_loss_cents'] += loss_cents
+                session_pnl['stopped_bots'] += 1
+                bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss_cents
+                _record_trade({
+                    'bot_id': bot_id, 'ticker': ticker,
+                    'yes_price': dog_price if dog_side == 'yes' else 0,
+                    'no_price': dog_price if dog_side == 'no' else 0,
+                    'quantity': qty, 'profit_cents': 0, 'loss_cents': loss_cents,
+                    'fee_cents': buy_fee,
+                    'result': 'sellback_failed', 'exit_via': 'max_retries',
+                    'dog_side': dog_side, 'dog_price': dog_price,
+                    'timestamp': now, 'bot_category': 'anchor_dog',
+                    'note': f'sellback failed {_attempts}x — holding {qty} {dog_side} @{dog_price}¢, market unsettled',
+                    'cross_market': bot.get('cross_market', False),
+                    'hedge_ticker': bot.get('hedge_ticker', ''),
+                }, bot)
+
             bot_log('PHANTOM_SELLBACK_MAX_RETRIES', bot_id, {
                 'dog_price': dog_price, 'qty': qty, 'attempts': _attempts,
-                'loss_cents': loss_cents,
+                'settled': _settled,
             }, level='ERROR')
-            session_pnl['gross_loss_cents'] += loss_cents
-            session_pnl['stopped_bots'] += 1
-            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) - loss_cents
-            _record_trade({
-                'bot_id': bot_id, 'ticker': ticker,
-                'yes_price': dog_price if dog_side == 'yes' else 0,
-                'no_price': dog_price if dog_side == 'no' else 0,
-                'quantity': qty, 'profit_cents': 0, 'loss_cents': loss_cents,
-                'fee_cents': buy_fee,
-                'result': 'sellback_failed', 'exit_via': 'max_retries',
-                'dog_side': dog_side, 'dog_price': dog_price,
-                'timestamp': now, 'bot_category': 'anchor_dog',
-                'note': f'sellback failed {_attempts}x — holding {qty} {dog_side} contracts, will settle',
-                'cross_market': bot.get('cross_market', False),
-                'hedge_ticker': bot.get('hedge_ticker', ''),
-            }, bot)
-            bot['status'] = 'stopped'
+            bot['status'] = 'stopped' if not _settled else 'completed'
             bot['stopped_at'] = now
-            bot['_trade_recorded'] = True  # prevent monitor from re-processing
-            bot['_sellback_exhausted'] = True  # flag to prevent retry loop
+            bot['_trade_recorded'] = True
+            bot['_sellback_exhausted'] = True
+            # Keep in dog_filled so settlement check can run if market settles later
+            if not _settled:
+                bot['status'] = 'dog_filled'
             save_state()
-            actions.append({'bot_id': bot_id, 'action': 'sellback_max_retries', 'loss_cents': loss_cents})
+            actions.append({'bot_id': bot_id, 'action': 'sellback_max_retries'})
             return
 
         # Normal retry — keep alive for next monitor cycle

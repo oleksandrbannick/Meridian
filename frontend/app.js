@@ -13578,7 +13578,8 @@ function filterPhantomLog() {
                 ${rawMs != null ? `<span style="color:${rawCol};font-weight:700;">⚡${rawMs.toFixed(1)}ms</span>` : ''}
                 ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}
                 ${t.fill_duration_s != null ? `<span style="color:#5a6484;">fill ${t.fill_duration_s}s</span>` : ''}
-                ${t.anchor_depth && !isSellback && combined != null ? (() => { const _sc = 100 - combined; const _df = t.anchor_depth; const _cc = _sc >= _df ? '#00ff88' : _sc >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${_cc};font-weight:700;background:${_cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">⬇${_sc}¢/${_df}¢</span>`; })() : t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">⬇${t.anchor_depth}¢</span>` : ''}
+                ${t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">Depth:${t.anchor_depth}¢</span>` : ''}
+                ${t.anchor_depth && combined != null ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB' : ''} ${_tw}/${_df}</span>`; })() : ''}
                 <span style="color:${takerCol};font-weight:600;font-size:9px;background:${takerCol}15;padding:1px 5px;border-radius:3px;">${taker}</span>
                 <span style="color:#3a4560;font-size:9px;">${sportName}</span>
             </div>

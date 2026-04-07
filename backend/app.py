@@ -6571,8 +6571,19 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         try:
             _gc = _get_game_context(ticker)
             if _gc:
-                bot['_cached_game_period'] = _gc.get('period', 0)
-                bot['_cached_game_clock'] = _gc.get('clock', '')
+                _new_period = _gc.get('period', 0)
+                _new_clock = _gc.get('clock', '')
+                _old_period = bot.get('_cached_game_period', 0)
+                # Sanity: don't jump forward >1 period at once (ESPN glitch guard)
+                # Allow same or +1, but if it jumps from 2→4 or 0→4 with 0:00, ignore
+                _new_secs = _parse_clock_seconds(_new_clock)
+                _suspicious = (_new_period > _old_period + 1 and _old_period > 0) or \
+                              (_new_period > _old_period and _new_secs is not None and _new_secs == 0 and _old_period > 0)
+                if _suspicious:
+                    print(f'⚠ APEX ESPN GLITCH GUARD: {bot_id} period jumped {_old_period}→{_new_period} clock={_new_clock} — keeping old cache')
+                else:
+                    bot['_cached_game_period'] = _new_period
+                    bot['_cached_game_clock'] = _new_clock
         except Exception:
             pass
     _period = bot.get('_cached_game_period', 0)

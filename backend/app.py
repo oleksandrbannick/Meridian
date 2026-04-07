@@ -2018,6 +2018,7 @@ def _smart_mode_should_repeat(bot, cycle_pnl):
         bot['_smart_losses'] = bot.get('_smart_losses', 0) + 1
         if losses >= 2:
             bot['_smart_stopped'] = True
+            bot['_smart_stop_reason'] = 'losses'
             return False, f'smart_stop_{losses}L'
         return True, f'smart_loss_{losses}L_continue'
     else:
@@ -9405,6 +9406,7 @@ def _handle_phantom(bot_id, bot, actions):
                             bot['status'] = 'completed'
                             bot['completed_at'] = now
                             bot['repeat_count'] = 0
+                            bot['_stop_reason'] = f'dead market (bid {current_dog_bid}¢)'
                     bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'will_repeat': bot['status'] == 'waiting_repeat', 'awaiting': bot['status'] == 'awaiting_settlement'})
                     _audit('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
                     actions.append({'bot_id': bot_id, 'action': 'anchor_dead_market_cancel'})
@@ -9461,6 +9463,7 @@ def _handle_phantom(bot_id, bot, actions):
                     else:
                         bot['status'] = 'completed'
                         bot['completed_at'] = now
+                        bot['_stop_reason'] = f'coinflip territory (dog bid {current_dog_bid}¢)'
                     actions.append({'bot_id': bot_id, 'action': 'anchor_drift_cancel', 'dog_bid': current_dog_bid})
                     save_state()
                     return

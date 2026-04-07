@@ -2828,28 +2828,44 @@ function formatBotDisplayName(ticker, spreadLine) {
     // Parse teams from gameId: 26MAR02BOSMIL → BOS vs MIL
     const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');  // strip date prefix
     let matchup = '';
-    if (cleaned.length >= 6) {
-        const t1 = cleaned.substring(0, 3);
-        const t2 = cleaned.substring(3, 6);
-        const teamMap = {
-            'ATL': 'ATL', 'BOS': 'BOS', 'BKN': 'BKN', 'CHA': 'CHA',
-            'CHI': 'CHI', 'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN',
-            'DET': 'DET', 'GSW': 'GSW', 'HOU': 'HOU', 'IND': 'IND',
-            'LAC': 'LAC', 'LAL': 'LAL', 'MEM': 'MEM', 'MIA': 'MIA',
-            'MIL': 'MIL', 'MIN': 'MIN', 'NOP': 'NOP', 'NYK': 'NYK',
-            'OKC': 'OKC', 'ORL': 'ORL', 'PHI': 'PHI', 'PHX': 'PHX',
-            'POR': 'POR', 'SAC': 'SAC', 'SAS': 'SAS', 'TOR': 'TOR',
-            'UTA': 'UTA', 'WAS': 'WAS',
-            'CAR': 'CAR', 'SEA': 'SEA', 'COL': 'COL', 'VGK': 'VGK',
-            'WPG': 'WPG', 'WSH': 'WSH', 'VAN': 'VAN', 'FLA': 'FLA',
-            'NYR': 'NYR', 'NYI': 'NYI', 'TBL': 'TBL', 'NJD': 'NJD',
-            'PIT': 'PIT', 'CBJ': 'CBJ', 'NSH': 'NSH', 'STL': 'STL',
-            'EDM': 'EDM', 'CGY': 'CGY', 'OTT': 'OTT', 'MTL': 'MTL',
-            'BUF': 'BUF', 'ARI': 'ARI', 'ANA': 'ANA', 'SJS': 'SJS',
-        };
-        const n1 = teamMap[t1] || t1;
-        const n2 = teamMap[t2] || t2;
-        matchup = `${n1} vs ${n2}`;
+    const _teamMap = {
+        'ATL': 'ATL', 'BOS': 'BOS', 'BKN': 'BKN', 'CHA': 'CHA',
+        'CHI': 'CHI', 'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN',
+        'DET': 'DET', 'GSW': 'GSW', 'HOU': 'HOU', 'IND': 'IND',
+        'LAC': 'LAC', 'LAL': 'LAL', 'MEM': 'MEM', 'MIA': 'MIA',
+        'MIL': 'MIL', 'MIN': 'MIN', 'NOP': 'NOP', 'NYK': 'NYK',
+        'OKC': 'OKC', 'ORL': 'ORL', 'PHI': 'PHI', 'PHX': 'PHX',
+        'POR': 'POR', 'SAC': 'SAC', 'SAS': 'SAS', 'TOR': 'TOR',
+        'UTA': 'UTA', 'WAS': 'WAS',
+        'CAR': 'CAR', 'SEA': 'SEA', 'COL': 'COL', 'VGK': 'VGK',
+        'WPG': 'WPG', 'WSH': 'WSH', 'VAN': 'VAN', 'FLA': 'FLA',
+        'NYR': 'NYR', 'NYI': 'NYI', 'TBL': 'TBL', 'NJD': 'NJD',
+        'PIT': 'PIT', 'CBJ': 'CBJ', 'NSH': 'NSH', 'STL': 'STL',
+        'EDM': 'EDM', 'CGY': 'CGY', 'OTT': 'OTT', 'MTL': 'MTL',
+        'BUF': 'BUF', 'ARI': 'ARI', 'ANA': 'ANA', 'SJS': 'SJS',
+        // 2-letter MLB/other codes
+        'KC': 'KC', 'SD': 'SD', 'SF': 'SF', 'TB': 'TB', 'LA': 'LA', 'NY': 'NY',
+        'CIN': 'CIN', 'TEX': 'TEX', 'BAL': 'BAL', 'CWS': 'CWS',
+    };
+    if (cleaned.length >= 4) {
+        // Try 3+3 first, then 2+3, then 3+2, then 2+2
+        let t1 = '', t2 = '';
+        if (cleaned.length >= 6 && _teamMap[cleaned.substring(0,3)] && _teamMap[cleaned.substring(3,6)]) {
+            t1 = cleaned.substring(0,3); t2 = cleaned.substring(3,6);
+        } else if (cleaned.length >= 5 && _teamMap[cleaned.substring(0,2)] && _teamMap[cleaned.substring(2,5)]) {
+            t1 = cleaned.substring(0,2); t2 = cleaned.substring(2,5);
+        } else if (cleaned.length >= 5 && _teamMap[cleaned.substring(0,3)] && _teamMap[cleaned.substring(3,5)]) {
+            t1 = cleaned.substring(0,3); t2 = cleaned.substring(3,5);
+        } else if (cleaned.length >= 4 && _teamMap[cleaned.substring(0,2)] && _teamMap[cleaned.substring(2,4)]) {
+            t1 = cleaned.substring(0,2); t2 = cleaned.substring(2,4);
+        } else if (cleaned.length >= 6) {
+            t1 = cleaned.substring(0,3); t2 = cleaned.substring(3,6);
+        } else if (cleaned.length >= 5) {
+            t1 = cleaned.substring(0,2); t2 = cleaned.substring(2,5);
+        }
+        if (t1 && t2) {
+            matchup = `${_teamMap[t1]||t1} vs ${_teamMap[t2]||t2}`;
+        }
     }
 
     // Side label from suffix (team or spread/total detail)
@@ -5726,6 +5742,15 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         const _isSettled = _isSmart && bot._smart_stop_reason === 'final';
         const _col = _isAwaiting ? '#818cf8' : _isSettled ? '#ffaa00' : _isSmart ? '#00e5ff' : '#00ff88';
         const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSettled ? '🏁 MARKET SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
+        // Completion reason
+        let _stopReason = '';
+        if (bot._stop_reason) _stopReason = bot._stop_reason;
+        else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
+        else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
+        else if (bot._smart_stop_reason === 'manual') _stopReason = 'manually stopped';
+        else if (bot._smart_stop_reason === 'coinflip') _stopReason = 'coinflip territory';
+        else if (bot._smart_stop_reason === 'bottom') _stopReason = 'hit bottom';
+        else if (status === 'stopped') _stopReason = 'stopped';
         const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
         const dogSide = bot.dog_side || 'no';
         const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
@@ -5746,6 +5771,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;">PHANTOM</span>
                     <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                     <span style="background:${_col}22;color:${_col};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${_label}</span>
+                    ${_stopReason ? `<span style="color:#8892a6;font-size:9px;font-style:italic;">${_stopReason}</span>` : ''}
                     ${liveScoreHtml}
                     ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">CROSS</span>' : ''}
                     ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs</span>` : _runs > 1 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_runs} runs</span>` : ''}

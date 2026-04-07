@@ -3252,33 +3252,39 @@ function displayOrderbookLadder(orderbook) {
     // Hedge room display (informational only — not used in score)
     const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
 
-    // ── CATCH SCORE (0-100) — IF you fill, will the hedge catch? ──
-    // Fav contracts/level (50pts) — THE key factor, determines if hedge fills
+    // ── CATCH SCORE (0-100) — calibrated from 992 phantom trades ──
+    // Data: Tennis 59% WR +5.4c, NBA 52% -5.1c, MLB 51% -14.3c, NHL 56% +36.6c
     const _favPL = favAnalysis.perLevel;
-    const favPLpts = _favPL >= 50 ? 50 : _favPL >= 30 ? 42 : _favPL >= 20 ? 34 : _favPL >= 10 ? 22 : _favPL >= 5 ? 10 : 0;
-    // Fav top-3 liquidity (20pts) — enough contracts at top bids to absorb your hedge
-    const favTop3Pts = favAnalysis.top3Qty >= 500 ? 20 : favAnalysis.top3Qty >= 100 ? 15 : favAnalysis.top3Qty >= 30 ? 8 : 0;
-    // Fav dominance (15pts) — fav dwarfs dog = hedge stays stable even during sweeps
-    const favDomPts = favDepth > dogDepth * 5 ? 15 : favDepth > dogDepth * 3 ? 12 : favDepth > dogDepth * 2 ? 8 : favDepth > dogDepth ? 4 : 0;
-    // Fav no-gaps bonus (15pts) — clean book = reliable catch
-    const favNoGapPts = favAnalysis.gaps === 0 ? 15 : favAnalysis.gaps === 1 ? 8 : 0;
-    // Dog gaps penalty — gaps mean sweeps skip levels, toxic fill risk
-    const dogGapPenalty = dogAnalysis.gaps >= 3 ? -10 : dogAnalysis.gaps >= 2 ? -5 : 0;
-    // Fav gaps penalty — hedge may miss levels
-    const gapPenalty = favAnalysis.gaps >= 3 ? -15 : favAnalysis.gaps >= 2 ? -10 : favAnalysis.gaps >= 1 ? -5 : 0;
-    // Fav concentration penalty — if 70%+ of depth is one wall, it's fragile
-    // One cancel/sweep of that level collapses the entire fav side
-    const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
-    const concPenalty = _favConc > 0.8 ? -12 : _favConc > 0.6 ? -6 : 0;
-    // Room penalty — maker so no fee on fills, but room = profit margin per contract
-    // Room + depth = actual profit. Room <= 1 means fav bid drop of 1¢ kills the trade
-    const roomPenalty = hedgeRoom <= 0 ? -20 : hedgeRoom === 1 ? -10 : hedgeRoom === 2 ? -4 : 0;
-    // Max safe qty: fav top-3 bids can absorb your hedge (conservative: /3 not /2)
-    const maxSafeQty = Math.max(1, Math.floor(favAnalysis.top3Qty / 3));
+    const _obTk = ob._ticker || orderbook?.ticker || '';
+    const _scoreSport = detectSport(_obTk);
 
-    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + favTop3Pts + favDomPts + favNoGapPts + dogGapPenalty + gapPenalty + concPenalty + roomPenalty)));
-    const catchLabel = catchScore >= 70 ? 'HIGH CATCH' : catchScore >= 40 ? 'OK CATCH' : 'LOW CATCH';
-    const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
+    // 1. Fav contracts/level (35pts) — can the hedge fill?
+    const favPLpts = _favPL >= 50 ? 35 : _favPL >= 30 ? 28 : _favPL >= 20 ? 22 : _favPL >= 10 ? 14 : _favPL >= 5 ? 6 : 0;
+    // 2. Fav top-3 liquidity (15pts) — absorb your hedge qty
+    const favTop3Pts = favAnalysis.top3Qty >= 500 ? 15 : favAnalysis.top3Qty >= 100 ? 12 : favAnalysis.top3Qty >= 30 ? 6 : 0;
+    // 3. Fav dominance (10pts) — fav dwarfs dog = stable hedge
+    const favDomPts = favDepth > dogDepth * 5 ? 10 : favDepth > dogDepth * 3 ? 7 : favDepth > dogDepth * 2 ? 4 : favDepth > dogDepth ? 2 : 0;
+    // 4. Clean book bonus (10pts) — no fav gaps = reliable catch
+    const favNoGapPts = favAnalysis.gaps === 0 ? 10 : favAnalysis.gaps === 1 ? 5 : 0;
+    // 5. Sport factor (±15pts) — from 992 trades: Tennis prints, MLB bleeds
+    const _sportPts = { 'Tennis': 15, 'MLS': 12, 'EPL': 10, 'UCL': 10, 'NHL': 5, 'NCAAB': 0, 'NBA': -8, 'MLB': -15 }[_scoreSport] || 0;
+    // 6. Dog gaps penalty (-8pts) — sweeps skip levels
+    const dogGapPenalty = dogAnalysis.gaps >= 3 ? -8 : dogAnalysis.gaps >= 2 ? -4 : 0;
+    // 7. Fav gaps penalty (-12pts) — hedge may miss levels
+    const gapPenalty = favAnalysis.gaps >= 3 ? -12 : favAnalysis.gaps >= 2 ? -8 : favAnalysis.gaps >= 1 ? -4 : 0;
+    // 8. Fav concentration penalty (-10pts) — fragile if 80%+ is one wall
+    const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
+    const concPenalty = _favConc > 0.8 ? -10 : _favConc > 0.6 ? -5 : 0;
+    // 9. Room penalty (-15pts) — combined at bid too tight
+    const roomPenalty = hedgeRoom <= 0 ? -15 : hedgeRoom === 1 ? -8 : hedgeRoom === 2 ? -3 : 0;
+    // 10. Dog thinness bonus (10pts) — thin dog = more fills, faster
+    const dogThinPts = dogDepth < 100 ? 10 : dogDepth < 300 ? 7 : dogDepth < 1000 ? 3 : 0;
+    // Max safe qty: conservative — don't be a whale, cap at 50
+    const maxSafeQty = Math.min(50, Math.max(1, Math.floor(favAnalysis.top3Qty / 3)));
+
+    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + favTop3Pts + favDomPts + favNoGapPts + _sportPts + dogGapPenalty + gapPenalty + concPenalty + roomPenalty + dogThinPts)));
+    const catchLabel = catchScore >= 70 ? 'PRIME' : catchScore >= 50 ? 'GOOD' : catchScore >= 35 ? 'OK' : 'WEAK';
+    const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 50 ? '#00ccff' : catchScore >= 35 ? '#ffaa00' : '#ff4444';
 
     // Fill difficulty — how likely your anchor actually fills (separate from catch quality)
     const fillDiff = dogDepth < 100 ? 'easy fill' : dogDepth < 500 ? 'moderate' : dogDepth < 2000 ? 'busy' : dogDepth < 10000 ? 'crowded' : 'packed';
@@ -3310,32 +3316,37 @@ function displayOrderbookLadder(orderbook) {
     }
 
     // Score breakdown tooltip
-    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · NoGap: ${favNoGapPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts · Conc: ${concPenalty}pts · Room: ${roomPenalty}pts`;
+    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · Clean: ${favNoGapPts}pts · ${_scoreSport}: ${_sportPts}pts · DogThin: ${dogThinPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts · Conc: ${concPenalty}pts · Room: ${roomPenalty}pts`;
 
     // ── Verdict: plain-language summary of whether this market is good for phantom ──
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
+    const _isBadSport = ['MLB'].includes(_scoreSport);
+    const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
     if (catchScore >= 70 && dogDepth < 2000) {
-        verdict = 'Prime phantom market — thick fav, thin dog, hedge will catch fast';
+        verdict = `Prime phantom market${_isGreatSport ? ' — ' + _scoreSport + ' prints' : ''}`;
         verdictCol = '#00ff88';
     } else if (catchScore >= 70) {
-        verdict = 'Strong catch but dog is crowded — fills will be rare';
+        verdict = 'Strong catch but dog is crowded — fills will be slow';
         verdictCol = '#00cc66';
-    } else if (catchScore >= 40 && hedgeRoom >= 3 && dogDepth < 5000) {
-        verdict = 'Decent setup — hedge should catch, reasonable fill probability';
-        verdictCol = '#ffaa00';
-    } else if (catchScore >= 40 && hedgeRoom <= 1) {
-        verdict = 'Tight market — fav mirrors dog moves, profit margin thin';
+    } else if (catchScore >= 50 && hedgeRoom >= 3) {
+        verdict = 'Good setup — hedge should catch';
+        verdictCol = '#00ccff';
+    } else if (catchScore >= 50 && hedgeRoom <= 1) {
+        verdict = 'Decent book but tight spread — thin margin';
         verdictCol = '#ff8800';
-    } else if (catchScore >= 40) {
-        verdict = 'OK catch but watch depth — sweep may strand the hedge';
+    } else if (catchScore >= 35 && !_isBadSport) {
+        verdict = 'OK — watch the depth, use wider floor';
         verdictCol = '#ffaa00';
+    } else if (_isBadSport) {
+        verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
+        verdictCol = '#ff4444';
     } else if (hedgeRoom <= 1) {
-        verdict = 'Avoid — spread too tight, hedge will fill at breakeven';
+        verdict = 'Avoid — spread too tight, no profit margin';
         verdictCol = '#ff4444';
     } else {
-        verdict = 'Weak — fav side too thin or gappy, hedge may miss';
+        verdict = 'Weak — fav too thin or gappy';
         verdictCol = '#ff4444';
     }
 
@@ -4069,12 +4080,11 @@ function updateAnchorPreview() {
             const fGaps = _obCache.favGaps || 0;
             const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
-            // Sport-specific minimums — calibrated from 972 phantom trades:
-            // NBA@5c: 52% WR, -7c/trade (losing). NBA@6c: 80% WR, +59c/trade.
-            // MLB@5c: 52% WR, -10c/trade (losing). Tennis@5c: 60% WR, +6.5c/trade (fine).
-            // NHL@5c: 33% WR (losing). NHL@8c: 86% WR, +80c/trade.
+            // Sport-specific minimums — calibrated from 992 phantom trades:
+            // Tennis@5c: 60% WR +6.1c. NBA@5c: 52% -7c, @6c: 60% +6.6c.
+            // MLB@5c: 51% -11.8c (loses at EVERY depth). NHL@5c: 25%, @8c: 86% +80c.
             const _recSport = detectSport(_obTicker);
-            const _sportMinDepth = { 'Tennis': 5, 'Baseball': 6, 'Basketball': 6, 'Hockey': 7, 'Soccer': 5 }[_recSport] || 5;
+            const _sportMinDepth = { 'Tennis': 5, 'NBA': 6, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_recSport] || 5;
             // Liquidity-based depth: fav contracts/level determines how fast hedge fills.
             // Thin book = wider depth needed (slow fill, price can move against you).
             let recDepth = _sportMinDepth;

@@ -494,3 +494,298 @@ In `_handle_late_anchor_fill` (~line 5636):
 - `/root/meridian/backend/app.py` — `_handle_late_anchor_fill()`, `_execute_ladder_arb_sweep_and_hedge()`
 
 ---
+
+## [BUG] Apex Deploy button unresponsive after first deployment
+**2026-03-21 06:27** | apex
+
+User reports: After successfully deploying one Apex bot, the Deploy button becomes completely unresponsive — clicking it does nothing. No error message, no loading state, no feedback. Button appears clickable but doesn't fire. 
+
+Steps to reproduce:
+1. Open Apex bot panel on a market
+2. Configure and click Deploy — first bot deploys successfully
+3. Navigate to a second market, configure Apex bot
+4. Click Deploy — nothing happens, button is dead
+
+Expected: Each market should allow independent Apex deployment
+Actual: Deploy button silently fails after first use
+
+Suspected cause: Some shared state or flag gets set after first deploy and isn't reset — possibly a loading/pending boolean that never clears, or an event listener that gets removed after first click.
+
+Screenshot context: Markets screen also showing "Network error loading markets. Check console." — these may be related (UI state corruption after first deploy).
+
+Fix needed: 
+- Reset deploy button state after each successful deployment
+- Add visual feedback if deploy fails (error toast/message)
+- Check if a global isPending/isDeploying flag is not being reset
+- Also investigate if network error and button lockout share a root cause
+
+---
+
+## [BUG] Remove ALL "ladder_arb" language from UI — user explicitly banned this term
+**2026-03-21 07:05** | apex
+
+Screenshot confirmed: the expanded bot card for an Apex bot (THU vs EGI · Moneyline · Thu Win) shows:
+- Subtitle reads: "APEX · LADDER_ARB_POSTED"
+- STATUS field shows: "ladder_arb_posted" (in blue pill)
+
+The user has explicitly said to NEVER use the word "ladder_arb" anywhere in the UI. This is an Apex bot and should only ever say "APEX" branding.
+
+FIXES NEEDED:
+1. Status label "ladder_arb_posted" → rename to something like "POSTED" or "LIVE" or "WATCHING"
+2. Subtitle "APEX · LADDER_ARB_POSTED" → should be "APEX · POSTED" or "APEX · ACTIVE"
+3. Search entire codebase for "ladder_arb" and replace ALL user-facing instances with Apex-branded equivalents
+4. Internal code can keep the variable names but NOTHING with "ladder_arb" should ever appear in the UI
+
+This is a branding/UX requirement the user has stated multiple times. Must be fixed.
+
+---
+
+## [BUG] Orphaned position showing incorrect P&L and misleading data in My Positions tab
+**2026-03-21 07:26** | system
+
+Screenshot captured. User has an orphaned position on KXKBLGAME-26MAR210100PHOGOY-PHO (Mobis Phoebus vs Goyang Skygunners — YES).
+
+WHAT THE SCREEN SHOWS:
+- Qty: 3 contracts
+- Entry: 35¢
+- Bid: 0¢ (market is likely settled/over)
+- P&L: -35¢/ea
+- Total: -105¢
+- Realized: $2.51
+- Badge: "3 orphaned — no bot managing"
+- "Sell Orphan" button visible
+
+WHAT THE API RETURNS:
+- avg_price: 35¢
+- yes_bid: 0¢, yes_ask: 1¢
+- no_bid: 99¢, no_ask: 100¢
+- market_exposure: 105¢ (showing as loss)
+- realized_pnl: 251 (which is $2.51 — this is the ACTUAL profit, game already resolved YES)
+- orphaned_qty: 3
+- managing_bots: [] (empty — no bot)
+- watched_by: null
+
+THE PROBLEM:
+1. The card shows P&L: -35¢/ea and Total: -105¢ which looks like a LOSS — but realized_pnl is $2.51 meaning this position ALREADY RESOLVED and WON. The display is completely misleading.
+2. yes_bid is 0¢ — market is settled. The "Sell Orphan" button should NOT be showing if the market is already resolved — there's nothing to sell at 0¢.
+3. The card should detect when yes_bid=0 and no_bid=99+ that the market has resolved YES, and show "RESOLVED ✅ +$2.51" instead of showing a scary red loss.
+4. Orphaned position has no bot managing it — this likely happened because the Apex/ladder bot completed but didn't clean up the position record.
+5. The realized_pnl field shows 251 (cents? dollars?) — needs consistent units. The UI shows $2.51 which seems right for 3 contracts resolving YES at 35¢ entry (profit = 65¢ x 3 = $1.95 after fees roughly), but the raw value 251 is ambiguous.
+
+REQUESTED FIXES:
+- Detect settled markets (yes_bid=0, no_bid=99-100) and show RESOLVED state instead of active P&L
+- Hide or disable "Sell Orphan" button on resolved markets
+- Show realized_pnl prominently as the actual outcome
+- Stop showing market_exposure as a loss when the game already ended
+- Clean up orphaned position records after resolution
+
+---
+
+## [CRITICAL] Anchor Ladder: Orphaned contracts from race condition during hedge cancellation
+**2026-03-21 16:33** | phantom
+
+TICKER: KXNCAAMBSPREAD-26MAR21SLUMICH-MICH12
+
+ORPHAN ISSUE:
+- Kalshi shows 20 YES contracts held
+- Meridian bot only tracks 13
+- 7 contracts are orphaned — Meridian lost track of them
+
+ROOT CAUSE (user's explanation of race condition):
+When a hedge fires and starts canceling the anchor limit orders, there is a tiny window where an anchor can fill DURING that cancellation. When this happens, the system incorrectly spawns a NEW generation of a hedge, treating it as a new cycle. But the original hedge was never completed — so those contracts from the split-millisecond fill get orphaned because they don't belong to the new hedge generation and the old one is already being torn down.
+
+CORRECT BEHAVIOR:
+- If an anchor fills DURING hedge cancellation, it should NOT spawn a new hedge generation
+- It should either: (a) absorb that fill into the existing hedge, or (b) hold it and reconcile before creating a new cycle
+- The system needs to handle this timing collision explicitly as a race condition
+
+RUNG DISPLAY BUGS (separate but related):
+1. All FILLED anchors should be LIT UP — not just the most recent one
+2. Anchors should be shown CONSOLIDATED (not split across rungs individually)
+3. Only ONE hedge order exists at a time covering all filled anchors
+4. Lower rungs are showing as filled but upper ones aren't lighting up — shading logic is inverted or wrong
+5. A completed rung pair (anchor + hedge both filled) should shade out TOGETHER
+6. An anchor that filled but whose hedge has NOT yet completed should remain LIT
+
+THE EDGE CASE FLOW:
+1. Anchor fills → hedge placed
+2. New anchor fills → hedge cancels and replaces with larger hedge
+3. During that cancellation window, ANOTHER anchor fills
+4. System spawns new hedge generation incorrectly
+5. Contracts from step 3 become orphaned
+
+This is causing real financial impact — 7 contracts untracked on MICH -12.5 spread.
+
+---
+
+## [CRITICAL] Apex bot full state dump — MICH12 ladder_arb with multiple critical bugs
+**2026-03-21 16:36** | apex
+
+
+BOT ID: larb_KXNCAAMBSPREAD-26MAR21SLUMICH-MICH12_1774110466833
+TICKER: KXNCAAMBSPREAD-26MAR21SLUMICH-MICH12
+MARKET: Michigan wins by over 12.5 Points — MICH -12.5 spread
+TYPE: ladder_arb (THIS IS AN APEX BOT — user has explicitly said never show "ladder_arb" in the UI)
+STATUS: ladder_arb_yes_filled (ALSO MUST NEVER SHOW — use "APEX" branding only)
+
+=== RUNG SUMMARY (12 total rungs) ===
+Rung 1:  width=6,  YES=44¢, NO=50¢, qty=1 — NO filled, YES NOT filled
+Rung 2:  width=7,  YES=44¢, NO=49¢, qty=1 — NO filled, YES NOT filled (no_fill_qty=0 but no_filled_at populated — DATA INCONSISTENCY)
+Rung 3:  width=7,  YES=44¢, NO=49¢, qty=1 — duplicate of rung 2, nothing filled
+Rung 4:  width=8,  YES=44¢, NO=48¢, qty=1 — nothing filled
+Rung 5:  width=9,  YES=43¢, NO=48¢, qty=1 — nothing filled
+Rung 6:  width=10, YES=43¢, NO=47¢, qty=1 — nothing filled
+Rung 7:  width=11, YES=43¢, NO=46¢, qty=1 — nothing filled
+Rung 8:  width=12, YES=42¢, NO=46¢, qty=1 — BOTH filled, completed=true, _profit_recorded=true
+Rung 9:  width=13, YES=42¢, NO=45¢, qty=3 — BOTH filled, completed=true, _profit_recorded=true
+Rung 10: width=14, YES=41¢, NO=45¢, qty=3 — BOTH filled, completed=true, _profit_recorded=true
+Rung 11: width=15, YES=41¢, NO=44¢, qty=3 — BOTH filled, completed=true, _profit_recorded=true
+Rung 12: width=16, YES=41¢, NO=43¢, qty=3 — BOTH filled, completed=true, _profit_recorded=true
+
+=== CRITICAL BUGS OBSERVED ===
+
+BUG 1 — CONTRACT SCALING BROKEN ON LOWER RUNGS:
+Rungs 1-7 all show qty=1. Per the Apex strategy, wider rungs should scale UP in contract count (more contracts as spread widens = more profit). Rungs 8-12 correctly scale to 3 contracts. But rungs 1-7 are stuck at 1. The scaling logic is only applying to some rungs, not all. This means the narrower rungs are underfilled.
+
+BUG 2 — NO FILLS ON RUNGS 1-7 WITH YES UNFILLED:
+Rungs 1-7 show no_filled_at timestamps on rungs 1-2 but fill_qty=0. This is a data inconsistency — either the timestamp is wrong or the qty tracking is wrong.
+
+BUG 3 — BOT STATUS STUCK IN ladder_arb_yes_filled:
+Status shows "ladder_arb_yes_filled" even though 5 rungs (8-12) are fully completed. The bot should either show COMPLETED or be cycling to the next repeat. Instead it's frozen. _hedge_fill_count=0 despite hedge order IDs existing (15 hedge order IDs in _all_hedge_order_ids).
+
+BUG 4 — cumulative_pnl=-147 CONTRADICTS pnl_cents=195:
+Bot-level shows pnl_cents=195 (positive). Bot detail shows cumulative_pnl=-147 (negative). These are contradictory. One of them is wrong. The orphaned position in the positions panel shows realized_pnl=-110 with avg_price=42, yes_bid=37 — this is the YES position from filled rungs that has NOT been hedged yet (or hedge failed).
+
+BUG 5 — ORPHANED YES POSITION:
+The positions panel shows 7 YES contracts @ avg 42¢, currently bid 37¢, realized_pnl=-110. This position has no managing bot (is_orphaned=true, managing_bots=[]). These are the unhedged YES fills from this bot. The hedge orders apparently did not fill. This is the same hedge-stuck bug from before (Apex hedge stuck in WAITING). The bot placed hedge orders but they never executed, leaving naked YES contracts.
+
+BUG 6 — UI SHOWS "LADDER_ARB" BRANDING:
+Bot subtitle shows "APEX · LADDER_ARB_POSTED" and status pill shows "ladder_arb_yes_filled". User has explicitly requested these strings NEVER appear in the UI. All user-facing text must say APEX only. Internal variable names can stay but grep all template/render code for ladder_arb and replace with APEX.
+
+=== HEDGE ORDER IDs (15 total, none confirmed filled) ===
+43682aef-a059-4f00-a885-20c2c29df42c
+14e38b34-c762-4fbd-86e8-2054b019d798
+ad5a9420-5e69-42bc-b0a7-ea3ce2979fa2
+356ed5c1-331e-47a8-8364-6a04f613f0e9
+a22e87c3-40cb-4fef-aa28-2c9ed1d6a1b3
+0292f064-485b-4542-ae83-03a745d1d668
+f3d06de9-1bc5-4ac4-b58a-d5b39cf810a7
+44e22b96-8f2c-4228-81db-905656035be8
+adaf6232-0038-4320-8e30-f6d39b4081a8
+4f8223db-f4ee-4ed4-986c-77b712e1162b
+e291139c-3ef2-472f-ace2-1e1333dce680
+1385a0c1-0c29-4d29-8340-d38e55b645f7
+2b1b4375-9442-4970-a9e2-2f29ef1b793c
+d2bd82c6-30db-420e-8411-05cac5f3b040
+fe3dede1-00e6-407c-94f4-bd928167ff4f
+
+=== POSITION DATA FROM POSITIONS PANEL ===
+ticker: KXNCAAMBSPREAD-26MAR21SLUMICH-MICH12
+side: YES
+quantity: 7 contracts
+avg_price: 42¢
+yes_bid: 37¢ / yes_ask: 40¢
+no_bid: 60¢ / no_ask: 63¢
+realized_pnl: -110¢
+market_exposure: 295¢
+is_orphaned: true
+managing_bots: []
+resting_orders: 0
+
+=== SUMMARY FOR CLAUDE CODE ===
+This bot ran an Apex ladder on MICH -12.5. The YES anchor side filled on 5 rungs (13 contracts total across rungs 8-12). Hedge orders were placed (15 order IDs) but _hedge_fill_count=0 — hedges never confirmed filled. Result: 7 YES contracts left orphaned at a loss. The bot is frozen in ladder_arb_yes_filled state. The UI shows wrong P&L (+195 bot level vs -147 detail level vs -110 realized in positions). Fix priority: (1) hedge fill tracking broken, (2) orphaned position detection should auto-attach a watch bot, (3) UI branding, (4) rung scaling.
+
+
+---
+
+## [BUG] Latency panel stats overflowing their boxes in the UI
+**2026-03-21 17:44** | system
+
+User reported that the latency panel stats are not fitting inside their display boxes — text/numbers are overflowing or getting clipped. Seen on the Monitoring tab. 
+
+The latency data has several stat blocks with multiple fields each (avg, min, max, p95, count, recent). The issue is likely that the stat values are too wide for their containers — for example:
+- api_ping: avg=41.9ms, max=125.6ms, p95=62.5ms
+- order_place: avg=26.2ms, max=43.7ms, p95=37.9ms
+- fill_to_hedge_apex: avg=32.0ms, max=36.3ms
+- orderbook: avg=23.5ms, max=69.6ms
+
+The boxes likely need wider min-width, smaller font, or text truncation/wrapping. The user saw this on their screen and the screenshot shows the Bots & Automation > Monitoring view. The latency section was not visible in the screenshot (likely requires scrolling), but the user confirmed the overflow visually.
+
+Suggest: check the CSS for the latency stat cards — add overflow handling, reduce font size, or expand card width. Also consider abbreviating labels (e.g. "Fill→Hedge (Apex)" instead of full names).
+
+---
+
+## [BUG] Trade log calendar shows "Lost" (3W/5L) but positive P&L +$0.07
+**2026-03-21 18:29** | system
+
+On the History tab, the P&L calendar for March 20 shows +$0.07 profit but the win/loss record reads 3W/5L — meaning more losses than wins, yet the day is green/profitable. This is confusing because the label implies the day was a net loss but the dollar figure says profit. 
+
+Two possible issues:
+1. The W/L label may be counting individual legs or bot cycles rather than net profitable trades — so a single arb bot that filled both sides counts as "2 losses" even if it made money overall.
+2. Or the +$0.07 is miscalculated and the day was actually a net loss (the -$0.23 on March 19 and -$9.00 on March 15 suggest a pattern of losses).
+
+User noticed and flagged this as confusing/wrong. The calendar cell should either: (a) correctly count W/L as net profitable days, not individual legs, or (b) clarify what W/L means in this context. Screenshot was taken — the March 20 cell clearly shows "+$0.07" in green with "3W/5L" below it.
+
+---
+
+## [BUG] Orphaned positions - user reporting orphans appearing but system shows 0
+**2026-03-22 03:32** | system
+
+User is experiencing orphaned positions appearing in the UI, but get_orphaned_positions returns count=0. User doesn't know how it's happening. Need to investigate: (1) Whether orphans are being detected on startup but cleared before the API is queried, (2) Whether the orphan detection logic misses certain bot types, (3) Whether bots that stop/fail are leaving contracts behind without being flagged. User says it keeps happening repeatedly. Check the orphan detection pipeline and whether stopped bots (status=stopped in active bots list) are properly reconciling their positions.
+
+---
+
+## [BUG] Bot count vs contract count mismatch - "18 bots watching 16 contracts" display
+**2026-03-22 03:32** | system
+
+User sees "18 bots watching 16 contracts" in the UI. This is confusing because you'd expect bots >= contracts (each bot watches at least 1 contract). Likely a display/aggregation bug where the contract counter is undercounting — possibly not summing all legs, or anchor ladder bots with pending/None prices aren't being counted. Screenshot shows Active Trading Bots panel. The numbers shown in the bot summary cards at the top (APEX, PHANTOM, ANCHOR DOG, SCOUT) should sum correctly to total bots and contracts. Investigate how contract count is calculated vs bot count.
+
+---
+
+## [BUG] P&L shows $0.00 at top of bot cards but individual cards show correct profit
+**2026-03-22 03:32** | system
+
+User reports that the aggregate P&L displayed at the TOP of the bot card section shows $0.00 (or $0 profit), but when you look at individual bot cards they each show their correct profit/loss values. The screenshot shows "APEX TODAY ??????? -$8.37" at the top level but individual cards may differ. The summary/rollup P&L is not correctly summing the individual card values. This could be a timing issue (cards load async and the total renders before values arrive), or the aggregation is reading from a different data source than the individual cards. The top-level number should be the sum of all individual card P&Ls.
+
+---
+
+## [BUG] Bot card header shows $0.00 profit but individual cards show correct P&L
+**2026-03-22 03:33** | system
+
+User showed a screenshot of the bot panel. The aggregate/header P&L at the top of the bot cards shows $0.00, but the individual bot cards below show the correct profit values. The rollup number is wrong — it's not summing the card values correctly, or it's reading from a stale source. All positions are being tracked fine, this is purely a display bug on the summary line.
+
+---
+
+## [BUG] Screenshot tool ignores scroll position — always captures top of page
+**2026-03-24 00:06** | system
+
+User scrolled to the bottom of the Active Bots page to show the latency footer bar (which appears at the bottom of every tab). The screenshot tool captured the top of the page instead of the current scroll position. This makes it impossible to inspect anything below the fold. The screenshot should capture what the user actually sees at their current scroll position, not document top. This is also why previous screenshots showed the wrong page — the tool seems to capture a static/initial render rather than live viewport state. Fix: screenshot should reflect actual viewport scroll position.
+
+---
+
+## [BUG] Phantom hedge latency: 260ms raw, 200ms round trip — extra 200ms overhead
+**2026-03-24 00:07** | phantom
+
+User reports from the latency footer at the bottom of the Active Bots page:
+- Phantom RAW hedge speed: 260ms
+- Phantom ROUND TRIP hedge speed: 200ms
+
+The round trip is showing LESS than the raw, which doesn't make sense (round trip should always be >= raw). User notes there is an "extra 200ms on their end" — suggesting the round trip is adding ~200ms of overhead beyond what's expected. This likely indicates network/processing overhead between order placement and confirmation that needs to be investigated. Could be a timing measurement issue, a sequencing bug in how raw vs round trip are calculated, or actual latency in the hedge acknowledgment cycle.
+
+ALSO: The screenshot tool has a critical bug — it ALWAYS captures the top of the page regardless of where the user is scrolled. The user was scrolled to the bottom of the Active Bots page to show the latency footer, but every screenshot taken showed only the top of the page. This makes it impossible for Claude to read any UI elements that live below the fold (latency bar, footer stats, etc.). The screenshot tool needs to capture the CURRENT scroll position, not always the top of the viewport.
+
+---
+
+## [BUG] Phantom bot ghost xN and xY labels overlapping in UI
+**2026-03-24 18:03** | phantom
+
+User reports that in the Phantom bot display, the contract multiplier labels (xN and xY) are overlapping/rendering on top of each other. This appears to be a z-index or positioning bug where two label elements are stacking. Screenshot capture is not catching the overlay panel clearly, but user confirms it is visible on their screen. Claude Code needs to check the Phantom bot card's contract multiplier label rendering — the xN and xY values are colliding instead of displaying in their correct separate positions.
+
+---
+
+## [BUG] Live filter showing non-live markets (golf/other)
+**2026-03-28 07:18** | system
+
+User reports the "live only" filter is hit or miss — non-live markets (e.g. golf player props for rounds not yet in progress) are appearing in the feed even with the live filter enabled. At 12:17 AM Arizona time, no golf is in progress but Houston Open markets were visible. The filter is inconsistent — sometimes works, sometimes doesn't. Needs investigation into what determines a market's "live" status and whether the filter is checking that correctly.
+
+---

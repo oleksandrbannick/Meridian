@@ -95,9 +95,7 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" --connect-timeout 5 http://104.223.8.231:5001/)",
       "Read(//Applications/Programs/Meridian/**)",
       "Read(//^def _run_monitor/,/^def [a-z_]+\\\\\\(/**)",
-      "Bash(grep -E '\\\\.\\(js|html|json\\)$')",
-      "Bash(ssh -o ConnectTimeout=10 root@104.223.8.231 \"tmux kill-session -t meridian 2>/dev/null; sleep 1; tmux new-session -d -s meridian -c /root/meridian ''claude remote-control --name Meridian'' && echo ''running''\")",
-      "Bash(brew list:*)"
+      "Bash(grep -E '\\\\.\\(js|html|json\\)$')"
     ],
     "additionalDirectories": [
       "/Users/Sasha/.claude/projects/-Applications-Programs-Meridian",

@@ -3113,14 +3113,29 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if order_id == bot.get('dog_order_id') and bot['status'] == 'dog_anchor_posted':
             matched = 'dog'
         elif order_id in (bot.get('_all_dog_order_ids') or []) and bot['status'] == 'dog_anchor_posted':
-            # Cancel-race: old order filled after repost — recover the fill
+            # Cancel-race: old order MIGHT have filled after repost — verify before acting
+            # Stale WS events for cancelled orders cause ghost fills if not verified
+            try:
+                api_read_limiter.wait()
+                _race_resp = kalshi_client.get_order(order_id)
+                _race_ord = _race_resp.get('order', _race_resp) if isinstance(_race_resp, dict) else {}
+                _race_fills = _parse_fill_count(_race_ord)
+                if _race_fills <= 0:
+                    print(f'👻 WS CANCEL-RACE GHOST: {bot_id} fill event for old order {order_id[:12]} but 0 fills on Kalshi — ignoring')
+                    bot_log('PHANTOM_WS_GHOST_FILL_BLOCKED', bot_id, {
+                        'old_order_id': order_id[:12], 'kalshi_fills': 0,
+                    }, level='WARN')
+                    continue
+            except Exception as _race_err:
+                print(f'⚠ WS CANCEL-RACE CHECK FAILED: {bot_id} {_race_err} — ignoring fill to be safe')
+                continue
             matched = 'dog'
             # Cancel the NEW order that replaced this one — otherwise it stays live and creates orphans
             _current_oid = bot.get('dog_order_id')
             if _current_oid and _current_oid != order_id:
                 threading.Thread(target=lambda oid=_current_oid: _safe_cancel(oid, f'cancel_race_cleanup_{bot_id}'), daemon=True).start()
             bot['dog_order_id'] = order_id  # restore old order ID so hedge can proceed
-            print(f'🔍 WS CANCEL-RACE CATCH: {bot_id} fill on old order {order_id[:12]}, cancelled new order {(_current_oid or "?")[:12]}')
+            print(f'🔍 WS CANCEL-RACE CATCH: {bot_id} fill on old order {order_id[:12]} VERIFIED ({_race_fills} fills), cancelled new order {(_current_oid or "?")[:12]}')
         elif order_id == bot.get('fav_order_id') and bot['status'] == 'fav_hedge_posted':
             matched = 'fav'
         if not matched:

@@ -13303,6 +13303,10 @@ function renderDogStatsAndDepth(trades, pnl) {
             </div>`;
     }
 
+    }
+
+    // ── Depth Floor breakdown (skip if just updating highlight) ──
+    if (renderDogStatsAndDepth._skipDepth) return;
     // ── Depth Floor breakdown ──
     if (depthPanel) {
         const depthMap = {};
@@ -13327,7 +13331,7 @@ function renderDogStatsAndDepth(trades, pnl) {
                     const isActive = _phantomActiveDepth === d.depth;
                     const borderCol = isActive ? '#ff66aa' : '#1e2740';
                     const bgCol = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
-                    return `<div onclick="selectPhantomDepth(${d.depth})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s;">
+                    return `<div data-depth="${d.depth}" onclick="selectPhantomDepth(${d.depth})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                         <div style="color:#ff66aa;font-size:14px;font-weight:800;">⬇${d.depth}¢</div>
                         <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
@@ -13406,10 +13410,20 @@ function selectPhantomDepth(depth) {
     if (depth === _phantomActiveDepth && depth !== 'all') depth = 'all';
     _phantomActiveDepth = depth;
 
+    // Update depth card highlights in-place (no rebuild, no flicker)
+    document.querySelectorAll('#dog-depth-panel [data-depth]').forEach(card => {
+        const d = Number(card.getAttribute('data-depth'));
+        const isActive = d === _phantomActiveDepth;
+        card.style.borderColor = isActive ? '#ff66aa' : '#1e2740';
+        card.style.background = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
+    });
+
+    // Re-render stats + trade log but NOT depth cards
     const allTrades = window._phantomAllTrades || [];
     const filtered = _applyPhantomFilters(allTrades);
-
+    renderDogStatsAndDepth._skipDepth = true;
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
+    renderDogStatsAndDepth._skipDepth = false;
     renderDogSportBreakdown(allTrades);
     filterPhantomLog();
 }

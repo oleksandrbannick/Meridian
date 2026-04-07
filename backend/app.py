@@ -3548,6 +3548,89 @@ def _execute_phantom_hedge(bot_id):
             except Exception:
                 pass
         threading.Thread(target=_verify_dog_price, daemon=True).start()
+
+        # ── Delayed taker cross: 1s maker window, then grab ask if profitable ──
+        _tp_bot_id = bot_id
+        _tp_dog_price = dog_price
+        _tp_fav_side = fav_side
+        _tp_fav_order_id = fav_order_id
+        _tp_hedge_ticker = hedge_ticker
+        _tp_qty = qty
+        def _delayed_taker_cross():
+            try:
+                time.sleep(1.0)  # 1s maker window
+                _b = active_bots.get(_tp_bot_id)
+                if not _b or _b.get('status') != 'fav_hedge_posted':
+                    return  # bot completed/cancelled/status changed
+                if _b.get('fav_fill_qty', 0) >= _tp_qty:
+                    return  # already filled as maker
+                if _b.get('fav_order_id') != _tp_fav_order_id:
+                    return  # order changed (already amended/crossed by monitor)
+                # Get current ask from WS cache
+                _ask = _b.get(f'live_{_tp_fav_side}_ask', 0)
+                if _tp_hedge_ticker != _b.get('ticker'):
+                    _ask = _b.get(f'live_hedge_{_tp_fav_side}_ask', 0) or _ask
+                if _ask <= 0:
+                    return  # no ask data
+                _cross_comb = _tp_dog_price + _ask
+                if _cross_comb > 98:
+                    return  # not profitable enough to cross
+                # Cross the spread: cancel maker, place taker at ask
+                _phantom_drop_lock.acquire()
+                try:
+                    # Re-check after acquiring lock
+                    if _b.get('fav_fill_qty', 0) >= _tp_qty or _b.get('fav_order_id') != _tp_fav_order_id:
+                        return
+                    api_rate_limiter.wait()
+                    try:
+                        kalshi_client.cancel_order(_tp_fav_order_id)
+                    except Exception as _ce:
+                        # May have filled during cancel
+                        try:
+                            api_read_limiter.wait()
+                            _chk = kalshi_client.get_order(_tp_fav_order_id)
+                            _chk_ord = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
+                            if _parse_fill_count(_chk_ord) >= _tp_qty:
+                                _b['fav_fill_qty'] = _tp_qty
+                                print(f'💰 PHANTOM TAKER SKIP: {_tp_bot_id} filled as maker during cancel')
+                                return
+                        except Exception:
+                            pass
+                        return  # cancel failed, don't proceed
+                    _already_filled = _b.get('fav_fill_qty', 0)
+                    _remaining = _tp_qty - _already_filled
+                    if _remaining <= 0:
+                        return
+                    price_kwargs = {'yes_price': _ask} if _tp_fav_side == 'yes' else {'no_price': _ask}
+                    api_rate_limiter.wait()
+                    resp = kalshi_client.create_order(
+                        ticker=_tp_hedge_ticker, side=_tp_fav_side, action='buy',
+                        count=_remaining, order_type='limit', **price_kwargs
+                    )
+                    new_oid = resp.get('order', {}).get('order_id', '')
+                    _b.setdefault('_all_hedge_order_ids', []).append(_tp_fav_order_id)
+                    _b['fav_order_id'] = new_oid
+                    _b['fav_price'] = _ask
+                    _b['_fav_was_taker'] = True
+                    _b['fav_walk_count'] = _b.get('fav_walk_count', 0) + 1
+                    if _tp_fav_side == 'yes':
+                        _b['yes_price'] = _ask
+                    else:
+                        _b['no_price'] = _ask
+                    save_state()
+                    _profit = 100 - _cross_comb
+                    print(f'💰 PHANTOM FAST TAKER: {_tp_bot_id} crossed ask {_ask}¢ (combined={_cross_comb}¢ profit={_profit}¢/ea) after 1s maker window')
+                    bot_log('PHANTOM_FAST_TAKER_CROSS', _tp_bot_id, {
+                        'cross_price': _ask, 'combined': _cross_comb,
+                        'dog_price': _tp_dog_price, 'profit_per': _profit,
+                        'maker_price': actual_fav_price,
+                    })
+                finally:
+                    if _phantom_drop_lock.locked():
+                        _phantom_drop_lock.release()
+            except Exception as e:
+                print(f'⚠ PHANTOM FAST TAKER {_tp_bot_id}: {e}')
+        threading.Thread(target=_delayed_taker_cross, daemon=True).start()
     except Exception as e:
         print(f'❌ WS PHANTOM HEDGE {bot_id}: {e}')
         import traceback

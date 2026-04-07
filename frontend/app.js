@@ -3323,7 +3323,10 @@ function displayOrderbookLadder(orderbook) {
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
     const _isBadSport = ['MLB'].includes(_scoreSport);
+    const _isRiskySport = ['NBA', 'MLB'].includes(_scoreSport);
     const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
+    const _favIsThick = _favPL >= 20;
+    const _dogIsPacked = dogDepth >= 5000;
     if (catchScore >= 70 && dogDepth < 2000) {
         verdict = `Prime phantom market${_isGreatSport ? ' — ' + _scoreSport + ' prints' : ''}`;
         verdictCol = '#00ff88';
@@ -3342,11 +3345,23 @@ function displayOrderbookLadder(orderbook) {
     } else if (_isBadSport) {
         verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
         verdictCol = '#ff4444';
+    } else if (_isRiskySport && _favIsThick && _dogIsPacked) {
+        verdict = `${_scoreSport} — thick book but packed dog (slow fills) + sport risk`;
+        verdictCol = '#ff8800';
+    } else if (_favIsThick && _dogIsPacked) {
+        verdict = 'Thick fav but dog is packed — fills will be very slow';
+        verdictCol = '#ff8800';
     } else if (hedgeRoom <= 1) {
         verdict = 'Avoid — spread too tight, no profit margin';
         verdictCol = '#ff4444';
+    } else if (_favPL < 5) {
+        verdict = 'Weak — fav too thin, hedge may miss';
+        verdictCol = '#ff4444';
+    } else if (favAnalysis.gaps >= 3) {
+        verdict = 'Weak — fav side too gappy, unreliable catch';
+        verdictCol = '#ff4444';
     } else {
-        verdict = 'Weak — fav too thin or gappy';
+        verdict = 'Low score — check gaps, sport, and dog depth';
         verdictCol = '#ff4444';
     }
 

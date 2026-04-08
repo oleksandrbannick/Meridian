@@ -6131,21 +6131,27 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
-            <div style="background:#060a14;border:1px solid #ffaa0033;border-radius:8px;padding:10px;">
-                <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
-                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`}</div>
+            ${(() => {
+                const _hasSell = !!bot.dog_sell_order_id;
+                const _sellFills = bot.dog_sell_fill_qty || 0;
+                const _sellPrice = bot.dog_sell_price || 0;
+                const _remaining = qty - _sellFills;
+                const _remainPct = qty > 0 ? (_remaining / qty) * 100 : 100;
+                const _borderCol = _hasSell ? '#ff880033' : '#ffaa0033';
+                const _headerLabel = _hasSell ? `📤 SELLING ${dogSide.toUpperCase()}` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
+                const _headerCol = _hasSell ? '#ff8800' : '#ffaa00';
+                const _priceLabel = _hasSell ? `${dogPrice}¢ → sell @${_sellPrice}¢` : (isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`);
+                const _barPct = _hasSell ? _remainPct : dogFillPct;
+                const _barCol = _hasSell ? '#ff8800' : dogFillCol;
+                const _barLabel = _hasSell ? `${_remaining}/${qty} left` : `${Math.min(dogFillQty, qty)}/${qty}`;
+                return `<div style="background:#060a14;border:1px solid ${_borderCol};border-radius:8px;padding:10px;">
+                <div style="color:${_headerCol};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${_headerLabel}</div>
+                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${_priceLabel}</div>
                 ${isLadder && dogFillQty === 0 ? '<div style="color:#ffaa00;font-size:10px;">Waiting for fill</div>' : ''}
-                <div style="color:#555;font-size:10px;margin-bottom:${bot.dog_sell_order_id ? '2' : '6'}px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
-                ${bot.dog_sell_order_id ? `<div style="color:#ff8800;font-size:10px;font-weight:700;margin-bottom:4px;">📤 Sell @${bot.dog_sell_price || '?'}¢${(bot.dog_sell_fill_qty || 0) > 0 ? ` · ${bot.dog_sell_fill_qty}/${qty} sold` : ''}</div>` : ''}
-                ${isLadder ? rungsHTML : `
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                            <div style="width:${dogFillPct}%;height:100%;background:${dogFillCol};border-radius:3px;"></div>
-                        </div>
-                        <span style="color:${dogFillCol};font-size:10px;font-weight:700;">${Math.min(dogFillQty, qty)}/${qty}</span>
-                    </div>
-                `}
-            </div>
+                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
+                ${isLadder ? rungsHTML : '<div style="display:flex;align-items:center;gap:6px;"><div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;"><div style="width:' + _barPct + '%;height:100%;background:' + _barCol + ';border-radius:3px;"></div></div><span style="color:' + _barCol + ';font-size:10px;font-weight:700;">' + _barLabel + '</span></div>'}
+            </div>`;
+            })()}
             <!-- FAV SIDE -->
             <div style="background:#060a14;border:1px solid ${favPrice > 0 ? '#00aaff33' : '#1e2740'};border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
                 <div style="color:#00aaff;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ ${isCrossMarket ? hedgeTeamCode + ' · ' : ''}FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>

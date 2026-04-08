@@ -10632,7 +10632,7 @@ def _handle_phantom(bot_id, bot, actions):
                         try:
                             _new_pk = {'yes_price': _dog_ask_now} if dog_side == 'yes' else {'no_price': _dog_ask_now}
                             api_rate_limiter.wait()
-                            kalshi_client.amend_order(_dog_sell_oid, ticker=ticker, side=dog_side, count=qty, **_new_pk)
+                            kalshi_client.amend_order(_dog_sell_oid, ticker=ticker, side=dog_side, count=qty, action='sell', **_new_pk)
                             bot['dog_sell_price'] = _dog_ask_now
                             print(f'📤 DUAL SELL WALK: {bot_id} {_cur_sell_price}→{_dog_ask_now}¢')
                         except Exception as _we:

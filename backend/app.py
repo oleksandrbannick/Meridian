@@ -4487,16 +4487,12 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
 
-    # Repeat logic — sellback counts as a cycle but NOT as a consecutive loss for smart mode
+    # Repeat logic — sellback counts as a cycle, track win/loss properly for smart mode
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    # Smart mode: sellbacks are market conditions, not strategy failures — don't count as losses
-    if bot.get('smart_mode') and not bot.get('_smart_stopped'):
-        _smart_repeat = True
-        _smart_reason = 'sellback_continue'
-    else:
-        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
+    _sb_pnl_for_smart = profit_cents - loss_cents  # positive = profitable sellback, negative = loss
+    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _sb_pnl_for_smart)
     _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
     if _will_repeat:
         bot['status'] = 'waiting_repeat'
@@ -10773,6 +10769,42 @@ def _handle_phantom(bot_id, bot, actions):
                     if bot.get('_race_orphan_fav_qty', 0) > 0:
                         # Don't finalize — monitor will sell the orphaned fav first
                         print(f'📤 DUAL EXIT: {bot_id} deferring completion — selling {bot["_race_orphan_fav_qty"]}x orphaned fav first')
+                        save_state()
+                        actions.append({'bot_id': bot_id, 'action': 'dual_exit_dog_sold', 'pnl': _net_pnl})
+                        return
+                    # ── Repeat logic for dual exit (same as sellback) ──
+                    _de_repeats_done = bot.get('repeats_done', 0) + 1
+                    bot['repeats_done'] = _de_repeats_done
+                    _de_repeat_total = bot.get('repeat_count', 0)
+                    _de_smart_repeat, _de_smart_reason = _smart_mode_should_repeat(bot, _net_pnl)
+                    _de_will_repeat = _de_smart_repeat if _de_smart_repeat is not None else (_de_repeats_done <= _de_repeat_total)
+                    if _de_will_repeat:
+                        bot['status'] = 'waiting_repeat'
+                        bot['waiting_repeat_since'] = now + 3
+                        bot['_just_completed'] = True
+                        bot['_last_pnl'] = _net_pnl
+                        bot['_last_result'] = 'dual_exit'
+                        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _net_pnl
+                        bot['net_pnl_cents'] = 0
+                        bot['dog_filled_at'] = None
+                        bot['fav_order_id'] = None
+                        bot['fav_fill_qty'] = 0
+                        bot['dog_fill_qty'] = 0
+                        bot['yes_fill_qty'] = 0
+                        bot['no_fill_qty'] = 0
+                        bot['_hedge_fired'] = False
+                        bot['_trade_recorded'] = False
+                        bot['_sellback_attempts'] = 0
+                        bot['_over_ceiling_since'] = None
+                        bot['_all_dog_order_ids'] = []
+                        bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
+                        bot['_last_repost_at'] = 0
+                        if bot.get('_original_qty'):
+                            bot['quantity'] = bot['_original_qty']
+                            bot.pop('_original_qty', None)
+                        bot.pop('_partial_hedge_qty', None)
+                        _de_label = f'smart({_de_smart_reason})' if bot.get('smart_mode') else f'cycle {_de_repeats_done}/{_de_repeat_total}'
+                        print(f'🔄 PHANTOM DUAL EXIT REPEAT: {bot_id} {_de_label} — re-anchoring')
                     else:
                         _phantom_set_final_status(bot, bot_id)
                     save_state()
@@ -13804,16 +13836,12 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'ts': now,
     })
 
-    # Repeat logic — sellback counts as a cycle but NOT as a consecutive loss for smart mode
+    # Repeat logic — sellback counts as a cycle, track win/loss properly for smart mode
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    # Smart mode: sellbacks are market conditions, not strategy failures — don't count as losses
-    if bot.get('smart_mode') and not bot.get('_smart_stopped'):
-        _smart_repeat = True
-        _smart_reason = 'sellback_continue'  # sellbacks never trigger smart stop
-    else:
-        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
+    _sb_pnl = profit_cents - loss_cents  # positive = profitable sellback, negative = loss
+    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _sb_pnl)
     _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
     if _will_repeat:
         bot['status'] = 'waiting_repeat'

@@ -2499,8 +2499,8 @@ class RateLimiter:
                 return True
             return False
 
-api_rate_limiter = RateLimiter(burst=10)  # Kalshi basic tier: 10 writes/s burst
-api_read_limiter = RateLimiter(burst=15)  # Kalshi basic tier: 20 reads/s (keep 5 headroom)
+api_rate_limiter = RateLimiter(burst=28)  # Kalshi advanced tier: 30 writes/s (keep 2 headroom)
+api_read_limiter = RateLimiter(burst=28)  # Kalshi advanced tier: 30 reads/s (keep 2 headroom)
 
 # ─── LocalOrderbook: real-time depth mirror from WS orderbook_delta ───────────
 from collections import deque as _deque

@@ -19130,6 +19130,8 @@ PNL_LOSS_RESULTS = (
     'anchor_sellback_position_cleared',  # phantom: sellback with position already cleared
     'apex_settled_loss',  # apex: market settled against hedge
     'manual_exit_apex',  # apex: manual exit (zero P&L)
+    'anchor_dual_exit',  # phantom: dual exit (dog sold at ceiling, typically small loss)
+    'race_orphan_cleared',  # phantom: orphaned fav sold back after dual exit race
 )
 PNL_WIN_RESULTS = (
     'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
@@ -19137,6 +19139,10 @@ PNL_WIN_RESULTS = (
     'take_profit_watch',  # straight bet take-profit hit
     'apex_rung',  # Apex 2.0 per-rung arb completion
     'apex_settled_win',  # apex: market settled in favor of hedge
+    'partial_arb',  # phantom ladder: partial hedge fill at ceiling (typically breakeven)
+    'anchor_partial_arb',  # phantom: partial arb completion
+    'anchor_race_fill',  # phantom: race condition partial hedge fill
+    'settled_win',  # phantom: settled as win (no yes/no suffix)
 )
 
 def _compute_pnl_bucket(trades, category=None):

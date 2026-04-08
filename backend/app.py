@@ -3810,9 +3810,9 @@ def _execute_phantom_hedge(bot_id):
         _tp_combined = dog_price + actual_fav_price  # combined at time of posting
         def _delayed_taker_cross():
             try:
-                # 1s maker window for all tiers — data 04/07 proved 3s is too long.
-                # BAS phantom: market moved 12¢ in 3s, taker missed the window entirely.
-                # 1s gives maker a fair shot, then crosses before the ask escapes.
+                # DISABLED: crossing spread costs 2-5c (bid→ask gap), which is the entire
+                # profit margin. Hedge stays as maker at bid. Walk system handles the rest.
+                return
                 _maker_wait = 1.0
                 time.sleep(_maker_wait)
                 _b = active_bots.get(_tp_bot_id)
@@ -10526,8 +10526,8 @@ def _handle_phantom(bot_id, bot, actions):
                     if hedge_ticker != ticker:
                         _fav_ask = bot.get(f'live_hedge_{fav_side}_ask', 0) or _fav_ask
                     _cross_combined = dog_price + _fav_ask if _fav_ask > 0 else 999
-                    if _fav_ask > 0 and _cross_combined <= 100 and bot.get('fav_fill_qty', 0) < qty:
-                        # Cross at the ask — breakeven taker exit
+                    if False and _fav_ask > 0 and _cross_combined <= 100 and bot.get('fav_fill_qty', 0) < qty:
+                        # DISABLED: taker cross pays ask price, eats profit margin
                         print(f'💰 PHANTOM BREAKEVEN TAKER: {bot_id} crossing ask {_fav_ask}¢ (combined={_cross_combined}¢) after {_ceiling_elapsed:.0f}s at ceiling')
                         try:
                             _phantom_drop_lock.acquire()
@@ -10684,7 +10684,7 @@ def _handle_phantom(bot_id, bot, actions):
         _posted_combined = dog_price + current_fav_price
         # Monitor taker: must wait longer than WS delayed taker (1s) to avoid racing it.
         # Monitor polls every ~2s, so wait_s starts at ~2 on first poll — naturally after WS.
-        _skip_take_profit = False
+        _skip_take_profit = True  # disabled: taker cross pays ask price, eats entire profit margin
         _min_wait_for_taker = 2.0  # WS fires at 1s, monitor catches at 2s+ as backup
         if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask >= current_fav_price
                 and wait_s >= _min_wait_for_taker

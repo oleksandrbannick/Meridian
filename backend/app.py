@@ -20680,6 +20680,19 @@ def read_activity_log_endpoint():
     }})
 
 
+@app.route('/api/account/limits', methods=['GET'])
+def get_account_limits():
+    """Check Kalshi API tier and rate limits."""
+    if not kalshi_client:
+        return jsonify({'error': 'Not authenticated'}), 401
+    try:
+        api_read_limiter.wait()
+        resp = kalshi_client._make_request('GET', '/account/limits', authenticated=True)
+        return jsonify(resp)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/system/status', methods=['GET'])
 def get_system_status_endpoint():
     """Full system health check."""

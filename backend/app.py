@@ -13252,7 +13252,59 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         except Exception as vf_err:
             print(f'⚠ PHANTOM SELLBACK order check failed: {bot_id}: {vf_err} — using local qty')
 
-    sold_back, sell_info = execute_sell(ticker, dog_side, qty, reason=f'anchor_sellback_{bot_id}')
+    # ── Maker-first sellback: post sell at bid+1 for 3s, then taker fallback ──
+    _maker_filled = 0
+    _maker_sell_price = 0
+    _dog_bid = bot.get(f'live_{dog_side}_bid', 0)
+    _dog_ask = bot.get(f'live_{dog_side}_ask', 0)
+    _has_spread = _dog_bid > 0 and _dog_ask > 0 and (_dog_ask - _dog_bid) >= 2
+    if _has_spread:
+        _maker_price = _dog_bid + 1
+        print(f'📤 PHANTOM MAKER SELL: {bot_id} posting sell {dog_side}@{_maker_price}¢ (bid={_dog_bid}¢ ask={_dog_ask}¢) — 3s maker window')
+        bot_log('PHANTOM_MAKER_SELL_START', bot_id, {
+            'dog_side': dog_side, 'maker_price': _maker_price,
+            'dog_bid': _dog_bid, 'dog_ask': _dog_ask, 'qty': qty,
+        })
+        try:
+            _mk_pk = {'yes_price': _maker_price} if dog_side == 'yes' else {'no_price': _maker_price}
+            api_rate_limiter.wait()
+            _mk_resp = kalshi_client.create_order(
+                ticker=ticker, side=dog_side, action='sell',
+                count=qty, order_type='limit', **_mk_pk
+            )
+            _mk_oid = _mk_resp.get('order', {}).get('order_id', '')
+            if _mk_oid:
+                time.sleep(3)
+                api_read_limiter.wait()
+                _mk_check = kalshi_client.get_order(_mk_oid)
+                _mk_ord = _mk_check.get('order', _mk_check) if isinstance(_mk_check, dict) else {}
+                _maker_filled = _parse_fill_count(_mk_ord)
+                if _maker_filled < qty:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(_mk_oid)
+                    except Exception:
+                        pass
+                if _maker_filled > 0:
+                    _maker_sell_price = _maker_price
+                    _saved = (_maker_price - _dog_bid) * _maker_filled
+                    print(f'✅ PHANTOM MAKER SELL: {bot_id} {_maker_filled}/{qty} filled@{_maker_price}¢ (saved {_saved}¢ vs taker@{_dog_bid}¢)')
+                    bot_log('PHANTOM_MAKER_SELL_FILLED', bot_id, {
+                        'maker_price': _maker_price, 'filled': _maker_filled,
+                        'qty': qty, 'saved_cents': _saved,
+                    })
+                else:
+                    print(f'📤 PHANTOM MAKER SELL TIMEOUT: {bot_id} 0 fills in 3s — taker fallback')
+        except Exception as _me:
+            print(f'⚠ PHANTOM MAKER SELL ERROR: {bot_id}: {_me} — taker fallback')
+
+    _taker_qty = qty - _maker_filled
+    if _taker_qty > 0:
+        sold_back, sell_info = execute_sell(ticker, dog_side, _taker_qty, reason=f'anchor_sellback_{bot_id}')
+    else:
+        sold_back = True
+        sell_info = {'actual_fill_price': _maker_sell_price, 'sell_price': _maker_sell_price,
+                     'filled': qty, 'maker_sellback': True}
 
     if not sold_back:
         _attempts = bot.get('_sellback_attempts', 0) + 1
@@ -13421,7 +13473,15 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         return
 
     already_cleared = (sell_info or {}).get('already_cleared', False)
-    sell_price = sell_info.get('actual_fill_price') or sell_info.get('sell_price') or 0
+    _taker_sell_price = sell_info.get('actual_fill_price') or sell_info.get('sell_price') or 0
+
+    # Weighted average sell price when maker + taker split
+    if _maker_filled > 0 and _taker_qty > 0 and _taker_sell_price > 0:
+        sell_price = round((_maker_sell_price * _maker_filled + _taker_sell_price * (qty - _maker_filled)) / qty)
+    elif _maker_filled >= qty:
+        sell_price = _maker_sell_price
+    else:
+        sell_price = _taker_sell_price
 
     if already_cleared and not sell_price:
         # Market likely settled — check settlement result for actual P&L
@@ -13454,9 +13514,11 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     else:
         loss_cents = (dog_price - sell_price) * qty if sell_price else dog_price * qty
 
-    # Calculate fees: maker fee on original buy (post_only) + taker fee on sell (crosses spread)
+    # Calculate fees: maker fee on original buy (post_only) + sell fees (maker for maker fills, taker for taker fills)
     buy_fee = _kalshi_side_fee_cents(dog_price, qty)
-    sell_fee = _kalshi_taker_side_fee_cents(sell_price, qty) if sell_price else 0
+    _maker_sell_fee = _kalshi_side_fee_cents(_maker_sell_price, _maker_filled) if _maker_filled > 0 and _maker_sell_price > 0 else 0
+    _taker_sell_fee = _kalshi_taker_side_fee_cents(_taker_sell_price, qty - _maker_filled) if (qty - _maker_filled) > 0 and _taker_sell_price > 0 else 0
+    sell_fee = _maker_sell_fee + _taker_sell_fee
     total_fees = buy_fee + sell_fee
     loss_cents += total_fees
 
@@ -13513,7 +13575,8 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'obi_at_fill': bot.get('_obi_at_fill'),
         'obi_at_sellback': _obi_snapshot(bot),
     })
-    print(f'🔙 PHANTOM SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢')
+    _sb_method = f'maker@{_maker_sell_price}¢×{_maker_filled}+taker×{qty-_maker_filled}' if _maker_filled > 0 and _maker_filled < qty else ('maker' if _maker_filled >= qty else 'taker')
+    print(f'🔙 PHANTOM SELLBACK: {bot_id} sold {dog_side}@{sell_price}¢ (bought@{dog_price}¢) loss={loss_cents}¢ [{_sb_method}]')
     _audit('PHANTOM_SELLBACK', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'sell_price': sell_price, 'qty': qty, 'sold': True})
     _audit_position_check(bot_id, ticker, dog_side, 'after_sellback')
 

@@ -1,6 +1,6 @@
 // Meridian — Sports Trading Terminal
-/** Return local YYYY-MM-DD string (avoids UTC date-shift bug) */
-function _localDateStr(d) { const dt = d || new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
+/** Return Arizona (MST, UTC-7) YYYY-MM-DD string — matches backend AZ_TZ bucketing */
+function _localDateStr(d) { const dt = d || new Date(); const az = new Date(dt.toLocaleString('en-US', {timeZone: 'America/Phoenix'})); return `${az.getFullYear()}-${String(az.getMonth()+1).padStart(2,'0')}-${String(az.getDate()).padStart(2,'0')}`; }
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : `${window.location.origin}/api`;
 
@@ -5894,18 +5894,20 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
                         const _depCap = _comb > 0 ? 100 - _comb : 0;
                         const _depFloor = bot.anchor_depth || 0;
-                        const _isSellback = r.result === 'loss' || r.result === 'sellback' || r.pnl < 0;
+                        const _isSellback = r.result === 'sellback';
+                        const _isDualExit = r.result === 'dual_exit';
                         const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
-                        // Depth badge: always show captured/floor ratio
-                        // Wins: green/yellow "7/6" — Sellbacks: red "SB -3/6"
+                        // Depth badge: Wins: green depth, Dual exit: blue "DE", Sellback: red "SB"
                         let _depBadge = '';
                         if (_depFloor > 0 && _comb > 0) {
-                            if (!_isSellback) {
-                                const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
-                                _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
-                            } else {
+                            if (_isSellback) {
                                 const _overBy = _comb > 100 ? -((_comb - 100)) : _depCap;
                                 _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB ${_overBy}¢</span>`;
+                            } else if (_isDualExit) {
+                                _depBadge = `<span style="color:#00aaff;font-size:8px;font-weight:700;background:#00aaff18;padding:0 3px;border-radius:2px;margin-left:2px;">DE ${_depCap}¢</span>`;
+                            } else {
+                                const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
+                                _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
                             }
                         }
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">

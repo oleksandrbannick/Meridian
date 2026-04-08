@@ -3416,9 +3416,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 # Hedge filled — cancel dog sell if dual exit is active
                 if bot['fav_fill_qty'] >= qty_bot and bot.get('dog_sell_order_id'):
                     _ds_oid = bot['dog_sell_order_id']
+                    bot['_dog_sell_verify_oid'] = _ds_oid  # preserve for completion to verify fills
                     threading.Thread(target=lambda oid=_ds_oid: _safe_cancel(oid, f'hedge_won_{bot_id}'), daemon=True).start()
                     bot['dog_sell_order_id'] = None
-                    print(f'⚡ WS DUAL EXIT: {bot_id} hedge filled — cancelling dog sell')
+                    print(f'⚡ WS DUAL EXIT: {bot_id} hedge filled — cancelling dog sell (verify pending)')
                 print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
             elif matched == 'dog_sell':
                 bot['dog_sell_fill_qty'] = bot.get('dog_sell_fill_qty', 0) + count
@@ -4486,11 +4487,16 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     session_pnl['stopped_bots'] += 1
     bot['_trade_recorded'] = True
 
-    # Repeat logic — sellback counts as a cycle (always a loss), re-anchor if repeats remain
+    # Repeat logic — sellback counts as a cycle but NOT as a consecutive loss for smart mode
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
+    # Smart mode: sellbacks are market conditions, not strategy failures — don't count as losses
+    if bot.get('smart_mode') and not bot.get('_smart_stopped'):
+        _smart_repeat = True
+        _smart_reason = 'sellback_continue'
+    else:
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
     _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
     if _will_repeat:
         bot['status'] = 'waiting_repeat'
@@ -9492,6 +9498,88 @@ def _handle_phantom(bot_id, bot, actions):
     except Exception:
         pass
 
+    # ── Race orphan cleanup: sell orphaned fav contracts from dual exit race ──
+    _orphan_qty = bot.get('_race_orphan_fav_qty', 0)
+    if _orphan_qty > 0:
+        _orphan_side = bot.get('_race_orphan_fav_side', fav_side)
+        _orphan_ticker = bot.get('_race_orphan_fav_ticker', hedge_ticker)
+        _orphan_sell_oid = bot.get('_race_orphan_sell_oid')
+
+        if not _orphan_sell_oid:
+            # Post initial maker sell at ask
+            _orphan_ask = bot.get(f'live_{_orphan_side}_ask', 0) or bot.get(f'live_hedge_{_orphan_side}_ask', 0)
+            if _orphan_ask <= 0:
+                # No ask available — try bid as fallback
+                _orphan_ask = bot.get(f'live_{_orphan_side}_bid', 0) or bot.get(f'live_hedge_{_orphan_side}_bid', 0)
+            if _orphan_ask > 0:
+                try:
+                    _opk = {'yes_price': _orphan_ask} if _orphan_side == 'yes' else {'no_price': _orphan_ask}
+                    api_rate_limiter.wait()
+                    _o_resp = kalshi_client.create_order(
+                        ticker=_orphan_ticker, side=_orphan_side, action='sell',
+                        count=_orphan_qty, order_type='limit', **_opk
+                    )
+                    _o_oid = _o_resp.get('order', {}).get('order_id', '')
+                    if _o_oid:
+                        bot['_race_orphan_sell_oid'] = _o_oid
+                        bot['_race_orphan_sell_price'] = _orphan_ask
+                        print(f'📤 RACE ORPHAN SELL: {bot_id} posting {_orphan_side}@{_orphan_ask}¢ x{_orphan_qty} on {_orphan_ticker}')
+                        bot_log('RACE_ORPHAN_SELL_POSTED', bot_id, {
+                            'side': _orphan_side, 'price': _orphan_ask, 'qty': _orphan_qty,
+                            'ticker': _orphan_ticker, 'order_id': _o_oid,
+                        })
+                except Exception as _oe:
+                    print(f'⚠ RACE ORPHAN SELL FAILED: {bot_id}: {_oe}')
+                    bot['_race_orphan_sell_attempts'] = bot.get('_race_orphan_sell_attempts', 0) + 1
+                    if bot.get('_race_orphan_sell_attempts', 0) >= 10:
+                        print(f'⚠ RACE ORPHAN SELL EXHAUSTED: {bot_id} giving up after 10 attempts')
+                        bot['_race_orphan_fav_qty'] = 0
+                        _phantom_set_final_status(bot, bot_id)
+                        save_state()
+                        return
+            save_state()
+            return
+
+        # Check if sell filled
+        try:
+            api_read_limiter.wait()
+            _o_check = kalshi_client.get_order(_orphan_sell_oid)
+            _o_ord = _o_check.get('order', _o_check) if isinstance(_o_check, dict) else {}
+            _o_fills = _parse_fill_count(_o_ord)
+        except Exception:
+            _o_fills = 0
+
+        if _o_fills >= _orphan_qty:
+            # Fully sold — clean up and continue to repeat or complete
+            _sell_price = bot.get('_race_orphan_sell_price', 0)
+            print(f'✅ RACE ORPHAN SOLD: {bot_id} {_orphan_side}@{_sell_price}¢ x{_orphan_qty}')
+            bot_log('RACE_ORPHAN_SOLD', bot_id, {
+                'side': _orphan_side, 'price': _sell_price, 'qty': _orphan_qty,
+            })
+            bot['_race_orphan_fav_qty'] = 0
+            bot['_race_orphan_sell_oid'] = None
+            # Now continue to repeat or complete
+            _phantom_set_final_status(bot, bot_id)
+            save_state()
+            return
+
+        # Walk the sell price with ask
+        _cur_price = bot.get('_race_orphan_sell_price', 0)
+        _new_ask = bot.get(f'live_{_orphan_side}_ask', 0) or bot.get(f'live_hedge_{_orphan_side}_ask', 0)
+        if _new_ask > 0 and _new_ask != _cur_price:
+            try:
+                _npk = {'yes_price': _new_ask} if _orphan_side == 'yes' else {'no_price': _new_ask}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(_orphan_sell_oid, ticker=_orphan_ticker,
+                                          side=_orphan_side, count=_orphan_qty, action='sell', **_npk)
+                bot['_race_orphan_sell_price'] = _new_ask
+                print(f'📤 RACE ORPHAN WALK: {bot_id} {_cur_price}→{_new_ask}¢')
+            except Exception as _we:
+                if '404' in str(_we):
+                    bot['_race_orphan_sell_oid'] = None  # will re-post next cycle
+                    print(f'📤 RACE ORPHAN GONE: {bot_id} order 404 — will re-post')
+        return
+
     # ── Smart-stopped cleanup: cancel unfilled orders and complete ──
     if bot.get('_smart_stopped') and status in ('dog_anchor_posted', 'waiting_repeat'):
         _cancel_oid = bot.get('dog_order_id')
@@ -10193,6 +10281,66 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔄 PHANTOM RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
+            # ── Dual exit race check: verify dog sell wasn't filled before cancel ──
+            _ds_verify_oid = bot.pop('_dog_sell_verify_oid', None)
+            if _ds_verify_oid:
+                try:
+                    api_read_limiter.wait()
+                    _ds_resp = kalshi_client.get_order(_ds_verify_oid)
+                    _ds_ord = _ds_resp.get('order', _ds_resp) if isinstance(_ds_resp, dict) else {}
+                    _ds_race_fills = _parse_fill_count(_ds_ord)
+                    if _ds_race_fills > 0:
+                        # Dog sell filled during race — dog position was sold, hedge is orphaned
+                        # Kalshi auto-netted the dog buy+sell, so we hold fav with no matching dog
+                        _ds_sell_price = bot.get('dog_sell_price', bot['dog_price'])
+                        _ds_buy_fee = _kalshi_side_fee_cents(bot['dog_price'], _ds_race_fills)
+                        _ds_sell_fee = _kalshi_side_fee_cents(_ds_sell_price, _ds_race_fills)
+                        _ds_pnl = (_ds_sell_price - bot['dog_price']) * _ds_race_fills - _ds_buy_fee - _ds_sell_fee
+                        print(f'⚠ DUAL EXIT RACE DETECTED: {bot_id} dog sell had {_ds_race_fills} fills — '
+                              f'fav is orphaned, selling back as maker')
+                        bot_log('DUAL_EXIT_RACE_DOG_SOLD', bot_id, {
+                            'dog_sell_fills': _ds_race_fills, 'dog_sell_oid': _ds_verify_oid,
+                            'dog_price': bot['dog_price'], 'sell_price': _ds_sell_price,
+                            'fav_price': bot.get('fav_price'), 'pnl': _ds_pnl,
+                        }, level='WARN')
+                        # Record the dog sell trade
+                        if _ds_pnl >= 0:
+                            session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _ds_pnl
+                        else:
+                            session_pnl['gross_loss_cents'] += abs(_ds_pnl)
+                        session_pnl['stopped_bots'] += 1
+                        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _ds_pnl
+                        bot['_trade_recorded'] = True
+                        _record_trade({
+                            'bot_id': bot_id, 'ticker': ticker,
+                            'yes_price': bot['dog_price'] if dog_side == 'yes' else _ds_sell_price,
+                            'no_price': bot['dog_price'] if dog_side == 'no' else _ds_sell_price,
+                            'quantity': _ds_race_fills,
+                            'profit_cents': max(0, _ds_pnl), 'loss_cents': max(0, -_ds_pnl),
+                            'fee_cents': _ds_buy_fee + _ds_sell_fee, 'result': 'anchor_dual_exit',
+                            'exit_via': 'dual_exit_race_dog_sold', 'dog_side': dog_side,
+                            'dog_price': bot['dog_price'], 'sell_back_price': _ds_sell_price,
+                            'timestamp': now, 'placed_at': bot.get('created_at', now),
+                            'bot_category': 'anchor_dog',
+                            'cross_market': bot.get('cross_market', False),
+                            'hedge_ticker': hedge_ticker,
+                        }, bot)
+                        # Flag orphaned fav contracts for maker sell
+                        bot['_race_orphan_fav_qty'] = min(_ds_race_fills, qty)
+                        bot['_race_orphan_fav_side'] = fav_side
+                        bot['_race_orphan_fav_ticker'] = hedge_ticker
+                        bot.setdefault('_run_history', []).append({
+                            'run': bot.get('repeats_done', 0) + 1,
+                            'pnl': _ds_pnl, 'result': 'dual_exit',
+                            'dog_price': bot['dog_price'], 'fav_price': _ds_sell_price,
+                            'qty': _ds_race_fills, 'ts': now,
+                        })
+                        save_state()
+                        actions.append({'bot_id': bot_id, 'action': 'dual_exit_race_orphan', 'pnl': _ds_pnl})
+                        return  # don't record the fake arb — monitor will handle the fav sell
+                except Exception as _ds_err:
+                    print(f'⚠ DUAL EXIT RACE VERIFY FAILED: {bot_id}: {_ds_err} — proceeding with normal completion')
+
             # BOTH LEGS FILLED — arb complete!
             actual_fav_price = (get_actual_fill_price(fav_order_id, fav_side) if fav_order_id else None) or bot['fav_price']
             bot['fav_price'] = actual_fav_price
@@ -10571,14 +10719,17 @@ def _handle_phantom(bot_id, bot, actions):
                     # ── Dog sell won the race — cancel hedge, clean exit ──
                     _dog_sell_price = bot.get('dog_sell_price', 0)
                     _hedge_fills = _cancel_hedge_verified(bot, bot_id)
-                    # If hedge had fills, hold them — they're the favorite, likely to win at settlement
+                    # If hedge had fills, sell them back as maker (they're orphaned)
                     if _hedge_fills > 0:
-                        print(f'📌 DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — holding fav for settlement')
-                        bot_log('DUAL_EXIT_HEDGE_HOLDS', bot_id, {
+                        print(f'⚠ DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — flagging for maker sell')
+                        bot_log('DUAL_EXIT_HEDGE_RACE_ORPHAN', bot_id, {
                             'hedge_fills': _hedge_fills, 'fav_side': fav_side,
                             'fav_price': bot.get('fav_price', 0),
                             'hedge_ticker': hedge_ticker,
-                        })
+                        }, level='WARN')
+                        bot['_race_orphan_fav_qty'] = _hedge_fills
+                        bot['_race_orphan_fav_side'] = fav_side
+                        bot['_race_orphan_fav_ticker'] = hedge_ticker
                     _sell_pnl = (_dog_sell_price - dog_price) * qty
                     _buy_fee = _kalshi_side_fee_cents(dog_price, qty)
                     _sell_fee = _kalshi_side_fee_cents(_dog_sell_price, qty) if _dog_sell_price > 0 else 0
@@ -10619,7 +10770,11 @@ def _handle_phantom(bot_id, bot, actions):
                         'raw_hedge_ms': bot.get('raw_hedge_ms'),
                         'ts': now,
                     })
-                    _phantom_set_final_status(bot, bot_id)
+                    if bot.get('_race_orphan_fav_qty', 0) > 0:
+                        # Don't finalize — monitor will sell the orphaned fav first
+                        print(f'📤 DUAL EXIT: {bot_id} deferring completion — selling {bot["_race_orphan_fav_qty"]}x orphaned fav first')
+                    else:
+                        _phantom_set_final_status(bot, bot_id)
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'dual_exit_dog_sold', 'pnl': _net_pnl})
                     return
@@ -13649,12 +13804,16 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         'ts': now,
     })
 
-    # Repeat logic — sellback counts as a cycle (always a loss), re-anchor if repeats remain
+    # Repeat logic — sellback counts as a cycle but NOT as a consecutive loss for smart mode
     repeats_done_now = bot.get('repeats_done', 0) + 1
     bot['repeats_done'] = repeats_done_now
     repeat_total = bot.get('repeat_count', 0)
-    # Smart mode: sellback is always a loss
-    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
+    # Smart mode: sellbacks are market conditions, not strategy failures — don't count as losses
+    if bot.get('smart_mode') and not bot.get('_smart_stopped'):
+        _smart_repeat = True
+        _smart_reason = 'sellback_continue'  # sellbacks never trigger smart stop
+    else:
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, -loss_cents)
     _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
     if _will_repeat:
         bot['status'] = 'waiting_repeat'

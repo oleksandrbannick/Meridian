@@ -3714,9 +3714,9 @@ def _execute_phantom_hedge(bot_id):
         # Ceiling handling: if fav bid is already past breakeven, don't hedge — sell back.
         # Posting at breakeven when bid is above it means zero chance of fill.
         _combined_at_bid = dog_price + fav_bid if fav_bid > 0 else 999
-        if _combined_at_bid > 103:
-            # Fav bid way past breakeven — hedge can't fill profitably, sell back instantly
-            print(f'🚫 PHANTOM HEDGE SKIP+SELLBACK: {bot_id} combined@bid={_combined_at_bid}¢ > 103 (dog={dog_price}¢ fav_bid={fav_bid}¢) — instant sellback')
+        if _combined_at_bid > 100:
+            # Fav bid past breakeven — hedge can't fill, sell back instantly
+            print(f'🚫 PHANTOM HEDGE SKIP+SELLBACK: {bot_id} combined@bid={_combined_at_bid}¢ > 100 (dog={dog_price}¢ fav_bid={fav_bid}¢) — instant sellback')
             bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
                 'dog_price': dog_price, 'fav_bid': fav_bid,
                 'max_hedge': max_hedge, 'combined_at_bid': _combined_at_bid,
@@ -3727,7 +3727,7 @@ def _execute_phantom_hedge(bot_id):
             _phantom_sell_back(bot_id, bot, dog_price, fav_bid, _combined_at_bid, [])
             return
         if dog_price + hedge_price > 100:
-            # Bid is under ceiling but hedge price exceeds — cap at breakeven
+            # Bid is at/under breakeven but hedge price exceeds — cap at breakeven
             hedge_price = max(1, max_hedge)
             print(f'📌 PHANTOM HEDGE AT CEILING: {bot_id} capped to {hedge_price}¢ (combined={dog_price + hedge_price}¢ bid={fav_bid}¢) — posting and holding')
             bot_log('PHANTOM_HEDGE_AT_CEILING_POST', bot_id, {
@@ -10508,17 +10508,17 @@ def _handle_phantom(bot_id, bot, actions):
         if _ceiling_combined < WALK_CEILING:
             bot['_over_ceiling_since'] = None  # under ceiling — clear timer
         else:
-            # At or past 103¢ — 2s then sellback (last resort, taker cross should catch before this)
+            # At or past 100¢ — 3s then sellback (mean reversion window)
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
-                print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢ ceiling={WALK_CEILING}¢) — 2s timer started')
+                print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢ ceiling={WALK_CEILING}¢) — 3s timer started')
                 bot_log('PHANTOM_OVER_CEILING_START', bot_id, {
                     'dog_price': dog_price, 'fav_price': _current_fav,
                     'fav_bid': _live_fav_bid, 'ceiling_combined': _ceiling_combined,
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                _ceiling_timeout = 15  # 15s — patient at 100c, catch mean reversion from spikes
+                _ceiling_timeout = 3  # 3s — quick mean reversion window, then sell back
                 if _ceiling_elapsed >= _ceiling_timeout:
                     qty = bot.get('quantity', 1)
                     # ── Try taker cross at ask if combined <= 100¢ ──

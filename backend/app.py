@@ -10571,6 +10571,22 @@ def _handle_phantom(bot_id, bot, actions):
                     # ── Dog sell won the race — cancel hedge, clean exit ──
                     _dog_sell_price = bot.get('dog_sell_price', 0)
                     _hedge_fills = _cancel_hedge_verified(bot, bot_id)
+                    # If hedge had fills, sell those fav contracts back immediately
+                    if _hedge_fills > 0:
+                        print(f'⚠ DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — selling fav back')
+                        try:
+                            _fav_sold, _fav_sell_info = execute_sell(hedge_ticker, fav_side, _hedge_fills,
+                                                                      reason=f'dual_exit_hedge_cleanup_{bot_id}')
+                            if _fav_sold:
+                                print(f'✅ DUAL EXIT HEDGE CLEANUP: {bot_id} sold {_hedge_fills} {fav_side} back')
+                            else:
+                                print(f'⚠ DUAL EXIT HEDGE CLEANUP FAILED: {bot_id} — may be orphaned')
+                        except Exception as _hce:
+                            print(f'⚠ DUAL EXIT HEDGE CLEANUP ERROR: {bot_id}: {_hce}')
+                        bot_log('DUAL_EXIT_HEDGE_CLEANUP', bot_id, {
+                            'hedge_fills': _hedge_fills, 'fav_side': fav_side,
+                            'hedge_ticker': hedge_ticker,
+                        })
                     _sell_pnl = (_dog_sell_price - dog_price) * qty
                     _buy_fee = _kalshi_side_fee_cents(dog_price, qty)
                     _sell_fee = _kalshi_side_fee_cents(_dog_sell_price, qty) if _dog_sell_price > 0 else 0

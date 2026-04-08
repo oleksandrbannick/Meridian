@@ -10065,8 +10065,8 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         total_cost = dog_price + hedge_price
-        if total_cost > 103:
-            print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 103¢ — selling dog back')
+        if total_cost > 100:
+            print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
             bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
                 'dog_price': dog_price, 'hedge_price': hedge_price,
                 'fav_bid': fav_bid, 'total_cost': total_cost,
@@ -10478,7 +10478,7 @@ def _handle_phantom(bot_id, bot, actions):
         # ── Fav Bid-Follow System ──
         # Snap to bid every cycle. Walk up to 103¢ combined (maker can fill near bid).
         # Every cycle: if crossing ask gives combined ≤ 100¢, take it immediately.
-        WALK_CEILING = 103  # maker walks up to 103, taker cross catches at ≤100
+        WALK_CEILING = 100  # breakeven cap — sit at front of queue, catch mean reversion
         dog_price = bot['dog_price']
 
         # Check absolute timeout — give up after hedge_timeout_s total
@@ -10518,7 +10518,7 @@ def _handle_phantom(bot_id, bot, actions):
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                _ceiling_timeout = 3  # 3s mean reversion window at ceiling, then sellback
+                _ceiling_timeout = 15  # 15s — patient at 100c, catch mean reversion from spikes
                 if _ceiling_elapsed >= _ceiling_timeout:
                     qty = bot.get('quantity', 1)
                     # ── Try taker cross at ask if combined <= 100¢ ──
@@ -10840,15 +10840,15 @@ def _handle_phantom(bot_id, bot, actions):
         # Walk target: always bid — walk up to 103¢ combined (maker fills at 99-101 are fine)
         walk_target = current_fav_bid
 
-        # Walk ceiling: 103¢ combined
-        max_fav_hold = WALK_CEILING - dog_price       # 103 - dog
+        # Walk ceiling: 100¢ combined — breakeven cap
+        max_fav_hold = WALK_CEILING - dog_price       # 100 - dog
         walk_target = min(walk_target, max_fav_hold)
 
         if walk_target <= 0:
             return
 
-        # ── Snap target: bid capped at 103¢ combined ──
-        # Maker can fill at 99-101. Past 101 at bid → taker cross or instant sellback.
+        # ── Snap target: bid capped at 100¢ combined ──
+        # Sit at breakeven, front of queue. 15s timer handles exit if bid stays above.
         new_fav_price = min(walk_target, max_fav_hold)
         # Also snap DOWN if above ceiling (e.g., after ceiling change)
         if current_fav_price > max_fav_hold:

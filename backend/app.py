@@ -2028,13 +2028,17 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
     """Total Kalshi maker fee for both legs of an arb trade, in cents."""
     return _kalshi_side_fee_cents(yes_price, qty) + _kalshi_side_fee_cents(no_price, qty)
 
-def _smart_mode_should_repeat(bot, cycle_pnl):
+def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
     """Smart mode repeat decision. Returns (should_repeat: bool, reason: str).
-    Smart mode: repeat on wins, stop after 2 consecutive losses."""
+    Smart mode: repeat on wins, stop after 2 consecutive losses.
+    Dual exits don't count as losses — they're normal ceiling exits, not bad trades."""
     if not bot.get('smart_mode'):
         return None, ''  # not smart mode, use normal repeat logic
     if bot.get('_smart_stopped'):
         return False, 'manual_stop'
+    # Dual exits are neutral — don't count toward consecutive losses
+    if exit_type == 'dual_exit':
+        return True, 'smart_dual_exit'
     losses = bot.get('consecutive_losses', 0)
     if cycle_pnl < 0:
         losses += 1
@@ -9554,8 +9558,41 @@ def _handle_phantom(bot_id, bot, actions):
             })
             bot['_race_orphan_fav_qty'] = 0
             bot['_race_orphan_sell_oid'] = None
-            # Now continue to repeat or complete
-            _phantom_set_final_status(bot, bot_id)
+            bot['_race_orphan_sell_attempts'] = 0
+            # Now continue to repeat or complete (dual exit repeat logic)
+            _ro_repeats_done = bot.get('repeats_done', 0) + 1
+            bot['repeats_done'] = _ro_repeats_done
+            _ro_repeat_total = bot.get('repeat_count', 0)
+            _ro_last_pnl = bot.get('_last_pnl', 0)
+            _ro_smart_repeat, _ro_smart_reason = _smart_mode_should_repeat(bot, _ro_last_pnl, exit_type='dual_exit')
+            _ro_will_repeat = _ro_smart_repeat if _ro_smart_repeat is not None else (_ro_repeats_done <= _ro_repeat_total)
+            if _ro_will_repeat:
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = time.time() + 3
+                bot['_just_completed'] = True
+                bot['_last_result'] = 'dual_exit'
+                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _ro_last_pnl
+                bot['net_pnl_cents'] = 0
+                bot['dog_filled_at'] = None
+                bot['fav_order_id'] = None
+                bot['fav_fill_qty'] = 0
+                bot['dog_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
+                bot['_over_ceiling_since'] = None
+                bot['_all_dog_order_ids'] = []
+                bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
+                bot['_last_repost_at'] = 0
+                if bot.get('_original_qty'):
+                    bot['quantity'] = bot['_original_qty']
+                    bot.pop('_original_qty', None)
+                bot.pop('_partial_hedge_qty', None)
+                _ro_label = f'smart({_ro_smart_reason})' if bot.get('smart_mode') else f'cycle {_ro_repeats_done}/{_ro_repeat_total}'
+                print(f'🔄 PHANTOM RACE ORPHAN REPEAT: {bot_id} {_ro_label} — re-anchoring after orphan cleanup')
+            else:
+                _phantom_set_final_status(bot, bot_id)
             save_state()
             return
 
@@ -10780,7 +10817,7 @@ def _handle_phantom(bot_id, bot, actions):
                     _de_repeats_done = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = _de_repeats_done
                     _de_repeat_total = bot.get('repeat_count', 0)
-                    _de_smart_repeat, _de_smart_reason = _smart_mode_should_repeat(bot, _net_pnl)
+                    _de_smart_repeat, _de_smart_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='dual_exit')
                     _de_will_repeat = _de_smart_repeat if _de_smart_repeat is not None else (_de_repeats_done <= _de_repeat_total)
                     if _de_will_repeat:
                         bot['status'] = 'waiting_repeat'

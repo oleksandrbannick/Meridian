@@ -6135,7 +6135,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <div style="color:#ffaa00;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`}</div>
                 ${isLadder && dogFillQty === 0 ? '<div style="color:#ffaa00;font-size:10px;">Waiting for fill</div>' : ''}
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
+                <div style="color:#555;font-size:10px;margin-bottom:${bot.dog_sell_order_id ? '2' : '6'}px;">bid <strong style="color:#ffaa00;">${dogBid || '?'}¢</strong> · ask <strong style="color:#ffaa00;">${dogAsk || '?'}¢</strong></div>
+                ${bot.dog_sell_order_id ? `<div style="color:#ff8800;font-size:10px;font-weight:700;margin-bottom:4px;">📤 Sell @${bot.dog_sell_price || '?'}¢${(bot.dog_sell_fill_qty || 0) > 0 ? ` · ${bot.dog_sell_fill_qty}/${qty} sold` : ''}</div>` : ''}
                 ${isLadder ? rungsHTML : `
                     <div style="display:flex;align-items:center;gap:6px;">
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
@@ -6299,21 +6300,12 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const timerVal = atCeiling && ceilingStart > 0 ? ceilingSecsLeft : secsLeft;
                     const timerLabel = atCeiling && ceilingStart > 0 ? `⏱ ${Math.round(ceilingSecsLeft)}s` : `${Math.round(secsLeft)}s`;
                     const timerCol = atCeiling ? '#ff4444' : secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff';
-                    const dogSide = bot.dog_side || 'yes';
-                    const dogBid = bot[`live_${dogSide}_bid`] || 0;
-                    const dogAsk = bot[`live_${dogSide}_ask`] || 0;
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
-                            <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong></span>
-                            ${hasDualExit ? `<span style="color:#ff8800;font-weight:700;">sell ${dogSide.toUpperCase()}@${dogSellPrice}¢</span><span style="color:#3a4560;">vs</span>` : ''}
-                            <span style="color:#00ff88;font-weight:700;">hedge ${favSide.toUpperCase()}@${favPrice}¢</span>
-                            ${hasDualExit && dogSellFills > 0 ? `<span style="color:#ff8800;font-size:9px;">(${dogSellFills}/${bot.quantity || '?'} sold)</span>` : ''}
+                            <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${favSide.toUpperCase()} hedge</span>
+                            <span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>
                         </div>
-                        ${hasDualExit ? `<div style="display:flex;gap:12px;color:#8892a6;font-size:9px;margin-bottom:2px;">
-                            <span>🐕 Dog: bid ${dogBid}¢ · ask ${dogAsk}¢ · sell@${dogSellPrice}¢</span>
-                            <span>⭐ Fav: bid ${favBid}¢ · hedge@${favPrice}¢</span>
-                        </div>` : ''}
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                             <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
                             <span style="color:${timerCol};font-weight:700;font-family:monospace;font-size:12px;">${timerLabel}</span>

@@ -10516,27 +10516,31 @@ def _handle_phantom(bot_id, bot, actions):
                 # Skip for cross-market bots — their dog positions are legitimately held for settlement
                 if not _is_cross:
                     _pos_qty = _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
-                    if _pos_qty is not None and _pos_qty > 0:
-                        print(f'⚠ PHANTOM ORPHAN AT REPEAT: {bot_id} Kalshi shows {_pos_qty} {dog_side} on {ticker} — selling back before re-anchor')
+                    if _pos_qty is not None and _pos_qty != 0:
+                        # Determine correct side from position sign (positive=YES, negative=NO)
+                        _orphan_side = 'yes' if _pos_qty > 0 else 'no'
+                        _orphan_count = abs(_pos_qty)
+                        _orphan_type = 'dog' if _orphan_side == dog_side else 'fav'
+                        print(f'⚠ PHANTOM ORPHAN AT REPEAT: {bot_id} Kalshi shows {_orphan_count} {_orphan_side} ({_orphan_type}) on {ticker} — selling back before re-anchor')
                         _audit('PHANTOM_ORPHAN_AT_REPEAT', bot_id, {
-                            'ticker': ticker, 'orphan_qty': _pos_qty, 'side': dog_side,
+                            'ticker': ticker, 'orphan_qty': _orphan_count, 'side': _orphan_side,
+                            'orphan_type': _orphan_type,
                         })
-                        try:
-                            api_rate_limiter.wait()
-                            _sell_resp = kalshi_client.create_order(
-                                ticker=ticker, side=dog_side, action='sell',
-                                order_type='market', count=_pos_qty,
-                            )
-                            _sell_oid = _sell_resp.get('order', {}).get('order_id', '?')
-                            print(f'🔙 PHANTOM ORPHAN SOLD: {bot_id} sold {_pos_qty} {dog_side} at market → {_sell_oid}')
+                        _sold, _sell_info = execute_sell(ticker, _orphan_side, _orphan_count,
+                                                         reason=f'phantom_orphan_repeat_{bot_id}')
+                        if _sold:
+                            _sell_oid = (_sell_info or {}).get('order_id', '?') if isinstance(_sell_info, dict) else '?'
+                            print(f'🔙 PHANTOM ORPHAN SOLD: {bot_id} sold {_orphan_count} {_orphan_side} ({_orphan_type}) → {_sell_oid}')
                             _audit('PHANTOM_ORPHAN_SOLD', bot_id, {
-                                'ticker': ticker, 'qty': _pos_qty, 'side': dog_side,
-                                'order_id': _sell_oid,
+                                'ticker': ticker, 'qty': _orphan_count, 'side': _orphan_side,
+                                'orphan_type': _orphan_type, 'order_id': _sell_oid,
                             })
-                        except Exception as _sell_err:
-                            print(f'⚠ PHANTOM ORPHAN SELL FAILED: {bot_id} {_sell_err}')
+                        else:
+                            _sell_err_msg = str(_sell_info)[:200] if _sell_info else 'execute_sell_false'
+                            print(f'⚠ PHANTOM ORPHAN SELL FAILED: {bot_id} {_sell_err_msg}')
                             _audit('PHANTOM_ORPHAN_SELL_FAIL', bot_id, {
-                                'ticker': ticker, 'qty': _pos_qty, 'error': str(_sell_err)[:200],
+                                'ticker': ticker, 'qty': _orphan_count, 'side': _orphan_side,
+                                'orphan_type': _orphan_type, 'error': _sell_err_msg,
                             })
             else:
                 if _is_cross:

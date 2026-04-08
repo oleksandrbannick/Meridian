@@ -13569,6 +13569,7 @@ function filterPhantomLog() {
         const net = (t.profit_cents||0) - (t.loss_cents||0);
         const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
         const isDualExit = t.result === 'anchor_dual_exit';
+        const isDualExitArb = t.exit_via === 'dual_exit_arb_complete' || t.dual_exit_active;
         const isOrphanRecovery = t.result === 'race_orphan_cleared';
         const isWin = net > 0;
         const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
@@ -13599,6 +13600,10 @@ function filterPhantomLog() {
             statusText = 'SELLBACK'; statusBg = 'rgba(255,68,68,0.15)'; statusFg = '#ff4444';
         } else if (isDualExit) {
             statusText = 'DUAL EXIT'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
+        } else if (isDualExitArb && isWin) {
+            statusText = 'DE ARB ✓'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
+        } else if (isDualExitArb && !isWin) {
+            statusText = 'DE ARB'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
         } else if (isWin) {
             statusText = 'COMPLETED'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
         } else {

@@ -10338,6 +10338,7 @@ def _handle_phantom(bot_id, bot, actions):
 
             # ── Dual exit race check: verify dog sell wasn't filled before cancel ──
             _ds_verify_oid = bot.pop('_dog_sell_verify_oid', None)
+            _dual_exit_was_active = _ds_verify_oid is not None or bot.get('dog_sell_order_id') is not None
             if _ds_verify_oid:
                 try:
                     api_read_limiter.wait()
@@ -10431,7 +10432,8 @@ def _handle_phantom(bot_id, bot, actions):
                 'loss_cents': abs(net_pnl) if net_pnl < 0 else 0,
                 'fee_cents': fee,
                 'result': 'completed' if net_pnl >= 0 else 'arb_loss',
-                'exit_via': 'anchor_dog_complete',
+                'exit_via': 'dual_exit_arb_complete' if _dual_exit_was_active else 'anchor_dog_complete',
+                'dual_exit_active': _dual_exit_was_active,
                 'first_leg': dog_side,
                 'dog_side': dog_side,
                 'dog_price': dog_price,

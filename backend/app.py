@@ -10571,20 +10571,12 @@ def _handle_phantom(bot_id, bot, actions):
                     # ── Dog sell won the race — cancel hedge, clean exit ──
                     _dog_sell_price = bot.get('dog_sell_price', 0)
                     _hedge_fills = _cancel_hedge_verified(bot, bot_id)
-                    # If hedge had fills, sell those fav contracts back immediately
+                    # If hedge had fills, hold them — they're the favorite, likely to win at settlement
                     if _hedge_fills > 0:
-                        print(f'⚠ DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — selling fav back')
-                        try:
-                            _fav_sold, _fav_sell_info = execute_sell(hedge_ticker, fav_side, _hedge_fills,
-                                                                      reason=f'dual_exit_hedge_cleanup_{bot_id}')
-                            if _fav_sold:
-                                print(f'✅ DUAL EXIT HEDGE CLEANUP: {bot_id} sold {_hedge_fills} {fav_side} back')
-                            else:
-                                print(f'⚠ DUAL EXIT HEDGE CLEANUP FAILED: {bot_id} — may be orphaned')
-                        except Exception as _hce:
-                            print(f'⚠ DUAL EXIT HEDGE CLEANUP ERROR: {bot_id}: {_hce}')
-                        bot_log('DUAL_EXIT_HEDGE_CLEANUP', bot_id, {
+                        print(f'📌 DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — holding fav for settlement')
+                        bot_log('DUAL_EXIT_HEDGE_HOLDS', bot_id, {
                             'hedge_fills': _hedge_fills, 'fav_side': fav_side,
+                            'fav_price': bot.get('fav_price', 0),
                             'hedge_ticker': hedge_ticker,
                         })
                     _sell_pnl = (_dog_sell_price - dog_price) * qty

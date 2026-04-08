@@ -9559,7 +9559,29 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_race_orphan_fav_qty'] = 0
             bot['_race_orphan_sell_oid'] = None
             bot['_race_orphan_sell_attempts'] = 0
+            # Record orphan sell as a trade (fav bought at fav_price, sold at _sell_price)
+            _ro_fav_price = bot.get('fav_price', 0)
+            _ro_orphan_pnl = (_sell_price - _ro_fav_price) * _orphan_qty if _sell_price and _ro_fav_price else 0
+            _ro_orphan_fee = _kalshi_side_fee_cents(_sell_price, _orphan_qty) if _sell_price else 0
+            _ro_orphan_net = _ro_orphan_pnl - _ro_orphan_fee
+            if _ro_orphan_net >= 0:
+                session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _ro_orphan_net
+            else:
+                session_pnl['gross_loss_cents'] += abs(_ro_orphan_net)
+            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _ro_orphan_net
+            bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _ro_orphan_net
+            _record_trade({
+                'bot_id': bot_id, 'ticker': _orphan_ticker,
+                'yes_price': _sell_price if _orphan_side == 'yes' else _ro_fav_price,
+                'no_price': _sell_price if _orphan_side == 'no' else _ro_fav_price,
+                'quantity': _orphan_qty,
+                'profit_cents': max(0, _ro_orphan_net), 'loss_cents': max(0, -_ro_orphan_net),
+                'fee_cents': _ro_orphan_fee, 'result': 'race_orphan_cleared',
+                'exit_via': 'race_orphan_sell', 'bot_category': 'anchor_dog',
+                'timestamp': time.time(), 'placed_at': bot.get('created_at', time.time()),
+            }, bot)
             # Now continue to repeat or complete (dual exit repeat logic)
+            # Note: lifetime_pnl for the main dual exit was already tracked before orphan flag
             _ro_repeats_done = bot.get('repeats_done', 0) + 1
             bot['repeats_done'] = _ro_repeats_done
             _ro_repeat_total = bot.get('repeat_count', 0)
@@ -9571,7 +9593,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['waiting_repeat_since'] = time.time() + 3
                 bot['_just_completed'] = True
                 bot['_last_result'] = 'dual_exit'
-                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _ro_last_pnl
+                # Don't add _last_pnl to lifetime_pnl — already tracked before orphan flag
                 bot['net_pnl_cents'] = 0
                 bot['dog_filled_at'] = None
                 bot['fav_order_id'] = None
@@ -10358,6 +10380,9 @@ def _handle_phantom(bot_id, bot, actions):
                             'cross_market': bot.get('cross_market', False),
                             'hedge_ticker': hedge_ticker,
                         }, bot)
+                        # Track P&L for repeat logic after orphan cleanup
+                        bot['_last_pnl'] = _ds_pnl
+                        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _ds_pnl
                         # Flag orphaned fav contracts for maker sell
                         bot['_race_orphan_fav_qty'] = min(_ds_race_fills, qty)
                         bot['_race_orphan_fav_side'] = fav_side
@@ -10809,6 +10834,9 @@ def _handle_phantom(bot_id, bot, actions):
                     })
                     if bot.get('_race_orphan_fav_qty', 0) > 0:
                         # Don't finalize — monitor will sell the orphaned fav first
+                        # Track P&L now so orphan repeat logic has correct values
+                        bot['_last_pnl'] = _net_pnl
+                        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _net_pnl
                         print(f'📤 DUAL EXIT: {bot_id} deferring completion — selling {bot["_race_orphan_fav_qty"]}x orphaned fav first')
                         save_state()
                         actions.append({'bot_id': bot_id, 'action': 'dual_exit_dog_sold', 'pnl': _net_pnl})

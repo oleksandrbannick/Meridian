@@ -1452,13 +1452,20 @@ def get_batch_prices():
                 n_sorted = sorted(n_levels, key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
                 best_yes_bid = (y_sorted[0][0] if isinstance(y_sorted[0], list) else y_sorted[0].get('price', 0)) if y_sorted else 0
                 best_no_bid  = (n_sorted[0][0] if isinstance(n_sorted[0], list) else n_sorted[0].get('price', 0)) if n_sorted else 0
-                prices[ticker] = {
+                _ob_price = {
                     'yes_bid': best_yes_bid,
                     'no_bid':  best_no_bid,
                     'yes_ask': 100 - best_no_bid if best_no_bid > 0 else 0,
                     'no_ask':  100 - best_yes_bid if best_yes_bid > 0 else 0,
                     'source': 'orderbook',
                 }
+                prices[ticker] = _ob_price
+                # Seed WS cache so next refresh uses cached data (no REST call)
+                if ws_manager and best_yes_bid > 0:
+                    ws_manager._price_cache[ticker] = {
+                        'yes_bid': best_yes_bid, 'no_bid': best_no_bid,
+                        'yes_ask': _ob_price['yes_ask'], 'no_ask': _ob_price['no_ask'],
+                    }
             except Exception as ob_err:
                 # Skip this ticker silently
                 continue

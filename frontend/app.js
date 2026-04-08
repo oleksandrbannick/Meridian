@@ -12042,6 +12042,7 @@ let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDays = [];      // Array of YYYY-MM-DD strings, empty = full history
 let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
 let _phantomActiveDepth = 'all';   // Depth floor filter for Phantom history panels
+let _phantomActiveExit = 'all';    // Exit type filter: all | arb | dual_exit | orphan
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
@@ -13211,7 +13212,7 @@ function renderDogStatsAndDepth(trades, pnl) {
         const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
         const dualExits = trades.filter(t => t.result === 'anchor_dual_exit').length;
 
-        const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all';
+        const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all' || _phantomActiveExit !== 'all';
         let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
 
         if (isFiltered) {
@@ -13401,13 +13402,58 @@ function renderDogSportBreakdown(allTrades) {
     } else {
         sportBrkPanel.innerHTML = '';
     }
+
+    // Exit type filter pills
+    const exitPanel = document.getElementById('dog-exit-filter');
+    if (exitPanel) {
+        const exitCounts = { arb: 0, dual_exit: 0, orphan: 0, sellback: 0 };
+        trades.forEach(t => {
+            if (t.result === 'anchor_dual_exit') exitCounts.dual_exit++;
+            else if (t.result === 'race_orphan_cleared') exitCounts.orphan++;
+            else if (t.result === 'anchor_sellback' || t.result === 'ladder_sellback') exitCounts.sellback++;
+            else exitCounts.arb++;
+        });
+        const pills = [
+            { key: 'all', label: 'All', count: trades.length, col: '#8892a6' },
+            { key: 'arb', label: 'Arb', count: exitCounts.arb, col: '#00ff88' },
+            { key: 'dual_exit', label: 'Dual Exit', count: exitCounts.dual_exit, col: '#00aaff' },
+            { key: 'orphan', label: 'Orphan Recovery', count: exitCounts.orphan, col: '#aa66ff' },
+        ];
+        if (exitCounts.sellback > 0) pills.push({ key: 'sellback', label: 'Sellback', count: exitCounts.sellback, col: '#ff4444' });
+        exitPanel.innerHTML = `
+            <h4 style="color:#00aaff;font-size:12px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">By Exit Type</h4>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                ${pills.filter(p => p.key === 'all' || p.count > 0).map(p => {
+                    const active = _phantomActiveExit === p.key;
+                    return `<div onclick="selectPhantomExit('${p.key}')" style="background:${active ? p.col+'18' : '#0f1419'};border:1px solid ${active ? p.col : '#1e2740'};border-radius:6px;padding:6px 12px;cursor:pointer;text-align:center;min-width:60px;">
+                        <div style="color:${active ? p.col : '#8892a6'};font-size:11px;font-weight:700;">${p.label}</div>
+                        <div style="color:#555;font-size:9px;margin-top:1px;">${p.count}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+    }
 }
 
 function _applyPhantomFilters(trades) {
     let f = trades;
     if (_phantomActiveSport !== 'all') f = f.filter(t => (t.sport||'Other') === _phantomActiveSport);
     if (_phantomActiveDepth !== 'all') f = f.filter(t => (t.anchor_depth||0) === _phantomActiveDepth);
+    if (_phantomActiveExit !== 'all') {
+        if (_phantomActiveExit === 'arb') f = f.filter(t => t.result !== 'anchor_dual_exit' && t.result !== 'race_orphan_cleared' && t.result !== 'anchor_sellback' && t.result !== 'ladder_sellback');
+        else if (_phantomActiveExit === 'dual_exit') f = f.filter(t => t.result === 'anchor_dual_exit');
+        else if (_phantomActiveExit === 'orphan') f = f.filter(t => t.result === 'race_orphan_cleared');
+        else if (_phantomActiveExit === 'sellback') f = f.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback');
+    }
     return f;
+}
+function selectPhantomExit(exit) {
+    if (exit === _phantomActiveExit && exit !== 'all') exit = 'all';
+    _phantomActiveExit = exit;
+    const allTrades = window._phantomAllTrades || [];
+    const filtered = _applyPhantomFilters(allTrades);
+    renderDogStatsAndDepth(filtered, window._phantomPnl || {});
+    renderDogSportBreakdown(allTrades);
+    filterPhantomLog();
 }
 
 function selectPhantomSport(sport) {
@@ -13475,6 +13521,7 @@ async function loadDogHistory() {
         window._phantomAllTrades = trades;
         _phantomActiveSport = 'all';
         _phantomActiveDepth = 'all';
+        _phantomActiveExit = 'all';
 
         renderDogStatsAndDepth(trades, pnl);
         renderDogSportBreakdown(trades);
@@ -13522,6 +13569,7 @@ function filterPhantomLog() {
         const net = (t.profit_cents||0) - (t.loss_cents||0);
         const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
         const isDualExit = t.result === 'anchor_dual_exit';
+        const isOrphanRecovery = t.result === 'race_orphan_cleared';
         const isWin = net > 0;
         const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
         const teamName = formatBotDisplayName(t.ticker||'', '');
@@ -13545,7 +13593,9 @@ function filterPhantomLog() {
 
         // Status pill
         let statusText, statusBg, statusFg;
-        if (isSellback) {
+        if (isOrphanRecovery) {
+            statusText = 'ORPHAN RECOVERY'; statusBg = 'rgba(170,102,255,0.15)'; statusFg = '#aa66ff';
+        } else if (isSellback) {
             statusText = 'SELLBACK'; statusBg = 'rgba(255,68,68,0.15)'; statusFg = '#ff4444';
         } else if (isDualExit) {
             statusText = 'DUAL EXIT'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';

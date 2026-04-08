@@ -9624,13 +9624,13 @@ def _handle_phantom(bot_id, bot, actions):
             hedge_price = fav_bid
             total_cost = actual_dog_price + hedge_price
             if total_cost > 100:
-                print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
-                bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
+                # Cap at breakeven and post — dual exit will handle the rest
+                hedge_price = max(1, 100 - actual_dog_price)
+                print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
+                bot_log('PHANTOM_CEILING_POST', bot_id, {
                     'dog_price': actual_dog_price, 'hedge_price': hedge_price,
                     'fav_bid': fav_bid, 'total_cost': total_cost,
                 })
-                _phantom_sell_back(bot_id, bot, actual_dog_price, fav_bid, total_cost, actions)
-                return
 
             # Guard: WS handler may have already posted the fav hedge
             if bot.get('_hedge_fired') and bot.get('fav_order_id'):
@@ -10072,13 +10072,13 @@ def _handle_phantom(bot_id, bot, actions):
 
         total_cost = dog_price + hedge_price
         if total_cost > 100:
-            print(f'🛑 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — selling dog back')
-            bot_log('PHANTOM_CEILING_SELLBACK', bot_id, {
+            # Cap at breakeven and post — dual exit will handle the rest
+            hedge_price = max(1, 100 - dog_price)
+            print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
+            bot_log('PHANTOM_CEILING_POST', bot_id, {
                 'dog_price': dog_price, 'hedge_price': hedge_price,
                 'fav_bid': fav_bid, 'total_cost': total_cost,
             })
-            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions)
-            return
 
         # Guard: WS handler may have completed the arb while we were making API calls above.
         # Re-check status — if it changed from dog_filled, the WS handler already handled it.
@@ -13338,9 +13338,9 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
                         'qty': qty, 'saved_cents': _saved,
                     })
                 else:
-                    print(f'📤 PHANTOM MAKER SELL TIMEOUT: {bot_id} 0 fills in 3s — taker fallback')
+                    print(f'📤 PHANTOM MAKER SELL TIMEOUT: {bot_id} 0 fills in 3s — retry next cycle')
         except Exception as _me:
-            print(f'⚠ PHANTOM MAKER SELL ERROR: {bot_id}: {_me} — taker fallback')
+            print(f'⚠ PHANTOM MAKER SELL ERROR: {bot_id}: {_me} — retry next cycle')
 
     # Maker-only: no taker fallback. If maker didn't fill everything, retry next cycle.
     _unfilled_qty = qty - _maker_filled

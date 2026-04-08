@@ -6324,6 +6324,28 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             })()}
         </div>
         ${(() => {
+            // Race orphan sell indicator
+            const _roQty = bot._race_orphan_fav_qty || 0;
+            if (_roQty <= 0) return '';
+            const _roSide = bot._race_orphan_fav_side || bot.fav_side || 'yes';
+            const _roPrice = bot._race_orphan_sell_price || 0;
+            const _roOid = bot._race_orphan_sell_oid;
+            const _roTicker = bot._race_orphan_fav_ticker || bot.hedge_ticker || bot.ticker || '';
+            const _roTeam = _roTicker.split('-').pop() || _roTicker;
+            return `<div style="margin-top:8px;background:#aa66ff08;border:1px solid #aa66ff33;border-radius:8px;padding:10px 12px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                    <span style="color:#aa66ff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Orphan Recovery</span>
+                    <span style="color:${_roOid ? '#00ff88' : '#ffaa00'};font-size:9px;font-weight:600;">${_roOid ? 'SELLING' : 'POSTING...'}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;font-size:12px;">
+                    <span style="color:#e8ecf2;font-weight:700;">${_roQty}x</span>
+                    <span style="color:${_roSide === 'yes' ? '#00ff88' : '#ff4444'};font-weight:700;">${_roSide.toUpperCase()}</span>
+                    ${_roPrice > 0 ? `<span style="color:#aa66ff;font-weight:700;">@${_roPrice}\u00a2</span>` : ''}
+                    <span style="color:#555;font-size:10px;">${_roTeam}</span>
+                </div>
+            </div>`;
+        })()}
+        ${(() => {
             // Run history breakdown (for completed/awaiting/multi-run bots)
             const _rh = bot._run_history || [];
             const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;

@@ -6351,7 +6351,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="color:#3a4560;">' + (_isExit ? '→' : '+') + '</span>'
                     + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
                     + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
-                    + (_isExit ? ' <span style="color:' + _exitCol + ';font-size:8px;font-weight:700;">' + _exitLabel + '</span>' : '')
+                    + (_isExit ? ' <span style="color:' + _exitCol + ';font-size:8px;font-weight:700;background:' + _exitCol + '18;padding:0 3px;border-radius:2px;">' + _exitLabel + '</span>' : '')
+                    + (!_isExit && r.pnl >= 0 ? ' <span style="color:#00ff88;font-size:8px;">✓</span>' : '')
                     + (r.taker ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>' : '')
                     + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'

@@ -3370,6 +3370,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             print(f'🔍 WS CANCEL-RACE CATCH: {bot_id} fill on old order {order_id[:12]} VERIFIED ({_race_fills} fills), cancelled new order {(_current_oid or "?")[:12]}')
         elif order_id == bot.get('fav_order_id') and bot['status'] == 'fav_hedge_posted':
             matched = 'fav'
+        elif order_id == bot.get('dog_sell_order_id') and bot['status'] == 'fav_hedge_posted':
+            matched = 'dog_sell'
         if not matched:
             continue
 
@@ -3411,7 +3413,22 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['yes_fill_qty'] = bot['fav_fill_qty']
                 else:
                     bot['no_fill_qty'] = bot['fav_fill_qty']
+                # Hedge filled — cancel dog sell if dual exit is active
+                if bot['fav_fill_qty'] >= qty_bot and bot.get('dog_sell_order_id'):
+                    _ds_oid = bot['dog_sell_order_id']
+                    threading.Thread(target=lambda oid=_ds_oid: _safe_cancel(oid, f'hedge_won_{bot_id}'), daemon=True).start()
+                    bot['dog_sell_order_id'] = None
+                    print(f'⚡ WS DUAL EXIT: {bot_id} hedge filled — cancelling dog sell')
                 print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
+            elif matched == 'dog_sell':
+                bot['dog_sell_fill_qty'] = bot.get('dog_sell_fill_qty', 0) + count
+                print(f'📤 WS DUAL EXIT SELL: {bot_id} +{count} → {bot["dog_sell_fill_qty"]}/{qty_bot}')
+                # Dog sell filled — cancel hedge immediately to prevent race
+                if bot['dog_sell_fill_qty'] >= qty_bot:
+                    _fav_oid = bot.get('fav_order_id')
+                    if _fav_oid:
+                        threading.Thread(target=lambda oid=_fav_oid: _safe_cancel(oid, f'dual_sold_{bot_id}'), daemon=True).start()
+                    print(f'📤 WS DUAL EXIT WON: {bot_id} dog fully sold — cancelling hedge')
             save_state()
         break
 
@@ -10495,138 +10512,115 @@ def _handle_phantom(bot_id, bot, actions):
         _at_breakeven_with_partials = _ceiling_combined >= WALK_CEILING and _has_partial_fills
         if _ceiling_combined < WALK_CEILING:
             bot['_over_ceiling_since'] = None  # under ceiling — clear timer
+            # Cancel dog sell if market reverted — hedge is now profitable
+            _ds_cancel_oid = bot.get('dog_sell_order_id')
+            if _ds_cancel_oid:
+                threading.Thread(target=lambda oid=_ds_cancel_oid: _safe_cancel(oid, f'ceiling_clear_{bot_id}'), daemon=True).start()
+                bot['dog_sell_order_id'] = None
+                bot['dog_sell_price'] = None
+                print(f'🔄 PHANTOM DUAL EXIT CANCEL: {bot_id} ceiling cleared (combined={_ceiling_combined}¢) — dog sell cancelled')
+                bot_log('PHANTOM_DUAL_EXIT_CANCEL', bot_id, {'ceiling_combined': _ceiling_combined, 'reason': 'market_reverted'})
         else:
-            # At or past 100¢ — 3s then sellback (mean reversion window)
+            # ── Dual Exit System: at ceiling, race hedge vs dog sell ──
+            # Post dog sell at ask immediately, keep hedge posted.
+            # Hedge fills → cancel sell (arb complete). Sell fills → cancel hedge (clean exit).
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
-                print(f'⏱ PHANTOM OVER CEILING: {bot_id} live combined={_ceiling_combined}¢ (posted={_posted_combined}¢ ceiling={WALK_CEILING}¢) — 3s timer started')
+                # Post dog sell at ask — race with hedge
+                _dog_ask_sell = bot.get(f'live_{dog_side}_ask', 0)
+                if _dog_ask_sell > 0 and not bot.get('dog_sell_order_id') and bot.get('fav_fill_qty', 0) == 0:
+                    try:
+                        _sell_pk = {'yes_price': _dog_ask_sell} if dog_side == 'yes' else {'no_price': _dog_ask_sell}
+                        api_rate_limiter.wait()
+                        _sell_resp = kalshi_client.create_order(
+                            ticker=ticker, side=dog_side, action='sell',
+                            count=qty, order_type='limit', **_sell_pk
+                        )
+                        _sell_oid = _sell_resp.get('order', {}).get('order_id', '')
+                        if _sell_oid:
+                            bot['dog_sell_order_id'] = _sell_oid
+                            bot['dog_sell_price'] = _dog_ask_sell
+                            bot['dog_sell_fill_qty'] = 0
+                    except Exception as _de:
+                        print(f'⚠ PHANTOM DUAL EXIT SELL FAILED: {bot_id}: {_de}')
+                print(f'⏱ PHANTOM DUAL EXIT: {bot_id} combined={_ceiling_combined}¢ — sell@{bot.get("dog_sell_price","?")}¢ racing hedge@{_current_fav}¢')
                 bot_log('PHANTOM_OVER_CEILING_START', bot_id, {
                     'dog_price': dog_price, 'fav_price': _current_fav,
                     'fav_bid': _live_fav_bid, 'ceiling_combined': _ceiling_combined,
+                    'dog_sell_price': bot.get('dog_sell_price'),
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                _ceiling_timeout = 3  # 3s — quick mean reversion window, then sell back
-                if _ceiling_elapsed >= _ceiling_timeout:
-                    qty = bot.get('quantity', 1)
-                    # ── Try taker cross at ask if combined <= 100¢ ──
-                    _fav_ask = bot.get(f'live_{fav_side}_ask', 0)
-                    if hedge_ticker != ticker:
-                        _fav_ask = bot.get(f'live_hedge_{fav_side}_ask', 0) or _fav_ask
-                    _cross_combined = dog_price + _fav_ask if _fav_ask > 0 else 999
-                    if False and _fav_ask > 0 and _cross_combined <= 100 and bot.get('fav_fill_qty', 0) < qty:
-                        # DISABLED: taker cross pays ask price, eats profit margin
-                        print(f'💰 PHANTOM BREAKEVEN TAKER: {bot_id} crossing ask {_fav_ask}¢ (combined={_cross_combined}¢) after {_ceiling_elapsed:.0f}s at ceiling')
-                        try:
-                            _phantom_drop_lock.acquire()
-                            try:
-                                old_fav_order_id = bot.get('fav_order_id', fav_order_id)
-                                api_rate_limiter.wait()
-                                try:
-                                    kalshi_client.cancel_order(old_fav_order_id)
-                                except Exception as _ce:
-                                    # Check if filled during cancel
-                                    try:
-                                        api_read_limiter.wait()
-                                        _chk = kalshi_client.get_order(old_fav_order_id)
-                                        _chk_ord = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
-                                        if _parse_fill_count(_chk_ord) >= qty:
-                                            bot['fav_fill_qty'] = qty
-                                            print(f'💰 PHANTOM BREAKEVEN SKIP: {bot_id} filled during cancel')
-                                            return
-                                    except Exception:
-                                        pass
-                                    print(f'⚠ PHANTOM {bot_id}: breakeven cancel failed ({_ce}) — falling through to sellback')
-                                    _phantom_drop_lock.release()
-                                    # Fall through to sellback below
-                                    _fav_ask = 0  # flag to skip taker
-                                else:
-                                    _already_filled = bot.get('fav_fill_qty', 0)
-                                    _remaining = qty - _already_filled
-                                    if _remaining > 0:
-                                        price_kwargs = {'yes_price': _fav_ask} if fav_side == 'yes' else {'no_price': _fav_ask}
-                                        api_rate_limiter.wait()
-                                        resp = kalshi_client.create_order(
-                                            ticker=hedge_ticker, side=fav_side, action='buy',
-                                            count=_remaining, order_type='limit', **price_kwargs
-                                        )
-                                        new_order_id = resp.get('order', {}).get('order_id', '')
-                                        bot.setdefault('_all_hedge_order_ids', []).append(old_fav_order_id)
-                                        bot['fav_order_id'] = new_order_id
-                                        bot['fav_price'] = _fav_ask
-                                        bot['_fav_was_taker'] = True
-                                        if fav_side == 'yes':
-                                            bot['yes_price'] = _fav_ask
-                                        else:
-                                            bot['no_price'] = _fav_ask
-                                        bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
-                                        bot['_over_ceiling_since'] = None
-                                        save_state()
-                                        bot_log('PHANTOM_BREAKEVEN_TAKER', bot_id, {
-                                            'cross_price': _fav_ask, 'combined': _cross_combined,
-                                            'dog_price': dog_price, 'fav_bid': _live_fav_bid,
-                                            'ceiling_elapsed': round(_ceiling_elapsed, 1),
-                                            'wait_s': round(wait_s, 1),
-                                        })
-                                        print(f'💰 PHANTOM BREAKEVEN TAKER: {bot_id} crossed at {_fav_ask}¢ combined={_cross_combined}¢ order={new_order_id[-8:]}')
-                                        actions.append({'bot_id': bot_id, 'action': 'anchor_fav_breakeven_taker',
-                                                        'cross_price': _fav_ask, 'combined': _cross_combined})
-                                    _phantom_drop_lock.release()
-                                    return
-                            except Exception:
-                                if _phantom_drop_lock.locked():
-                                    _phantom_drop_lock.release()
-                                raise
-                        except Exception as e:
-                            print(f'❌ PHANTOM {bot_id}: breakeven taker failed: {e}')
-                            # Fall through to sellback
+                _dog_sell_oid = bot.get('dog_sell_order_id')
 
-                    # ── Can't cross at ≤100¢ — sell back immediately ──
-                    bot_log('PHANTOM_CEILING_TIMEOUT', bot_id, {
-                        'wait_s': round(wait_s, 1), 'ceiling_elapsed': round(_ceiling_elapsed, 1),
-                        'fav_filled': bot.get('fav_fill_qty', 0), 'qty': qty,
-                        'fav_price': bot.get('fav_price'), 'dog_price': dog_price,
-                        'fav_bid': _live_fav_bid, 'fav_ask': _fav_ask,
-                        'ceiling_combined': _ceiling_combined,
-                        'cross_combined': _cross_combined if _fav_ask > 0 else None,
-                    })
-                    _verified_fills = _cancel_hedge_verified(bot, bot_id)
-                    fav_filled = max(bot.get('fav_fill_qty', 0), _verified_fills)
-                    bot['fav_fill_qty'] = fav_filled
-                    if fav_filled > 0 and fav_filled < qty:
-                        sell_qty = qty - fav_filled
-                        print(f'⏰ PHANTOM CEILING EXIT (PARTIAL): {bot_id} fav filled {fav_filled}/{qty} — selling back {sell_qty} dogs')
-                        fav_price = bot.get('fav_price', 0)
-                        profit_per = 100 - dog_price - fav_price
-                        est_fee = kalshi_fee_cents(
-                            dog_price if bot['dog_side'] == 'yes' else fav_price,
-                            dog_price if bot['dog_side'] == 'no' else fav_price,
-                            fav_filled
-                        )
-                        net_profit = max(0, profit_per * fav_filled - est_fee)
-                        session_pnl['gross_profit_cents'] += net_profit
-                        bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + net_profit
-                        _record_trade({
-                            'bot_id': bot_id, 'ticker': ticker,
-                            'yes_price': dog_price if bot['dog_side'] == 'yes' else fav_price,
-                            'no_price': dog_price if bot['dog_side'] == 'no' else fav_price,
-                            'quantity': fav_filled, 'profit_cents': net_profit, 'loss_cents': 0,
-                            'fee_cents': est_fee, 'result': 'anchor_partial_arb',
-                            'timestamp': now, 'placed_at': bot.get('created_at', now),
-                            'arb_width': bot.get('target_width', 0),
-                            'bot_category': 'anchor_dog',
-                        }, bot)
-                        bot['quantity'] = sell_qty
-                        _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
-                        bot['quantity'] = qty
-                    elif fav_filled >= qty:
-                        print(f'⏰ PHANTOM CEILING EXIT: {bot_id} fav actually filled {fav_filled}/{qty} — completing')
-                        bot['status'] = 'fav_hedge_posted'
-                        bot['_over_ceiling_since'] = None
+                # ── Check if dog sell filled (WS tracks fills, API as backup) ──
+                _dog_sell_fills = bot.get('dog_sell_fill_qty', 0)
+                if _dog_sell_oid and _dog_sell_fills < qty:
+                    try:
+                        api_read_limiter.wait()
+                        _ds_check = kalshi_client.get_order(_dog_sell_oid)
+                        _ds_ord = _ds_check.get('order', _ds_check) if isinstance(_ds_check, dict) else {}
+                        _ds_api_fills = _parse_fill_count(_ds_ord)
+                        if _ds_api_fills > _dog_sell_fills:
+                            bot['dog_sell_fill_qty'] = _ds_api_fills
+                            _dog_sell_fills = _ds_api_fills
+                    except Exception:
+                        pass
+
+                if _dog_sell_fills >= qty:
+                    # ── Dog sell won the race — cancel hedge, clean exit ──
+                    _dog_sell_price = bot.get('dog_sell_price', 0)
+                    _hedge_fills = _cancel_hedge_verified(bot, bot_id)
+                    _sell_pnl = (_dog_sell_price - dog_price) * qty
+                    _buy_fee = _kalshi_side_fee_cents(dog_price, qty)
+                    _sell_fee = _kalshi_side_fee_cents(_dog_sell_price, qty) if _dog_sell_price > 0 else 0
+                    _net_pnl = _sell_pnl - _buy_fee - _sell_fee
+                    if _net_pnl >= 0:
+                        session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _net_pnl
                     else:
-                        print(f'⏰ PHANTOM CEILING EXIT: {bot_id} over ceiling {_ceiling_elapsed:.0f}s, ask={_fav_ask}¢ (combined={_cross_combined}¢) — selling back')
-                        _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+                        session_pnl['gross_loss_cents'] += abs(_net_pnl)
+                    session_pnl['stopped_bots'] += 1
+                    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _net_pnl
+                    bot['_trade_recorded'] = True
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': dog_price if dog_side == 'yes' else _dog_sell_price,
+                        'no_price': dog_price if dog_side == 'no' else _dog_sell_price,
+                        'quantity': qty, 'profit_cents': max(0, _net_pnl), 'loss_cents': max(0, -_net_pnl),
+                        'fee_cents': _buy_fee + _sell_fee, 'result': 'anchor_dual_exit',
+                        'exit_via': 'dual_exit_dog_sold', 'dog_side': dog_side, 'fav_side': fav_side,
+                        'dog_price': dog_price, 'sell_back_price': _dog_sell_price,
+                        'timestamp': now, 'placed_at': bot.get('created_at', now),
+                        'bot_category': 'anchor_dog',
+                        'cross_market': bot.get('cross_market', False),
+                        'hedge_ticker': hedge_ticker,
+                    }, bot)
+                    print(f'✅ PHANTOM DUAL EXIT WON: {bot_id} sold@{_dog_sell_price}¢ (bought@{dog_price}¢) net={_net_pnl}¢ hedge_fills={_hedge_fills}')
+                    bot_log('PHANTOM_DUAL_EXIT_SOLD', bot_id, {
+                        'dog_price': dog_price, 'sell_price': _dog_sell_price,
+                        'net_pnl': _net_pnl, 'hedge_fills': _hedge_fills,
+                    })
+                    bot['dog_sell_order_id'] = None
+                    _phantom_set_final_status(bot, bot_id)
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'dual_exit_dog_sold', 'pnl': _net_pnl})
                     return
+
+                # ── Walk dog sell price with ask ──
+                if _dog_sell_oid:
+                    _dog_ask_now = bot.get(f'live_{dog_side}_ask', 0)
+                    _cur_sell_price = bot.get('dog_sell_price', 0)
+                    if _dog_ask_now > 0 and _dog_ask_now != _cur_sell_price:
+                        try:
+                            _new_pk = {'yes_price': _dog_ask_now} if dog_side == 'yes' else {'no_price': _dog_ask_now}
+                            api_rate_limiter.wait()
+                            kalshi_client.amend_order(_dog_sell_oid, ticker=ticker, side=dog_side, count=qty, **_new_pk)
+                            bot['dog_sell_price'] = _dog_ask_now
+                        except Exception:
+                            pass
+
+                # No timeout — both orders race indefinitely (maker only).
+                # Normal hedge_timeout_s handles overall bot lifetime.
 
         # ── Phantom Walk + Snap System ──
         # Priority 1: Drop to bid if above it (instant)
@@ -10752,16 +10746,12 @@ def _handle_phantom(bot_id, bot, actions):
                     print(f'❌ PHANTOM {bot_id}: take-profit cross failed: {e}')
                 return
 
-        # ── Emergency exit: combined at bid > 100 → sell back (maker only, no taker crosses) ──
+        # ── Emergency exit: combined at bid > 100 → dual exit handles it ──
+        # If ceiling section didn't catch it, restart the dual exit from here
         _be_combined_at_bid = dog_price + current_fav_bid if current_fav_bid > 0 else 0
         if _be_combined_at_bid > 100 and wait_s >= 3 and bot.get('fav_fill_qty', 0) < qty:
-            print(f'⏰ PHANTOM EXIT SELLBACK: {bot_id} bid={current_fav_bid}¢ combined@bid={_be_combined_at_bid}¢ > 100 — dog sellback (maker only)')
-            bot_log('PHANTOM_EXIT_SELLBACK', bot_id, {
-                'dog_price': dog_price, 'fav_bid': current_fav_bid,
-                'combined_at_bid': _be_combined_at_bid, 'wait_s': round(wait_s, 1),
-            })
-            _cancel_hedge_verified(bot, bot_id)
-            _phantom_sell_back(bot_id, bot, dog_price, bot.get('fav_price', 0), 999, actions)
+            if not bot.get('_over_ceiling_since'):
+                bot['_over_ceiling_since'] = now  # trigger dual exit next cycle
             return
 
         # Walk target: always bid — walk up to 100¢ combined (breakeven cap)
@@ -13083,6 +13073,15 @@ def _cancel_hedge_verified(bot, bot_id):
 def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     """Sell the filled dog leg back to recover capital when arb is dead."""
     now = time.time()
+    # Cancel dog sell if dual exit is active
+    _ds_oid = bot.get('dog_sell_order_id')
+    if _ds_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(_ds_oid)
+        except Exception:
+            pass
+        bot['dog_sell_order_id'] = None
     # Safety: cancel fav hedge if still live — verify it's actually dead
     _hedge_fills = _cancel_hedge_verified(bot, bot_id)
     ticker = bot['ticker']
@@ -13286,9 +13285,16 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
         except Exception as _me:
             print(f'⚠ PHANTOM MAKER SELL ERROR: {bot_id}: {_me} — taker fallback')
 
-    _taker_qty = qty - _maker_filled
-    if _taker_qty > 0:
-        sold_back, sell_info = execute_sell(ticker, dog_side, _taker_qty, reason=f'anchor_sellback_{bot_id}')
+    # Maker-only: no taker fallback. If maker didn't fill everything, retry next cycle.
+    _unfilled_qty = qty - _maker_filled
+    if _unfilled_qty > 0 and _maker_filled == 0:
+        # Nothing filled — retry next cycle
+        sold_back = False
+        sell_info = {'error': 'maker_only_no_fills', 'maker_attempted': _has_spread}
+    elif _unfilled_qty > 0:
+        # Partial maker fill — record partial, retry rest next cycle
+        sold_back = False
+        sell_info = {'error': 'maker_only_partial', 'maker_filled': _maker_filled, 'remaining': _unfilled_qty}
     else:
         sold_back = True
         sell_info = {'actual_fill_price': _maker_sell_price, 'sell_price': _maker_sell_price,
@@ -17827,6 +17833,15 @@ def cancel_bot(bot_id):
                         cancelled.append(f'FAV_{fav_side.upper()}')
                     except Exception as e:
                         print(f'⚠ cancel_bot({bot_id}): cancel fav order failed: {e}')
+                # Cancel dog sell (dual exit) if active
+                if bot.get('dog_sell_order_id'):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(bot['dog_sell_order_id'])
+                        cancelled.append('DOG_SELL')
+                    except Exception as e:
+                        print(f'⚠ cancel_bot({bot_id}): cancel dog sell failed: {e}')
+                    bot['dog_sell_order_id'] = None
                 # Cross-market: sell positions on BOTH tickers
                 if _is_cross_cancel and dog_fill > 0:
                     sold, sell_info = execute_sell(ticker, dog_side, dog_fill,

@@ -10621,13 +10621,30 @@ def _handle_phantom(bot_id, bot, actions):
                     _dog_ask_now = bot.get(f'live_{dog_side}_ask', 0)
                     _cur_sell_price = bot.get('dog_sell_price', 0)
                     if _dog_ask_now > 0 and _dog_ask_now != _cur_sell_price:
+                        # Cancel+replace (amend may not work on sell orders)
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_dog_sell_oid)
+                        except Exception as _ce:
+                            print(f'⚠ DUAL SELL WALK CANCEL: {bot_id}: {_ce}')
                         try:
                             _new_pk = {'yes_price': _dog_ask_now} if dog_side == 'yes' else {'no_price': _dog_ask_now}
                             api_rate_limiter.wait()
-                            kalshi_client.amend_order(_dog_sell_oid, ticker=ticker, side=dog_side, count=qty, **_new_pk)
-                            bot['dog_sell_price'] = _dog_ask_now
-                        except Exception:
-                            pass
+                            _new_sell = kalshi_client.create_order(
+                                ticker=ticker, side=dog_side, action='sell',
+                                count=qty, order_type='limit', **_new_pk
+                            )
+                            _new_oid = _new_sell.get('order', {}).get('order_id', '')
+                            if _new_oid:
+                                bot['dog_sell_order_id'] = _new_oid
+                                bot['dog_sell_price'] = _dog_ask_now
+                                print(f'📤 DUAL SELL WALK: {bot_id} {_cur_sell_price}→{_dog_ask_now}¢')
+                            else:
+                                bot['dog_sell_order_id'] = None
+                                print(f'⚠ DUAL SELL WALK: {bot_id} replace failed — no order ID')
+                        except Exception as _we:
+                            bot['dog_sell_order_id'] = None
+                            print(f'⚠ DUAL SELL WALK ERROR: {bot_id}: {_we}')
 
                 # No timeout — both orders race indefinitely (maker only).
                 # Normal hedge_timeout_s handles overall bot lifetime.

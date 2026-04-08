@@ -13207,6 +13207,7 @@ function renderDogStatsAndDepth(trades, pnl) {
         const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
         const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
         const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
+        const dualExits = trades.filter(t => t.result === 'anchor_dual_exit').length;
 
         const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all';
         let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
@@ -13241,6 +13242,7 @@ function renderDogStatsAndDepth(trades, pnl) {
         let captureRatio = 0, avgCapture = '—', avgFloorDisp = '—';
         const dcTrades = trades.filter(t => {
             if (!t.anchor_depth || t.anchor_depth <= 0) return false;
+            if (t.result === 'anchor_dual_exit') return false;
             const ds = t.dog_side || t.first_leg || 'no';
             const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
             const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price) || 0;
@@ -13311,9 +13313,9 @@ function renderDogStatsAndDepth(trades, pnl) {
                     <div style="color:#555;font-size:10px;margin-top:2px;">${hedgeTrades.length} samples</div>
                 </div>
                 <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Sellbacks</div>
-                    <div style="color:#ff4444;font-size:22px;font-weight:800;">${sellbacks}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">safety exits</div>
+                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Exits</div>
+                    <div style="color:#ff4444;font-size:22px;font-weight:800;">${sellbacks + dualExits}</div>
+                    <div style="color:#555;font-size:10px;margin-top:2px;">${sellbacks} SB · ${dualExits} dual</div>
                 </div>
             </div>`;
     }
@@ -13517,6 +13519,7 @@ function filterPhantomLog() {
         const dateStr = dt.toLocaleDateString([], {month:'short',day:'numeric'});
         const net = (t.profit_cents||0) - (t.loss_cents||0);
         const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
+        const isDualExit = t.result === 'anchor_dual_exit';
         const isWin = net > 0;
         const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
         const teamName = formatBotDisplayName(t.ticker||'', '');
@@ -13527,7 +13530,7 @@ function filterPhantomLog() {
         const dogCol = dogSide === 'yes' ? '#00ff88' : '#ff4444';
         const favCol = favSide === 'yes' ? '#00ff88' : '#ff4444';
         const dogPrice = t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?';
-        const favPrice = t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?';
+        const favPrice = isDualExit ? (t.sell_back_price || t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?') : (t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?');
         const combined = (typeof dogPrice === 'number' && typeof favPrice === 'number') ? dogPrice + favPrice : null;
         const qty = t.quantity || 1;
         const taker = t.taker ? 'TKR' : 'MKR';
@@ -13542,6 +13545,8 @@ function filterPhantomLog() {
         let statusText, statusBg, statusFg;
         if (isSellback) {
             statusText = 'SELLBACK'; statusBg = 'rgba(255,68,68,0.15)'; statusFg = '#ff4444';
+        } else if (isDualExit) {
+            statusText = 'DUAL EXIT'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
         } else if (isWin) {
             statusText = 'COMPLETED'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
         } else {
@@ -13585,14 +13590,14 @@ function filterPhantomLog() {
                     </div>
                     <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty}${typeof dogPrice === 'number' ? ` · $${((qty * dogPrice) / 100).toFixed(2)}` : ''}</div>
                 </div>
-                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isSellback ? '#ff444418' : '#00aaff18'};">
-                    <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isSellback ? '🔙 Sold Back' : '⭐ Hedge'}${t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
-                    ${isSellback
+                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isSellback || isDualExit ? (isDualExit ? '#00aaff18' : '#ff444418') : '#00aaff18'};">
+                    <div style="color:${isSellback ? '#ff4444' : (isDualExit ? '#00aaff' : '#00aaff')};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isSellback ? '🔙 Sold Back' : (isDualExit ? '📤 Sold Back' : '⭐ Hedge')}${!isSellback && !isDualExit && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
+                    ${isSellback || isDualExit
                         ? `<div style="display:flex;align-items:baseline;gap:4px;">
-                            <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${t.sell_back_price > 0 ? t.sell_back_price + '¢' : 'Failed'}</span>
+                            <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${(isDualExit ? t.sell_back_price : t.sell_back_price) > 0 ? (isDualExit ? t.sell_back_price : t.sell_back_price) + '¢' : 'Failed'}</span>
                             <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()} back</span>
                         </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢'}</div>`
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${isDualExit ? 'Bought ' + dogPrice + '¢ → Sold ' + (t.sell_back_price||'?') + '¢' : (net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢')}${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
                         : `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${favCol};font-weight:800;font-size:16px;">${favPrice}¢</span>
                             <span style="color:#5a6484;font-size:10px;">${favSide.toUpperCase()}</span>
@@ -13609,7 +13614,7 @@ function filterPhantomLog() {
                 ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}
                 ${t.fill_duration_s != null ? `<span style="color:#5a6484;">fill ${t.fill_duration_s}s</span>` : ''}
                 ${t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">Depth:${t.anchor_depth}¢</span>` : ''}
-                ${t.anchor_depth && combined != null ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB ' : ''}${_tw}¢</span>`; })() : ''}
+                ${t.anchor_depth && combined != null && !isDualExit ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB ' : ''}${_tw}¢</span>`; })() : ''}
                 <span style="color:${takerCol};font-weight:600;font-size:9px;background:${takerCol}15;padding:1px 5px;border-radius:3px;">${taker}</span>
                 <span style="color:#3a4560;font-size:9px;">${sportName}</span>
             </div>

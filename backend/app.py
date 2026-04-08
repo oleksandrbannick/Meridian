@@ -10621,30 +10621,47 @@ def _handle_phantom(bot_id, bot, actions):
                     _dog_ask_now = bot.get(f'live_{dog_side}_ask', 0)
                     _cur_sell_price = bot.get('dog_sell_price', 0)
                     if _dog_ask_now > 0 and _dog_ask_now != _cur_sell_price:
-                        # Cancel+replace (amend may not work on sell orders)
+                        # Cancel+replace — ONLY replace if cancel succeeds
+                        _cancel_ok = False
                         try:
                             api_rate_limiter.wait()
                             kalshi_client.cancel_order(_dog_sell_oid)
+                            _cancel_ok = True
                         except Exception as _ce:
-                            print(f'⚠ DUAL SELL WALK CANCEL: {bot_id}: {_ce}')
-                        try:
-                            _new_pk = {'yes_price': _dog_ask_now} if dog_side == 'yes' else {'no_price': _dog_ask_now}
-                            api_rate_limiter.wait()
-                            _new_sell = kalshi_client.create_order(
-                                ticker=ticker, side=dog_side, action='sell',
-                                count=qty, order_type='limit', **_new_pk
-                            )
-                            _new_oid = _new_sell.get('order', {}).get('order_id', '')
-                            if _new_oid:
-                                bot['dog_sell_order_id'] = _new_oid
-                                bot['dog_sell_price'] = _dog_ask_now
-                                print(f'📤 DUAL SELL WALK: {bot_id} {_cur_sell_price}→{_dog_ask_now}¢')
-                            else:
+                            # Cancel failed — check if order was already filled
+                            try:
+                                api_read_limiter.wait()
+                                _chk = kalshi_client.get_order(_dog_sell_oid)
+                                _chk_ord = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
+                                _chk_fills = _parse_fill_count(_chk_ord)
+                                _chk_status = _chk_ord.get('status', '?')
+                                if _chk_fills > 0:
+                                    bot['dog_sell_fill_qty'] = _chk_fills
+                                    print(f'📤 DUAL SELL FILLED DURING WALK: {bot_id} {_chk_fills} fills')
+                                elif _chk_status in ('cancelled', 'canceled'):
+                                    _cancel_ok = True  # already cancelled, safe to replace
+                            except Exception:
+                                pass
+                            if not _cancel_ok:
+                                print(f'⚠ DUAL SELL WALK: {bot_id} cancel failed, keeping old order — {_ce}')
+                        if _cancel_ok:
+                            try:
+                                _new_pk = {'yes_price': _dog_ask_now} if dog_side == 'yes' else {'no_price': _dog_ask_now}
+                                api_rate_limiter.wait()
+                                _new_sell = kalshi_client.create_order(
+                                    ticker=ticker, side=dog_side, action='sell',
+                                    count=qty, order_type='limit', **_new_pk
+                                )
+                                _new_oid = _new_sell.get('order', {}).get('order_id', '')
+                                if _new_oid:
+                                    bot['dog_sell_order_id'] = _new_oid
+                                    bot['dog_sell_price'] = _dog_ask_now
+                                    print(f'📤 DUAL SELL WALK: {bot_id} {_cur_sell_price}→{_dog_ask_now}¢')
+                                else:
+                                    bot['dog_sell_order_id'] = None
+                            except Exception as _we:
                                 bot['dog_sell_order_id'] = None
-                                print(f'⚠ DUAL SELL WALK: {bot_id} replace failed — no order ID')
-                        except Exception as _we:
-                            bot['dog_sell_order_id'] = None
-                            print(f'⚠ DUAL SELL WALK ERROR: {bot_id}: {_we}')
+                                print(f'⚠ DUAL SELL WALK ERROR: {bot_id}: {_we}')
 
                 # No timeout — both orders race indefinitely (maker only).
                 # Normal hedge_timeout_s handles overall bot lifetime.
@@ -13093,6 +13110,11 @@ def _cancel_hedge_verified(bot, bot_id):
     except Exception as e:
         print(f'⚠ HEDGE VERIFY FAILED: {bot_id} order={fav_oid[:12]} — {e}')
         bot_log('HEDGE_VERIFY_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
+        # 404 = order gone from Kalshi — fall back to WS-tracked fills
+        _ws_fills = bot.get('fav_fill_qty', 0)
+        if _ws_fills > 0:
+            filled_qty = _ws_fills
+            print(f'⚠ HEDGE VERIFY 404 FALLBACK: {bot_id} using WS fav_fill_qty={_ws_fills}')
     bot['fav_order_id'] = None
     return filled_qty
 

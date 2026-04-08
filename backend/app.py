@@ -10518,7 +10518,7 @@ def _handle_phantom(bot_id, bot, actions):
                 })
             else:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
-                _ceiling_timeout = 2  # last resort — taker cross should catch before this
+                _ceiling_timeout = 3  # 3s mean reversion window at ceiling, then sellback
                 if _ceiling_elapsed >= _ceiling_timeout:
                     qty = bot.get('quantity', 1)
                     # ── Try taker cross at ask if combined <= 100¢ ──

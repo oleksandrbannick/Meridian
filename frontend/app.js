@@ -6290,18 +6290,30 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const ceilingStart = bot._over_ceiling_since || 0;
                     const ceilingElapsed = ceilingStart > 0 ? Date.now()/1000 - ceilingStart : 0;
                     const ceilingSecsLeft = Math.max(0, 2 - ceilingElapsed);
-                    const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
-                    const statusText = atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
-                    const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
+                    const hasDualExit = !!bot.dog_sell_order_id;
+                    const dogSellPrice = bot.dog_sell_price || 0;
+                    const dogSellFills = bot.dog_sell_fill_qty || 0;
+                    const statusIcon = hasDualExit ? '📤' : atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
+                    const statusText = hasDualExit ? 'DUAL EXIT' : atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
+                    const statusCol = hasDualExit ? '#ff8800' : atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
                     const timerVal = atCeiling && ceilingStart > 0 ? ceilingSecsLeft : secsLeft;
                     const timerLabel = atCeiling && ceilingStart > 0 ? `⏱ ${Math.round(ceilingSecsLeft)}s` : `${Math.round(secsLeft)}s`;
                     const timerCol = atCeiling ? '#ff4444' : secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff';
+                    const dogSide = bot.dog_side || 'yes';
+                    const dogBid = bot[`live_${dogSide}_bid`] || 0;
+                    const dogAsk = bot[`live_${dogSide}_ask`] || 0;
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
-                            <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${favSide.toUpperCase()} hedge</span>
-                            <span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>
+                            <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong></span>
+                            ${hasDualExit ? `<span style="color:#ff8800;font-weight:700;">sell ${dogSide.toUpperCase()}@${dogSellPrice}¢</span><span style="color:#3a4560;">vs</span>` : ''}
+                            <span style="color:#00ff88;font-weight:700;">hedge ${favSide.toUpperCase()}@${favPrice}¢</span>
+                            ${hasDualExit && dogSellFills > 0 ? `<span style="color:#ff8800;font-size:9px;">(${dogSellFills}/${bot.quantity || '?'} sold)</span>` : ''}
                         </div>
+                        ${hasDualExit ? `<div style="display:flex;gap:12px;color:#8892a6;font-size:9px;margin-bottom:2px;">
+                            <span>🐕 Dog: bid ${dogBid}¢ · ask ${dogAsk}¢ · sell@${dogSellPrice}¢</span>
+                            <span>⭐ Fav: bid ${favBid}¢ · hedge@${favPrice}¢</span>
+                        </div>` : ''}
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
                             <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
                             <span style="color:${timerCol};font-weight:700;font-family:monospace;font-size:12px;">${timerLabel}</span>
@@ -6330,14 +6342,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const _comb2 = (r.dog_price || 0) + (r.fav_price || 0);
                     const _combCol2 = _comb2 <= 96 ? '#00ff88' : _comb2 <= 98 ? '#ffaa00' : '#ff4444';
                     const _isSB2 = r.result === 'sellback';
+                    const _isDualExit = r.result === 'dual_exit';
+                    const _isExit = _isSB2 || _isDualExit;
+                    const _exitCol = _isDualExit ? '#00aaff' : '#ffaa00';
+                    const _exitLabel = _isDualExit ? 'EXIT' : 'SB';
                     return '<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
                     + '<span style="display:flex;align-items:center;gap:3px;">'
                     + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '¢</span>'
-                    + '<span style="color:#3a4560;">' + (_isSB2 ? '→' : '+') + '</span>'
-                    + '<span style="color:' + (_isSB2 ? '#ffaa00' : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
-                    + (!_isSB2 && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
-                    + (_isSB2 ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">SB</span>' : '')
+                    + '<span style="color:#3a4560;">' + (_isExit ? '→' : '+') + '</span>'
+                    + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
+                    + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
+                    + (_isExit ? ' <span style="color:' + _exitCol + ';font-size:8px;font-weight:700;">' + _exitLabel + '</span>' : '')
                     + (r.taker ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>' : '')
                     + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'

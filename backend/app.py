@@ -10601,6 +10601,16 @@ def _handle_phantom(bot_id, bot, actions):
                         'net_pnl': _net_pnl, 'hedge_fills': _hedge_fills,
                     })
                     bot['dog_sell_order_id'] = None
+                    bot.setdefault('_run_history', []).append({
+                        'run': bot.get('repeats_done', 0) + 1,
+                        'pnl': _net_pnl,
+                        'result': 'dual_exit',
+                        'dog_price': dog_price,
+                        'fav_price': _dog_sell_price,
+                        'qty': qty,
+                        'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                        'ts': now,
+                    })
                     _phantom_set_final_status(bot, bot_id)
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'dual_exit_dog_sold', 'pnl': _net_pnl})

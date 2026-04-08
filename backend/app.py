@@ -3711,21 +3711,10 @@ def _execute_phantom_hedge(bot_id):
             bot['status'] = 'dog_filled'
             return
 
-        # Ceiling handling: if fav bid is already past breakeven, don't hedge — sell back.
-        # Posting at breakeven when bid is above it means zero chance of fill.
-        _combined_at_bid = dog_price + fav_bid if fav_bid > 0 else 999
-        if _combined_at_bid > 100:
-            # Fav bid past breakeven — hedge can't fill, sell back instantly
-            print(f'🚫 PHANTOM HEDGE SKIP+SELLBACK: {bot_id} combined@bid={_combined_at_bid}¢ > 100 (dog={dog_price}¢ fav_bid={fav_bid}¢) — instant sellback')
-            bot_log('PHANTOM_HEDGE_OVER_CEILING', bot_id, {
-                'dog_price': dog_price, 'fav_bid': fav_bid,
-                'max_hedge': max_hedge, 'combined_at_bid': _combined_at_bid,
-                'path': 'ws_fast',
-            })
-            bot['status'] = 'fav_hedge_posted'
-            bot['fav_price'] = fav_bid
-            _phantom_sell_back(bot_id, bot, dog_price, fav_bid, _combined_at_bid, [])
-            return
+        # Ceiling handling: if combined > 100, cap at breakeven and post.
+        # Don't instant-sellback — post at breakeven and let the 3s ceiling timer decide.
+        # Temporary spikes above 100¢ revert often; posting at breakeven costs nothing
+        # and gives the market time to come back down for a profitable fill.
         if dog_price + hedge_price > 100:
             # Bid is at/under breakeven but hedge price exceeds — cap at breakeven
             hedge_price = max(1, max_hedge)
@@ -10498,11 +10487,10 @@ def _handle_phantom(bot_id, bot, actions):
             _live_fav_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) or _live_fav_bid
         _live_combined = dog_price + _live_fav_bid if _live_fav_bid > 0 else 999
         _best_combined = min(_posted_combined, _live_combined)
-        # Zone-based timeout with ceiling detection:
-        # Use max(posted_fav, live_bid) to detect when fav bid moved past ceiling.
-        # Our fav price is capped at max_fav_hold (=100-dog), so _posted_combined
-        # stays at 100 even when fav bid is 99¢ and our hedge at 87¢ can't fill.
-        _ceiling_combined = dog_price + max(_current_fav, _live_fav_bid) if _live_fav_bid > 0 else _posted_combined
+        # Ceiling detection: use LIVE bid only — detect when the market is at/past ceiling.
+        # Posted fav price is irrelevant; what matters is whether the market bid has reverted.
+        # Old bug: max(posted, bid) kept ceiling active after bid dropped because posted was stale.
+        _ceiling_combined = dog_price + _live_fav_bid if _live_fav_bid > 0 else _posted_combined
         # At 100¢ with partial fills = breakeven with risk, no reason to wait
         _at_breakeven_with_partials = _ceiling_combined >= WALK_CEILING and _has_partial_fills
         if _ceiling_combined < WALK_CEILING:

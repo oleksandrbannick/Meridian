@@ -13259,7 +13259,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     _dog_ask = bot.get(f'live_{dog_side}_ask', 0)
     _has_spread = _dog_bid > 0 and _dog_ask > 0 and (_dog_ask - _dog_bid) >= 2
     if _has_spread:
-        _maker_price = _dog_bid + 1
+        _maker_price = _dog_ask - 1  # undercut best ask by 1¢ — first in queue, best price
         print(f'📤 PHANTOM MAKER SELL: {bot_id} posting sell {dog_side}@{_maker_price}¢ (bid={_dog_bid}¢ ask={_dog_ask}¢) — 3s maker window')
         bot_log('PHANTOM_MAKER_SELL_START', bot_id, {
             'dog_side': dog_side, 'maker_price': _maker_price,

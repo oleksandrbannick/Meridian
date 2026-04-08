@@ -13407,14 +13407,14 @@ function renderDogSportBreakdown(allTrades) {
     const exitPanel = document.getElementById('dog-exit-filter');
     if (exitPanel) {
         const exitCounts = { arb: 0, dual_exit: 0, orphan: 0, sellback: 0 };
-        trades.forEach(t => {
+        allTrades.forEach(t => {
             if (t.result === 'anchor_dual_exit') exitCounts.dual_exit++;
             else if (t.result === 'race_orphan_cleared') exitCounts.orphan++;
             else if (t.result === 'anchor_sellback' || t.result === 'ladder_sellback') exitCounts.sellback++;
             else exitCounts.arb++;
         });
         const pills = [
-            { key: 'all', label: 'All', count: trades.length, col: '#8892a6' },
+            { key: 'all', label: 'All', count: allTrades.length, col: '#8892a6' },
             { key: 'arb', label: 'Arb', count: exitCounts.arb, col: '#00ff88' },
             { key: 'dual_exit', label: 'Dual Exit', count: exitCounts.dual_exit, col: '#00aaff' },
             { key: 'orphan', label: 'Orphan Recovery', count: exitCounts.orphan, col: '#aa66ff' },

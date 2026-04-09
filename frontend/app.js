@@ -5925,6 +5925,12 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
                         </div>`;
                     }).join('')}
+                ${(bot._orphan_recovery_pnl || 0) !== 0 ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;border-top:1px solid #141a24;font-size:11px;">
+                    <span style="color:#aa66ff;font-weight:700;font-size:10px;">🔄</span>
+                    <span style="color:#aa66ff;font-weight:600;">Orphan recovery ×${bot._orphan_recovery_count || 1}</span>
+                    <span></span>
+                    <span style="color:${bot._orphan_recovery_pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${bot._orphan_recovery_pnl >= 0 ? '+' : ''}${bot._orphan_recovery_pnl}¢</span>
+                </div>` : ''}
                 </div>` : _runs > 1 ? `
                 <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
@@ -6428,6 +6434,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const statusMap = {
         'ladder_arb_posted': '⚡ BOTH LIVE',
         'ladder_arb_active': '🔥 ACTIVE',
+        'depth_pulled': '📊 DEPTH PULL',
         'waiting_repeat': '🔄 REPEATING',
         'drift_cancelled': '🚫 DRIFT',
         'completed': '✅ DONE',
@@ -6441,6 +6448,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const borderMap = {
         'ladder_arb_posted': '#00aaff',
         'ladder_arb_active': '#ffaa00',
+        'depth_pulled': '#ff6600',
         'waiting_repeat': '#aa66ff',
         'drift_cancelled': '#ff8800',
         'completed': '#00ff88',
@@ -6523,6 +6531,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>`;
         }
 
+        // ── DEPTH PULLED: show as dimmed with pull reason ──
+        if (r.status === 'depth_pulled') {
+            return `<div style="display:grid;grid-template-columns:40px 1fr 80px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.4;">
+                <span style="color:#ff6600;font-weight:700;">${width}¢</span>
+                <span style="color:#ff6600;font-size:9px;">📊 Pulled${r._pull_reason ? ' — ' + r._pull_reason : ''}</span>
+                <span style="color:#555;font-size:8px;text-align:right;">waiting</span>
+            </div>`;
+        }
+
         // ── ALL OTHER STATES: show both sides with fill progress ──
         postedCount++;
         const yFill = r.yes_fill_qty || 0;
@@ -6583,6 +6600,20 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 stageHTML = `<span style="color:#555;font-size:9px;">${rStage}</span>`;
             }
 
+            // Hedge depth indicator
+            const hedgeDepth = r._hedge_depth || 0;
+            const hedgeVanish = r._hedge_vanishing || false;
+            const depthColor = hedgeVanish ? '#ff0000' : hedgeDepth < 300 ? '#ff4444' : hedgeDepth < 500 ? '#ffaa00' : '#00ff88';
+            const depthIcon = hedgeVanish ? '⚠' : hedgeDepth < 300 ? '🔴' : hedgeDepth < 500 ? '🟡' : '🟢';
+            const depthStr = hedgeDepth > 0 ? `<span style="color:${depthColor};font-size:7px;margin-left:4px;" title="Hedge side depth">${depthIcon}${hedgeDepth}</span>` : '';
+
+            // Maker exit display
+            const isMakerExit = r.status === 'maker_exit';
+            if (isMakerExit) {
+                const sellPrice = r._maker_sell_price || 0;
+                stageHTML = `<span style="background:#ff880033;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">📤 MAKER SELL @${sellPrice}¢</span>`;
+            }
+
             const snapBtn = (rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0011;color:#ffaa00;border:1px solid #ffaa0033;border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-weight:600;">Snap Now</button>` : '';
 
             // Fill bar layout: YES left, NO right — anchor shows full bar, hedge shows progress
@@ -6622,6 +6653,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         return `<span style="color:${liveCol};font-size:8px;font-weight:700;">${liveProf >= 0 ? '🟢' : '🔴'}${liveProf}¢${timerStr}</span>`;
                     })()}
                     ${snapBtn ? snapBtn : `<span style="color:${profColor};font-size:9px;font-weight:700;">${profEst > 0 ? '+' : ''}${profEst}¢</span>`}
+                    ${depthStr}
                 </div>
             </div>`;
         }
@@ -6670,6 +6702,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#00aaff08;border:1px solid #00aaff22;border-radius:5px;margin-top:6px;">
             <span style="color:#00aaff;">⚡ ${rungs.length} rungs live</span>
             <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${_yBid}/${_yAsk}¢</strong> · N <strong style="color:#ff4444;">${_nBid}/${_nAsk}¢</strong></span>
+        </div>`;
+    } else if (status === 'depth_pulled') {
+        const pullCount = bot._pull_count || 0;
+        const pullReason = bot._last_pull_reason || 'depth';
+        const maxPulls = 8;
+        statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#ff660011;border:1px solid #ff660033;border-radius:5px;margin-top:6px;">
+            <span style="color:#ff6600;font-weight:700;">📊 DEPTH PULLED</span>
+            <span style="color:#8892a6;">${pullReason}</span>
+            <span style="color:#555;">cycle ${pullCount}/${maxPulls}</span>
+            <span style="color:#ff6600;font-size:8px;margin-left:auto;">Waiting for book recovery...</span>
         </div>`;
     } else if (status === 'waiting_repeat') {
         statusInfo = `<div style="padding:6px 8px;background:#aa66ff08;border:1px solid #aa66ff22;border-radius:5px;margin-top:6px;font-size:10px;color:#aa66ff;">

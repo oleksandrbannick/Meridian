@@ -3141,7 +3141,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         # Cap at ceiling (98¢ combined)
         dog_price = bot.get('dog_price') or bot.get('avg_fill_price') or 0
         if dog_price > 0:
-            max_fav = 98 - dog_price
+            max_fav = 100 - dog_price
             drop_target = min(drop_target, max_fav)
 
         if drop_target <= 0 or drop_target >= fav_price:
@@ -3660,7 +3660,7 @@ def _precalc_phantom_hedge(dog_price, target_width, dog_side, qty):
     Returns the ceiling-capped hedge price or 0 if too low.
     This is a FALLBACK when no live bid is available — the WS path uses the actual bid."""
     # Cap at 98¢ combined — dual exit handles above this
-    max_hedge = 98 - dog_price
+    max_hedge = 100 - dog_price
     if max_hedge < 1:
         return 0
     return max_hedge
@@ -3708,7 +3708,7 @@ def _execute_phantom_hedge(bot_id):
         dog_price = bot['dog_price']
 
         # Ceiling: cap at 98¢ combined (dual exit handles rest)
-        max_hedge = 98 - dog_price
+        max_hedge = 100 - dog_price
 
         # Post at fav BID — maker order, first in queue with our speed
         # ALWAYS read from ws_manager first (real-time), fall back to bot cache
@@ -3750,7 +3750,7 @@ def _execute_phantom_hedge(bot_id):
             return
 
         # Ceiling handling: if combined > 98, cap and post. Dual exit handles exits above this.
-        if dog_price + hedge_price > 98:
+        if dog_price + hedge_price > 100:
             hedge_price = max(1, max_hedge)
             print(f'📌 PHANTOM HEDGE AT CEILING: {bot_id} capped to {hedge_price}¢ (combined={dog_price + hedge_price}¢ bid={fav_bid}¢) — posting and holding')
             bot_log('PHANTOM_HEDGE_AT_CEILING_POST', bot_id, {
@@ -4004,7 +4004,7 @@ def _execute_phantom_ladder_hedge(bot_id):
             bot['dog_filled_at'] = bot.get('dog_filled_at') or time.time()
 
         # ── Hedge price: fav BID or bid+1 in gapped markets ──
-        _max_hedge = 98 - (avg_price or bot.get('dog_price', 0))
+        _max_hedge = 100 - (avg_price or bot.get('dog_price', 0))
         _is_cross = hedge_ticker != ticker
         _fav_bid = 0
         _fav_ask = 0
@@ -4046,7 +4046,7 @@ def _execute_phantom_ladder_hedge(bot_id):
 
         # At ceiling — only sell back if truly over ceiling, not at breakeven
         _ladder_combined = (avg_price or bot.get('dog_price', 0)) + hedge_price
-        if _ladder_combined > 98:
+        if _ladder_combined > 100:
             print(f'🚫 PHANTOM LADDER HEDGE SKIP: {bot_id} combined {avg_price}+{hedge_price}={_ladder_combined}¢ > 98¢ — deferring to dual exit')
             bot_log('PHANTOM_LADDER_HEDGE_AT_CEILING', bot_id, {
                 'avg_price': avg_price, 'hedge_price': hedge_price,
@@ -8571,7 +8571,7 @@ def create_anchor_bot():
             'anchor_depth':        anchor_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
-            'fav_walk_ceiling':    98,  # profit cap — dual exit handles above this
+            'fav_walk_ceiling':    100,  # breakeven cap — dual exit handles above this
             'fav_last_walk_at':    None,
             'market_type':         _detect_market_type(ticker),
             'spread_line':         _extract_spread_line(ticker),
@@ -10113,10 +10113,10 @@ def _handle_phantom(bot_id, bot, actions):
             # Always post at fav bid — same as WS path
             hedge_price = fav_bid
             total_cost = actual_dog_price + hedge_price
-            if total_cost > 98:
+            if total_cost > 100:
                 # Cap at 98¢ and post — dual exit will handle the rest
-                hedge_price = max(1, 98 - actual_dog_price)
-                print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 98¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
+                hedge_price = max(1, 100 - actual_dog_price)
+                print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
                 bot_log('PHANTOM_CEILING_POST', bot_id, {
                     'dog_price': actual_dog_price, 'hedge_price': hedge_price,
                     'fav_bid': fav_bid, 'total_cost': total_cost,
@@ -10569,8 +10569,8 @@ def _handle_phantom(bot_id, bot, actions):
         total_cost = dog_price + hedge_price
         if total_cost > 98:
             # Cap at 98¢ and post — dual exit will handle the rest
-            hedge_price = max(1, 98 - dog_price)
-            print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 98¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
+            hedge_price = max(1, 100 - dog_price)
+            print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
             bot_log('PHANTOM_CEILING_POST', bot_id, {
                 'dog_price': dog_price, 'hedge_price': hedge_price,
                 'fav_bid': fav_bid, 'total_cost': total_cost,
@@ -11049,7 +11049,7 @@ def _handle_phantom(bot_id, bot, actions):
         # ── Fav Bid-Follow System ──
         # Snap to bid every cycle. Walk up to 100¢ combined (breakeven cap).
         # Every cycle: if crossing ask gives combined ≤ 100¢, take it immediately.
-        WALK_CEILING = 98  # profit cap — camp here for queue priority, dual exit handles rest
+        WALK_CEILING = 100  # breakeven cap — dual exit handles above this
         dog_price = bot['dog_price']
 
         # Check absolute timeout — give up after hedge_timeout_s total
@@ -11335,10 +11335,21 @@ def _handle_phantom(bot_id, bot, actions):
                 fav_order_id = bot.get('fav_order_id', fav_order_id)
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(
+                _walk_resp = kalshi_client.amend_order(
                     fav_order_id, ticker=hedge_ticker, side=fav_side,
                     count=qty, **amend_kwargs
                 )
+                # Capture new order ID if Kalshi reassigned
+                _walk_order = _walk_resp.get('order', _walk_resp) if isinstance(_walk_resp, dict) else {}
+                _walk_new_oid = _walk_order.get('order_id', '')
+                if _walk_new_oid and _walk_new_oid != fav_order_id:
+                    bot['fav_order_id'] = _walk_new_oid
+                    bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
+                    if fav_side == 'yes':
+                        bot['yes_order_id'] = _walk_new_oid
+                    else:
+                        bot['no_order_id'] = _walk_new_oid
+                    fav_order_id = _walk_new_oid
             finally:
                 _phantom_drop_lock.release()
             walk_count = bot.get('fav_walk_count', 0) + 1
@@ -12797,7 +12808,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         # ── Over-Ceiling Timer (98¢ cap, 3s) ──
         _is_cross_lad = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
         combined_check = avg_dog + max(current_fav_price, current_fav_bid)
-        if combined_check > 98:
+        if combined_check > 100:
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
                 print(f'⏱ PHANTOM LADDER OVER CEILING: {bot_id} combined={combined_check}¢ — 3s timer started')
@@ -12869,7 +12880,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             bot['_over_ceiling_since'] = None
 
         # ── Bid-follow: snap to bid every cycle, capped at 98¢ combined ──
-        max_fav_ladder = 98 - avg_dog
+        max_fav_ladder = 100 - avg_dog
         new_fav_price = min(current_fav_bid, max_fav_ladder)
         if new_fav_price == current_fav_price:
             return

@@ -11443,7 +11443,7 @@ def _handle_phantom(bot_id, bot, actions):
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
-        if now - wait_since < 10:  # 10s cooldown between repeats
+        if now - wait_since < 5:  # 5s cooldown between repeats
             return
 
         # Smart stop check: cross-market → awaiting_settlement, same-market → completed
@@ -11925,7 +11925,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             return
 
         wait_since = bot.get('waiting_repeat_since', now)
-        if now - wait_since < 10:  # 10s cooldown
+        if now - wait_since < 5:  # 5s cooldown
             return
 
         # Settlement check: don't keep waiting on finalized markets (throttled to every 60s)
@@ -13124,7 +13124,7 @@ def _handle_apex(bot_id, bot, actions):
             print(f'🏁 APEX REPEAT DONE: {bot_id} repeats_done={bot.get("repeats_done",0)}/{bot.get("repeat_count",0)}')
             save_state()
             return
-        if now - wait_since < 10:
+        if now - wait_since < 5:
             return
 
         # Settlement check: don't repost on finalized markets (throttled to every 60s)

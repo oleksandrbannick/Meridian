@@ -6551,6 +6551,25 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <span style="color:#8892a6;">Round Trips: <strong style="color:#fff;">${roundTrips}</strong></span>
         </div>` : ''}
 
+        ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #1e2740;border-radius:6px;padding:6px;margin-bottom:8px;">
+            ${(bot._rt_log || []).map((rt, i) => {
+                const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
+                const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
+                return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
+                    <span style="color:#00d4ff;font-weight:700;font-size:10px;">#${i + 1}</span>
+                    <span style="display:flex;align-items:center;gap:3px;">
+                        <span style="color:#ffaa00;font-weight:700;">${rt.entry_price}¢</span>
+                        <span style="color:#3a4560;">+</span>
+                        <span style="color:#00aaff;font-weight:700;">${rt.exit_price}¢</span>
+                        <span style="color:#3a4560;">=</span>
+                        <span style="color:${combCol};font-weight:700;">${rt.combined}¢</span>
+                    </span>
+                    <span style="color:#00d4ff;font-weight:700;">x${rt.qty}</span>
+                    <span style="color:${pCol};font-weight:800;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}¢</span>
+                </div>`;
+            }).join('')}
+        </div>` : ''}
+
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
             <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">

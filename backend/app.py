@@ -3786,6 +3786,16 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
                 print(f'📊 WS APEX MM FILL: {bot_id} {matched_side.upper()} +{count} @{matched_price}c → net_{matched_side}={bot[f"net_{matched_side}"]} avg={bot[f"avg_{matched_side}_cost"]}c')
 
+                # Log fill for card display
+                bot.setdefault('_fill_log', []).append({
+                    'side': matched_side, 'price': matched_price, 'qty': count,
+                    'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
+                    'ts': time.time(),
+                })
+                # Keep last 50 fills
+                if len(bot['_fill_log']) > 50:
+                    bot['_fill_log'] = bot['_fill_log'][-50:]
+
                 # Check if this fill closes opposite position (round trip)
                 opposite = 'no' if matched_side == 'yes' else 'yes'
                 opp_held = bot.get(f'net_{opposite}', 0)
@@ -3806,6 +3816,14 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
                     'realized_pnl': bot.get('realized_pnl_cents', 0),
                 })
+
+                # Rolling Wave: only move exit side on fill, leave entry alone
+                if status == 'market_making_active':
+                    threading.Thread(
+                        target=_apex_mm_rolling_wave,
+                        args=(bot_id, bot, matched_side),
+                        daemon=True
+                    ).start()
 
             save_state()
         break
@@ -6314,34 +6332,38 @@ def _apex_mm_check_loss_limit(bot_id, bot):
     return False
 
 
-APEX_MM_SKEW_FACTOR = 1         # Cents to shift per unit of net inventory
-APEX_MM_SKEW_INTERVAL_S = 5     # Only reprice every 5s to avoid API churn
 
 
-def _apex_mm_skew_reprice(bot_id, bot):
-    """Inventory skew repricing. When holding inventory:
-    - Exit side: move orders closer to market (aggressive, fill faster)
-    - Entry side: pull orders back (defensive, stop accumulating)
-    When flat: do nothing (symmetric ladder already posted)."""
+def _apex_mm_rolling_wave(bot_id, bot, fill_side):
+    """Rolling Wave: on fill, ONLY move the EXIT side closer. Leave entry side untouched.
+    Called from WS fill handler immediately on fill — event-driven, not loop-driven.
+    fill_side: which side just filled ('yes' or 'no')."""
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
-    now = time.time()
 
-    # No inventory = no skew needed, ladder sits as-is
+    # If flat after this fill, reprice symmetric for next cycle
     if net_yes == 0 and net_no == 0:
-        # If we were skewed before and now flat, reprice fresh symmetric ladder
         if bot.get('_skew_active'):
             bot['_skew_active'] = False
             _apex_mm_reprice_symmetric(bot_id, bot)
         return
 
-    # Only reprice when inventory CHANGES — not on a timer
-    # Compare current net to what we last skewed for
-    last_skew_net = bot.get('_last_skew_net', (0, 0))
-    current_net = (net_yes, net_no)
-    if current_net == tuple(last_skew_net) and bot.get('_skew_active'):
-        return  # inventory hasn't changed, ladder is already skewed correctly
+    # Determine exit side (side we need fills on to close position)
+    if net_yes > net_no:
+        exit_side = 'no'    # long YES, need NO fills
+        avg_held = bot.get('avg_yes_cost', 0)
+        net_held = net_yes - net_no
+    else:
+        exit_side = 'yes'   # long NO, need YES fills
+        avg_held = bot.get('avg_no_cost', 0)
+        net_held = net_no - net_yes
 
+    # If this fill was on the EXIT side (closing position), no need to move anything
+    # The existing orders are fine — we're getting closer to flat
+    if fill_side == exit_side:
+        return
+
+    # This fill was on the ENTRY side (accumulating) — move EXIT side more aggressive
     ticker = bot['ticker']
     midpoint = _apex_mm_midpoint(ticker)
     if midpoint is None:
@@ -6356,103 +6378,80 @@ def _apex_mm_skew_reprice(bot_id, bot):
     levels = bot.get('levels', 7)
     spacing = bot.get('spacing', 1)
     base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
-    no_anchor = 100 - midpoint
 
-    # Determine which side is heavy (entry) and which needs to exit
-    if net_yes > net_no:
-        # Long YES — need NO fills to close. NO = exit (aggressive), YES = entry (defensive)
-        exit_side = 'no'
-        entry_side = 'yes'
-        net_held = net_yes - net_no
-    else:
-        # Long NO — need YES fills to close. YES = exit (aggressive), NO = entry (defensive)
-        exit_side = 'yes'
-        entry_side = 'no'
-        net_held = net_no - net_yes
-
-    # Calculate skew: how many cents to shift
-    skew = min(base_gap, max(1, round(net_held * APEX_MM_SKEW_FACTOR / base_qty)))
-
-    # Exit side: post closer to market (reduce gap by skew)
+    # Skew: more inventory = tighter exit gap
+    skew = min(base_gap - 1, max(1, round(net_held * 1.0 / max(1, base_qty))))
     exit_gap = max(1, base_gap - skew)
-    # Entry side: post further from market (increase gap by skew)
-    entry_gap = base_gap + skew
 
-    # Breakeven cap: exit price must ensure combined < 100 to be profitable
-    # If long YES at avg_yes_cost, NO exit must be < 100 - avg_yes_cost
-    # If long NO at avg_no_cost, YES exit must be < 100 - avg_no_cost
-    if exit_side == 'no':
-        avg_held_cost = bot.get('avg_yes_cost', 0)
-        max_exit_price = (100 - avg_held_cost - 2) if avg_held_cost > 0 else 99  # 2c min profit
-    else:
-        avg_held_cost = bot.get('avg_no_cost', 0)
-        max_exit_price = (100 - avg_held_cost - 2) if avg_held_cost > 0 else 99  # 2c min profit
+    # Breakeven cap: exit must be profitable (4c min after fees)
+    max_exit_price = (100 - avg_held - 4) if avg_held > 0 else 99
 
-    # Generate skewed levels
-    exit_levels = []
-    entry_levels = []
-    for i in range(levels):
-        offset_exit = exit_gap + (i * spacing)
-        offset_entry = entry_gap + (i * spacing)
-        # Auto-scale qty
-        if levels > 1:
-            scale_factor = 1.0 + (i * 1.0 / (levels - 1))
-        else:
-            scale_factor = 1.0
-        level_qty = max(1, round(base_qty * scale_factor))
-
-        if exit_side == 'yes':
-            ep = midpoint - offset_exit
-            np_entry = no_anchor - offset_entry
-        else:
-            ep = no_anchor - offset_exit
-            np_entry = midpoint - offset_entry
-
-        # Cap exit price at breakeven - ensure every exit fill is profitable
-        ep = min(ep, max_exit_price)
-
-        if ep >= 1:
-            exit_levels.append((int(ep), level_qty))
-        if np_entry >= 1:
-            entry_levels.append((int(np_entry), level_qty))
-
+    # Generate new exit levels
     if exit_side == 'yes':
-        new_yes_levels = exit_levels
-        new_no_levels = entry_levels
+        anchor = midpoint
     else:
-        new_yes_levels = entry_levels
-        new_no_levels = exit_levels
+        anchor = 100 - midpoint
 
-    # Cancel all current unfilled orders
+    new_exit_levels = []
+    for i in range(levels):
+        offset = exit_gap + (i * spacing)
+        ep = anchor - offset
+        ep = min(ep, max_exit_price)
+        # Auto-scale
+        scale_factor = 1.0 + (i * 1.0 / (levels - 1)) if levels > 1 else 1.0
+        level_qty = max(1, round(base_qty * scale_factor))
+        if ep >= 1:
+            new_exit_levels.append((int(ep), level_qty))
+
+    # Only cancel EXIT side orders, leave ENTRY side completely alone
+    exit_orders_key = f'{exit_side}_orders'
     cancelled = 0
-    for side_key in ('yes_orders', 'no_orders'):
-        for price_str, level in list(bot.get(side_key, {}).items()):
-            oid = level.get('oid')
-            if oid:
-                cr = _cancel_with_retry(oid)
-                if cr == 'filled':
-                    pass  # WS handler catches it
-                elif cr:
-                    cancelled += 1
-                level['oid'] = None
+    for price_str, level in list(bot.get(exit_orders_key, {}).items()):
+        oid = level.get('oid')
+        if oid:
+            cr = _cancel_with_retry(oid)
+            if cr == 'filled':
+                # Cancel-race fill! Add to inventory.
+                _qty = level.get('qty', 1)
+                bot[f'net_{exit_side}'] = bot.get(f'net_{exit_side}', 0) + _qty
+                bot[f'total_{exit_side}_cost'] = bot.get(f'total_{exit_side}_cost', 0) + (int(price_str) * _qty)
+                _net = bot[f'net_{exit_side}']
+                bot[f'avg_{exit_side}_cost'] = round(bot[f'total_{exit_side}_cost'] / _net) if _net > 0 else 0
+                print(f'⚡ APEX MM CANCEL-RACE: {bot_id} {exit_side.upper()} filled @{price_str}c during cancel → net={_net}')
+            elif cr:
+                cancelled += 1
+            level['oid'] = None
 
-    # Post skewed ladder
-    _apex_mm_post_ladder(bot_id, bot, new_yes_levels, new_no_levels)
+    # Post new exit levels
+    exit_specs = []
+    for price, qty in new_exit_levels:
+        exit_specs.append({'ticker': ticker, 'side': exit_side, 'action': 'buy', 'count': qty, 'price': price})
+
+    if exit_specs:
+        results = create_orders_batch(exit_specs) or []
+        new_orders = {}
+        for i, (price, qty) in enumerate(new_exit_levels):
+            result = results[i] if i < len(results) and results[i] else None
+            if result:
+                resp, actual_price = result
+                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                if oid:
+                    new_orders[str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
+                    bot.setdefault('_all_placed_order_ids', []).append(oid)
+        bot[exit_orders_key] = new_orders
+
     bot['midpoint'] = midpoint
-    bot['_last_skew_at'] = now
     bot['_skew_active'] = True
     bot['_skew_direction'] = f'exit_{exit_side}'
     bot['_skew_exit_gap'] = exit_gap
-    bot['_skew_entry_gap'] = entry_gap
-    bot['_last_skew_net'] = [net_yes, net_no]
 
     long_side = 'YES' if net_yes > net_no else 'NO'
-    bot_log('APEX_MM_SKEW', bot_id, {
-        'net_yes': net_yes, 'net_no': net_no, 'net_held': net_held,
-        'exit_side': exit_side, 'exit_gap': exit_gap, 'entry_gap': entry_gap,
-        'skew': skew, 'midpoint': midpoint, 'cancelled': cancelled,
+    bot_log('APEX_MM_WAVE', bot_id, {
+        'fill_side': fill_side, 'exit_side': exit_side, 'net_held': net_held,
+        'exit_gap': exit_gap, 'max_exit': max_exit_price, 'midpoint': midpoint,
+        'cancelled': cancelled, 'new_levels': len(new_exit_levels),
     })
-    print(f'📊 APEX MM SKEW: {bot_id} long {long_side} {net_held}x → {exit_side.upper()} exit gap={exit_gap} entry gap={entry_gap} (skew={skew})')
+    print(f'📊 APEX MM WAVE: {bot_id} {fill_side.upper()} filled → moving {exit_side.upper()} exit closer (gap={exit_gap}, {len(new_exit_levels)} levels, breakeven<{max_exit_price}c)')
 
 
 def _apex_mm_reprice_symmetric(bot_id, bot):
@@ -6674,6 +6673,15 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     else:
         bot[f'avg_{opposite}_cost'] = 0
         bot[f'total_{opposite}_cost'] = 0
+
+    # Log round trip for card display
+    bot.setdefault('_rt_log', []).append({
+        'entry_side': opposite, 'entry_price': opp_avg,
+        'exit_side': fill_side, 'exit_price': fill_price,
+        'combined': opp_avg + fill_price, 'qty': close_qty,
+        'gross': gross_pnl, 'fee': total_fee, 'pnl': net_pnl,
+        'ts': time.time(),
+    })
 
     # Record trade
     _record_trade({
@@ -11515,8 +11523,7 @@ def _handle_apex(bot_id, bot, actions):
         _apex_mm_begin_exit(bot_id, bot, f'smart_stop ({bot["consecutive_losses"]} consecutive losses)')
         return
 
-    # 6. Inventory skew — push exit side aggressive, pull entry side back
-    _apex_mm_skew_reprice(bot_id, bot)
+    # 6. Rolling wave handles skew in WS fill handler — nothing to do here
 
     save_state()
 
@@ -11562,11 +11569,13 @@ def _cancel_hedge_verified(bot, bot_id):
             return _ws_fills
         return 0
     filled_qty = 0
+    _cancel_failed = False
     # Attempt cancel
     try:
         api_rate_limiter.wait()
         kalshi_client.cancel_order(fav_oid)
     except Exception as e:
+        _cancel_failed = True
         print(f'⚠ HEDGE CANCEL FAILED: {bot_id} order={fav_oid[:12]} — {e}')
         bot_log('HEDGE_CANCEL_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
     # Verify: check order status to confirm cancel and catch fills
@@ -11582,8 +11591,6 @@ def _cancel_hedge_verified(bot, bot_id):
                 'order_id': fav_oid, 'filled_qty': filled_qty, 'status': status,
             }, level='WARN')
         if status not in ('cancelled', 'canceled'):
-            # Order is still active — retry cancel
-            print(f'⚠ HEDGE STILL ACTIVE AFTER CANCEL: {bot_id} order={fav_oid[:12]} status={status} — retrying')
             try:
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(fav_oid)
@@ -11592,7 +11599,8 @@ def _cancel_hedge_verified(bot, bot_id):
     except Exception as e:
         print(f'⚠ HEDGE VERIFY FAILED: {bot_id} order={fav_oid[:12]} — {e}')
         bot_log('HEDGE_VERIFY_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
-        # 404 = order gone from Kalshi — check actual position as ground truth
+    # If cancel 404'd and we detected 0 fills, Kalshi may have stale data — check actual position
+    if _cancel_failed and filled_qty == 0:
         _ws_fills = bot.get('fav_fill_qty', 0)
         _pos_fills = 0
         try:
@@ -11605,14 +11613,14 @@ def _cancel_hedge_verified(bot, bot_id):
                     _pos_fills = max(_pos_fills, abs(_p.get('position', 0)))
             elif isinstance(_positions, dict):
                 _pos_fills = abs(_positions.get('position', 0))
-            if _pos_fills > 0:
-                print(f'⚠ HEDGE VERIFY 404 POSITION CHECK: {bot_id} Kalshi position={_pos_fills} ws={_ws_fills}')
         except Exception as _pe:
-            print(f'⚠ HEDGE VERIFY POSITION CHECK FAILED: {bot_id}: {_pe}')
-        # Use the highest of: WS fills, Kalshi position
+            print(f'⚠ HEDGE POSITION CHECK FAILED: {bot_id}: {_pe}')
         filled_qty = max(_ws_fills, _pos_fills)
         if filled_qty > 0:
-            print(f'⚠ HEDGE VERIFY 404 FALLBACK: {bot_id} using {filled_qty} (ws={_ws_fills} pos={_pos_fills})')
+            print(f'⚠ HEDGE CANCEL 404 RECOVERY: {bot_id} order reported 0 fills but Kalshi position={_pos_fills} ws={_ws_fills} → using {filled_qty}')
+            bot_log('HEDGE_CANCEL_404_POSITION_RECOVERY', bot_id, {
+                'ws_fills': _ws_fills, 'pos_fills': _pos_fills, 'used': filled_qty,
+            }, level='WARN')
     bot['fav_order_id'] = None
     return filled_qty
 

@@ -8395,6 +8395,7 @@ def _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market):
 
     return (None, None)
 
+_phantom_create_lock = threading.Lock()
 
 @app.route('/api/bot/anchor', methods=['POST'])
 def create_anchor_bot():
@@ -8528,6 +8529,14 @@ def create_anchor_bot():
                 count=quantity, price=dog_price
             )
             dog_order_id = dog_resp['order']['order_id']
+
+        # Double-tap guard: re-check after order posted (prevents race between concurrent requests)
+        _net_err2, _ = _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market)
+        if _net_err2:
+            # Cancel the order we just placed
+            if dog_order_id:
+                threading.Thread(target=lambda oid=dog_order_id: _safe_cancel(oid, f'double_tap_{ticker}'), daemon=True).start()
+            return jsonify({'error': f'Double-tap blocked: {_net_err2}'}), 409
 
         # Subscribe WS
         if ws_manager.connected:

@@ -13323,6 +13323,9 @@ function renderDogStatsAndDepth(trades, pnl) {
         const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
         const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
         const dualExits = trades.filter(t => t.result === 'anchor_dual_exit').length;
+        const dualExitsFav = trades.filter(t => t.dual_exit_active || t.exit_via === 'dual_exit_arb_complete').length;
+        const orphans = trades.filter(t => t.result === 'race_orphan_cleared').length;
+        const totalExits = sellbacks + dualExits + dualExitsFav;
 
         const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all' || _phantomActiveExit !== 'all';
         let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
@@ -13380,58 +13383,26 @@ function renderDogStatsAndDepth(trades, pnl) {
         // Total contracts
         const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
 
+        const exitRate = ltTotal > 0 ? Math.round(totalExits / ltTotal * 100) : 0;
+        const _bub = (label, value, sub, color) => `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+            <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
+            <div style="color:${color};font-size:22px;font-weight:800;">${value}</div>
+            ${sub ? `<div style="color:#555;font-size:10px;margin-top:2px;">${sub}</div>` : ''}
+        </div>`;
+
         statsPanel.innerHTML = ltTotal === 0 && !isFiltered
             ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
             : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${pnlLabel} P&L</div>
-                    <div style="color:${dLtCol};font-size:22px;font-weight:800;">${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
-                </div>
-                ${!isFiltered ? `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L</div>
-                    <div style="color:${dDCol};font-size:22px;font-weight:800;">${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${dDWins}W / ${dDLosses}L today</div>
-                </div>` : ''}
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Win Rate</div>
-                    <div style="color:#ffaa00;font-size:22px;font-weight:800;">${ltWinRate}%</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Profit</div>
-                    <div style="color:${ltAvgCol};font-size:22px;font-weight:800;">${ltAvgProfit === '—' ? '—' : (parseFloat(ltAvgProfit) >= 0 ? '+' : '') + ltAvgProfit + '¢'}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltTotal} trades</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Avg Depth Floor</div>
-                    <div style="color:#ff66aa;font-size:22px;font-weight:800;">${avgDepth}¢</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Depth Capture</div>
-                    <div style="color:${captureRatio >= 90 ? '#00ff88' : captureRatio >= 70 ? '#ffaa00' : '#ff4444'};font-size:22px;font-weight:800;">${dcTrades.length > 0 ? captureRatio + '%' : '—'}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${avgCapture !== '—' ? avgCapture + '¢ / ' + avgFloorDisp + '¢' : ''}</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Contracts</div>
-                    <div style="color:#00ddff;font-size:22px;font-weight:800;">${totalContracts}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">total pushed</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Trades</div>
-                    <div style="color:#8892a6;font-size:22px;font-weight:800;">${ltTotal}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${ltWins}W / ${ltLosses}L</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Hedge Speed</div>
-                    <div style="color:#00ffcc;font-size:22px;font-weight:800;">${avgHedgeMs === '—' ? '—' : avgHedgeMs + 'ms'}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${hedgeTrades.length} samples</div>
-                </div>
-                <div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                    <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Exits</div>
-                    <div style="color:#ff4444;font-size:22px;font-weight:800;">${sellbacks + dualExits}</div>
-                    <div style="color:#555;font-size:10px;margin-top:2px;">${sellbacks} SB · ${dualExits} dual</div>
-                </div>
+                ${_bub(`${pnlLabel} P&L`, `${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}`, `${ltWins}W / ${ltLosses}L`, dLtCol)}
+                ${!isFiltered ? _bub('Daily P&L', `${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol) : ''}
+                ${_bub('Win Rate', `${ltWinRate}%`, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
+                ${_bub('Avg Profit', ltAvgProfit === '—' ? '—' : `${parseFloat(ltAvgProfit)>=0?'+':''}${ltAvgProfit}¢`, `${ltTotal} trades`, ltAvgCol)}
+                ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#8892a6')}
+                ${_bub('Contracts', totalContracts, 'total pushed', '#00ddff')}
+                ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#00ffcc')}
+                ${_bub('Ceiling Exits', dualExits + dualExitsFav, `${exitRate}% of trades · ${dualExitsFav} fav · ${dualExits} dog`, '#ff4444')}
+                ${_bub('Sellbacks', sellbacks, `${ltTotal > 0 ? Math.round(sellbacks/ltTotal*100) : 0}% of trades`, '#ff8800')}
+                ${orphans > 0 ? _bub('Orphans', orphans, `${ltTotal > 0 ? Math.round(orphans/ltTotal*100) : 0}% of trades`, '#aa66ff') : ''}
             </div>`;
     }
 
@@ -13443,12 +13414,22 @@ function renderDogStatsAndDepth(trades, pnl) {
         trades.forEach(t => {
             const d = t.anchor_depth || 0;
             if (d <= 0) return;
-            if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0 };
+            if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0, capTotal: 0, capCount: 0 };
             const net = (t.profit_cents||0) - (t.loss_cents||0);
             depthMap[d].net += net;
             depthMap[d].count++;
             if (net >= 0 && (t.profit_cents||0) > 0) depthMap[d].wins++;
             else if (net < 0) depthMap[d].losses++;
+            // Depth capture per floor
+            if (t.result !== 'anchor_dual_exit') {
+                const ds = t.dog_side || t.first_leg || 'no';
+                const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
+                const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price) || 0;
+                if (dp > 0 && fp > 0) {
+                    depthMap[d].capTotal += 100 - dp - fp;
+                    depthMap[d].capCount++;
+                }
+            }
         });
         const depths = Object.values(depthMap).sort((a,b) => a.depth - b.depth);
         depthPanel.innerHTML = depths.length === 0 ? '' : `
@@ -13461,10 +13442,14 @@ function renderDogStatsAndDepth(trades, pnl) {
                     const isActive = _phantomActiveDepth === d.depth;
                     const borderCol = isActive ? '#ff66aa' : '#1e2740';
                     const bgCol = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
+                    const capPct = d.capCount > 0 ? Math.round((d.capTotal / d.capCount) / d.depth * 100) : 0;
+                    const capCol = capPct >= 90 ? '#00ff88' : capPct >= 70 ? '#ffaa00' : '#ff4444';
+                    const capAvg = d.capCount > 0 ? (d.capTotal / d.capCount).toFixed(1) : '—';
                     return `<div data-depth="${d.depth}" onclick="selectPhantomDepth(${d.depth})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                         <div style="color:#ff66aa;font-size:14px;font-weight:800;">⬇${d.depth}¢</div>
                         <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
+                        <div style="color:${capCol};font-size:9px;margin-top:2px;">capture ${capPct}%${capAvg !== '—' ? ` (${capAvg}¢)` : ''}</div>
                         <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
                     </div>`;
                 }).join('')}

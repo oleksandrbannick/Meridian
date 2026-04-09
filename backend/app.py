@@ -6290,7 +6290,7 @@ def _apex_mm_check_inventory(bot_id, bot):
     hysteresis = APEX_MM_INVENTORY_HYSTERESIS
 
     # YES side: pause if over limit, resume if back under
-    if bot.get('net_yes', 0) > inv_limit and not bot.get('_yes_side_paused'):
+    if bot.get('net_yes', 0) >= inv_limit and not bot.get('_yes_side_paused'):
         for price, level in list(bot.get('yes_orders', {}).items()):
             oid = level.get('oid')
             if oid:
@@ -6306,7 +6306,7 @@ def _apex_mm_check_inventory(bot_id, bot):
         print(f'✅ APEX MM: {bot_id} YES resumed (inv {bot["net_yes"]} < {inv_limit - hysteresis})')
 
     # NO side
-    if bot.get('net_no', 0) > inv_limit and not bot.get('_no_side_paused'):
+    if bot.get('net_no', 0) >= inv_limit and not bot.get('_no_side_paused'):
         for price, level in list(bot.get('no_orders', {}).items()):
             oid = level.get('oid')
             if oid:
@@ -18070,25 +18070,34 @@ def get_active_positions():
                     if _total_fav > 0:
                         _add(_fav_ticker, fav_side, 'phantom', _total_fav)
             elif cat == 'ladder_arb':
-                # Sum fills across all rungs (per-rung siloed system)
-                _apex_yes = sum(_si(r.get('yes_fill_qty', 0)) for r in b.get('rungs', []) if not r.get('completed'))
-                _apex_no = sum(_si(r.get('no_fill_qty', 0)) for r in b.get('rungs', []) if not r.get('completed'))
-                # Also count hedge fills on the hedge side
-                for r in b.get('rungs', []):
-                    if r.get('completed'):
-                        continue  # completed rungs = settled on Kalshi, net 0
-                    hfq = _si(r.get('hedge_fill_qty', 0))
-                    if hfq > 0:
-                        hs = 'no' if r.get('anchor_side') == 'yes' else 'yes'
-                        if hs == 'yes':
-                            _apex_yes += hfq
-                        else:
-                            _apex_no += hfq
-                # Net position (Kalshi settles matching YES+NO instantly)
-                if _apex_yes > _apex_no:
-                    _add(t, 'yes', 'apex', _apex_yes - _apex_no)
-                elif _apex_no > _apex_yes:
-                    _add(t, 'no', 'apex', _apex_no - _apex_yes)
+                if btype == 'apex_mm':
+                    # Apex MM: uses net_yes/net_no inventory tracking
+                    _mm_yes = _si(b.get('net_yes', 0))
+                    _mm_no = _si(b.get('net_no', 0))
+                    if _mm_yes > 0:
+                        _add(t, 'yes', 'apex', _mm_yes)
+                    if _mm_no > 0:
+                        _add(t, 'no', 'apex', _mm_no)
+                else:
+                    # Apex 2.0: sum fills across all rungs (per-rung siloed system)
+                    _apex_yes = sum(_si(r.get('yes_fill_qty', 0)) for r in b.get('rungs', []) if not r.get('completed'))
+                    _apex_no = sum(_si(r.get('no_fill_qty', 0)) for r in b.get('rungs', []) if not r.get('completed'))
+                    # Also count hedge fills on the hedge side
+                    for r in b.get('rungs', []):
+                        if r.get('completed'):
+                            continue  # completed rungs = settled on Kalshi, net 0
+                        hfq = _si(r.get('hedge_fill_qty', 0))
+                        if hfq > 0:
+                            hs = 'no' if r.get('anchor_side') == 'yes' else 'yes'
+                            if hs == 'yes':
+                                _apex_yes += hfq
+                            else:
+                                _apex_no += hfq
+                    # Net position (Kalshi settles matching YES+NO instantly)
+                    if _apex_yes > _apex_no:
+                        _add(t, 'yes', 'apex', _apex_yes - _apex_no)
+                    elif _apex_no > _apex_yes:
+                        _add(t, 'no', 'apex', _apex_no - _apex_yes)
             elif btype == 'middle':
                 for leg in ('a', 'b'):
                     mt = b.get(f'ticker_{leg}', '')

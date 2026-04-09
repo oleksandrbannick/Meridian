@@ -10576,7 +10576,7 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         total_cost = dog_price + hedge_price
-        if total_cost > 98:
+        if total_cost > 100:
             # Cap at 98¢ and post — dual exit will handle the rest
             hedge_price = max(1, 100 - dog_price)
             print(f'📌 PHANTOM CEILING: {bot_id} combined {total_cost}¢ > 100¢ — posting hedge at {hedge_price}¢ (dual exit will handle)')
@@ -11095,10 +11095,15 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔄 PHANTOM DUAL EXIT CANCEL: {bot_id} ceiling cleared (combined={_ceiling_combined}¢) — dog sell cancelled')
                 bot_log('PHANTOM_DUAL_EXIT_CANCEL', bot_id, {'ceiling_combined': _ceiling_combined, 'reason': 'market_reverted'})
         else:
-            # ── Dual Exit System: at ceiling, race hedge vs dog sell ──
-            # Post dog sell at ask immediately, keep hedge posted.
-            # Hedge fills → cancel sell (arb complete). Sell fills → cancel hedge (clean exit).
-            if not bot.get('_over_ceiling_since'):
+            # ── Cross-market: hold for settlement, skip dual exit entirely ──
+            _is_cross_de = hedge_ticker and hedge_ticker != ticker
+            if _is_cross_de:
+                if not bot.get('_ceiling_hold_logged_cross'):
+                    bot['_ceiling_hold_logged_cross'] = True
+                    print(f'⏳ PHANTOM CROSS CEILING: {bot_id} combined={_ceiling_combined}¢ — holding for settlement')
+                    bot_log('PHANTOM_CROSS_CEILING_HOLD', bot_id, {'ceiling_combined': _ceiling_combined})
+            # ── Dual Exit System (same-market only): race hedge vs dog sell ──
+            elif not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
                 # Post dog sell at ask — race with hedge
                 _dog_ask_sell = bot.get(f'live_{dog_side}_ask', 0)
@@ -11123,7 +11128,7 @@ def _handle_phantom(bot_id, bot, actions):
                     'fav_bid': _live_fav_bid, 'ceiling_combined': _ceiling_combined,
                     'dog_sell_price': bot.get('dog_sell_price'),
                 })
-            else:
+            elif not _is_cross_de:
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
                 _dog_sell_oid = bot.get('dog_sell_order_id')
 

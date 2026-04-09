@@ -11314,7 +11314,10 @@ def _handle_phantom(bot_id, bot, actions):
                     # ── Dog sell won the race — cancel hedge, clean exit ──
                     _dog_sell_price = bot.get('dog_sell_price', 0)
                     _hedge_fills = _cancel_hedge_verified(bot, bot_id)
-                    # If hedge had fills, sell them back as maker (they're orphaned)
+                    # Also check WS-tracked fills as fallback (404 bug: cancel_hedge may return 0)
+                    _ws_fav_fills = bot.get('fav_fill_qty', 0)
+                    _hedge_fills = max(_hedge_fills, _ws_fav_fills)
+                    # If hedge had ANY fills, sell them back as maker (they're orphaned)
                     if _hedge_fills > 0:
                         print(f'⚠ DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — flagging for maker sell')
                         bot_log('DUAL_EXIT_HEDGE_RACE_ORPHAN', bot_id, {

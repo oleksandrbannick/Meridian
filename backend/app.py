@@ -2466,6 +2466,37 @@ def load_state():
         print(f'🧹 Deduped: removed {len(_remove_idx)} duplicate trade entries')
         save_state()  # persist cleaned data immediately
 
+    # ── Recalculate session_pnl from trades to ensure consistency across restarts ──
+    _day_key = session_pnl.get('day_key', '')
+    _reset_ts = pnl_resets.get(_day_key, session_pnl.get('session_start', 0))
+    _recalc_profit = 0
+    _recalc_loss = 0
+    _recalc_completed = 0
+    _recalc_stopped = 0
+    for t in trade_history:
+        if t.get('timestamp', 0) < _reset_ts:
+            continue
+        p = t.get('profit_cents', 0)
+        l = t.get('loss_cents', 0)
+        if p > 0:
+            _recalc_profit += p
+        if l > 0:
+            _recalc_loss += l
+        result = t.get('result', '')
+        if 'completed' in result or 'win' in result or result == 'race_orphan_cleared':
+            _recalc_completed += 1
+        elif 'sellback' in result or 'dual_exit' in result or 'manual' in result or 'settled' in result:
+            _recalc_stopped += 1
+    _old_profit = session_pnl.get('gross_profit_cents', 0)
+    _old_loss = session_pnl.get('gross_loss_cents', 0)
+    if abs(_recalc_profit - _old_profit) > 5 or abs(_recalc_loss - _old_loss) > 5:
+        print(f'🔧 P&L RECALC: profit {_old_profit}→{_recalc_profit} loss {_old_loss}→{_recalc_loss} (from trades.jsonl)')
+        session_pnl['gross_profit_cents'] = _recalc_profit
+        session_pnl['gross_loss_cents'] = _recalc_loss
+        session_pnl['completed_bots'] = _recalc_completed
+        session_pnl['stopped_bots'] = _recalc_stopped
+        save_state()
+
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
     """Burst rate limiter — fires up to `burst` requests instantly within a

@@ -10537,10 +10537,9 @@ def _handle_phantom(bot_id, bot, actions):
                 anchor_depth = bot.get('anchor_depth', 5)
                 new_dog_price = max(1, current_dog_bid - anchor_depth)
 
-                # Hard price ceiling: dog never exceeds 35¢ — park there and wait
-                # Data: 36-40¢ dog prices lose -69¢/trade avg on tennis since Sunday
-                if new_dog_price > 35:
-                    new_dog_price = 35
+                # Hard price ceiling: dog never exceeds 40¢ — park there and wait
+                if new_dog_price > 40:
+                    new_dog_price = 40
 
                 # Price floor: don't repost at < 2¢ — pull order and wait for recovery
                 if new_dog_price < 2:
@@ -11935,8 +11934,8 @@ def _handle_phantom(bot_id, bot, actions):
             elif new_dog_price < 2:
                 _drift_stop = True
                 _drift_reason = f'price_too_low_{new_dog_price}c'
-            elif new_dog_price > 35:
-                new_dog_price = 35  # park at ceiling, don't stop
+            elif new_dog_price > 40:
+                new_dog_price = 40  # park at ceiling, don't stop
             if _drift_stop:
                 # Pull and wait — don't stop the bot
                 bot['status'] = 'dog_anchor_posted'

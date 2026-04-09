@@ -23482,6 +23482,7 @@ def claude_chat():
         'For anchor/dog bots: the dog side is the underdog (lower probability). You post a cheap maker order and hedge on fill.',
         'Prices are always in CENTS (1-99). Count = number of contracts.',
         'IMPORTANT: Always confirm with the user before executing trades or cancellations. State the action, ticker, prices, and count, then proceed.',
+        'CANCELLATION: When the user asks to cancel a bot, ALWAYS call cancel_bot with the bot_id. Do NOT assume a bot is already cancelled based on status or fills. If you are unsure, call get_active_bots first, find the bot_id, then cancel it. A bot with status "posted" or "waiting_repeat" with "no fills yet" is still active and resting on Kalshi — it MUST be cancelled to remove the orders.',
         'When the user refers to a game by team name (e.g. "Suns game", "Duke spread"), use search_markets to find the right ticker. Do NOT guess tickers.',
         'You can see the user\'s current screen state (sport filter, live filter, visible markets). Reference this context when the user says "this game", "the first one", etc.',
         'You have tools for: live scores (get_live_scores), trade history (get_trade_history), price alerts (set_alert), UI control (change_view), game schedules (get_schedule), market analysis (analyze_market), bulk bot deployment (bulk_deploy), performance tracking (get_leaderboard), boxscores (get_boxscore), and opening lines (get_opening_lines).',

@@ -6192,6 +6192,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     <span style="color:#555;font-size:9px;">${profitPer}¢/ea × ${totalQty} - ${estFee}¢ fees</span>
                 </div>`;
             } else if (dogFilled && favPrice > 0) {
+                const _hasDualExit = !!bot.dog_sell_order_id || (bot._over_ceiling_since && bot._over_ceiling_since > 0);
+                const _dogSellP = bot.dog_sell_price || 0;
+                if (_hasDualExit && _dogSellP > 0) {
+                    // During dual exit — show dog sell loss, not fake fav profit
+                    const _sellLoss = (_dogSellP - avgDogPrice) * qty;
+                    const _sellFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(avgDogPrice, _dogSellP, qty) : 0;
+                    const _sellNet = _sellLoss - _sellFee;
+                    return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid #ff880033;border-radius:6px;font-size:11px;">
+                        <span style="color:#ff8800;font-weight:800;">DE exit: ${_sellNet >= 0 ? '+' : ''}${_sellNet}¢</span>
+                        <span style="color:#555;font-size:9px;">if dog sells @${_dogSellP}¢ (fav @${favPrice}¢ waiting)</span>
+                    </div>`;
+                }
                 const estProfitPer = 100 - avgDogPrice - favPrice;
                 const totalQty = isLadder ? (bot.total_dog_fill_qty || hedgeQty) : qty;
                 const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : favPrice, dogSide === 'yes' ? favPrice : avgDogPrice, totalQty) : 0;
@@ -6312,20 +6324,19 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const dogSellPrice = bot.dog_sell_price || 0;
                     const dogSellFills = bot.dog_sell_fill_qty || 0;
                     const statusIcon = hasDualExit ? '📤' : atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
-                    const statusText = hasDualExit ? 'DUAL EXIT' : atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
+                    const statusText = hasDualExit ? 'DUAL EXIT RACING' : atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
                     const statusCol = hasDualExit ? '#ff8800' : atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
-                    const timerVal = atCeiling && ceilingStart > 0 ? ceilingSecsLeft : secsLeft;
-                    const timerLabel = atCeiling && ceilingStart > 0 ? `⏱ ${Math.round(ceilingSecsLeft)}s` : `${Math.round(secsLeft)}s`;
-                    const timerCol = atCeiling ? '#ff4444' : secsLeft <= 30 ? '#ff4444' : secsLeft <= 60 ? '#ff8800' : '#fff';
+                    const _deSellP = bot.dog_sell_price || 0;
+                    const _deSellFills = bot.dog_sell_fill_qty || 0;
+                    const _bidGap = favBid > 0 && favPrice > 0 ? favBid - favPrice : 0;
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
-                            <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${favSide.toUpperCase()} hedge</span>
-                            <span style="color:#00ff88;font-weight:700;font-size:12px;">${favPrice}¢</span>
+                            <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong></span>
+                            ${hasDualExit ? `<span style="color:#ff8800;font-size:9px;">sell@${_deSellP}¢ ${_deSellFills > 0 ? _deSellFills + '/' + qty + ' sold' : ''}</span>` : ''}
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
-                            <span style="color:${timerCol};font-weight:700;font-family:monospace;font-size:12px;">${timerLabel}</span>
+                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${_bidGap > 0 ? ` <span style="color:#ff4444;">(bid ${favBid}¢, +${_bidGap}¢ away)</span>` : ''}${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
                         </div>
                     </div><div style="display:none;">`;
                 }

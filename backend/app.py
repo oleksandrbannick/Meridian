@@ -13430,6 +13430,18 @@ def _handle_apex(bot_id, bot, actions):
         if now - _last_pull < APEX_PULL_COOLDOWN_S:
             return
 
+        # Drift check: if market is decided (bid >= 80), complete — don't wait for depth
+        _drift_yes = bot.get('live_yes_bid', 0)
+        _drift_no = bot.get('live_no_bid', 0)
+        _drift_max = max(_drift_yes, _drift_no)
+        if _drift_max >= 80:
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot['_stop_reason'] = f'depth_pulled_drift_{_drift_max}c'
+            print(f'⏹ APEX DRIFT COMPLETE: {bot_id} bid={_drift_max}¢ — game decided')
+            save_state()
+            return
+
         # Check if depth has recovered
         if _apex_depth_recovered(ticker, bot):
             # Re-post all depth_pulled rungs with fresh prices
@@ -13447,15 +13459,10 @@ def _handle_apex(bot_id, bot, actions):
                 if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
                     return  # still no book — wait
 
-                # Drift guard — market too decided, complete instead of waiting forever
+                # Drift guard — already checked above with live bids, double-check with fresh
                 drift_max = max(fresh_yes_bid, fresh_no_bid)
                 if drift_max >= 80:
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
-                    bot['_stop_reason'] = f'depth_pulled_drift_{drift_max}c'
-                    print(f'⏹ APEX DRIFT COMPLETE: {bot_id} bid={drift_max}¢ — game decided, completing')
-                    save_state()
-                    return
+                    return  # market too decided — don't repost
 
                 new_group_id = _create_order_group()
                 qty_per = bot.get('quantity', 1)

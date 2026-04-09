@@ -9865,12 +9865,16 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_orphan_recovery_count'] = bot.get('_orphan_recovery_count', 0) + 1
             _record_trade({
                 'bot_id': bot_id, 'ticker': _orphan_ticker,
-                'yes_price': _sell_price if _orphan_side == 'yes' else _ro_fav_price,
-                'no_price': _sell_price if _orphan_side == 'no' else _ro_fav_price,
+                'yes_price': _ro_fav_price if _orphan_side == 'yes' else 0,
+                'no_price': _ro_fav_price if _orphan_side == 'no' else 0,
                 'quantity': _orphan_qty,
                 'profit_cents': max(0, _ro_orphan_net), 'loss_cents': max(0, -_ro_orphan_net),
                 'fee_cents': _ro_orphan_fee, 'result': 'race_orphan_cleared',
                 'exit_via': 'race_orphan_sell', 'bot_category': 'anchor_dog',
+                'sell_back_price': _sell_price,
+                'orphan_side': _orphan_side,
+                'orphan_buy_price': _ro_fav_price,
+                'orphan_sell_price': _sell_price,
                 'timestamp': time.time(), 'placed_at': bot.get('created_at', time.time()),
             }, bot)
             # Now continue to repeat or complete (dual exit repeat logic)

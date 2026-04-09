@@ -2064,6 +2064,12 @@
             const welcome = document.getElementById('claude-chat-welcome');
             if (welcome) { welcome.style.display = ''; msgsEl.appendChild(welcome); }
             initWelcomeScreen();
+            // Auto-send a greeting to start fresh with context
+            setTimeout(() => {
+                const welcome2 = document.getElementById('claude-chat-welcome');
+                if (welcome2) welcome2.style.display = 'none';
+                sendClaudeMessage("New session — give me a quick status update: what bots are running, today's P&L, and anything I should know right now. Keep it short.");
+            }, 300);
         }
 
         // ── Rotating suggestions ──
@@ -3186,7 +3192,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409132500"></script>
+    <script src="app.js?v=20260409133000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

@@ -6527,8 +6527,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${smartMode > 0 ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
                 <span style="color:#556;font-size:10px;">${ageStr}</span>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
+            <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
+                ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 ${!isCompleted ? `<button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>` : ''}
             </div>
         </div>

@@ -6717,9 +6717,9 @@ def _apex_should_pull(ticker):
     vanish_yes = lob.detect_vanishing_liquidity('yes')
     vanish_no = lob.detect_vanishing_liquidity('no')
 
-    if vanish_yes:
+    if vanish_yes and yes_depth < APEX_DEPTH_PULL_MIN:
         return True, f'vanish_yes (depth={yes_depth:.0f})'
-    if vanish_no:
+    if vanish_no and no_depth < APEX_DEPTH_PULL_MIN:
         return True, f'vanish_no (depth={no_depth:.0f})'
     if yes_depth < APEX_DEPTH_PULL_MIN:
         return True, f'thin_yes ({yes_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
@@ -6730,37 +6730,48 @@ def _apex_should_pull(ticker):
     return False, ''
 
 
-def _apex_depth_recovered(ticker):
-    """Check if book conditions have recovered enough to re-post. Returns bool."""
+def _apex_depth_recovered(ticker, bot=None):
+    """Check if book conditions have recovered enough to re-post. Returns bool.
+    Falls back to bot's live bid data if LocalOrderbook is unavailable/stale."""
     lob = _local_orderbooks.get(ticker)
-    if not lob or lob.last_update_ts <= 0:
-        return False
-    age_s = time.time() - lob.last_update_ts
-    if age_s > 10:
-        return False  # stale data — wait for fresh book
+    if lob and lob.last_update_ts > 0 and (time.time() - lob.last_update_ts) < 10:
+        yes_depth = lob.get_total_depth('yes', 3)
+        no_depth = lob.get_total_depth('no', 3)
+        obi = lob.get_weighted_obi()
+        return (yes_depth >= APEX_DEPTH_RECOVER_MIN and
+                no_depth >= APEX_DEPTH_RECOVER_MIN and
+                abs(obi) <= APEX_DEPTH_RECOVER_OBI)
 
-    yes_depth = lob.get_total_depth('yes', 3)
-    no_depth = lob.get_total_depth('no', 3)
-    obi = lob.get_weighted_obi()
-
-    return (yes_depth >= APEX_DEPTH_RECOVER_MIN and
-            no_depth >= APEX_DEPTH_RECOVER_MIN and
-            abs(obi) <= APEX_DEPTH_RECOVER_OBI)
+    # No fresh LOB — fallback: if both sides have bids, assume OK
+    if bot:
+        yes_bid = bot.get('live_yes_bid', 0)
+        no_bid = bot.get('live_no_bid', 0)
+        if yes_bid > 0 and no_bid > 0 and max(yes_bid, no_bid) < 80:
+            return True
+    return False
 
 
 def _apex_pull_unfilled_rungs(bot_id, bot, reason):
-    """Cancel all unfilled rung orders. Returns count of pulled rungs."""
+    """Cancel all unfilled rung orders. Returns count of pulled rungs.
+    Detects fills that arrive during cancel to avoid orphans."""
     pulled = 0
     for rung in bot.get('rungs', []):
         if rung.get('status') != 'posted':
             continue
         if rung.get('yes_fill_qty', 0) > 0 or rung.get('no_fill_qty', 0) > 0:
             continue  # has partial fill — don't pull
+        _rung_filled = False
         for side in ('yes', 'no'):
             oid = rung.get(f'{side}_order_id')
             if oid:
-                _cancel_with_retry(oid)
+                cr = _cancel_with_retry(oid)
+                if cr == 'filled':
+                    _rung_filled = True
+                    print(f'⚠ APEX PULL: {bot_id} {side} order filled during cancel — aborting pull for this rung')
+                    break
                 rung[f'{side}_order_id'] = None
+        if _rung_filled:
+            continue
         rung['status'] = 'depth_pulled'
         rung['_pull_reason'] = reason
         rung['_pulled_at'] = time.time()
@@ -13243,7 +13254,7 @@ def _handle_apex(bot_id, bot, actions):
             return
 
         # Check if depth has recovered
-        if _apex_depth_recovered(ticker):
+        if _apex_depth_recovered(ticker, bot):
             # Re-post all depth_pulled rungs with fresh prices
             try:
                 api_read_limiter.wait()

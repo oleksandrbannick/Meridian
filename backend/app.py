@@ -3621,6 +3621,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     # Anchor fill detected from WS — trust it and proceed
                     rung['anchor_side'] = matched_side
                     rung['anchor_fill_at'] = time.time()
+                    rung['_obi_at_anchor_fill'] = _apex_obi_snapshot(bot.get('ticker', ''))
                     rung['status'] = 'anchor_filled'
                     if not bot.get('first_fill_at'):
                         bot['first_fill_at'] = time.time()
@@ -3644,7 +3645,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
             # Check if ALL rungs are resolved → bot completion
             all_resolved = all(
-                r.get('status') in ('completed', 'stopped', 'scratched')
+                r.get('status') in ('completed', 'stopped', 'scratched', 'depth_pulled')
                 for r in bot.get('rungs', [])
             )
             if all_resolved:
@@ -6672,6 +6673,111 @@ def _apex_stop_loss_threshold(width, anchor_price=0):
     return 5  # sell back if anchor bid dropped 5¢+ from entry
 
 
+# ─── Apex OBI: depth-gated posting + book-aware exits ─────────────────────────
+# Pull unfilled orders when book conditions are hostile; re-post when they recover.
+APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-3 depth < this (contracts/dollars)
+APEX_DEPTH_PULL_OBI = 0.7       # Pull if |OBI| > this (market too one-sided)
+APEX_DEPTH_RECOVER_MIN = 500    # Re-post when both sides > this
+APEX_DEPTH_RECOVER_OBI = 0.5    # Re-post when |OBI| < this
+APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
+APEX_MAX_PULL_CYCLES = 8        # Stop re-posting after this many pull/repost cycles
+
+
+def _apex_obi_snapshot(ticker):
+    """Capture OBI + depth snapshot for Apex. Returns dict or None.
+    Unlike phantom's _obi_snapshot, Apex needs both YES/NO depth (not fav/dog)."""
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return None
+    return {
+        'obi': round(lob.get_weighted_obi(), 3),
+        'yes_depth': round(lob.get_total_depth('yes', 3)),
+        'no_depth': round(lob.get_total_depth('no', 3)),
+        'yes_best_bid': lob.get_best_bid('yes'),
+        'no_best_bid': lob.get_best_bid('no'),
+        'vanish_yes': lob.detect_vanishing_liquidity('yes'),
+        'vanish_no': lob.detect_vanishing_liquidity('no'),
+        'age_ms': round((time.time() - lob.last_update_ts) * 1000),
+    }
+
+
+def _apex_should_pull(ticker):
+    """Check if book conditions are hostile for Apex. Returns (should_pull, reason) tuple.
+    Uses LocalOrderbook — zero API calls."""
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return False, ''  # no data — don't pull blind
+    age_s = time.time() - lob.last_update_ts
+    if age_s > 10:
+        return False, ''  # stale data — don't act on old book
+
+    yes_depth = lob.get_total_depth('yes', 3)
+    no_depth = lob.get_total_depth('no', 3)
+    obi = lob.get_weighted_obi()
+    vanish_yes = lob.detect_vanishing_liquidity('yes')
+    vanish_no = lob.detect_vanishing_liquidity('no')
+
+    if vanish_yes:
+        return True, f'vanish_yes (depth={yes_depth:.0f})'
+    if vanish_no:
+        return True, f'vanish_no (depth={no_depth:.0f})'
+    if yes_depth < APEX_DEPTH_PULL_MIN:
+        return True, f'thin_yes ({yes_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
+    if no_depth < APEX_DEPTH_PULL_MIN:
+        return True, f'thin_no ({no_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
+    if abs(obi) > APEX_DEPTH_PULL_OBI:
+        return True, f'obi_extreme ({obi:+.2f})'
+    return False, ''
+
+
+def _apex_depth_recovered(ticker):
+    """Check if book conditions have recovered enough to re-post. Returns bool."""
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return False
+    age_s = time.time() - lob.last_update_ts
+    if age_s > 10:
+        return False  # stale data — wait for fresh book
+
+    yes_depth = lob.get_total_depth('yes', 3)
+    no_depth = lob.get_total_depth('no', 3)
+    obi = lob.get_weighted_obi()
+
+    return (yes_depth >= APEX_DEPTH_RECOVER_MIN and
+            no_depth >= APEX_DEPTH_RECOVER_MIN and
+            abs(obi) <= APEX_DEPTH_RECOVER_OBI)
+
+
+def _apex_pull_unfilled_rungs(bot_id, bot, reason):
+    """Cancel all unfilled rung orders. Returns count of pulled rungs."""
+    pulled = 0
+    for rung in bot.get('rungs', []):
+        if rung.get('status') != 'posted':
+            continue
+        if rung.get('yes_fill_qty', 0) > 0 or rung.get('no_fill_qty', 0) > 0:
+            continue  # has partial fill — don't pull
+        for side in ('yes', 'no'):
+            oid = rung.get(f'{side}_order_id')
+            if oid:
+                _cancel_with_retry(oid)
+                rung[f'{side}_order_id'] = None
+        rung['status'] = 'depth_pulled'
+        rung['_pull_reason'] = reason
+        rung['_pulled_at'] = time.time()
+        pulled += 1
+    if pulled > 0:
+        bot['_pull_count'] = bot.get('_pull_count', 0) + 1
+        bot['_last_pull_at'] = time.time()
+        bot['_last_pull_reason'] = reason
+        bot_log('APEX_DEPTH_PULL', bot_id, {
+            'reason': reason, 'pulled_rungs': pulled,
+            'pull_count': bot.get('_pull_count', 0),
+            'obi': _apex_obi_snapshot(bot.get('ticker', '')),
+        })
+        print(f'🛑 APEX DEPTH PULL: {bot_id} pulled {pulled} rungs — {reason} (cycle {bot.get("_pull_count", 0)})')
+    return pulled
+
+
 def _apex_post_rung_hedge(bot_id, rung_idx):
     """Post a per-rung hedge after anchor fill. Called from daemon thread.
     Each rung fires its own hedge independently — no consolidation."""
@@ -6969,6 +7075,30 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _profit_snap_delay = 60  # profit snap after 60s
         rung['_snap_timer'] = _rung_timeout  # update display
 
+    # ── Book-aware timer modulation: tighten timers when hedge side is thin ──
+    _lob = _local_orderbooks.get(ticker)
+    _hedge_depth = 0
+    _hedge_vanishing = False
+    if _lob and _lob.last_update_ts > 0 and (time.time() - _lob.last_update_ts) < 10:
+        _hedge_depth = _lob.get_total_depth(hedge_side, 3)
+        _hedge_vanishing = _lob.detect_vanishing_liquidity(hedge_side)
+        rung['_hedge_depth'] = round(_hedge_depth)
+        rung['_hedge_vanishing'] = _hedge_vanishing
+        # Modulate timers based on hedge-side depth
+        if _hedge_vanishing or _hedge_depth < 200:
+            # Hedge side evaporating — snap immediately if profitable, fast timeout
+            _profit_snap_delay = min(_profit_snap_delay, 3)
+            _rung_timeout = min(_rung_timeout, 15)
+        elif _hedge_depth < APEX_DEPTH_PULL_MIN:
+            # Thin hedge — cut delays in half
+            _profit_snap_delay = min(_profit_snap_delay, 15)
+            _rung_timeout = min(_rung_timeout, 45)
+        elif _hedge_depth < APEX_DEPTH_RECOVER_MIN:
+            # Moderate hedge — slightly tighter
+            _profit_snap_delay = min(_profit_snap_delay, 30)
+            _rung_timeout = min(_rung_timeout, 90)
+        # Thick depth (>= APEX_DEPTH_RECOVER_MIN) → keep game-phase timers as-is
+
     # ── PROFIT SNAP: if combined at bid is profitable AND rung has waited long enough ──
     # Early game: be patient, wait for full-width fill. As game progresses, take profit faster.
     if _rung_age >= _profit_snap_delay:
@@ -6992,20 +7122,19 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
     rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
 
     if _rung_age >= _rung_timeout and anchor_filled_at:
-        # At timeout: compare snap (maker) vs sellback (taker) cost, pick cheaper.
+        # At timeout: compare completing arb (maker) vs selling anchor (maker), pick cheaper.
+        # Both paths use maker limit orders — no taker fees.
         _bid_combined = anchor_price + hedge_bid if hedge_bid > 0 else 999
         _snap_cost = max(0, _bid_combined - 100)  # ¢ loss per contract from completing at bid
-        _sellback_cost = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else anchor_price  # ¢ loss from selling anchor back
+        _sellback_cost = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else anchor_price  # ¢ loss from selling anchor at bid
 
-        # Snap exhaustion: if we already snapped to bid and it hasn't filled within 60s,
-        # the market is dead for this price. Fall back to sellback.
-        _snap_exhaustion_s = 60
+        # Maker exit exhaustion: if maker exit has been sitting 90s+ post-timeout, taker as last resort
+        _maker_exhaustion_s = 90
         _first_timeout_snap = rung.get('_first_timeout_snap_at')
-        if _first_timeout_snap and (now - _first_timeout_snap) >= _snap_exhaustion_s:
-            # Snap has been sitting at bid for 60s+ post-timeout — force sellback
-            rung['_snap_reason'] = f'snap_exhausted_{int(now - _first_timeout_snap)}s'
-            print(f'⏰ APEX SNAP EXHAUSTED: {bot_id} rung#{rung_idx} ({width}c) snap at bid for {now - _first_timeout_snap:.0f}s, no fill → sellback')
-            bot_log('APEX_SNAP_EXHAUSTED', bot_id, {
+        if _first_timeout_snap and (now - _first_timeout_snap) >= _maker_exhaustion_s:
+            rung['_snap_reason'] = f'maker_exhausted_{int(now - _first_timeout_snap)}s'
+            print(f'⏰ APEX MAKER EXHAUSTED: {bot_id} rung#{rung_idx} ({width}c) maker exit for {now - _first_timeout_snap:.0f}s, no fill → taker sellback')
+            bot_log('APEX_MAKER_EXHAUSTED', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
                 'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
                 'hedge_bid': hedge_bid, 'snap_age_s': round(now - _first_timeout_snap, 1),
@@ -7013,27 +7142,21 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
             return
 
-        # Snap is maker (low fees), sellback is taker (higher fees) — snap wins ties
+        if not _first_timeout_snap:
+            rung['_first_timeout_snap_at'] = now
+
+        # Both exits are maker — compare costs and pick cheaper
         if hedge_bid > 0 and _snap_cost <= _sellback_cost:
-            # Snap to bid — cheaper exit (or both profitable)
+            # Complete arb (maker): snap hedge to bid
             _max_hedge = 100 - anchor_price
-            _uncapped_snap = min(hedge_bid, max(1, _max_hedge + 5))  # allow up to 105¢ combined
-            # If snap price is below bid, order can never fill — skip to sellback
+            _uncapped_snap = min(hedge_bid, max(1, _max_hedge + 5))
             if _uncapped_snap < hedge_bid:
-                rung['_snap_reason'] = f'timeout_snap_unreachable_{_uncapped_snap}c_bid_{hedge_bid}c'
-                print(f'⏰ APEX SNAP UNREACHABLE: {bot_id} rung#{rung_idx} ({width}c) snap={_uncapped_snap}¢ < bid={hedge_bid}¢ — sellback instead')
-                bot_log('APEX_SNAP_UNREACHABLE', bot_id, {
-                    'rung_idx': rung_idx, 'width': width,
-                    'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
-                    'snap_price': _uncapped_snap, 'combined': anchor_price + _uncapped_snap,
-                })
-                _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
+                # Snap unreachable — switch to maker sellback instead
+                _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid_now)
                 return
             rung['_snap_reason'] = f'timeout_snap_{_uncapped_snap}c'
             rung['_timeout_uncapped'] = True
-            if not _first_timeout_snap:
-                rung['_first_timeout_snap_at'] = now  # track when snap was first attempted post-timeout
-            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → snap to bid {_uncapped_snap}¢ (combined {anchor_price + _uncapped_snap}¢, snap_cost={_snap_cost}¢ vs sellback_cost={_sellback_cost}¢)')
+            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → maker arb @{_uncapped_snap}¢ (snap={_snap_cost}¢ vs sell={_sellback_cost}¢)')
             bot_log('APEX_TIMEOUT_SNAP', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
                 'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
@@ -7043,17 +7166,16 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
             })
             _apex_snap_hedge(bot_id, bot, rung, rung_idx, _uncapped_snap)
         else:
-            # Sell back anchor — cheaper exit
-            rung['_snap_reason'] = f'timeout_{int(_rung_age)}s'
-            print(f'⏰ APEX TIMEOUT SELLBACK: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, sellback_cost={_sellback_cost}¢ vs snap_cost={_snap_cost}¢')
-            bot_log('APEX_TIMEOUT', bot_id, {
+            # Sell anchor (maker): cancel hedge, post maker sell at anchor bid
+            print(f'⏰ APEX TIMEOUT MAKER SELL: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, sell={_sellback_cost}¢ vs snap={_snap_cost}¢')
+            bot_log('APEX_TIMEOUT_MAKER_SELL', bot_id, {
                 'rung_idx': rung_idx, 'width': width,
                 'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
                 'hedge_bid': hedge_bid, 'combined': _bid_combined,
                 'snap_cost': _snap_cost, 'sellback_cost': _sellback_cost,
                 'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
             })
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
+            _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid_now)
         return
 
     # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──
@@ -7193,6 +7315,160 @@ def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
         print(f'  ❌ HEDGE POST FAIL: {bot_id} rung#{rung_idx}: {e}')
         rung['hedge_order_id'] = None
         save_state()
+
+
+def _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid):
+    """Start a maker sellback: cancel hedge, post a maker sell of the anchor position.
+    The sell order tracks like a hedge — checked each tick, snapped to bid."""
+    anchor_side = rung.get('anchor_side', 'yes')
+    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
+    anchor_price = rung.get(f'{anchor_side}_price', 0)
+    qty = rung.get('quantity', bot.get('quantity', 1))
+    ticker = bot['ticker']
+    hedge_oid = rung.get('hedge_order_id')
+
+    # 1. Cancel hedge order
+    if hedge_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(hedge_oid)
+        except Exception:
+            pass
+        # Check if hedge filled during cancel (race condition win)
+        try:
+            api_read_limiter.wait()
+            resp = kalshi_client.get_order(hedge_oid)
+            ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+            filled = _parse_fill_count(ord_data)
+            if filled >= qty:
+                rung['hedge_fill_qty'] = filled
+                rung['hedge_fill_at'] = time.time()
+                rung['status'] = 'completed'
+                rung['completed'] = True
+                print(f'✅ APEX RUNG (maker-sell cancel-race): {bot_id} rung#{rung_idx} hedge filled during cancel')
+                _apex_record_rung_pnl(bot_id, rung_idx)
+                save_state()
+                return
+            if filled > rung.get('hedge_fill_qty', 0):
+                rung['hedge_fill_qty'] = filled
+        except Exception:
+            pass
+        rung['hedge_order_id'] = None
+
+    # 2. Compute qty to sell (total minus any partial hedge fills)
+    hedged_qty = rung.get('hedge_fill_qty', 0)
+    sell_qty = qty - hedged_qty
+    if sell_qty <= 0:
+        rung['status'] = 'completed'
+        rung['completed'] = True
+        _apex_record_rung_pnl(bot_id, rung_idx)
+        save_state()
+        return
+
+    # 3. Post maker sell at anchor_bid (rests as an ask — maker fees)
+    sell_price = max(1, anchor_bid) if anchor_bid > 0 else max(1, anchor_price - 5)
+    try:
+        resp, actual_price = create_order_maker(
+            ticker=ticker, side=anchor_side, action='sell',
+            count=sell_qty, price=sell_price, priority=True,
+        )
+        sell_oid = resp.get('order', resp).get('order_id', '') if isinstance(resp, dict) else ''
+        rung['_maker_sell_oid'] = sell_oid
+        rung['_maker_sell_price'] = actual_price
+        rung['_maker_sell_at'] = time.time()
+        rung['_maker_sell_qty'] = sell_qty
+        rung['_maker_sell_filled'] = 0
+        rung['status'] = 'maker_exit'
+        rung['_snap_reason'] = f'maker_sell@{actual_price}c'
+        bot.setdefault('_all_placed_order_ids', []).append(sell_oid)
+        print(f'📤 APEX MAKER SELL: {bot_id} rung#{rung_idx} {anchor_side.upper()} sell @{actual_price}¢ x{sell_qty} (oid={sell_oid[:12]})')
+        save_state()
+    except Exception as e:
+        print(f'❌ APEX MAKER SELL FAIL: {bot_id} rung#{rung_idx}: {e} → taker fallback')
+        # Maker failed — fall back to taker sellback
+        _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, 0)
+
+
+def _apex_maker_exit_tick(bot_id, bot, rung, rung_idx):
+    """Monitor a maker sell exit order. Check fill, snap to current bid, exhaust to taker."""
+    now = time.time()
+    sell_oid = rung.get('_maker_sell_oid')
+    anchor_side = rung.get('anchor_side', 'yes')
+    anchor_price = rung.get(f'{anchor_side}_price', 0)
+    ticker = bot['ticker']
+    sell_qty = rung.get('_maker_sell_qty', 0)
+
+    if not sell_oid:
+        # No sell order — taker fallback
+        _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, 0)
+        return
+
+    # 1. Check fill status (every 5s)
+    if now - rung.get('_last_maker_sell_poll', 0) >= 5:
+        rung['_last_maker_sell_poll'] = now
+        if api_read_limiter.try_wait():
+            try:
+                resp = kalshi_client.get_order(sell_oid)
+                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
+                filled = _parse_fill_count(ord_data)
+                if filled >= sell_qty:
+                    # Fully sold — done
+                    rung['_maker_sell_filled'] = filled
+                    sell_price = rung.get('_maker_sell_price', 0)
+                    rung['stop_price'] = sell_price
+                    rung['_sellback_price'] = sell_price
+                    rung['status'] = 'completed'
+                    rung['completed'] = True
+                    print(f'✅ APEX MAKER SELL DONE: {bot_id} rung#{rung_idx} sold {anchor_side}@{sell_price}¢ x{filled}')
+                    _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback')
+                    save_state()
+                    return
+                elif filled > rung.get('_maker_sell_filled', 0):
+                    rung['_maker_sell_filled'] = filled
+                ord_status = ord_data.get('status', '')
+                if ord_status in ('canceled', 'cancelled'):
+                    rung['_maker_sell_oid'] = None
+                    sell_oid = None
+            except Exception as e:
+                if '404' in str(e):
+                    rung['_maker_sell_oid'] = None
+                    sell_oid = None
+
+    # 2. Snap to current bid (follow the market down)
+    anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)
+    current_sell_price = rung.get('_maker_sell_price', 0)
+    if anchor_bid_now > 0 and anchor_bid_now != current_sell_price and sell_oid:
+        if now - rung.get('_last_maker_sell_snap', 0) >= 5:
+            rung['_last_maker_sell_snap'] = now
+            # Amend sell order to current bid
+            try:
+                price_kwargs = {f'{anchor_side}_price': anchor_bid_now}
+                if api_rate_limiter.try_wait():
+                    amend_resp = kalshi_client.amend_order(sell_oid, ticker=ticker, side=anchor_side,
+                                                          count=sell_qty, action='sell', **price_kwargs)
+                    _amend_ord = amend_resp.get('order', amend_resp) if isinstance(amend_resp, dict) else {}
+                    _new_oid = _amend_ord.get('order_id', '')
+                    if _new_oid and _new_oid != sell_oid:
+                        rung['_maker_sell_oid'] = _new_oid
+                        bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
+                    rung['_maker_sell_price'] = anchor_bid_now
+                    rung['_snap_reason'] = f'maker_sell@{anchor_bid_now}c'
+            except Exception:
+                pass
+
+    # 3. Exhaustion: if maker sell has been sitting 90s+, taker as last resort
+    _maker_sell_at = rung.get('_maker_sell_at', 0)
+    if _maker_sell_at and (now - _maker_sell_at) >= 90:
+        # Cancel maker sell and do taker
+        if sell_oid:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(sell_oid)
+            except Exception:
+                pass
+            rung['_maker_sell_oid'] = None
+        print(f'⏰ APEX MAKER SELL EXHAUSTED: {bot_id} rung#{rung_idx} 90s → taker fallback')
+        _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, 0)
 
 
 def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, stop_loss):
@@ -7464,6 +7740,9 @@ def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
         'smart_mode': bot.get('smart_mode', False),
         'hedge_latency_ms': rung.get('hedge_latency_ms'),
         'raw_hedge_ms': rung.get('raw_hedge_ms'),
+        'obi_at_anchor_fill': rung.get('_obi_at_anchor_fill'),
+        'obi_at_exit': _apex_obi_snapshot(ticker),
+        'hedge_depth_at_exit': rung.get('_hedge_depth'),
     }, bot)
     print(f'💰 APEX RUNG P&L: {bot_id} rung#{rung_idx} ({width}c) Y{yes_price}+N{no_price}={combined_price}¢ net={net_pnl}c {"(snapped)" if rung.get("time_stage") == "snapped" else "(target)"}')
 
@@ -10912,10 +11191,8 @@ def _handle_phantom(bot_id, bot, actions):
                 # Normal hedge_timeout_s handles overall bot lifetime.
 
         # ── Phantom Walk + Snap System ──
-        # Priority 1: Drop to bid if above it (instant)
-        # Priority 2: Profit snap to bid if combined <= 96¢ (instant, up or down)
-        # Priority 3: Normal walk +1¢ toward bid (every 20s)
-        # Hard ceiling: combined (dog + fav) never exceeds WALK_CEILING (100¢)
+        # Snap to bid every cycle, capped at 98¢ combined.
+        # Runs even during dual exit — fav must stay at ceiling cap to be competitive.
         current_fav_price = bot.get('fav_price', 0)
         if current_fav_price <= 0:
             return
@@ -11041,7 +11318,7 @@ def _handle_phantom(bot_id, bot, actions):
         if _be_combined_at_bid > WALK_CEILING and wait_s >= 3 and bot.get('fav_fill_qty', 0) < qty:
             if not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now  # trigger dual exit next cycle
-            return
+            # Don't return — fall through to walk system so fav snaps up to ceiling cap
 
         # Walk target: always bid — walk up to 98¢ combined (profit cap)
         walk_target = current_fav_bid
@@ -12982,11 +13259,147 @@ def _handle_apex(bot_id, bot, actions):
         save_state()
         return
 
+    # ── STATE: depth_pulled — rungs pulled due to bad book, waiting for recovery ──
+    if status == 'depth_pulled':
+        if bot.get('_bot_completed'):
+            bot['status'] = 'completed'
+            return
+
+        # Check if we've exhausted pull cycles
+        if bot.get('_pull_count', 0) >= APEX_MAX_PULL_CYCLES:
+            bot['status'] = 'drift_cancelled'
+            bot['completed_at'] = now
+            bot['_cancel_reason'] = f'max_pull_cycles_{APEX_MAX_PULL_CYCLES}'
+            print(f'⏹ APEX MAX PULLS: {bot_id} hit {APEX_MAX_PULL_CYCLES} pull cycles — giving up')
+            save_state()
+            return
+
+        # Cooldown: don't re-post too quickly
+        _last_pull = bot.get('_last_pull_at', 0)
+        if now - _last_pull < APEX_PULL_COOLDOWN_S:
+            return
+
+        # Check if depth has recovered
+        if _apex_depth_recovered(ticker):
+            # Re-post all depth_pulled rungs with fresh prices
+            try:
+                api_read_limiter.wait()
+                ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
+                ob = ob_data.get('orderbook', ob_data)
+                yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+                fresh_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
+                fresh_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
+                fresh_yes_ask = 100 - fresh_no_bid if fresh_no_bid > 0 else 99
+                fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
+
+                if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
+                    return  # still no book — wait
+
+                # Drift guard
+                drift_max = max(fresh_yes_bid, fresh_no_bid)
+                if drift_max >= 80:
+                    return  # market too decided — wait
+
+                new_group_id = _create_order_group()
+                qty_per = bot.get('quantity', 1)
+                valid_specs = []
+                for rung in bot.get('rungs', []):
+                    if rung.get('status') != 'depth_pulled':
+                        continue
+                    w = rung['width']
+                    ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
+                    profit = 100 - ty - tn
+                    if profit <= 0:
+                        continue
+                    valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn})
+
+                if not valid_specs:
+                    return  # no profitable widths at current prices
+
+                yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]
+                no_specs  = [{'ticker': ticker, 'side': 'no',  'count': qty_per, 'price': s['no_price']}  for s in valid_specs]
+                yes_results = create_orders_batch(yes_specs, order_group_id=new_group_id)
+                no_results  = create_orders_batch(no_specs, order_group_id=new_group_id)
+
+                new_rungs = []
+                for idx_s in range(len(valid_specs)):
+                    try:
+                        if yes_results[idx_s] is None or no_results[idx_s] is None:
+                            _orphan_result = yes_results[idx_s] if no_results[idx_s] is None else no_results[idx_s]
+                            if _orphan_result:
+                                try:
+                                    _orphan_oid = _orphan_result[0].get('order', {}).get('order_id', '')
+                                    if _orphan_oid:
+                                        api_rate_limiter.wait()
+                                        kalshi_client.cancel_order(_orphan_oid)
+                                except Exception:
+                                    pass
+                            continue
+                        yr, ya = yes_results[idx_s]
+                        nr, na = no_results[idx_s]
+                        actual_width = 100 - ya - na
+                        new_rungs.append({
+                            'width': actual_width, 'yes_price': ya, 'no_price': na,
+                            'yes_order_id': yr['order']['order_id'],
+                            'no_order_id': nr['order']['order_id'],
+                            'yes_fill_qty': 0, 'no_fill_qty': 0,
+                            'yes_filled_at': None, 'no_filled_at': None,
+                            'quantity': qty_per,
+                            'status': 'posted', 'anchor_side': None,
+                            'anchor_fill_at': None, 'hedge_order_id': None,
+                            'hedge_price': None, 'hedge_fill_qty': 0,
+                            'hedge_fill_at': None, 'time_stage': None,
+                            'stage_entered_at': None,
+                            'stop_loss_cents': _apex_stop_loss_threshold(actual_width),
+                            'completed': False, '_profit_recorded': False,
+                        })
+                    except Exception:
+                        pass
+
+                if new_rungs:
+                    _repost_oids = []
+                    for _nr in new_rungs:
+                        if _nr.get('yes_order_id'): _repost_oids.append(_nr['yes_order_id'])
+                        if _nr.get('no_order_id'): _repost_oids.append(_nr['no_order_id'])
+                    bot['_all_placed_order_ids'] = list(set(bot.get('_all_placed_order_ids', []) + _repost_oids))
+                    bot['rungs'] = new_rungs
+                    bot['total_rungs'] = len(new_rungs)
+                    bot['posted_at'] = now
+                    bot['status'] = 'ladder_arb_posted'
+                    bot['_order_group_id'] = new_group_id
+                    _obi_snap = _apex_obi_snapshot(ticker)
+                    bot_log('APEX_DEPTH_REPOST', bot_id, {
+                        'rungs': len(new_rungs), 'pull_count': bot.get('_pull_count', 0),
+                        'obi': _obi_snap,
+                    })
+                    print(f'✅ APEX DEPTH REPOST: {bot_id} {len(new_rungs)} rungs — book recovered (cycle {bot.get("_pull_count", 0)})')
+                    actions.append({'bot_id': bot_id, 'action': 'depth_repost'})
+            except Exception as e:
+                print(f'❌ APEX DEPTH REPOST {bot_id}: {e}')
+        save_state()
+        return
+
     # ── STATE: ladder_arb_posted — all rungs live, both sides, waiting for fills ──
     if status == 'ladder_arb_posted':
         if bot.get('_bot_completed'):
             bot['status'] = 'completed'
             return
+
+        # ── OBI depth check: pull orders if book is hostile ──
+        _should_pull, _pull_reason = _apex_should_pull(ticker)
+        if _should_pull:
+            _pulled = _apex_pull_unfilled_rungs(bot_id, bot, _pull_reason)
+            if _pulled > 0:
+                # Check if ALL rungs are now pulled (no fills happened)
+                _all_pulled = all(r.get('status') in ('depth_pulled', 'stopped', 'completed') for r in bot.get('rungs', []))
+                if _all_pulled:
+                    bot['status'] = 'depth_pulled'
+                else:
+                    # Some rungs had fills — go to active
+                    bot['status'] = 'ladder_arb_active'
+                save_state()
+                return
 
         # Repost stale orders (60s — apex needs fresh prices)
         REPOST_AFTER_MIN = 1
@@ -13174,12 +13587,24 @@ def _handle_apex(bot_id, bot, actions):
                 has_posted = True
                 all_resolved = False  # unfilled rung still live — not resolved
                 continue
+            if rs == 'depth_pulled':
+                # Pulled rung = resolved (no position held)
+                continue
             if rs in ('completed', 'stopped', 'scratched'):
                 any_filled = True
                 continue  # resolved
 
             any_filled = True
             all_resolved = False
+
+            # Maker exit: tracked sell order for anchor
+            if rs == 'maker_exit':
+                any_active = True
+                try:
+                    _apex_maker_exit_tick(bot_id, bot, rung, idx)
+                except Exception as _tde:
+                    print(f'❌ MAKER EXIT TICK ERROR: {bot_id} rung#{idx}: {_tde}')
+                continue
 
             # Active rung with fill — run tick
             if rs in ('anchor_filled', 'pending_profit', 'snapped',
@@ -13199,6 +13624,13 @@ def _handle_apex(bot_id, bot, actions):
                     _apex_time_decay_tick(bot_id, bot, rung, idx)
                 except Exception as _tde:
                     print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
+
+        # ── OBI depth pull: cancel unfilled POSTED rungs if book is hostile ──
+        if has_posted:
+            _should_pull, _pull_reason = _apex_should_pull(ticker)
+            if _should_pull:
+                _apex_pull_unfilled_rungs(bot_id, bot, _pull_reason)
+                has_posted = False  # recalc — rungs are now depth_pulled, not posted
 
         # Auto-cancel unfilled POSTED rungs: either 2min after first completion,
         # or immediately when market has drifted 15¢+ past the rung's posted price.
@@ -13223,7 +13655,7 @@ def _handle_apex(bot_id, bot, actions):
                         _drift_info = f'yes_bid={yes_bid} rung_yes={_pr.get("yes_price",0)}' if not _time_cancel else '2min timeout'
                         print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped ({_drift_info})')
             # Re-check if all resolved now
-            all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched') for r in bot.get('rungs', []))
+            all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched', 'depth_pulled') for r in bot.get('rungs', []))
 
         # Check if ALL rungs are resolved → bot completion
         if all_resolved and any_filled:
@@ -18207,7 +18639,7 @@ def cancel_bot(bot_id):
                 # Cancel all historically tracked hedge/placed orders
                 rung_oids = set()
                 for rung in bot.get('rungs', []):
-                    for sk in ('yes_order_id', 'no_order_id'):
+                    for sk in ('yes_order_id', 'no_order_id', '_maker_sell_oid'):
                         if rung.get(sk):
                             rung_oids.add(rung[sk])
                 for oid in bot.get('_all_hedge_order_ids', []):

@@ -6148,9 +6148,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const _sellPrice = bot.dog_sell_price || 0;
                 const _remaining = qty - _sellFills;
                 const _remainPct = qty > 0 ? (_remaining / qty) * 100 : 100;
-                const _borderCol = _hasSell ? '#ff880033' : '#ffaa0033';
-                const _headerLabel = _hasSell ? `📤 DUAL EXIT · ${dogSide.toUpperCase()} · FILLED ✓` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
-                const _headerCol = _hasSell ? '#ff8800' : '#ffaa00';
+                const _isPulled = !!bot._price_floor_pulled;
+                const _borderCol = _isPulled ? '#ff444433' : _hasSell ? '#ff880033' : '#ffaa0033';
+                const _headerLabel = _isPulled ? `⏸ PULLED · ${dogSide.toUpperCase()} · WAITING` : _hasSell ? `📤 DUAL EXIT · ${dogSide.toUpperCase()} · FILLED ✓` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
+                const _headerCol = _isPulled ? '#ff4444' : _hasSell ? '#ff8800' : '#ffaa00';
                 const _priceLabel = _hasSell ? `${dogPrice}¢ → sell @${_sellPrice}¢` : (isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`);
                 const _barPct = _hasSell ? _remainPct : dogFillPct;
                 const _barCol = _hasSell ? '#ff8800' : dogFillCol;

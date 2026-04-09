@@ -437,7 +437,8 @@ async function loadLiveScores() {
         });
 
         // Pre-fetch box scores for live games (fire-and-forget for cache warming)
-        games.filter(g => g.state === 'in' && g.espnGameId).forEach(g => {
+        // Pre-fetch box scores for live games (skip tennis — uses API Tennis, not ESPN)
+        games.filter(g => g.state === 'in' && g.espnGameId && g.sport !== 'Tennis').forEach(g => {
             fetchBoxScore(g.sport, g.espnGameId);
         });
 

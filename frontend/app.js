@@ -436,7 +436,13 @@ async function loadLiveScores() {
             }
         });
 
-        // Pre-fetch box scores for live games (fire-and-forget for cache warming)
+        // Build abbreviation → full name map for bot display (all sports)
+        window._abbrToName = window._abbrToName || {};
+        games.forEach(g => {
+            if (g.homeAbbr && g.homeName) window._abbrToName[g.homeAbbr] = g.homeName;
+            if (g.awayAbbr && g.awayName) window._abbrToName[g.awayAbbr] = g.awayName;
+        });
+
         // Pre-fetch box scores for live games (skip tennis — uses API Tennis, not ESPN)
         games.filter(g => g.state === 'in' && g.espnGameId && g.sport !== 'Tennis').forEach(g => {
             fetchBoxScore(g.sport, g.espnGameId);
@@ -496,8 +502,20 @@ function parseESPNGame(event, sport) {
     // Start time for pregame display
     let startTime = '';
     if (state === 'pre') {
+        // API Tennis provides _start_time in local tournament time (no timezone)
+        // Use it directly if available; fall back to date field for ESPN
+        const rawStart = event._start_time || '';
         const gameDate = event.date || comp.date || '';
-        if (gameDate) {
+        if (rawStart) {
+            const d = new Date(rawStart);
+            if (!isNaN(d.getTime())) {
+                // Local tournament time — show as-is without timezone label
+                const hrs = d.getHours(), mins = d.getMinutes();
+                const ampm = hrs >= 12 ? 'PM' : 'AM';
+                const h12 = hrs % 12 || 12;
+                startTime = `${h12}:${String(mins).padStart(2,'0')} ${ampm} local`;
+            }
+        } else if (gameDate) {
             const d = new Date(gameDate);
             startTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
         }
@@ -2855,7 +2873,11 @@ function formatBotDisplayName(ticker, spreadLine) {
             t1 = cleaned.substring(0,2); t2 = cleaned.substring(2,5);
         }
         if (t1 && t2) {
-            matchup = `${_teamMap[t1]||t1} vs ${_teamMap[t2]||t2}`;
+            // Resolve abbreviations to full names from score data
+            const names = window._abbrToName || {};
+            const n1 = names[t1] || _teamMap[t1] || t1;
+            const n2 = names[t2] || _teamMap[t2] || t2;
+            matchup = `${n1} vs ${n2}`;
         }
     }
 

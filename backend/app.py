@@ -1841,10 +1841,12 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         else:
             period_label = ''
 
-        # Build date for matching — use noon UTC to avoid timezone day-boundary issues
-        # (API Tennis times are local tournament time, not UTC)
+        # Date for matching — noon UTC avoids timezone day-boundary issues
         event_date = m.get('event_date', '')
-        start_time_iso = f"{event_date}T12:00:00Z" if event_date else ''
+        event_time = m.get('event_time', '')
+        match_date_iso = f"{event_date}T12:00:00Z" if event_date else ''
+        # Actual start time for pregame display (API Tennis times are local tournament time)
+        start_time_iso = f"{event_date}T{event_time}:00" if event_date and event_time else ''
 
         # Tournament + round for display
         tournament = m.get('tournament_name', '')
@@ -1865,7 +1867,8 @@ def _fetch_api_tennis_scoreboard(tour_filter):
 
         events.append({
             'id': str(m.get('event_key', '')),
-            'date': start_time_iso,
+            'date': match_date_iso,
+            '_start_time': start_time_iso,
             'name': f'{p1} vs {p2} ({tournament})',
             'shortName': f'{p1} vs {p2}',
             'status': status_obj,

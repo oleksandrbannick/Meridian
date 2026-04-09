@@ -2061,7 +2061,16 @@ function displayEventRow(eventData, container) {
     // Debug tennis matching
     if (sport === 'Tennis' && kalshiLive && !gameScore) {
         const cleaned = (eventData.gameId || '').replace(/^\d+[A-Z]{3}\d+/, '');
-        console.warn(`🎾 MATCH FAIL: gameId=${eventData.gameId} cleaned=${cleaned} sport=${sport} keys=Tennis:${cleaned} inLookup=${!!allGameData['Tennis:'+cleaned]} allKeys=${Object.keys(allGameData).filter(k=>k.startsWith('Tennis:')).slice(0,10).join(',')}`);
+        const entry = allGameData['Tennis:'+cleaned];
+        if (entry) {
+            const dateMatch = (eventData.gameId||'').match(/^(\d{2})([A-Z]{3})(\d{2})/);
+            const monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+            const tY = 2000+parseInt(dateMatch[1]), tM = monthMap[dateMatch[2]], tD = parseInt(dateMatch[3]);
+            const ed = new Date(entry.gameDate);
+            console.warn(`🎾 DATE REJECT: gameId=${eventData.gameId} tickerDate=${tY}-${tM+1}-${tD} espnDate=${entry.gameDate} localDate=${ed.getFullYear()}-${ed.getMonth()+1}-${ed.getDate()} state=${entry.state}`);
+        } else {
+            console.warn(`🎾 NOT IN LOOKUP: gameId=${eventData.gameId} cleaned=${cleaned}`);
+        }
     }
     const emoji = getSportEmoji(sport);
 

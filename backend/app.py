@@ -1722,6 +1722,16 @@ _API_TENNIS_KEY = 'a12d0895ba334cfa37cc5e131a8f94c78f0cd5d2d3785a28f36fe2e3c5647
 _api_tennis_cache = {'data': None, 'ts': 0}
 _API_TENNIS_TTL = 20  # seconds
 
+def _set_won(score_obj, player):
+    """Check if a set has been won by 'first' or 'second' player."""
+    s1 = int(score_obj.get('score_first', 0))
+    s2 = int(score_obj.get('score_second', 0))
+    if player == 'first':
+        return (s1 >= 6 and s1 - s2 >= 2) or s1 == 7
+    else:
+        return (s2 >= 6 and s2 - s1 >= 2) or s2 == 7
+
+
 def _fetch_api_tennis_scoreboard(tour_filter):
     """Fetch today's tennis matches from API Tennis and format as ESPN-like events.
     tour_filter: 'atp' or 'wta' — filters event_type_type accordingly."""
@@ -1772,20 +1782,27 @@ def _fetch_api_tennis_scoreboard(tour_filter):
 
         # Determine match state
         is_live = m.get('event_live') == '1'
-        status_str = m.get('event_status', '') or ''
+        status_str = (m.get('event_status', '') or '').lower()
         result_str = m.get('event_final_result', '') or '-'
         winner = m.get('event_winner', '')
 
         if is_live:
             state = 'in'
-        elif winner or ('Finished' in status_str) or (result_str != '-' and result_str != '0 - 0' and not is_live):
-            # Check if scores indicate a completed match
+        elif status_str in ('interrupted', 'break time', 'retired', 'walkover', 'defaulted'):
+            # Match in progress but on break/interrupted — treat as live
+            state = 'in'
+        elif winner or 'finished' in status_str:
+            state = 'post'
+        elif result_str not in ('-', '0 - 0', ''):
+            # Has a set result but check if match is truly complete
+            # Best-of-3: need 2 sets won; Best-of-5: need 3 sets won
             scores = m.get('scores', [])
-            has_scores = any(int(s.get('score_first', 0)) > 0 or int(s.get('score_second', 0)) > 0 for s in scores) if scores else False
-            if has_scores and not is_live:
+            p1_sets = sum(1 for s in scores if _set_won(s, 'first'))
+            p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
+            if p1_sets >= 2 or p2_sets >= 2:
                 state = 'post'
             else:
-                state = 'pre'
+                state = 'in'  # incomplete match with scores = still in progress
         else:
             state = 'pre'
 

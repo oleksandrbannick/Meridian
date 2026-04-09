@@ -5790,7 +5790,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             }
                         }
                         // Orphan sub-row: check run entry first, then bot._last_orphan as fallback
-                        const _oData = r.orphan_pnl != null ? r : (r.result === 'dual_exit' && bot._last_orphan ? bot._last_orphan : null);
+                        const _rhArr = bot._run_history || [];
+                        const _isLastDE2 = r.result === 'dual_exit' && !_rhArr.slice(i + 1).some(x => x.result === 'dual_exit');
+                        const _oData = r.orphan_pnl != null ? r : (_isLastDE2 && bot._last_orphan ? bot._last_orphan : null);
                         const _orphanRow = _oData ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">
                             <span></span>
                             <span style="display:flex;align-items:center;gap:3px;">
@@ -6285,7 +6287,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>'
                     + (() => {
-                        const _o = r.orphan_pnl != null ? r : (r.result === 'dual_exit' && bot._last_orphan ? bot._last_orphan : null);
+                        // Only use bot._last_orphan fallback on the LAST dual_exit in the list (not all of them)
+                        const _isLastDE = r.result === 'dual_exit' && !_rh.slice(i + 1).some(x => x.result === 'dual_exit');
+                        const _o = r.orphan_pnl != null ? r : (_isLastDE && bot._last_orphan ? bot._last_orphan : null);
                         if (!_o) return '';
                         const _ob = _o.orphan_buy ?? _o.buy ?? '?';
                         const _os = _o.orphan_sell ?? _o.sell ?? '?';

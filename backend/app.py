@@ -3014,6 +3014,11 @@ class KalshiWSManager:
                     threading.Thread(target=_ws_phantom_instant_drop, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
+                # ── Real-time phantom retreat: pull dog if bid approaches order ──
+                try:
+                    _ws_phantom_retreat(ticker, yb, nb)
+                except Exception:
+                    pass
             return
 
         if msg_type == 'fill':
@@ -3098,6 +3103,50 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
     Kept for signature compatibility.
     """
     return
+
+
+_phantom_retreat_lock = threading.Lock()
+
+def _ws_phantom_retreat(ticker, yes_bid, no_bid):
+    """Real-time retreat: if dog bid drops within 2¢ of our posted price, pull the order.
+    Runs synchronously on WS thread — fast check, only cancels if needed."""
+    if not _phantom_retreat_lock.acquire(blocking=False):
+        return  # another retreat in progress
+    try:
+        for bot_id, bot in list(active_bots.items()):
+            if bot.get('status') != 'dog_anchor_posted':
+                continue
+            if bot.get('ticker') != ticker:
+                continue
+            if bot.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+                continue
+            dog_order_id = bot.get('dog_order_id')
+            if not dog_order_id:
+                continue
+            dog_side = bot.get('dog_side', 'no')
+            dog_price = bot.get('dog_price', 0)
+            dog_bid = yes_bid if dog_side == 'yes' else no_bid
+            if dog_bid <= 0 or dog_price <= 0:
+                continue
+            depth = bot.get('anchor_depth', 5)
+            gap = dog_bid - dog_price
+            # Retreat when bid is within 2¢ of our order (about to fill at bad price)
+            if 0 <= gap <= 2:
+                threading.Thread(target=lambda oid=dog_order_id, bid=bot_id: (
+                    _safe_cancel(oid, f'ws_retreat_{bid}'),
+                ), daemon=True).start()
+                bot['dog_order_id'] = None
+                bot['_last_retreat_at'] = time.time()
+                # Go to waiting_repeat to repost at new depth
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = time.time() + 1
+                print(f'⚡ WS RETREAT: {bot_id} bid={dog_bid}¢ gap={gap}¢ from dog@{dog_price}¢ — pulled instantly')
+                bot_log('PHANTOM_WS_RETREAT', bot_id, {
+                    'dog_bid': dog_bid, 'dog_price': dog_price, 'gap': gap, 'depth': depth,
+                })
+                save_state()
+    finally:
+        _phantom_retreat_lock.release()
 
 
 # Lock to prevent concurrent phantom drop amends
@@ -9847,11 +9896,19 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_orphan_recovery_pnl'] = bot.get('_orphan_recovery_pnl', 0) + _ro_orphan_net
             bot['_orphan_recovery_count'] = bot.get('_orphan_recovery_count', 0) + 1
             _rh = bot.get('_run_history', [])
-            if _rh:
-                _rh[-1]['orphan_pnl'] = _ro_orphan_net
-                _rh[-1]['orphan_qty'] = _orphan_qty
-                _rh[-1]['orphan_buy'] = _ro_fav_price
-                _rh[-1]['orphan_sell'] = _sell_price
+            # Find the dual_exit run that created this orphan (last DE run, not necessarily last run)
+            _orphan_target = None
+            for _ri in reversed(_rh):
+                if _ri.get('result') == 'dual_exit' and 'orphan_pnl' not in _ri:
+                    _orphan_target = _ri
+                    break
+            if not _orphan_target and _rh:
+                _orphan_target = _rh[-1]  # fallback to last run
+            if _orphan_target:
+                _orphan_target['orphan_pnl'] = _ro_orphan_net
+                _orphan_target['orphan_qty'] = _orphan_qty
+                _orphan_target['orphan_buy'] = _ro_fav_price
+                _orphan_target['orphan_sell'] = _sell_price
             _record_trade({
                 'bot_id': bot_id, 'ticker': _orphan_ticker,
                 'yes_price': _ro_fav_price if _orphan_side == 'yes' else 0,

@@ -526,12 +526,16 @@
                 <button class="sport-pill"        data-sport="other" onclick="filterBySport('other')">Other</button>
             </div>
 
-            <!-- Signal Legend (collapsible) -->
-            <div id="signal-legend" style="margin-bottom:12px;">
-                <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px;user-select:none;">
+            <!-- Signal Legend + Claude chat button -->
+            <div id="signal-legend" style="margin-bottom:12px;display:flex;gap:8px;align-items:stretch;">
+                <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="flex:1;display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px;user-select:none;">
                     <span style="font-size:11px;color:#8892a6;font-weight:600;">👻 What do the ghosts mean?</span>
                     <span class="arrow" style="font-size:10px;color:#556;">▸</span>
                 </div>
+                <button onclick="toggleClaudeChat()" style="background:#0c1020;border:1px solid #d9770655;border-radius:8px;padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all 0.2s;white-space:nowrap;" onmouseover="this.style.background='#d9770618';this.style.borderColor='#d97706';this.style.boxShadow='0 0 12px rgba(217,119,6,0.2)'" onmouseout="this.style.background='#0c1020';this.style.borderColor='#d9770655';this.style.boxShadow='none'">
+                    <canvas id="markets-ghost-canvas" width="16" height="16" style="image-rendering:pixelated;width:18px;height:18px;"></canvas>
+                    <span style="color:#d97706;font-size:11px;font-weight:700;">Ask Claude</span>
+                </button>
                 <div id="legend-body" class="hidden" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
 
                     <div style="color:#8892a6;margin-bottom:10px;">Ghost icons on each market show which bots are <strong style="color:#ccc;">active</strong> or <strong style="color:#ccc;">recommended</strong> for that line.</div>
@@ -1673,30 +1677,8 @@
     <!-- CLAUDE CHAT WIDGET                                         -->
     <!-- ═══════════════════════════════════════════════════════════ -->
     <style>
-        /* ── Chat Bubble (FAB) ──────────────────────────────────── */
-        #claude-chat-fab {
-            position: fixed; z-index: 10000;
-            width: 60px; height: 60px; border-radius: 50%;
-            background: #0c1020;
-            border: 2px solid #d97706; cursor: grab;
-            box-shadow: 0 4px 24px rgba(217,119,6,0.35), 0 0 0 0 rgba(251,191,36,0);
-            transition: box-shadow 0.3s, opacity 0.3s;
-            display: flex; align-items: center; justify-content: center;
-            animation: claudeFabPulse 3s ease-in-out infinite;
-            touch-action: none; user-select: none; -webkit-user-select: none;
-        }
-        #claude-chat-fab.dragging { cursor: grabbing; animation: none; }
-        #claude-chat-fab:hover {
-            transform: scale(1.1);
-            box-shadow: 0 6px 32px rgba(217,119,6,0.5), 0 0 0 8px rgba(251,191,36,0.12);
-        }
-        #claude-chat-fab.open {
-            transform: scale(0.9) rotate(90deg); opacity: 0; pointer-events: none;
-        }
-        @keyframes claudeFabPulse {
-            0%,100% { box-shadow: 0 4px 24px rgba(217,119,6,0.35), 0 0 0 0 rgba(251,191,36,0); }
-            50% { box-shadow: 0 4px 24px rgba(217,119,6,0.35), 0 0 0 10px rgba(251,191,36,0.08); }
-        }
+        /* ── Chat FAB (hidden — replaced by bottom bar + markets button) ── */
+        #claude-chat-fab { display: none !important; }
         /* ── Chat Panel ─────────────────────────────────────────── */
         #claude-chat-panel {
             position: fixed; bottom: 24px; right: 24px; z-index: 10001;
@@ -1976,9 +1958,9 @@
         }
     </style>
 
-    <!-- FAB: Pixel ghost bubble -->
-    <button id="claude-chat-fab" onclick="toggleClaudeChat()" aria-label="Chat with Claude">
-        <canvas id="fab-ghost-canvas" width="24" height="24" style="image-rendering:pixelated;width:36px;height:36px;"></canvas>
+    <!-- FAB removed — chat opens from bottom bar + markets header -->
+    <button id="claude-chat-fab" style="display:none !important;">
+        <canvas id="fab-ghost-canvas" width="24" height="24"></canvas>
     </button>
 
     <!-- Chat Panel -->
@@ -2249,21 +2231,11 @@
             for (let x=17;x<=19;x++) { fp(x,18,A); fp(x,19,A); }
         }
 
-        // Draw mini ghost on FAB button
+        // Draw ghosts on all canvases
         drawMiniGhost(document.getElementById('fab-ghost-canvas'));
-
-        // Draw mini ghost on chat header
         drawMiniGhost(document.getElementById('header-ghost-canvas'));
-
-        // ── FAB — pinned bottom-left, no drag (drag caused off-screen ghost on mobile) ──
-        (function() {
-            const fab = document.getElementById('claude-chat-fab');
-            localStorage.removeItem('claude_fab_pos');  // clear stale drag positions
-            fab.style.left = '16px';
-            fab.style.bottom = '80px';
-            fab.style.right = 'auto';
-            fab.style.top = 'auto';
-        })();
+        drawMiniGhost(document.getElementById('bar-ghost-canvas'));
+        drawMiniGhost(document.getElementById('markets-ghost-canvas'));
 
         const input = document.getElementById('claude-chat-input');
         const sendBtn = document.getElementById('claude-chat-send');
@@ -3057,7 +3029,19 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409121700"></script>
-    <div style="text-align:center;padding:12px;color:#3a4560;font-size:11px;letter-spacing:.05em;">hi irene</div>
+    <script src="app.js?v=20260409123000"></script>
+    <!-- Bottom status bar — always visible -->
+    <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span id="bottom-latency" style="color:#3a4560;font-size:10px;">⏱ —ms</span>
+            <span style="color:#1a2035;">│</span>
+            <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>
+        </div>
+        <button onclick="toggleClaudeChat()" style="background:none;border:1px solid #d9770644;border-radius:8px;padding:4px 12px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all 0.2s;" onmouseover="this.style.background='#d9770618';this.style.borderColor='#d97706'" onmouseout="this.style.background='none';this.style.borderColor='#d9770644'">
+            <canvas id="bar-ghost-canvas" width="16" height="16" style="image-rendering:pixelated;width:18px;height:18px;"></canvas>
+            <span style="color:#d97706;font-size:10px;font-weight:600;">Claude</span>
+        </button>
+    </div>
+    <div style="height:36px;"></div><!-- spacer for fixed bottom bar -->
 </body>
 </html>

@@ -6677,8 +6677,8 @@ def _apex_stop_loss_threshold(width, anchor_price=0):
 # Pull unfilled orders when book conditions are hostile; re-post when they recover.
 APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-3 depth < this (contracts/dollars)
 APEX_DEPTH_PULL_OBI = 0.7       # Pull if |OBI| > this (market too one-sided)
-APEX_DEPTH_RECOVER_MIN = 500    # Re-post when both sides > this
-APEX_DEPTH_RECOVER_OBI = 0.5    # Re-post when |OBI| < this
+APEX_DEPTH_RECOVER_MIN = 300    # Re-post when both sides > this (match pull threshold)
+APEX_DEPTH_RECOVER_OBI = 0.7    # Re-post when |OBI| < this (match pull threshold)
 APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
 APEX_MAX_PULL_CYCLES = 8        # Stop re-posting after this many pull/repost cycles
 

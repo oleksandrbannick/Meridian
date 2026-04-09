@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meridian — Sports Trading Terminal</title>
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#00ff88">
+    <meta name="theme-color" content="#1a1f35">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Meridian">
@@ -16,13 +16,16 @@
 
         /* ── Header ────────────────────────────────────────────────── */
         .header {
-            background: #1a1f35; padding: 1.5rem 2rem; border-bottom: 2px solid #00ff88;
+            background: linear-gradient(135deg, #0d1525 0%, #1a1f35 40%, #1a1530 70%, #1a1f35 100%);
+            padding: 1.5rem 2rem;
+            border-bottom: 2px solid transparent;
+            border-image: linear-gradient(90deg, #00ff88, #00d4ff, #cc66ff, #ffaa00) 1;
             display: flex; justify-content: space-between; align-items: center;
             min-height: 80px;
         }
-        .header h1 { font-size: 1.5rem; color: #00ff88; }
+        .header h1 { font-size: 1.5rem; color: #cc66ff; }
         .balance-info { display: flex; gap: 2rem; font-size: 0.95rem; }
-        .balance-info span { color: #00ff88; font-weight: 600; }
+        .balance-info span { color: #00d4ff; font-weight: 600; }
 
         /* ── Tab Navigation ────────────────────────────────────────── */
         .main-nav {
@@ -450,14 +453,16 @@
     <!-- ─── Header ─────────────────────────────────────────────── -->
     <div class="header" style="position:relative;overflow:hidden;">
         <!-- Floating ghost background -->
-        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.45;"></canvas>
+        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.55;"></canvas>
         <h1 style="display:flex;align-items:center;gap:14px;position:relative;z-index:1;">
             <!-- Meridian logo mark -->
             <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
                 <defs>
-                    <linearGradient id="hdr-mg" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="hdr-mg" x1="0" y1="0" x2="1" y2="1">
                         <stop offset="0%" stop-color="#00ff88"/>
-                        <stop offset="100%" stop-color="#00aaff"/>
+                        <stop offset="35%" stop-color="#00d4ff"/>
+                        <stop offset="65%" stop-color="#cc66ff"/>
+                        <stop offset="100%" stop-color="#ffaa00"/>
                     </linearGradient>
                     <linearGradient id="hdr-bg" x1="0" y1="0" x2="1" y2="1">
                         <stop offset="0%" stop-color="#1a1f35"/>
@@ -484,8 +489,8 @@
             </svg>
             <!-- Wordmark -->
             <span style="display:flex;flex-direction:column;line-height:1.1;gap:2px;">
-                <span style="background:linear-gradient(90deg,#00ff88,#00aaff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:900;letter-spacing:.06em;font-size:1.35rem;">MERIDIAN</span>
-                <span style="color:#4a5568;font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;">Sports Trading Terminal</span>
+                <span style="background:linear-gradient(90deg,#00ff88 0%,#00d4ff 30%,#cc66ff 65%,#ffaa00 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;font-weight:900;letter-spacing:.08em;font-size:1.35rem;">MERIDIAN</span>
+                <span style="color:#6b7394;font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;">Sports Trading Terminal</span>
             </span>
         </h1>
         <div class="balance-info" id="balance-display" style="display:none;position:relative;z-index:1;">
@@ -1086,112 +1091,78 @@
                     </button>
                 </div>
 
-                <!-- ═══════ DUAL ARB BOT SECTION ═══════ -->
+                <!-- ═══════ APEX MARKET MAKER SECTION ═══════ -->
                 <div id="arb-section" style="display:none;">
-                    <!-- Strategy description (collapsible) -->
-                    <div id="strategy-info" style="margin-bottom:16px;">
-                        <div onclick="toggleStrategyInfo()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:10px 14px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;">
-                            <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:12px;">📖</span><span style="color:#8892a6;font-size:12px;font-weight:600;">How does this strategy work?</span></div>
-                            <span id="strategy-chevron" style="color:#8892a6;font-size:10px;">▼</span>
-                        </div>
-                        <div id="strategy-details" style="display:none;padding:14px;background:#080b14;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;font-size:12px;line-height:1.6;color:#8892a6;">
-                            <div style="margin-bottom:10px;"><span style="color:#00ff88;font-weight:700;">Core principle:</span> Every contract settles at <strong style="color:#fff;">100¢</strong>. Buy YES + NO below 100¢ = <strong style="color:#00ff88;">guaranteed profit</strong>.</div>
-                            <div style="padding:8px 12px;background:#0d1120;border-radius:6px;border-left:3px solid #00ff88;">
-                                <strong style="color:#fff;">Example:</strong> YES 45¢ + NO 50¢ = 95¢ → <strong style="color:#00ff88;">+5¢ profit</strong> per contract.
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Risk warning area -->
-                    <div id="bot-risk-warnings"></div>
-                    <!-- Width slider removed — Apex 2.0 uses preset buttons below -->
-                    <div id="bot-arb-width" style="display:none;" data-value="10"></div>
-                    <div id="width-display" style="display:none;"></div>
-                    <!-- Preset Strategy Table -->
-                    <div style="margin-bottom:16px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                            <span style="color:#8892a6;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">⚡ Widths</span>
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <div style="display:flex;gap:4px;">
-                                    <button onclick="selectAllWidths()" style="background:#818cf822;color:#818cf8;border:1px solid #818cf844;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;">ALL</button>
-                                    <button onclick="clearSelectedWidths()" style="background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;">CLEAR</button>
-                                </div>
-                                <span id="breakeven-display" style="color:#ffaa33;font-size:11px;font-weight:700;"></span>
-                            </div>
-                        </div>
-                        <div id="preset-recommendation" style="display:none;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff8866;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;"></div>
-                        <div style="color:#556;font-size:9px;margin-bottom:8px;line-height:1.4;">Tap to select · tap again to deselect · deploy places bots at all selected widths</div>
-                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;" id="preset-grid">
-                            <button onclick="applyPreset(4)" class="arb-preset-btn" data-width="4" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">4¢</div></button>
-                            <button onclick="applyPreset(5)" class="arb-preset-btn" data-width="5" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">5¢</div></button>
-                            <button onclick="applyPreset(6)" class="arb-preset-btn" data-width="6" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">6¢</div></button>
-                            <button onclick="applyPreset(7)" class="arb-preset-btn" data-width="7" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">7¢</div></button>
-                            <button onclick="applyPreset(8)" class="arb-preset-btn" data-width="8" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">8¢</div></button>
-                            <button onclick="applyPreset(9)" class="arb-preset-btn" data-width="9" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">9¢</div></button>
-                            <button onclick="applyPreset(10)" class="arb-preset-btn" data-width="10" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">10¢</div></button>
-                            <button onclick="applyPreset(11)" class="arb-preset-btn" data-width="11" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">11¢</div></button>
-                            <button onclick="applyPreset(12)" class="arb-preset-btn" data-width="12" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">12¢</div></button>
-                            <button onclick="applyPreset(13)" class="arb-preset-btn" data-width="13" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">13¢</div></button>
-                            <button onclick="applyPreset(14)" class="arb-preset-btn" data-width="14" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">14¢</div></button>
-                            <button onclick="applyPreset(15)" class="arb-preset-btn" data-width="15" style="padding:8px 4px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;transition:all .15s;font-size:11px;"><div style="font-weight:800;font-size:14px;color:#00ff88;">15¢</div></button>
-                        </div>
-                    </div>
-                    <!-- YES / NO Price Inputs -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-                        <div style="background:#0a0e1a;border:1px solid #00ff8844;border-radius:8px;padding:12px;text-align:center;">
-                            <label style="color:#00ff88;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">YES LIMIT BUY</label>
-                            <div style="position:relative;">
-                                <input type="number" id="bot-yes-price" min="1" max="98" oninput="onPriceManualChange()"
-                                       style="width:100%;padding:8px;background:#060a14;border:2px solid #00ff8866;border-radius:6px;color:#00ff88;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
-                                       onfocus="this.style.borderColor='#00ff88'" onblur="this.style.borderColor='#00ff8866'">
-                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#00ff8866;font-size:12px;pointer-events:none;">¢</span>
-                            </div>
-                            <div id="yes-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
-                        </div>
-                        <div style="background:#0a0e1a;border:1px solid #ff444444;border-radius:8px;padding:12px;text-align:center;">
-                            <label style="color:#ff4444;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">NO LIMIT BUY</label>
-                            <div style="position:relative;">
-                                <input type="number" id="bot-no-price" min="1" max="98" oninput="onPriceManualChange()"
-                                       style="width:100%;padding:8px;background:#060a14;border:2px solid #ff444466;border-radius:6px;color:#ff4444;font-size:1.5rem;font-weight:800;text-align:center;outline:none;"
-                                       onfocus="this.style.borderColor='#ff4444'" onblur="this.style.borderColor='#ff444466'">
-                                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#ff444466;font-size:12px;pointer-events:none;">¢</span>
-                            </div>
-                            <div id="no-queue-hint" style="color:#555;font-size:10px;margin-top:4px;"></div>
-                        </div>
-                    </div>
-                    <!-- Profit Preview -->
-                    <div id="profit-preview" style="margin-bottom:16px;"></div>
-                    <!-- Qty, Flip Threshold, Phase, Repeat -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts</label>
-                            <input type="number" id="bot-quantity" min="1" value="1" oninput="updateProfitPreview(); updateAllWidthsPreview();"
-                                   style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                        </div>
-                        <div>
-                            <label style="display:flex;align-items:center;gap:4px;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Repeat <span style="color:#555;font-weight:400;">(extra×)</span></label>
-                            <div style="display:flex;gap:6px;align-items:center;">
-                                <input type="number" id="bot-repeat-count" min="0" max="50" value="0"
-                                       style="width:60px;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;"
-                                       title="How many extra times to re-run after the first fill. 0 = run once, 1 = run twice total, etc.">
-                                <label style="display:flex;align-items:center;gap:3px;cursor:pointer;" id="apex-smart-label">
-                                    <input type="checkbox" id="apex-smart-mode" checked onchange="toggleApexSmartMode(this.checked)" style="accent-color:#00e5ff;">
-                                    <span style="color:#00e5ff;font-size:10px;font-weight:600;">Smart</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-                    <div id="bot-game-phase-display" style="display:none;">🔄 Auto</div>
-                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00aaff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;display:flex;align-items:center;gap:10px;">
-                        <canvas id="apex-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
-                        <div><strong style="color:#00aaff;">△ Apex 2.0</strong> — Posts YES+NO per rung. On fill: <span style="color:#00ff88;">30s at target</span> → <span style="color:#ffaa00;">snap to bid+1</span>. Each rung is an independent scalp. Reposts every 1 min if no fills.</div>
+                    <!-- Strategy description -->
+                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00d4ff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;">
+                        <strong style="color:#00d4ff;">📊 Apex Market Maker</strong> — Continuously quotes both sides of the spread. Collects profit as fills trickle in. Tracks net inventory, auto-reposts, drift-reprices. OBI depth gating protects against hostile books.
                     </div>
 
-                    <!-- All-widths stats preview (shown inline when multiple selected) -->
-                    <div id="all-widths-preview" style="margin-bottom:16px;font-size:11px;"></div>
+                    <!-- Risk warning area -->
+                    <div id="bot-risk-warnings"></div>
+
+                    <!-- MM Configuration -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Start Gap</label>
+                            <input type="number" id="mm-start-gap" min="2" max="20" value="4" oninput="updateMMPreview()"
+                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Min edge from midpoint</div>
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Levels</label>
+                            <input type="number" id="mm-levels" min="1" max="15" value="7" oninput="updateMMPreview()"
+                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Price levels per side</div>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Spacing</label>
+                            <input type="number" id="mm-spacing" min="1" max="5" value="1" oninput="updateMMPreview()"
+                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Gap between levels</div>
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Qty / Level</label>
+                            <input type="number" id="mm-qty-per-level" min="1" max="100" value="10" oninput="updateMMPreview()"
+                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Contracts per level</div>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Inv. Limit</label>
+                            <input type="number" id="mm-inventory-limit" min="10" max="500" value="50"
+                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Max contracts one side</div>
+                        </div>
+                        <div>
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Loss Limit ($)</label>
+                            <input type="number" id="mm-loss-limit" min="1" max="100" value="5"
+                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Unrealized loss stop</div>
+                        </div>
+                    </div>
+
+                    <!-- Smart Mode -->
+                    <div style="margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                            <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00e5ff;">
+                            <span style="color:#00e5ff;font-size:11px;font-weight:600;">Smart Mode</span>
+                        </label>
+                        <span style="color:#556;font-size:10px;">Stop after</span>
+                        <input type="number" id="mm-smart-limit" min="1" max="10" value="2"
+                               style="width:40px;padding:4px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:12px;text-align:center;">
+                        <span style="color:#556;font-size:10px;">consecutive losing round trips</span>
+                    </div>
+
+                    <!-- Ladder Preview -->
+                    <div id="mm-ladder-preview" style="margin-bottom:16px;padding:10px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;font-size:11px;"></div>
 
                     <!-- Action buttons -->
                     <div style="display:flex;gap:10px;">
-                        <button id="deploy-btn" onclick="createBot()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">△ Deploy Apex Bot</button>
+                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00d4ff 0%,#0099cc 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">📊 Deploy Market Maker</button>
                         <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
@@ -3200,7 +3171,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260410021500"></script>
+    <script src="app.js?v=20260410050000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

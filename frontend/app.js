@@ -3729,15 +3729,13 @@ function setTradeMode(mode) {
             renderAnchorRungs(true);
         }
     } else {
-        // arb
+        // arb (Market Maker)
         if (arbSection) arbSection.style.display = 'block';
-        if (arbBtn) { arbBtn.style.background = '#00ff8822'; arbBtn.style.color = '#00ff88'; arbBtn.style.borderBottom = '2px solid #00ff88'; }
-        iconEl.textContent = '⚡';
-        titleEl.textContent = 'Apex Bot';
-        subtitleEl.textContent = 'Settlement Arbitrage Engine';
-        if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('apex-form-ghost'), 'apex');
-        // Recalculate arb prices when switching to arb mode
-        recalcArbPrices();
+        if (arbBtn) { arbBtn.style.background = '#00d4ff22'; arbBtn.style.color = '#00d4ff'; arbBtn.style.borderBottom = '2px solid #00d4ff'; }
+        iconEl.textContent = '📊';
+        titleEl.textContent = 'Apex MM';
+        subtitleEl.textContent = 'Market Maker · Spread Collector';
+        updateMMPreview();
     }
 }
 
@@ -4871,49 +4869,8 @@ function openBotModal(market, _side, _price) {
     if (novigChevronEl) novigChevronEl.textContent = '▼';
     updateStraightPreview();
 
-    // Also prepare arb side for if they switch
-    const spreadSum  = Math.max(0, (yesAsk - yesBid) + (noAsk - noBid));
-    const autoWidth  = Math.max(3, Math.min(15, Math.round(spreadSum / 2) || 5));
-    document.getElementById('bot-arb-width').value = autoWidth;
-    document.getElementById('strategy-details').style.display = 'none';
-    document.getElementById('strategy-chevron').textContent = '▼';
-
-    // ── Preset recommendation based on game signal ──
-    const liq = getMarketLiquidity(market);
-    const gameId = extractGameId(market.event_ticker || market.ticker || '');
-    const signal = getGameSignal(gameId, sport, [market]);
-    const sigType = signal.type; // anchor, swing, caution, pregame, none
-    const recEl = document.getElementById('preset-recommendation');
-    // Apex 2.0: show game signal info only (no auto-selected widths)
-    if (recEl && liq.yesBid > 0 && liq.noBid > 0) {
-        let sigText = '', sigColor = '#8892a6';
-        if (sigType === 'coin_flip') { sigText = '🔵 COIN FLIP — close game, both legs bounce'; sigColor = '#60a5fa'; }
-        else if (sigType === 'lean') { sigText = '🟢 LEAN — small lead, still volatile'; sigColor = '#4ade80'; }
-        else if (sigType === 'drifting') { sigText = '🟡 DRIFTING — lead building, dog fills harder'; sigColor = '#ffaa33'; }
-        else if (sigType === 'runaway') { sigText = '🔴 RUNAWAY — blowout, very wide or skip'; sigColor = '#ff6644'; }
-        else if (sigType === 'late_game') { sigText = '⌛ LATE — running out of time'; sigColor = '#ff4444'; }
-        else if (sigType === 'early') { sigText = '⚪ EARLY — no score context yet'; sigColor = '#8892a6'; }
-        else if (sigType === 'pregame') { sigText = '⏳ PREGAME'; sigColor = '#8892a6'; }
-        else { sigText = `💡 ${liq.tierLabel}`; }
-        const _tmpRec = getRecommendedPresets(liq.tier, sigType, market);
-        const _recRange = _tmpRec.length ? `${_tmpRec[0]}-${_tmpRec[_tmpRec.length-1]}¢` : '';
-        recEl.style.display = 'block';
-        recEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">`
-            + `<span style="color:${sigColor};font-weight:700;">${sigText}</span>`
-            + `<span style="color:#8892a6;font-size:10px;">${liq.yesBid}+${liq.noBid}=${liq.bidSum} · spread ${liq.avgSpread}c${_recRange ? ' · rec ' + _recRange : ''}</span>`
-            + `</div>`;
-    } else if (recEl) {
-        recEl.style.display = 'none';
-    }
-    // Auto-recommend widths based on spread + signal — pre-select best ones
-    const recWidths = getRecommendedPresets(liq.tier, sigType, market);
-    window._recPresets = recWidths;
-    _selectedWidths.clear();
-    // Pre-select top 3 recommended widths (user can toggle)
-    recWidths.slice(0, 3).forEach(w => _selectedWidths.add(w));
-    _syncPresetStyles();
-    recalcArbPrices();
-    _updateDeployButton();
+    // Prepare MM preview for if they switch to arb mode
+    // (updateMMPreview called when setTradeMode('arb') fires)
 
     // Underdog warning removed — no longer relevant for dual arb strategy
     const warnEl = document.getElementById('modal-underdog-warning');
@@ -4925,7 +4882,6 @@ function openBotModal(market, _side, _price) {
     _currentMiddleData = null;
 
     document.getElementById('bot-modal').classList.add('show');
-    initWidthSelector();
 
     // ── Auto-refresh market prices every 3s using ORDERBOOK (real-time) ──
     if (modalRefreshInterval) clearInterval(modalRefreshInterval);
@@ -4962,7 +4918,7 @@ function openBotModal(market, _side, _price) {
             refreshModalPriceCards();
             // Recalc prices based on current mode
             if (currentTradeMode === 'arb') {
-                recalcArbPrices();
+                updateMMPreview();
             } else if (currentTradeMode === 'anchor') {
                 initAnchorDogPrices();
             }
@@ -5547,92 +5503,88 @@ function updateAllWidthsPreview() {
         </div>`;
 }
 
-async function createBot() {
+function updateMMPreview() {
+    const el = document.getElementById('mm-ladder-preview');
+    if (!el || !currentArbMarket) return;
+    const yesBid = currentArbMarket.yes_bid || 0;
+    const noBid = currentArbMarket.no_bid || 0;
+    if (yesBid <= 0 || noBid <= 0) { el.innerHTML = '<span style="color:#ff4444;">No orderbook data</span>'; return; }
+    const mid = Math.round((yesBid + (100 - noBid)) / 2);
+    const gap = parseInt(document.getElementById('mm-start-gap')?.value) || 4;
+    const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
+    const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
+    const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
+    const noAnchor = 100 - mid;
+    const yesPrices = [], noPrices = [];
+    for (let i = 0; i < levels; i++) {
+        const offset = gap + (i * spacing);
+        const yp = mid - offset;
+        const np = noAnchor - offset;
+        if (yp >= 1) yesPrices.push(yp);
+        if (np >= 1) noPrices.push(np);
+    }
+    const minCombined = yesPrices.length && noPrices.length ? yesPrices[yesPrices.length-1] + noPrices[noPrices.length-1] : 0;
+    const maxCombined = yesPrices.length && noPrices.length ? yesPrices[0] + noPrices[0] : 0;
+    const totalOrders = yesPrices.length + noPrices.length;
+    const capitalAtRisk = (yesPrices.reduce((a,b) => a+b, 0) + noPrices.reduce((a,b) => a+b, 0)) * qty;
+    el.innerHTML = `
+        <div style="display:flex;gap:16px;margin-bottom:8px;">
+            <div style="flex:1;">
+                <div style="color:#00ff88;font-weight:700;font-size:10px;margin-bottom:3px;">YES BIDS</div>
+                <div style="color:#00ff88;font-size:13px;font-weight:600;">${yesPrices.map(p=>p+'¢').join(', ')}</div>
+            </div>
+            <div style="flex:1;">
+                <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:3px;">NO BIDS</div>
+                <div style="color:#ff4444;font-size:13px;font-weight:600;">${noPrices.map(p=>p+'¢').join(', ')}</div>
+            </div>
+        </div>
+        <div style="color:#8892a6;font-size:10px;line-height:1.6;">
+            Midpoint: <strong style="color:#fff;">${mid}¢</strong> · ${totalOrders} orders (${yesPrices.length}Y + ${noPrices.length}N) · ${qty}x each<br>
+            Combined range: ${minCombined}¢–${maxCombined}¢ · Profit range: ${100-maxCombined}¢–${100-minCombined}¢/trip<br>
+            Capital at risk: <strong style="color:#ffaa33;">$${(capitalAtRisk/100).toFixed(2)}</strong>
+        </div>`;
+}
+
+async function deployMarketMaker() {
     if (!currentArbMarket) { alert('No market selected'); return; }
+    const ticker = currentArbMarket.ticker;
+    const startGap = parseInt(document.getElementById('mm-start-gap')?.value) || 4;
+    const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
+    const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
+    const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
+    const invLimit = parseInt(document.getElementById('mm-inventory-limit')?.value) || 50;
+    const lossLimitDollars = parseInt(document.getElementById('mm-loss-limit')?.value) || 5;
+    const smartChecked = document.getElementById('mm-smart-mode')?.checked;
+    const smartLimit = smartChecked ? (parseInt(document.getElementById('mm-smart-limit')?.value) || 2) : 0;
 
-    // All width selections go through Apex (ladder-arb) endpoint
-    if (_selectedWidths.size >= 1) {
-        return placeSelectedWidthsBots();
-    }
+    if (!confirm(`Deploy Apex Market Maker\n\nMarket: ${ticker}\nGap: ${startGap}¢ · Levels: ${levels} · Spacing: ${spacing}¢\nQty/level: ${qtyPerLevel} · Inv limit: ${invLimit}\nLoss limit: $${lossLimitDollars}${smartLimit ? ` · Smart: stop after ${smartLimit} losses` : ''}\n\nContinue?`)) return;
 
-    // ── Fetch fresh prices from ORDERBOOK right before submitting ──
-    try {
-        const obResp = await fetch(`${API_BASE}/orderbook/${currentArbMarket.ticker}`);
-        if (obResp.ok) {
-            const obData = await obResp.json();
-            if (!obData.error) {
-                const ob = obData.orderbook || obData;
-                const yesLevels = (ob.yes || []).slice().reverse();
-                const noLevels  = (ob.no  || []).slice().reverse();
-                const bestYesBid = yesLevels.length ? parseOrderLevel(yesLevels[0]).price : 0;
-                const bestNoBid  = noLevels.length  ? parseOrderLevel(noLevels[0]).price  : 0;
-                currentArbMarket.yes_bid = bestYesBid;
-                currentArbMarket.no_bid  = bestNoBid;
-                currentArbMarket.yes_ask = bestNoBid > 0 ? (100 - bestNoBid) : 0;
-                currentArbMarket.no_ask  = bestYesBid > 0 ? (100 - bestYesBid) : 0;
-                delete currentArbMarket.yes_bid_dollars;
-                delete currentArbMarket.no_bid_dollars;
-                delete currentArbMarket.yes_ask_dollars;
-                delete currentArbMarket.no_ask_dollars;
-                refreshModalPriceCards();
-                recalcArbPrices();
-            }
-        }
-    } catch (_) { /* proceed with what we have */ }
-
-    const yes_price       = parseInt(document.getElementById('bot-yes-price').value);
-    const no_price        = parseInt(document.getElementById('bot-no-price').value);
-    const quantity        = parseInt(document.getElementById('bot-quantity').value);
-    const repeat_count    = parseInt(document.getElementById('bot-repeat-count').value) || 0;
-    const smart_mode      = !!document.getElementById('apex-smart-mode')?.checked;
-    const arb_width       = parseInt(document.getElementById('bot-arb-width').value) || (100 - yes_price - no_price);
-
-    if (yes_price + no_price >= 100) {
-        alert(`❌ Not an arb — YES(${yes_price}¢) + NO(${no_price}¢) = ${yes_price + no_price}¢ ≥ 100¢\nAdjust prices so total is below 100¢.`);
-        return;
-    }
-    if (!quantity || quantity < 1) { alert('Quantity must be at least 1'); return; }
-
-    // ── Guardrail: block phantom arbs with no real bids on one side ──
-    const realYesBid = currentArbMarket?.yes_bid || 0;
-    const realNoBid  = currentArbMarket?.no_bid  || 0;
-    if (realYesBid <= 0 || realNoBid <= 0) {
-        const missingSide = realYesBid <= 0 ? 'YES' : 'NO';
-        alert(`⚠️ No real ${missingSide} bids in the orderbook.\n\nThe ${missingSide} price is derived (calculated), not from a real order. Nobody is there to fill it. This arb is phantom.`)
-        return;
-    }
-
-    const favPrice = Math.max(yes_price, no_price);
-    const profitPer = 100 - yes_price - no_price;
-    const totalCost = (yes_price + no_price) * quantity;
-    const repeatMsg = smart_mode ? '\n↻ Smart Mode (repeat on wins, stop after 2 losses)' : repeat_count > 0 ? `\n↻ Repeat: ${repeat_count}× after first fill (${repeat_count + 1} runs total)` : '';
-    const slInfo = `Stop-loss: ${_apexStopLossThreshold(arb_width)}¢ (delta-adjusted)`;
-    if (!confirm(`△ Deploy Apex 2.0 — ${quantity} contract(s)\n\nMarket: ${currentArbMarket.ticker}\nYES limit buy: ${yes_price}¢\nNO limit buy: ${no_price}¢\nTotal cost: ${totalCost}¢ ($${(totalCost / 100).toFixed(2)})\nProfit if both fill: +${profitPer}¢/contract\n${slInfo}${repeatMsg}\n\nConfirm order?`)) return;
+    const deployBtn = document.getElementById('deploy-btn');
+    if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = 'Deploying...'; }
+    closeModal();
+    if (!autoMonitorInterval) toggleAutoMonitor();
+    showNotification(`Deploying MM on ${ticker}...`);
 
     try {
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                ticker: currentArbMarket.ticker,
-                widths: [arb_width],
-                quantity,
-                repeat_count: smart_mode ? 0 : repeat_count,
-                smart_mode,
+                ticker, start_gap: startGap, levels, spacing,
+                qty_per_level: qtyPerLevel, inventory_limit: invLimit,
+                loss_limit_cents: lossLimitDollars * 100,
+                smart_mode: smartLimit,
             }),
         });
         const data = await resp.json();
-
         if (data.bot_id) {
-            showNotification(`△ Apex deployed: 1 rung · ${quantity} contracts`);
-            closeModal();
-            loadBots();
-            if (!autoMonitorInterval) toggleAutoMonitor();
+            showNotification(`Market Maker deployed: ${data.total_orders} orders @ mid=${data.midpoint}`);
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            showNotification(`MM failed: ${data.error || 'Unknown error'}`);
         }
+        loadBots();
     } catch (err) {
-        alert('Network error: ' + err.message);
+        showNotification(`MM failed: ${err.message}`);
     }
 }
 
@@ -5660,146 +5612,6 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
     }
 }
 
-async function placeSelectedWidthsBots() {
-    if (!currentArbMarket) return;
-    const selectedArr = [..._selectedWidths].sort((a, b) => a - b);
-    if (selectedArr.length === 0) return;
-    const qty         = parseInt(document.getElementById('bot-quantity')?.value) || 1;
-    const repeatCount = parseInt(document.getElementById('bot-repeat-count')?.value) || 0;
-    const smartMode   = !!document.getElementById('apex-smart-mode')?.checked;
-    const gamePhase   = document.querySelector('input[name="game-phase"]:checked')?.value || 'live';
-
-    // ── Fetch fresh orderbook prices before computing widths ───────────────────
-    try {
-        const obResp = await fetch(`${API_BASE}/orderbook/${currentArbMarket.ticker}`);
-        if (obResp.ok) {
-            const obData = await obResp.json();
-            if (!obData.error) {
-                const ob = obData.orderbook || obData;
-                const yesLevels = (ob.yes || []).slice().reverse();
-                const noLevels  = (ob.no  || []).slice().reverse();
-                const bestYesBid = yesLevels.length ? parseOrderLevel(yesLevels[0]).price : 0;
-                const bestNoBid  = noLevels.length  ? parseOrderLevel(noLevels[0]).price  : 0;
-                currentArbMarket.yes_bid = bestYesBid;
-                currentArbMarket.no_bid  = bestNoBid;
-                currentArbMarket.yes_ask = bestNoBid > 0 ? (100 - bestNoBid) : 0;
-                currentArbMarket.no_ask  = bestYesBid > 0 ? (100 - bestYesBid) : 0;
-                delete currentArbMarket.yes_bid_dollars;
-                delete currentArbMarket.no_bid_dollars;
-                delete currentArbMarket.yes_ask_dollars;
-                delete currentArbMarket.no_ask_dollars;
-            }
-        }
-    } catch (_) { /* proceed with cached prices */ }
-
-    // ── Phantom-arb guardrail: block if one side has no real bids ──────────────
-    const realYesBid = currentArbMarket?.yes_bid || 0;
-    const realNoBid  = currentArbMarket?.no_bid  || 0;
-    if (realYesBid <= 0 || realNoBid <= 0) {
-        const missingSide = realYesBid <= 0 ? 'YES' : 'NO';
-        alert(`⚠️ No real ${missingSide} bids in the orderbook.\n\nThe ${missingSide} price is derived (calculated), not from a real order. Nobody is there to fill it. This arb is phantom.`);
-        return;
-    }
-
-    // ── Pre-scan: build detailed confirmation ──────────────────────────────────
-    const validWidths = [];
-    const skipReasons = [];
-    let totalCostCents = 0;
-
-    for (const w of selectedArr) {
-        const arb      = calculateArbPrices(currentArbMarket, w);
-        const yesPrice = arb.targetYes;
-        const noPrice  = arb.targetNo;
-        const profit   = 100 - yesPrice - noPrice;
-        if (profit <= 0) {
-            skipReasons.push(`  ⛔  ${w}¢ width — no profit`);
-        } else {
-            validWidths.push({ w, arb, yesPrice, noPrice, profit, rungQty: qty });
-            totalCostCents += (yesPrice + noPrice) * qty;
-        }
-    }
-
-    if (validWidths.length === 0) {
-        alert(`△ Deploy ${selectedArr.length} Widths — ${currentArbMarket.ticker}\n\nNo valid widths to deploy (all skipped).\n\n${skipReasons.join('\n')}`);
-        return;
-    }
-
-    // Build order table string
-    const pad = (s, n) => String(s).padStart(n);
-    let orderLines = [`△ Apex: Deploy ${validWidths.length} Widths — ${currentArbMarket.ticker}`, ''];
-    orderLines.push('  WIDTH   QTY   YES    NO    PROFIT   COST');
-    orderLines.push('  ────────────────────────────────────────');
-    for (const { w, arb, yesPrice, noPrice, profit, rungQty } of validWidths) {
-        const costDollars = ((yesPrice + noPrice) * rungQty / 100).toFixed(2);
-        orderLines.push(`  ${pad(w+'¢',5)}   ${pad(rungQty+'×',4)}  ${pad(arb.targetYes+'¢',4)}   ${pad(arb.targetNo+'¢',4)}   +${pad(profit+'¢',3)}   $${costDollars}`);
-    }
-    if (skipReasons.length > 0) {
-        orderLines.push('');
-        orderLines.push(...skipReasons);
-    }
-    orderLines.push('');
-    orderLines.push(`  ${validWidths.length} widths × ${qty} contract${qty !== 1 ? 's' : ''} each`);
-    orderLines.push(`  Total entry cost: $${(totalCostCents / 100).toFixed(2)}`);
-    orderLines.push('');
-    orderLines.push('Place these orders?');
-
-    if (!confirm(orderLines.join('\n'))) return;
-
-    // ── Placement: unified ladder-arb for multi-width, legacy for single ─────
-    const deployBtn = document.getElementById('deploy-btn');
-    if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '⏳ Placing...'; }
-
-    let notifMsg;
-
-    console.log(`[DEPLOY] validWidths=${validWidths.length}, routing to ladder-arb (Apex)`);
-
-    // Close modal IMMEDIATELY — don't wait for Kalshi API round trips
-    const deployTicker = currentArbMarket.ticker;
-    closeModal();
-    if (!autoMonitorInterval) toggleAutoMonitor();
-    showNotification(`△ Deploying Apex: ${validWidths.length} widths on ${deployTicker}...`);
-
-    // Fire API call in background — notification updates when done
-    fetch(`${API_BASE}/bot/ladder-arb`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            ticker: deployTicker,
-            widths: validWidths.map(v => v.w),
-            quantity: qty,
-            repeat_count: smartMode ? 0 : repeatCount,
-            smart_mode: smartMode,
-            game_phase: gamePhase,
-        }),
-    }).then(r => r.json()).then(data => {
-        if (data.bot_id) {
-            showNotification(`△ Apex 2.0 deployed: ${data.rungs} rungs × ${qty}`);
-        } else if (data.warning && data.spread) {
-            // Spread-aware entry guard — offer override
-            if (confirm(`⚠️ Spread is ${data.spread}¢ — narrow widths (${(data.narrow_widths||[]).join(', ')}¢) may get adversely selected.\n\nDeploy anyway?`)) {
-                // Retry with force_narrow flag
-                fetch(`${API_BASE}/bot/ladder-arb`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ticker: deployTicker, widths: validWidths.map(v => v.w),
-                        quantity: qty, repeat_count: smartMode ? 0 : repeatCount,
-                        smart_mode: smartMode, game_phase: gamePhase, force_narrow: true,
-                    }),
-                }).then(r2 => r2.json()).then(d2 => {
-                    if (d2.bot_id) showNotification(`△ Apex 2.0 deployed (override): ${d2.rungs} rungs × ${qty}`);
-                    else showNotification(`❌ Apex failed: ${d2.error || 'Unknown error'}`);
-                    loadBots();
-                });
-            }
-        } else {
-            showNotification(`❌ Apex failed: ${data.error || 'Unknown error'}`);
-        }
-        loadBots();
-    }).catch(() => {
-        showNotification(`❌ Apex failed: Network error`);
-    });
-}
 
 let botsTabMode = 'arb';  // 'arb' | 'middle'
 function _renderDogBotCard(bot, botId, container, gameScores) {
@@ -6006,7 +5818,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._dual_exit_active ? (bot._dual_exit_sell_won ? '📤 SELL WON' : bot._dual_exit_fav_won ? '⭐ HEDGE WON' : '⏱ DUAL EXIT') : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isAwaitingSettlement ? '⏳ SETTLED' : _isSmartStopped ? '⏹ SMART STOP' : '✅ COMPLETE',
         'stopped': _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
         'awaiting_settlement': '⏳ SETTLED',
@@ -6014,7 +5826,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
+        'fav_hedge_posted': bot._dual_exit_active ? '#ff8800' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
         'completed': _isAwaitingSettlement ? '#818cf8' : _isSmartStopped ? '#00e5ff' : '#00ff88',
         'stopped': _isSmartStopped ? '#00e5ff' : '#ff4444',
         'awaiting_settlement': '#818cf8',
@@ -6456,999 +6268,115 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
 function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
-    const status = bot.status || 'ladder_arb_posted';
-    const rungs = bot.rungs || [];
-    const qtyPer = bot.quantity || 1;
-    const phase = bot.game_phase || 'pregame';
+    const status = bot.status || 'market_making_active';
+    const isCompleted = status === 'completed' || status === 'stopped';
 
     const statusMap = {
-        'ladder_arb_posted': '⚡ BOTH LIVE',
-        'ladder_arb_active': '🔥 ACTIVE',
-        'depth_pulled': '📊 DEPTH PULL',
-        'waiting_repeat': '🔄 REPEATING',
-        'drift_cancelled': '🚫 DRIFT',
-        'completed': '✅ DONE',
-        'stopped': '🛑 STOPPED',
-        'awaiting_settlement': '⏳ SETTLE',
+        'market_making_active': ['QUOTING', '#00d4ff'],
+        'mm_depth_pulled': ['PULLED', '#ffaa00'],
+        'mm_exiting': ['EXITING', '#ff8800'],
+        'completed': ['DONE', '#00ff88'],
+        'stopped': ['STOPPED', '#ff4444'],
     };
-    // Smart mode info
-    const isSmart = bot.smart_mode;
-    const smartWins = bot._smart_wins || 0;
-    const smartLosses = bot._smart_losses || 0;
-    const borderMap = {
-        'ladder_arb_posted': '#00aaff',
-        'ladder_arb_active': '#ffaa00',
-        'depth_pulled': '#ff6600',
-        'waiting_repeat': '#aa66ff',
-        'drift_cancelled': '#ff8800',
-        'completed': '#00ff88',
-        'stopped': '#ff4444',
-        'awaiting_settlement': '#00e5ff',
-    };
-    const borderCol = borderMap[status] || '#00aaff';
-    const statusLabel = statusMap[status] || status;
-    const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
+    const [statusLabel, borderCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
 
-    // Live score
-    let liveScoreHtml = '';
-    if (gameScores && gameKey) {
-        const gs = gameScores[gameKey] || {};
-        if (gs.home_score != null || gs.away_score != null) {
-            liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
-        }
+    const netYes = bot.net_yes || 0;
+    const netNo = bot.net_no || 0;
+    const avgYesCost = bot.avg_yes_cost || 0;
+    const avgNoCost = bot.avg_no_cost || 0;
+    const realizedPnl = bot.realized_pnl_cents || 0;
+    const unrealizedPnl = bot._unrealized_pnl || 0;
+    const roundTrips = bot.round_trips_completed || 0;
+    const midpoint = bot.midpoint || 0;
+    const pullCount = bot._pull_count || 0;
+    const consLosses = bot.consecutive_losses || 0;
+    const smartMode = bot.smart_mode || 0;
+
+    const pnlColor = realizedPnl >= 0 ? '#00ff88' : '#ff4444';
+    const unrealColor = unrealizedPnl >= 0 ? '#00ff88' : '#ff4444';
+    const pnlSign = realizedPnl >= 0 ? '+' : '';
+    const unrealSign = unrealizedPnl >= 0 ? '+' : '';
+
+    // Inventory badge
+    let invBadge = '';
+    if (netYes > 0) invBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">YES ${netYes}x @${avgYesCost}c</span>`;
+    if (netNo > 0) invBadge += `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-left:4px;">NO ${netNo}x @${avgNoCost}c</span>`;
+    if (!invBadge) invBadge = '<span style="color:#556;font-size:10px;">FLAT</span>';
+
+    // Ladder display
+    let yesLadder = '', noLadder = '';
+    const yesOrders = bot.yes_orders || {};
+    const noOrders = bot.no_orders || {};
+    const sortedYes = Object.entries(yesOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
+    const sortedNo = Object.entries(noOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
+
+    for (const [price, level] of sortedYes) {
+        const filled = level.fill_qty || 0;
+        const qty = level.qty || bot.qty_per_level || 10;
+        const active = level.oid ? true : false;
+        const bg = filled >= qty ? '#00ff8833' : active ? '#00ff8811' : '#0a0e1a';
+        const col = filled >= qty ? '#00ff88' : active ? '#00ff88' : '#556';
+        yesLadder += `<div style="background:${bg};padding:2px 6px;border-radius:3px;display:flex;justify-content:space-between;"><span style="color:${col};font-weight:600;">${price}c</span><span style="color:#556;font-size:9px;">${filled}/${qty}</span></div>`;
+    }
+    for (const [price, level] of sortedNo) {
+        const filled = level.fill_qty || 0;
+        const qty = level.qty || bot.qty_per_level || 10;
+        const active = level.oid ? true : false;
+        const bg = filled >= qty ? '#ff444433' : active ? '#ff444411' : '#0a0e1a';
+        const col = filled >= qty ? '#ff4444' : active ? '#ff4444' : '#556';
+        noLadder += `<div style="background:${bg};padding:2px 6px;border-radius:3px;display:flex;justify-content:space-between;"><span style="color:${col};font-weight:600;">${price}c</span><span style="color:#556;font-size:9px;">${filled}/${qty}</span></div>`;
     }
 
-    // Repeat info
-    const repeatCount = bot.repeat_count || 0;
-    const repeatsDone = bot.repeats_done || 0;
-    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.net_pnl_cents || bot.cumulative_pnl || 0);
-    let cycleInfo = '';
-    if (repeatCount > 0) {
-        cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>`;
-    }
+    const yesPaused = bot._yes_side_paused ? ' <span style="color:#ffaa00;font-size:9px;">(PAUSED)</span>' : '';
+    const noPaused = bot._no_side_paused ? ' <span style="color:#ffaa00;font-size:9px;">(PAUSED)</span>' : '';
 
-    // Live bid/ask for market context
-    const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : null;
-    const nBid = bot.live_no_bid != null ? bot.live_no_bid : null;
+    // Game score
+    const gs = gameScores?.[gameKey || bot.ticker?.split('-')[0]];
+    const scoreBadge = gs ? buildScoreBadgeHtml(gs, 'compact') : '';
 
-    // ── Per-rung rendering — each rung is its own independent scalp ──
-    let rungTotalPnl = 0;
-    let activeCount = 0, doneCount = 0, postedCount = 0;
-
-    const rungsHTML = rungs.map((r, i) => {
-        const rQty = r.quantity || qtyPer;
-        const rs = r.status || 'posted';
-        const width = r.width;
-
-        // ── COMPLETED: show actual fill prices with fill bars ──
-        if (rs === 'completed' || r._profit_recorded) {
-            doneCount++;
-            // Use actual prices: anchor side = original, hedge side = hedge_price (may differ after snap)
-            const ancSide = r.anchor_side;
-            const hedgeP = r.hedge_price || 0;
-            let yP, nP;
-            if (ancSide === 'yes') {
-                yP = r.yes_price || 0;  // anchor = original
-                nP = hedgeP || r.no_price || 0;  // hedge = actual fill price
-            } else if (ancSide === 'no') {
-                yP = hedgeP || r.yes_price || 0;
-                nP = r.no_price || 0;
-            } else {
-                yP = r.yes_price || 0;
-                nP = r.no_price || 0;
-            }
-            const combined = yP + nP;
-            const wasSnapped = r.time_stage === 'snapped';
-            // Use backend net P&L (includes fees) if available, else raw spread * qty
-            const prof = r._net_pnl != null ? r._net_pnl : (combined > 0 ? (100 - combined) * rQty : 0);
-            rungTotalPnl += prof;
-            const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
-            return `<div style="display:grid;grid-template-columns:40px 1fr 1fr 55px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.5;">
-                <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#00ff88;font-size:9px;width:28px;">Y${yP}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:100%;height:100%;background:#00ff88;border-radius:2px;"></div>
-                    </div>
-                </div>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#ff4444;font-size:9px;width:28px;">N${nP}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:100%;height:100%;background:#ff4444;border-radius:2px;"></div>
-                    </div>
-                </div>
-                <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${wasSnapped ? '⚡' : '🎯'}${prof > 0 ? '+' : ''}${prof}¢</span>
-            </div>`;
-        }
-
-        // ── DEPTH PULLED: show as dimmed with pull reason ──
-        if (r.status === 'depth_pulled') {
-            return `<div style="display:grid;grid-template-columns:40px 1fr 80px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.4;">
-                <span style="color:#ff6600;font-weight:700;">${width}¢</span>
-                <span style="color:#ff6600;font-size:9px;">📊 Pulled${r._pull_reason ? ' — ' + r._pull_reason : ''}</span>
-                <span style="color:#555;font-size:8px;text-align:right;">waiting</span>
-            </div>`;
-        }
-
-        // ── ALL OTHER STATES: show both sides with fill progress ──
-        postedCount++;
-        const yFill = r.yes_fill_qty || 0;
-        const nFill = r.no_fill_qty || 0;
-        const yFull = yFill >= rQty;
-        const nFull = nFill >= rQty;
-        const isAnchored = !!r.anchor_side;
-        const rStage = r.time_stage || 'posted';
-        const hedgePrice = r.hedge_price || 0;
-        const anchorSide = r.anchor_side;
-        const hedgeSide = anchorSide === 'yes' ? 'no' : 'yes';
-        const hedgeBid = hedgeSide === 'yes' ? yBid : nBid;
-
-        // ── ANCHORED RUNG: one side filled, hedge order live ──
-        if (isAnchored) {
-            activeCount++;
-            const anchorPrice = r[anchorSide + '_price'] || 0;
-            const elapsed = r.anchor_fill_at ? Math.round((Date.now()/1000) - r.anchor_fill_at) : 0;
-            const midDist = r._midpoint_dist || 0;
-            const snapTimer = r._snap_timer;  // null = no timer (early game), number = active timer
-            const hasTimer = snapTimer != null && snapTimer < 999999;
-            const driftStarted = r._drift_started_at;
-            const driftElapsed = driftStarted ? Math.round((Date.now()/1000) - driftStarted) : 0;
-            const driftCountdown = (driftStarted && hasTimer) ? Math.max(0, snapTimer - driftElapsed) : 0;
-            const combined = anchorPrice + hedgePrice;
-            const profEst = combined > 0 ? (100 - combined) : 0;
-            const profColor = profEst >= 3 ? '#00ff88' : profEst >= 1 ? '#ffaa00' : '#ff4444';
-
-            // Stage display: breathing / drifting with timer / snapped / burst / stop-loss / walking
-            let stageHTML;
-            const snapReason = r._snap_reason || '';
-            const isBurst = snapReason.startsWith('burst_');
-            const isStopLossPP = snapReason.startsWith('stop_loss_pp');
-            const walkPrice = r._walk_price;
-            if (rStage === 'pending_profit') {
-                if (isStopLossPP) {
-                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;animation:botPulse 0.5s infinite;">🛑 STOP-LOSS</span>`;
-                } else if (isBurst) {
-                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;animation:botPulse 0.5s infinite;">⚡ BURST</span>`;
-                } else if (midDist <= 5) {
-                    stageHTML = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟢 ${midDist}¢</span>`;
-                } else if (hasTimer) {
-                    stageHTML = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🔴 ${midDist}¢ ${driftCountdown}s</span>`;
-                } else {
-                    stageHTML = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🟢 PATIENT ${midDist}¢</span>`;
-                }
-            } else if (rStage === 'snapped') {
-                if (isBurst) {
-                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ BURST</span>`;
-                } else if (isStopLossPP) {
-                    stageHTML = `<span style="background:#ff000033;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">🛑 STOP-LOSS</span>`;
-                } else if (walkPrice) {
-                    stageHTML = `<span style="background:#aa66ff22;color:#aa66ff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">📈 WALK @${walkPrice}¢</span>`;
-                } else {
-                    stageHTML = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">⚡ AT BID</span>`;
-                }
-            } else {
-                stageHTML = `<span style="color:#555;font-size:9px;">${rStage}</span>`;
-            }
-
-            // Hedge depth indicator
-            const hedgeDepth = r._hedge_depth || 0;
-            const hedgeVanish = r._hedge_vanishing || false;
-            const depthColor = hedgeVanish ? '#ff0000' : hedgeDepth < 300 ? '#ff4444' : hedgeDepth < 500 ? '#ffaa00' : '#00ff88';
-            const depthIcon = hedgeVanish ? '⚠' : hedgeDepth < 300 ? '🔴' : hedgeDepth < 500 ? '🟡' : '🟢';
-            const depthStr = hedgeDepth > 0 ? `<span style="color:${depthColor};font-size:7px;margin-left:4px;" title="Hedge side depth">${depthIcon}${hedgeDepth}</span>` : '';
-
-            // Maker exit display
-            const isMakerExit = r.status === 'maker_exit';
-            if (isMakerExit) {
-                const sellPrice = r._maker_sell_price || 0;
-                stageHTML = `<span style="background:#ff880033;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">📤 MAKER SELL @${sellPrice}¢</span>`;
-            }
-
-            const snapBtn = (rStage === 'pending_profit') ? `<button onclick="event.stopPropagation();snapRung('${botId}',${i})" style="background:#ffaa0011;color:#ffaa00;border:1px solid #ffaa0033;border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-weight:600;">Snap Now</button>` : '';
-
-            // Fill bar layout: YES left, NO right — anchor shows full bar, hedge shows progress
-            const yesIsAnchor = anchorSide === 'yes';
-            const yesPrice = yesIsAnchor ? anchorPrice : hedgePrice;
-            const noPrice = yesIsAnchor ? hedgePrice : anchorPrice;
-            const hfq = r.hedge_fill_qty || 0;
-            const yesFillPct = yesIsAnchor ? 100 : (rQty > 0 ? Math.round((hfq/rQty)*100) : 0);
-            const noFillPct = !yesIsAnchor ? 100 : (rQty > 0 ? Math.round((hfq/rQty)*100) : 0);
-            const yesFilled = yesIsAnchor;
-            const noFilled = !yesIsAnchor;
-            const hedgeDistLabel = hedgeBid != null && hedgePrice ? (hedgePrice >= hedgeBid ? '<span style="color:#00ff88;font-size:7px;"> AT BID</span>' : `<span style="color:#ff8800;font-size:7px;"> ${hedgeBid - hedgePrice}↓</span>`) : '';
-
-            return `<div style="display:grid;grid-template-columns:40px 1fr 1fr 50px;gap:4px;align-items:center;font-size:10px;padding:5px 2px;border-bottom:1px solid #1e274022;">
-                <div><span style="color:#ffaa00;font-weight:700;">${width}¢</span></div>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#00ff88;font-size:9px;width:28px;">Y${yesPrice}</span>${!yesFilled ? hedgeDistLabel : ''}
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${yesFillPct}%;height:100%;background:${yesFilled ? '#00ff88' : '#335'};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${yesFilled ? '#00ff88' : '#555'};font-size:8px;">${yesFilled ? '✓' : hfq + '/' + rQty}</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#ff4444;font-size:9px;width:28px;">N${noPrice}</span>${!noFilled ? hedgeDistLabel : ''}
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${noFillPct}%;height:100%;background:${noFilled ? '#ff4444' : '#335'};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${noFilled ? '#ff4444' : '#555'};font-size:8px;">${noFilled ? '✓' : hfq + '/' + rQty}</span>
-                </div>
-                <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
-                    ${(() => {
-                        // Show live profit gap using hedge BID (what snap would fill at)
-                        const liveCombined = anchorPrice + (hedgeBid || hedgePrice);
-                        const liveProf = liveCombined > 0 ? (100 - liveCombined) : 0;
-                        const liveCol = liveProf >= 3 ? '#00ff88' : liveProf >= 0 ? '#ffaa00' : '#ff4444';
-                        const timerStr = (hasTimer && driftStarted) ? ` ${driftCountdown}s` : '';
-                        return `<span style="color:${liveCol};font-size:8px;font-weight:700;">${liveProf >= 0 ? '🟢' : '🔴'}${liveProf}¢${timerStr}</span>`;
-                    })()}
-                    ${snapBtn ? snapBtn : `<span style="color:${profColor};font-size:9px;font-weight:700;">${profEst > 0 ? '+' : ''}${profEst}¢</span>`}
-                    ${depthStr}
-                </div>
-            </div>`;
-        }
-
-        // ── POSTED (not yet anchored): show both sides with bid distance ──
-        const yDist = (yBid != null && r.yes_price) ? (yBid - r.yes_price) : null;
-        const nDist = (nBid != null && r.no_price) ? (nBid - r.no_price) : null;
-        const yDistLabel = yFull ? '' : (yDist != null ? `<span style="color:${yDist <= 1 ? '#ffaa00' : yDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${yDist > 0 ? '+' : ''}${yDist}</span>` : '');
-        const nDistLabel = nFull ? '' : (nDist != null ? `<span style="color:${nDist <= 1 ? '#ffaa00' : nDist <= 3 ? '#8892a6' : '#555'};font-size:7px;"> ${nDist > 0 ? '+' : ''}${nDist}</span>` : '');
-        return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 30px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;">
-            <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
-            <div style="display:flex;align-items:center;gap:4px;">
-                <span style="color:#00ff88;font-size:9px;width:26px;">Y${r.yes_price}</span>${yDistLabel}
-                <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFull ? '#00ff88' : '#335'};border-radius:2px;"></div>
-                </div>
-                <span style="color:${yFull ? '#00ff88' : '#555'};font-size:8px;">${yFull ? '✓' : yFill + '/' + rQty}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:4px;">
-                <span style="color:#ff4444;font-size:9px;width:26px;">N${r.no_price}</span>${nDistLabel}
-                <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFull ? '#ff4444' : '#335'};border-radius:2px;"></div>
-                </div>
-                <span style="color:${nFull ? '#ff4444' : '#555'};font-size:8px;">${nFull ? '✓' : nFill + '/' + rQty}</span>
-            </div>
-            <span style="color:#333;font-size:9px;text-align:right;">—</span>
-        </div>`;
-    }).join('');
-
-    // ── Status summary bar ──
-    let statusInfo = '';
-    if (status === 'ladder_arb_active') {
-        const _mktLine = (yBid != null && nBid != null) ? `<span style="color:#8892a6;font-size:9px;">mkt: Y${yBid}/N${nBid}</span>` : '';
-        statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#0a0e1a;border-radius:5px;margin-top:6px;">
-            ${activeCount > 0 ? `<span style="color:#ffaa00;font-weight:700;">🔥 ${activeCount} active</span>` : ''}
-            ${doneCount > 0 ? `<span style="color:#00ff88;">✅ ${doneCount} done</span>` : ''}
-            ${postedCount > 0 ? `<span style="color:#555;">⏳ ${postedCount} waiting</span>` : ''}
-            ${_mktLine}
-            ${rungTotalPnl !== 0 ? `<span style="color:${rungTotalPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;margin-left:auto;">Total: ${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</span>` : ''}
-        </div>`;
-    } else if (status === 'ladder_arb_posted') {
-        const _yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
-        const _yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
-        const _nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-        const _nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
-        statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#00aaff08;border:1px solid #00aaff22;border-radius:5px;margin-top:6px;">
-            <span style="color:#00aaff;">⚡ ${rungs.length} rungs live</span>
-            <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${_yBid}/${_yAsk}¢</strong> · N <strong style="color:#ff4444;">${_nBid}/${_nAsk}¢</strong></span>
-        </div>`;
-    } else if (status === 'depth_pulled') {
-        const pullCount = bot._pull_count || 0;
-        const pullReason = bot._last_pull_reason || 'depth';
-        const maxPulls = 8;
-        statusInfo = `<div style="display:flex;align-items:center;gap:10px;font-size:10px;padding:6px 8px;background:#ff660011;border:1px solid #ff660033;border-radius:5px;margin-top:6px;">
-            <span style="color:#ff6600;font-weight:700;">📊 DEPTH PULLED</span>
-            <span style="color:#8892a6;">${pullReason}</span>
-            <span style="color:#555;">cycle ${pullCount}/${maxPulls}</span>
-            <span style="color:#ff6600;font-size:8px;margin-left:auto;">Waiting for book recovery...</span>
-        </div>`;
-    } else if (status === 'waiting_repeat') {
-        statusInfo = `<div style="padding:6px 8px;background:#aa66ff08;border:1px solid #aa66ff22;border-radius:5px;margin-top:6px;font-size:10px;color:#aa66ff;">
-            🔄 Cycle ${repeatsDone + 1}/${repeatCount + 1} done${rungTotalPnl !== 0 ? ` · <strong>${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</strong>` : ''} — reposting ~10s
-        </div>`;
-    } else if (status === 'completed' || status === 'stopped') {
-        statusInfo = rungTotalPnl !== 0 ? `<div style="padding:6px 8px;background:#0a0e1a;border-radius:5px;margin-top:6px;font-size:10px;">
-            <span style="color:${rungTotalPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total P&L: ${rungTotalPnl >= 0 ? '+' : ''}${rungTotalPnl}¢</span>
-        </div>` : '';
-    } else if (status === 'awaiting_settlement') {
-        statusInfo = `<div style="padding:6px 8px;background:#00e5ff08;border:1px solid #00e5ff22;border-radius:5px;margin-top:6px;font-size:10px;color:#00e5ff;">
-            ⏳ Awaiting settlement — position held
-        </div>`;
-    }
-
-    // ── Run history (past cycles) ──
-    const _runHist = bot._run_history || [];
-    let runHistoryHtml = '';
-    if (_runHist.length > 0) {
-        runHistoryHtml = `<div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:6px 10px;margin-top:6px;">
-            ${_runHist.map((r, i) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #1a254033;' : ''}font-size:10px;">
-                <span style="color:#555;font-weight:600;">#${r.run || i + 1}</span>
-                <span style="color:#8892a6;">${r.rungs_completed || '?'}/${r.total_rungs || '?'} rungs</span>
-                <span style="color:#8892a6;">x${r.qty || 1}</span>
-                <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
-            </div>`).join('')}
-        </div>`;
-    }
+    // Smart mode display
+    const smartInfo = smartMode > 0 ? `<span style="color:#00e5ff;font-size:9px;">Smart:${consLosses}/${smartMode}L</span>` : '';
 
     const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
-    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
+    item.className = 'bot-item';
+    item.style.cssText = 'background:#0d1120;border:1px solid ' + borderCol + '44;border-radius:8px;padding:10px 12px;margin-bottom:6px;';
     item.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #00aaff66);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>
-                <span style="color:#00aaff;font-weight:800;font-size:10px;letter-spacing:.08em;">APEX</span>
-                <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
-                <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
-                <span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">🪜 ${rungs.length}</span>
-                ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
-                ${liveScoreHtml}
-                ${cycleInfo}
-                ${isSmart ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart ${smartWins}W/${smartLosses}L${bot.consecutive_losses ? ` · ${bot.consecutive_losses}L streak` : ''}</span>` : ''}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                ${botIconImg('apex', 16)}
+                <span style="color:#fff;font-weight:700;font-size:12px;">Apex MM</span>
+                <span style="background:${borderCol}22;color:${borderCol};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
+                ${scoreBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
-                ${isSmart && status !== 'completed' && status !== 'stopped' ? `<button onclick="event.stopPropagation();smartStopApex('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">⏹ Stop</button>` : ''}
-                ${isSmart && (status === 'completed' || status === 'stopped') ? `<button onclick="event.stopPropagation();restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">🔄 Restart</button>` : ''}
-                ${!isSmart && repeatCount > 0 && status !== 'completed' ? `<button onclick="event.stopPropagation();addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
-                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+                <span style="color:${pnlColor};font-weight:700;font-size:12px;">${pnlSign}${realizedPnl}c</span>
+                ${smartInfo}
+                <span style="color:#556;font-size:10px;">${ageMin}m</span>
             </div>
         </div>
-        ${(yBid != null || nBid != null) ? `<div style="display:flex;justify-content:space-around;padding:4px 8px;background:#060a14;border:1px solid #1e274033;border-radius:6px 6px 0 0;font-size:10px;">
-            <span style="color:#8892a6;">MARKET</span>
-            <span>YES <strong style="color:#00ff88;">${yBid ?? '?'}¢</strong><span style="color:#555;"> / ${bot.live_yes_ask ?? '?'}¢</span></span>
-            <span>NO <strong style="color:#ff4444;">${nBid ?? '?'}¢</strong><span style="color:#555;"> / ${bot.live_no_ask ?? '?'}¢</span></span>
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="color:#8892a6;font-size:10px;">mid=${midpoint}c</span>
+            <span style="color:#8892a6;font-size:10px;">gap=${bot.start_gap || 0}</span>
+            <span style="color:#8892a6;font-size:10px;">lvl=${bot.levels || 0}</span>
+            <span style="color:#8892a6;font-size:10px;">qty=${bot.qty_per_level || 0}</span>
+            ${pullCount > 0 ? `<span style="color:#ffaa00;font-size:10px;">pulls:${pullCount}</span>` : ''}
+            <span style="color:#8892a6;font-size:10px;">RT:${roundTrips}</span>
+        </div>
+        <div style="margin-bottom:6px;">${invBadge}</div>
+        ${unrealizedPnl !== 0 ? `<div style="color:${unrealColor};font-size:10px;margin-bottom:4px;">Unrealized: ${unrealSign}${unrealizedPnl}c</div>` : ''}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
+            <div>
+                <div style="color:#00ff88;font-weight:700;font-size:9px;margin-bottom:2px;">YES BIDS${yesPaused}</div>
+                <div style="display:flex;flex-direction:column;gap:1px;font-size:11px;">${yesLadder || '<span style="color:#556;">--</span>'}</div>
+            </div>
+            <div>
+                <div style="color:#ff4444;font-weight:700;font-size:9px;margin-bottom:2px;">NO BIDS${noPaused}</div>
+                <div style="display:flex;flex-direction:column;gap:1px;font-size:11px;">${noLadder || '<span style="color:#556;">--</span>'}</div>
+            </div>
+        </div>
+        ${!isCompleted ? `<div style="display:flex;gap:6px;">
+            <button onclick="cancelBot('${botId}')" style="padding:4px 10px;background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Cancel</button>
         </div>` : ''}
-        <div style="background:#060a14;border:1px solid #1e274033;${(yBid != null || nBid != null) ? 'border-top:none;border-radius:0 0 8px 8px;' : 'border-radius:8px;'}padding:8px 10px;">
-            ${rungsHTML}
-        </div>
-        ${statusInfo}
-        ${runHistoryHtml}
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ffaa00;">Widths: ${rungs.map(r => r.width + '¢').join(', ')}</span>
-            <span style="color:#8892a6;">×${qtyPer}</span>
-            <span style="color:#555;">${phase === 'live' ? '🔴 LIVE' : '⏳ PRE'}</span>
-            ${bot.repost_count ? `<span style="color:#ff8800;font-weight:700;background:#ff880015;padding:1px 6px;border-radius:4px;">↻ #${bot.repost_count}</span>` : ''}
-        </div>
-        <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
-            <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>
-            <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
-        </div>
-    `;
-    container.appendChild(item);
-}
-
-
-function _renderMiddleBotCard(bot, botId, container, gameScores) {
-    const combinedAvg = (status === 'ladder_arb_yes_filled' || status === 'ladder_arb_no_filled') && hedgePriceForPnl > 0
-        ? (status === 'ladder_arb_yes_filled' ? avgYes : avgNo) + hedgePriceForPnl  // anchor avg + actual hedge
-        : avgYes + avgNo;
-    const estFeePerContract = combinedAvg > 0 ? kalshiFeeCents(avgYes || Math.round(combinedAvg / 2), avgNo || Math.round(combinedAvg / 2), 1) : 0;
-    const effectiveProfit = combinedAvg > 0 ? (100 - combinedAvg - estFeePerContract) : 0;
-    const pnlColor = effectiveProfit > 2 ? '#00ff88' : effectiveProfit > 0 ? '#00aaff' : '#ff4444';
-
-    // Rungs table — show consolidated hedge when one side is filled
-    const isConsolidated = bot._consolidated;
-    const filledSideForRungs = status === 'ladder_arb_yes_filled' ? 'yes' : status === 'ladder_arb_no_filled' ? 'no' : null;
-    const hedgePrice = bot.hedge_price || 0;
-    const hedgeQty = bot.hedge_qty || 0;
-    const hedgeSide = filledSideForRungs === 'yes' ? 'no' : 'yes';
-
-    // Hedge history (completed hedge generations)
-    const hedgeHistory = bot.hedge_history || [];
-    const completedRungs = bot.completed_rungs_count || 0;
-    const cumulativePnl = (bot.lifetime_pnl || 0) + (bot.net_pnl_cents || bot.cumulative_pnl || 0);
-
-    // Shared fill-state variables
-    const filledSideKey = status === 'ladder_arb_yes_filled' ? 'yes'
-        : status === 'ladder_arb_no_filled' ? 'no'
-        : status === 'apex_selling_back' ? (bot.first_fill_side || 'yes')
-        : status === 'awaiting_settlement' ? (bot.first_fill_side || 'yes')
-        : null;
-    const isFilled = !!filledSideKey;
-    const filledSideLabel = filledSideKey === 'yes' ? 'YES' : filledSideKey === 'no' ? 'NO' : '';
-    const unfilledSideLabel = filledSideLabel === 'YES' ? 'NO' : 'YES';
-    const filledColor = filledSideKey === 'yes' ? '#00ff88' : '#ff4444';
-    const hedgeColorSide = hedgeSide === 'yes' ? '#00ff88' : '#ff4444';
-    const avgFilled = isFilled ? (filledSideKey === 'yes' ? avgYes : avgNo) : 0;
-    const filledQty = isFilled ? (filledSideKey === 'yes' ? totalYesFill : totalNoFill) : 0;
-    const unfilledBid = isFilled ? (unfilledSideLabel === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0)) : 0;
-    const unfilledAsk = isFilled ? (unfilledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
-    const filledBid = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_bid || 0) : (bot.live_no_bid || 0)) : 0;
-    const filledAsk = isFilled ? (filledSideLabel === 'YES' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0)) : 0;
-    const currentHedgePrice = hedgePrice || 0;
-    const combined = avgFilled + currentHedgePrice;
-    const _botCeiling = bot.hard_ceiling || 98;
-    const firstFillAt = bot.first_fill_at || 0;
-    const lastWalkAt = bot.last_walk_at || firstFillAt || 0;
-    const atCeiling = combined >= _botCeiling;
-    const gameUrgency = bot._game_urgency || 'normal';
-    const walkInterval = bot._walk_interval != null ? bot._walk_interval : (atCeiling ? 3 : 20);
-    const nextWalkIn = lastWalkAt > 0 ? Math.max(0, Math.ceil(walkInterval - (nowSec - lastWalkAt))) : walkInterval;
-    const urgencyBadge = gameUrgency === 'critical' ? '<span style="color:#ff4444;font-weight:700;font-size:9px;background:#ff444422;padding:1px 4px;border-radius:3px;">⚡ CRITICAL</span>'
-        : gameUrgency === 'late' ? '<span style="color:#ff8800;font-weight:700;font-size:9px;background:#ff880022;padding:1px 4px;border-radius:3px;">🔥 LATE</span>'
-        : gameUrgency === 'halftime' ? '<span style="color:#818cf8;font-weight:700;font-size:9px;background:#818cf822;padding:1px 4px;border-radius:3px;">⏸ HALF</span>'
-        : '<span style="color:#8892a6;font-weight:600;font-size:9px;background:#8892a612;padding:1px 4px;border-radius:3px;">NORMAL</span>';
-    const fillAgeS = firstFillAt > 0 ? Math.floor(nowSec - firstFillAt) : 0;
-    const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
-    // Ceiling distance
-    const ceilingDist = isFilled ? (98 - combined) : 0;
-
-    let rungsHTML;
-    if (status === 'ladder_arb_active') {
-        // ── APEX 2.0: per-rung rows with time-stage badges and countdowns ──
-        rungsHTML = rungs.map((r, i) => {
-            const rQty = r.quantity || qtyPer;
-            const rs = r.status || 'posted';
-            const width = r.width;
-            if (rs === 'posted') {
-                const yFill = r.yes_fill_qty || 0;
-                const nFill = r.no_fill_qty || 0;
-                return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;opacity:0.4;">
-                    <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
-                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                            <div style="width:${rQty > 0 ? Math.round((yFill/rQty)*100) : 0}%;height:100%;background:${yFill >= rQty ? '#00ff88' : '#333'};border-radius:2px;"></div>
-                        </div>
-                        <span style="color:#555;font-size:9px;">${yFill}/${rQty}</span>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <span style="color:#ff4444;font-size:9px;width:24px;">N${r.no_price}</span>
-                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                            <div style="width:${rQty > 0 ? Math.round((nFill/rQty)*100) : 0}%;height:100%;background:${nFill >= rQty ? '#ff4444' : '#333'};border-radius:2px;"></div>
-                        </div>
-                        <span style="color:#555;font-size:9px;">${nFill}/${rQty}</span>
-                    </div>
-                </div>`;
-            }
-            if (rs === 'completed' || r._profit_recorded) {
-                const aS = r.anchor_side || 'yes';
-                const hP = r.hedge_price || 0;
-                let yP, nP;
-                if (aS === 'yes') {
-                    yP = r.yes_price || 0;
-                    nP = hP || r.no_price || 0;
-                } else if (aS === 'no') {
-                    yP = hP || r.yes_price || 0;
-                    nP = r.no_price || 0;
-                } else {
-                    yP = r.yes_price || 0;
-                    nP = r.no_price || 0;
-                }
-                const comb = yP + nP;
-                const wasSnapped = r.time_stage === 'snapped';
-                const prof = r._net_pnl != null ? r._net_pnl : (comb > 0 ? (100 - comb) * (r.quantity || qtyPer) : 0);
-                const pCol = prof > 0 ? '#00ff88' : prof < 0 ? '#ff4444' : '#555';
-                return `<div style="display:grid;grid-template-columns:40px 1fr 1fr 55px;gap:4px;align-items:center;font-size:10px;padding:4px 0;border-bottom:1px solid #1e274015;opacity:0.5;">
-                    <span style="color:#ffaa00;font-weight:700;">${width}¢</span>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <span style="color:#00ff88;font-size:9px;width:28px;">Y${yP}</span>
-                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                            <div style="width:100%;height:100%;background:#00ff88;border-radius:2px;"></div>
-                        </div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <span style="color:#ff4444;font-size:9px;width:28px;">N${nP}</span>
-                        <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                            <div style="width:100%;height:100%;background:#ff4444;border-radius:2px;"></div>
-                        </div>
-                    </div>
-                    <span style="color:${pCol};font-weight:700;font-size:10px;text-align:right;">${wasSnapped ? '⚡' : '🎯'}${prof > 0 ? '+' : ''}${prof}¢</span>
-                </div>`;
-            }
-            // Active rung — time-stage with countdown
-            const aS = r.anchor_side || 'yes';
-            const aP = r[`${aS}_price`] || 0;
-            const hP = r.hedge_price || 0;
-            const hFill = r.hedge_fill_qty || 0;
-            const elapsed = Math.floor(nowSec - (r.anchor_fill_at || nowSec));
-            const ts = r.time_stage || 'profit';
-            const aCol = aS === 'yes' ? '#00ff88' : '#ff4444';
-            const sm = { profit: { l:'PROFIT', c:'#00ff88', lim:15 }, scratch: { l:'SCRATCH', c:'#ffaa00', lim:30 }, panic: { l:'PANIC', c:'#ff4444', lim:60 } };
-            const st = sm[ts] || sm.profit;
-            const cdStr = ts === 'profit' ? `${Math.max(0,15-elapsed)}s` : ts === 'scratch' ? `${Math.max(0,30-elapsed)}s` : `${elapsed}s`;
-            let hStr, hCol;
-            if (hFill >= rQty && hP > 0) { hStr = `${hP}¢ FILLED`; hCol = '#00ff88'; }
-            else if (hP > 0) { hStr = `${hP}¢ (${hFill}/${rQty})`; hCol = '#ffaa00'; }
-            else { hStr = rs === 'anchor_filled' ? 'posting...' : 'pending'; hCol = '#555'; }
-            const tPct = Math.min(100, (elapsed / st.lim) * 100);
-            return `<div style="padding:4px 0;border-bottom:1px solid #1e274022;">
-                <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
-                    <span style="color:#ffaa00;font-weight:700;width:28px;">${width}¢</span>
-                    <span style="color:${aCol};font-weight:700;font-size:9px;">${aS.toUpperCase()} ${aP}¢</span>
-                    <span style="background:${st.c}22;color:${st.c};font-size:8px;font-weight:800;padding:1px 6px;border-radius:3px;">${st.l}</span>
-                    <span style="color:${st.c};font-family:monospace;font-weight:700;font-size:12px;">${cdStr}</span>
-                    <span style="color:${hCol};font-size:9px;margin-left:auto;">hedge ${hStr}</span>
-                </div>
-                <div style="height:3px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;">
-                    <div style="width:${tPct}%;height:100%;background:${st.c}88;border-radius:2px;transition:width 1s;"></div>
-                </div>
-            </div>`;
-        }).join('');
-    } else if (isFilled && (isConsolidated || completedRungs > 0)) {
-        // ── CONSOLIDATED VIEW: anchor summary + per-rung breakdown + hedge detail ──
-        const hedgeLabel = hedgeSide === 'yes' ? 'YES' : 'NO';
-
-        // Split rungs into filled (consolidated) and unfilled (show individually)
-        const filledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) > 0);
-        const unfilledRungs = rungs.filter(r => (r[`${filledSideKey}_fill_qty`] || 0) === 0 && !r.completed && !r.cancelled);
-
-        // Cleanup generation: split anchors into completed (hedged) vs cleanup (unhedged)
-        const hasCleanup = hedgeHistory.length > 0 && hedgeQty > 0 && currentHedgePrice > 0;
-        const historyHedgedQty = hedgeHistory.reduce((s, h) => s + (h.fill_qty || h.qty || 0), 0);
-        const cleanupQty = hasCleanup ? Math.max(0, filledQty - historyHedgedQty) : 0;
-        const completedQty = hasCleanup ? historyHedgedQty : 0;
-
-        // Anchor summary block — split into COMPLETED + CLEANUP if cleanup generation active
-        let anchorSummary;
-        if (hasCleanup && completedQty > 0) {
-            anchorSummary = `
-                <div style="color:#556;font-size:8px;font-weight:700;letter-spacing:.08em;margin-bottom:4px;">── COMPLETED ──</div>
-                <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}22;border-radius:6px;margin-bottom:4px;opacity:0.35;">
-                    <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
-                    <span style="color:${filledColor};font-size:11px;font-weight:700;">${completedQty} contracts · HEDGED</span>
-                </div>
-                ${cleanupQty > 0 ? `
-                <div style="color:#ffaa00;font-size:8px;font-weight:700;letter-spacing:.08em;margin:8px 0 4px;">── CLEANUP ──</div>
-                <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
-                    <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
-                    <span style="color:${filledColor};font-size:11px;font-weight:700;">${cleanupQty} contracts @ avg ${avgFilled}¢</span>
-                    <span style="color:#ffaa00;font-size:8px;">cancel-race fills</span>
-                </div>` : ''}`;
-        } else {
-            anchorSummary = `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#060a14;border:1px solid ${filledColor}33;border-radius:6px;margin-bottom:6px;">
-                <span style="color:${filledColor};font-weight:800;font-size:12px;">${filledSideLabel} ANCHOR</span>
-                <span style="color:${filledColor};font-size:11px;font-weight:700;">${filledQty} contracts @ avg ${avgFilled}¢</span>
-                <span style="color:#555;font-size:9px;">bid ${filledBid}¢ · ask ${filledAsk}¢</span>
-            </div>`;
-        }
-
-        // Unfilled anchors — show individually so user can see where limit orders sit
-        const unfilledRows = unfilledRungs.map(r => {
-            const anchorPrice = r[`${filledSideKey}_price`] || 0;
-            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:1px 0;opacity:0.4;">
-                <span style="color:#ffaa00;font-weight:700;width:22px;">${r.width}¢</span>
-                <span style="color:${filledColor};width:30px;">${filledSideLabel[0]}${anchorPrice}</span>
-                <div style="flex:1;height:3px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                    <div style="width:0%;height:100%;background:#333;border-radius:2px;"></div>
-                </div>
-                <span style="color:#555;width:20px;text-align:right;">0/${r.quantity || qtyPer}</span>
-                <span style="color:#335;font-size:8px;">LIVE</span>
-            </div>`;
-        }).join('');
-
-        const rungRows = (unfilledRungs.length > 0)
-            ? `<div style="padding:2px 8px;margin-top:4px;border-top:1px solid #1e274022;">
-                <div style="color:#556;font-size:8px;font-weight:600;margin-bottom:2px;">PENDING ANCHORS (${unfilledRungs.length})</div>
-                ${unfilledRows}
-               </div>`
-            : '';
-
-        // Hedge detail block
-        let hedgeBlock = '';
-        const hedgeFill = bot[`filled_${hedgeSide}_qty`] || 0;
-        const historyFills = hedgeHistory.reduce((s, h) => s + (h.fill_qty || 0), 0);
-        const rawActiveHedgeFill = Math.max(0, hedgeFill - historyFills);
-        const activeHedgeFill = Math.min(rawActiveHedgeFill, hedgeQty); // cap at hedge qty for display
-        const overflowFills = Math.max(0, rawActiveHedgeFill - hedgeQty); // extra fills needing new hedge
-
-        // Completed hedge history
-        const historyHTML = hedgeHistory.map(h => {
-            const hLabel = (h.side === 'yes' ? 'YES' : 'NO');
-            const hColor = h.side === 'yes' ? '#00ff88' : '#ff4444';
-            return `<div style="display:flex;align-items:center;gap:6px;font-size:9px;padding:2px 0;opacity:0.35;">
-                <span style="color:${hColor};font-weight:700;">HEDGE</span>
-                <span style="color:${hColor};">${hLabel} @${h.price}¢ × ${h.qty}</span>
-                <span style="color:#00ff8888;font-size:8px;">DONE</span>
-            </div>`;
-        }).join('');
-
-        // Active hedge
-        if (currentHedgePrice > 0 && hedgeQty > 0) {
-            const hedgeFilled = activeHedgeFill >= hedgeQty;
-            const hedgeCol = hedgeFilled ? hedgeColorSide : activeHedgeFill > 0 ? '#ffaa00' : '#00aaff';
-            const hedgePct = hedgeQty > 0 ? Math.round((activeHedgeFill / hedgeQty) * 100) : 0;
-            const gapToBid = unfilledBid - currentHedgePrice;
-            const gapToAsk = unfilledAsk - currentHedgePrice;
-            const gapCol = gapToBid === 0 ? '#00ff88' : gapToBid <= 2 ? '#00ff88' : gapToBid <= 5 ? '#ffaa00' : gapToBid <= 10 ? '#ff8800' : '#ff4444';
-            const gapStr = gapToBid > 0 ? `+${gapToBid}¢ to bid` : gapToBid === 0 ? '= bid' : '';
-            // System state
-            const maxHedge = bot._max_hedge || 0;
-            const snapReady = bot._snap_ready || false;
-            const spread = unfilledAsk > 0 ? unfilledAsk - unfilledBid : 0;
-            // State label — 3 zones: snap (≤96), walk (97), ceiling (≥98)
-            let stateLabel, stateColor;
-            if (hedgeFilled) { stateLabel = 'FILLED'; stateColor = '#00ff88'; }
-            else if (snapReady && currentHedgePrice >= unfilledBid) { stateLabel = 'AT BID — SNAP'; stateColor = '#00ff88'; }
-            else if (snapReady) { stateLabel = 'SNAP → BID'; stateColor = '#00ff88'; }
-            else if (combined >= _botCeiling) { stateLabel = 'CEILING — WAIT'; stateColor = '#ff4444'; }
-            else { stateLabel = 'SNAPPING'; stateColor = '#00aaff'; }
-            hedgeBlock = `<div style="margin-top:6px;padding:6px 8px;background:#060a14;border:1px solid ${hedgeColorSide}33;border-radius:6px;">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-                    <span style="color:${hedgeColorSide};font-weight:800;font-size:12px;">${hedgeLabel} HEDGE</span>
-                    <span style="color:${hedgeColorSide};font-size:11px;font-weight:700;">${hedgeQty}× @ ${currentHedgePrice}¢</span>
-                    <span style="color:#555;font-size:9px;">bid ${unfilledBid}¢ · ask ${unfilledAsk}¢${spread > 1 ? ` · gap ${spread}¢` : ''}</span>
-                    <span style="background:${stateColor}22;color:${stateColor};font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;">${stateLabel}</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
-                    <div style="flex:1;height:5px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${hedgePct}%;height:100%;background:${hedgeCol};border-radius:2px;transition:width 0.3s;"></div>
-                    </div>
-                    <span style="color:${hedgeCol};font-weight:700;font-size:10px;">${activeHedgeFill}/${hedgeQty}</span>
-                </div>
-                <div style="display:flex;gap:10px;font-size:9px;color:#555;flex-wrap:wrap;">
-                    <span>ceiling: <strong style="color:${_botCeiling <= 96 ? '#00ff88' : _botCeiling <= 97 ? '#ffaa00' : '#ff4444'};">${_botCeiling}¢</strong></span>
-                    <span>snap: <strong style="color:#00aaff;">bid</strong></span>
-                    ${snapReady ? `<span style="color:#00ff88;">≤${bot._game_urgency === 'late' || bot._game_urgency === 'critical' ? '97' : '96'}¢ — snap</span>` : ''}
-                    ${gapStr ? `<span style="color:${gapCol};">${gapStr}</span>` : ''}
-                </div>
-            </div>`;
-        }
-
-        // Overflow: extra anchor fills that arrived after hedge was placed (cancel race)
-        const overflowBlock = overflowFills > 0 ? `<div style="margin-top:4px;padding:4px 8px;background:#ffaa0011;border:1px dashed #ffaa0044;border-radius:4px;font-size:10px;">
-            <span style="color:#ffaa00;font-weight:700;">⚡ +${overflowFills} late fill${overflowFills > 1 ? 's' : ''}</span>
-            <span style="color:#8892a6;"> — extra anchor${overflowFills > 1 ? 's' : ''} filled during cancel, awaiting new hedge</span>
-        </div>` : '';
-
-        rungsHTML = anchorSummary
-            + rungRows
-            + (historyHTML ? `<div style="padding:2px 8px;border-top:1px solid #1e274033;">${historyHTML}</div>` : '')
-            + hedgeBlock
-            + overflowBlock;
-    } else if (isFilled) {
-        // Filled but not yet consolidated — show per-rung with fills (hide cancelled rungs)
-        const filledLabel = filledSideKey === 'yes' ? 'YES' : 'NO';
-        rungsHTML = rungs.filter(r => {
-            // Only show rungs that have fills on the anchor side
-            return (r[`${filledSideKey}_fill_qty`] || 0) > 0;
-        }).map((r, i) => {
-            const fill = r[`${filledSideKey}_fill_qty`] || 0;
-            const rQty = r.quantity || qtyPer;
-            const filled = fill >= rQty;
-            const col = filled ? filledColor : fill > 0 ? '#ffaa00' : '#333';
-            const pct = rQty > 0 ? Math.round((fill / rQty) * 100) : 0;
-            return `<div style="display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;">
-                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:${filledColor};font-size:9px;width:24px;">${filledLabel[0]}${r[`${filledSideKey}_price`]}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${col};font-weight:700;font-size:9px;">${fill}/${rQty}</span>
-                </div>
-            </div>`;
-        }).join('');
-    } else {
-        // Normal: show both sides per rung — dim completed ones
-        rungsHTML = rungs.map((r, i) => {
-            const yFill = r.yes_fill_qty || 0;
-            const nFill = r.no_fill_qty || 0;
-            const rQty = r.quantity || qtyPer;
-            const yFilled = yFill >= rQty;
-            const nFilled = nFill >= rQty;
-            const isCompleted = r.completed;
-            const dimStyle = isCompleted ? 'opacity:0.3;' : '';
-            const yCol = yFilled ? '#00ff88' : yFill > 0 ? '#ffaa00' : '#333';
-            const nCol = nFilled ? '#00ff88' : nFill > 0 ? '#ffaa00' : '#333';
-            const yPct = rQty > 0 ? Math.round((yFill / rQty) * 100) : 0;
-            const nPct = rQty > 0 ? Math.round((nFill / rQty) * 100) : 0;
-            return `<div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;align-items:center;font-size:10px;padding:3px 0;${dimStyle}">
-                <span style="color:#ffaa00;font-weight:700;">${r.width}¢</span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#00ff88;font-size:9px;width:24px;">Y${r.yes_price}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${yPct}%;height:100%;background:${yCol};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${yCol};font-weight:700;font-size:9px;">${yFill}/${rQty}</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:#ff4444;font-size:9px;width:24px;">N${r.no_price}</span>
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${nPct}%;height:100%;background:${nCol};border-radius:2px;"></div>
-                    </div>
-                    <span style="color:${nCol};font-weight:700;font-size:9px;">${nFill}/${rQty}</span>
-                </div>
-            </div>`;
-        }).join('');
-    }
-
-    // Walk info — detailed status bar
-    let walkInfo = '';
-    if (status === 'awaiting_settlement') {
-        walkInfo = `<div style="background:#00e5ff11;border:1px solid #00e5ff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00e5ff;margin-top:6px;">
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-weight:700;">⏳ <strong>AWAITING SETTLEMENT</strong></span>
-                <span style="color:#8892a6;">Market closed — waiting for Kalshi to settle</span>
-            </div>
-            <div style="color:#8892a6;font-size:9px;margin-top:3px;">
-                Position held · P&L calculated on settlement result · anchor ${avgFilled}¢ × ${filledQty}
-            </div>
-        </div>`;
-    } else if (status === 'apex_selling_back') {
-        // ── SELL-BACK STATE — full exit visibility (must be before isFilled check) ──
-        const sbPrice = bot._sellback_price || 0;
-        const sbStarted = bot._sellback_started_at || 0;
-        const sbElapsed = sbStarted > 0 ? Math.floor(nowSec - sbStarted) : 0;
-        const sbWalks = bot._sellback_walk_count || 0;
-        const sbUrgency = bot._game_urgency || 'normal';
-        const sbTimeout = sbUrgency === 'critical' ? 30 : 300;
-        const sbTimeLeft = Math.max(0, sbTimeout - sbElapsed);
-        const sbPct = sbTimeout > 0 ? Math.min(100, (sbElapsed / sbTimeout) * 100) : 0;
-        const sbTimerCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#ffaa00';
-        const sbMinLeft = Math.floor(sbTimeLeft / 60);
-        const sbSecLeft = Math.floor(sbTimeLeft % 60);
-        const sbAnchorSide = bot.first_fill_side === 'yes' ? 'YES' : 'NO';
-        const sbAvgAnchor = bot._sellback_avg_anchor || avgFilled || 0;
-        const sbFillQty = bot._sellback_fill_qty || 0;
-        const sbQty = bot._sellback_qty || bot.hedge_qty || 1;
-        const sbFillPct = sbQty > 0 ? Math.round((sbFillQty / sbQty) * 100) : 0;
-        const sbTimeoutNote = sbUrgency === 'critical' ? 'Emergency cross in'
-            : sbTimeLeft <= 30 ? 'Taker cross in' : 'Timeout cross in';
-        const sbBid = bot._sellback_bid || 0;
-        const sbAsk = bot._sellback_ask || 0;
-        const sbWalkTarget = bot._sellback_walk_target || sbBid;
-        const sbAtBid = sbPrice > 0 && sbBid > 0 && sbPrice <= sbBid + 1;
-        walkInfo = `<div style="background:#ff880011;border:1px solid #ff880033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff8800;margin-top:6px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                <span style="font-weight:700;">🔙 <strong>MAKER SELL-BACK</strong></span>
-                ${urgencyBadge}
-                ${sbAtBid ? '<span style="color:#00ff88;font-weight:700;font-size:9px;background:#00ff8818;padding:1px 4px;border-radius:3px;">AT BID</span>' : ''}
-            </div>
-            <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:4px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
-                    <span style="color:#ff8800;font-weight:700;">${sbAnchorSide} sell @ ${sbPrice}¢ × ${sbQty}</span>
-                    <span style="color:#8892a6;">bid ${sbBid}¢ · ask ${sbAsk}¢${sbWalkTarget > 0 ? ` · target ${sbWalkTarget}¢` : ''}</span>
-                </div>
-            </div>
-            ${sbFillQty > 0 ? `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                <div style="flex:1;height:6px;background:#1e2740;border-radius:3px;overflow:hidden;">
-                    <div style="width:${sbFillPct}%;height:100%;background:#ff8800;border-radius:3px;transition:width 0.3s;"></div>
-                </div>
-                <span style="color:#ff8800;font-weight:700;font-size:10px;">${sbFillQty}/${sbQty} sold</span>
-            </div>` : ''}
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-                <span style="color:${sbTimerCol};font-weight:700;font-family:monospace;font-size:18px;">${sbMinLeft}:${String(sbSecLeft).padStart(2,'0')}</span>
-                <div style="flex:1;height:4px;background:#1e2740;border-radius:2px;overflow:hidden;">
-                    <div style="height:100%;width:${Math.round(sbPct)}%;background:${sbTimerCol};border-radius:2px;transition:width 1s;"></div>
-            </div>
-            <div style="color:#8892a6;font-size:9px;">
-                anchor avg ${sbAvgAnchor}¢ · step #${sbWalks} · ${sbTimeoutNote} · taker cross if timeout
-            </div>
-        </div>`;
-    } else if (isFilled) {
-        const isHalftime = ((gameScores && gameKey && (gameScores[gameKey] || {}).status_detail) || '').toLowerCase().includes('half');
-        const walkLabel = walkCount > 0 ? `walked +${walkCount}` : '';
-        const ceilingStr = ceilingDist <= 3 ? `<span style="color:${ceilingDist <= 0 ? '#ff4444' : '#ff8800'};font-weight:700;">${ceilingDist}¢ to ceiling</span>` : '';
-
-        if (isHalftime) {
-            walkInfo = `<div style="background:#818cf822;border:1px solid #818cf833;border-radius:5px;padding:6px 8px;font-size:10px;color:#818cf8;margin-top:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>⏸ <strong>HALFTIME PAUSE</strong></span>
-                    <span style="color:#8892a6;">anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = ${combined}¢ · ${unfilledSideLabel} bid ${unfilledBid}¢</span>
-                </div>
-            </div>`;
-        } else if (atCeiling && currentHedgePrice > 0) {
-            // ── AT CEILING — combined ≥ 98¢ (breakeven), waiting for fill or sell-back timer ──
-            const bidGap = bot._bid_gap || 0;
-            const bidGapWarn = bidGap >= 5 ? `<div style="background:#ff444422;border:1px solid #ff444444;border-radius:3px;padding:2px 6px;margin-top:3px;font-size:9px;color:#ff4444;font-weight:700;">⚠ bid ${bidGap}¢ from hedge — ${gameUrgency === 'critical' ? 'drift exit at 5¢' : gameUrgency === 'late' ? 'drift exit at 10¢' : 'watching'}</div>` : '';
-            const sbTimeLeft = bot._sellback_time_left;
-            const sbGrace = bot._sellback_grace_s || 0;
-            const sbTimerHtml = (() => {
-                if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
-                    const sbMin = Math.floor(sbTimeLeft / 60);
-                    const sbSec = Math.floor(sbTimeLeft % 60);
-                    const sbCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#818cf8';
-                    return `<span style="color:${sbCol};font-size:9px;font-weight:700;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
-                } else if (sbGrace >= 9999) {
-                    return '<span style="color:#818cf8;font-size:9px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
-                } else if (sbTimeLeft != null && sbTimeLeft <= 0 && bot._apex_sellback_attempted) {
-                    return '<span style="color:#ffaa00;font-size:9px;font-weight:700;background:#ffaa0018;padding:1px 5px;border-radius:3px;">⏱ completing cheaper — waiting for fill</span>';
-                } else if (sbTimeLeft != null && sbTimeLeft <= 0) {
-                    const decision = bot._sellback_decision;
-                    const hp = bot.hedge_price || currentHedgePrice || '?';
-                    if (decision === 'selling_back') {
-                        const sbp = bot._sellback_price || '?';
-                        return `<span style="color:#ff8800;font-size:9px;font-weight:700;background:#ff880018;padding:1px 5px;border-radius:3px;">🔙 SELLING BACK @ ${sbp}¢</span>`;
-                    } else if (decision === 'crossing_to_bid') {
-                        return `<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">💀 CROSSING @ ${hp}¢ — waiting for fill</span>`;
-                    }
-                    return '<span style="color:#ff4444;font-size:9px;font-weight:700;background:#ff444418;padding:1px 5px;border-radius:3px;">⏱ sell-back evaluating...</span>';
-                }
-                return '';
-            })();
-            // Show live countdown in exit rule instead of static grace period
-            const exitRule = (() => {
-                if (gameUrgency === 'halftime') return 'Exit: paused until game resumes';
-                if (sbTimeLeft != null && sbTimeLeft > 0) {
-                    const m = Math.floor(sbTimeLeft / 60);
-                    const s = Math.floor(sbTimeLeft % 60);
-                    return `Exit: sell-back in ${m > 0 ? m + 'm ' : ''}${s}s`;
-                }
-                if (sbTimeLeft != null && sbTimeLeft <= 0) {
-                    const d = bot._sellback_decision;
-                    if (d === 'selling_back') return `Exit: selling back @ ${bot._sellback_price || '?'}¢`;
-                    if (d === 'crossing_to_bid') return `Exit: crossing @ ${bot.hedge_price || '?'}¢ — waiting for fill`;
-                    return 'Exit: sell-back timer expired — evaluating';
-                }
-                const grace = gameUrgency === 'critical' ? '10s' : gameUrgency === 'late' ? '60s' : '180s';
-                return `Exit: sell-back · ${grace}`;
-            })();
-            walkInfo = `<div style="background:#ff444411;border:1px solid #ff444433;border-radius:5px;padding:6px 8px;font-size:10px;color:#ff4444;margin-top:6px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                    <span style="font-weight:700;">🔴 <strong>AT CEILING ${combined}¢</strong></span>
-                    ${urgencyBadge}
-                    ${sbTimerHtml}
-                </div>
-                <div style="background:#0a0e1a;border-radius:4px;padding:4px 8px;margin-bottom:3px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;">
-                        <span style="color:#fff;">${unfilledSideLabel} hedge @ ${currentHedgePrice}¢</span>
-                        <span style="color:#8892a6;">anchor ${avgFilled}¢ · bid ${unfilledBid}¢ · ask ${unfilledAsk}¢</span>
-                    </div>
-                </div>
-                <div style="color:#8892a6;font-size:9px;">filled ${fillAgeStr} ago · step #${walkCount} · <span style="color:#ffaa00;">${exitRule}</span></div>
-                ${bidGapWarn}
-            </div>`;
-        } else if (walkCount > 0 && currentHedgePrice > 0) {
-            const atBid = currentHedgePrice >= unfilledBid;
-            const walkStartPrice = bot.walk_start_price || currentHedgePrice;
-            const prevPrice = walkCount > 1 ? currentHedgePrice - 1 : walkStartPrice;
-            const nextPrice = atBid ? currentHedgePrice : currentHedgePrice + 1;
-            const walkPct = Math.min(100, ((walkInterval - nextWalkIn) / walkInterval) * 100);
-            const statusIcon = atCeiling ? '🔴' : atBid ? '🎯' : '📈';
-            const statusText = atBid ? 'AT BID' : 'SNAPPING TO BID';
-            const statusCol = atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
-            // Exit rules line
-            const exitRule = gameUrgency === 'critical' ? 'Exit: cross to bid if >97¢ · 30s'
-                : gameUrgency === 'late' ? 'Exit: sell-back if >97¢ · 5min timeout'
-                : gameUrgency === 'halftime' ? 'Exit: paused until game resumes'
-                : 'Exit: sell-back if >96¢ · 5min timeout';
-            walkInfo = `<div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
-                    <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong> — ${unfilledSideLabel} hedge</span>
-                    <span style="color:#666;font-size:9px;">start ${walkStartPrice}¢</span>
-                    <span style="color:#888;">prev ${prevPrice}¢ →</span>
-                    <span style="color:#00ff88;font-weight:700;font-size:12px;">${currentHedgePrice}¢</span>
-                    <span style="color:#888;">→ next ${nextPrice}¢</span>
-                    <span style="position:relative;display:inline-block;width:20px;height:20px;flex-shrink:0;" title="Next walk in ${nextWalkIn}s">
-                      <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg);">
-                        <circle cx="10" cy="10" r="8" fill="none" stroke="#333" stroke-width="2"/>
-                        <circle cx="10" cy="10" r="8" fill="none" stroke="${statusCol}" stroke-width="2"
-                          stroke-dasharray="${2*Math.PI*8}" stroke-dashoffset="${2*Math.PI*8*(1-walkPct/100)}"
-                          stroke-linecap="round"/>
-                      </svg>
-                      <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;color:#aaa;">${nextWalkIn}</span>
-                    </span>
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                    <span>anchor ${avgFilled}¢ + hedge ${currentHedgePrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong> · step #${walkCount} · ${walkInterval}s interval · filled ${fillAgeStr} ago</span>
-                    ${urgencyBadge} ${atCeiling ? `<span style="color:#ff4444;font-weight:700;">≥98¢ — maker at bid until fill</span>` : ceilingStr}
-                    ${(() => {
-                        const sbTimeLeft = bot._sellback_time_left;
-                        const sbGrace = bot._sellback_grace_s || 0;
-                        if (sbGrace > 0 && sbGrace < 9999 && sbTimeLeft != null && sbTimeLeft > 0) {
-                            const sbMin = Math.floor(sbTimeLeft / 60);
-                            const sbSec = Math.floor(sbTimeLeft % 60);
-                            const sbCol = sbTimeLeft <= 30 ? '#ff4444' : sbTimeLeft <= 60 ? '#ff8800' : '#818cf8';
-                            return `<span style="color:${sbCol};font-size:8px;font-weight:600;background:${sbCol}18;padding:1px 5px;border-radius:3px;">⏱ sell-back in ${sbMin > 0 ? sbMin + 'm ' : ''}${sbSec}s</span>`;
-                        } else if (sbGrace >= 9999) {
-                            return '<span style="color:#818cf8;font-size:8px;font-weight:600;background:#818cf818;padding:1px 5px;border-radius:3px;">⏸ sell-back paused</span>';
-                        }
-                        return '';
-                    })()}
-                    <span style="color:#ffaa00;font-size:8px;">${exitRule}</span>
-                </div>
-            </div>`;
-        } else if (currentHedgePrice > 0 && currentHedgePrice >= unfilledBid) {
-            walkInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:6px 8px;font-size:10px;color:#00ff88;margin-top:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>🎯 <strong>${unfilledSideLabel} AT BID</strong> — @${currentHedgePrice}¢ × ${hedgeQty} — waiting for fill</span>
-                    <span style="color:#8892a6;">${combined}¢ combined · ${fillAgeStr}</span>
-                </div>
-            </div>`;
-        } else {
-            walkInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 8px;font-size:10px;color:#ffaa00;margin-top:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                    <span>⏳ <strong>${filledSideLabel} FILLED</strong> (avg ${avgFilled}¢ × ${filledQty}) — posting ${unfilledSideLabel} hedge</span>
-                    <span style="color:#8892a6;">${unfilledSideLabel} bid ${unfilledBid}¢ · ask ${unfilledAsk}¢ · next walk ${nextWalkIn}s</span>
-                </div>
-            </div>`;
-        }
-    } else if (status === 'ladder_arb_posted') {
-        const yBid = bot.live_yes_bid != null ? bot.live_yes_bid : '?';
-        const yAsk = bot.live_yes_ask != null ? bot.live_yes_ask : '?';
-        const nBid = bot.live_no_bid != null ? bot.live_no_bid : '?';
-        const nAsk = bot.live_no_ask != null ? bot.live_no_ask : '?';
-        walkInfo = `<div style="background:#00aaff11;border:1px solid #00aaff33;border-radius:5px;padding:6px 8px;font-size:10px;color:#00aaff;margin-top:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
-                <span>⚡ All ${rungs.length} rungs live — YES+NO posted</span>
-                <span style="color:#8892a6;">Y <strong style="color:#00ff88;">${yBid}/${yAsk}¢</strong> · N <strong style="color:#ff4444;">${nBid}/${nAsk}¢</strong></span>
-            </div>
-        </div>`;
-    }
-
-    // Repeat + ceiling info
-    const repeatCount = bot.repeat_count || 0;
-    const repeatsDone = bot.repeats_done || 0;
-    let cycleInfo = '';
-    if (repeatCount > 0) {
-        const totalRuns = repeatCount + 1;
-        const currentCycle = repeatsDone + 1;
-        cycleInfo = `<span style="background:#6366f122;color:#818cf8;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">Run ${currentCycle}/${totalRuns}</span>`;
-    }
-    if (_botCeiling < 98) {
-        cycleInfo += ` <span style="background:${_botCeiling <= 96 ? '#00ff8822' : '#ffaa0022'};color:${_botCeiling <= 96 ? '#00ff88' : '#ffaa00'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⬆ ${_botCeiling}¢</span>`;
-    }
-
-    const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
-    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
-    item.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #00aaff66);"><polygon points="12,2 22,20 2,20" fill="none" stroke="#00aaff" stroke-width="2" stroke-linejoin="round"/><polygon points="12,8 17,17 7,17" fill="#00aaff33" stroke="#00aaff" stroke-width="1" stroke-linejoin="round"/><circle cx="12" cy="13" r="1.5" fill="#00aaff"/></svg>
-                <span style="color:#00aaff;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">APEX</span>
-                <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
-                <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
-                <span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">🪜 ${rungs.length} RUNGS</span>
-                ${cumulativePnl !== 0 ? `<span style="background:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'}22;color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
-                ${liveScoreHtml}
-                ${cycleInfo}
-                ${(() => {
-                    const gu = bot._game_urgency || '';
-                    const wi = bot._walk_interval || 20;
-                    if (gu === 'critical') return '<span style="background:#ff444433;color:#ff4444;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;animation:pulse 1s infinite;">⚡ CRITICAL · 3s</span>';
-                    if (gu === 'late') return `<span style="background:#ff880033;color:#ff8800;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">🔥 LATE · ${wi}s</span>`;
-                    if (gu === 'halftime') return '<span style="background:#818cf833;color:#818cf8;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">⏸ HALF</span>';
-                    if (isFilled) return `<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● ${wi}s walk</span>`;
-                    return '';
-                })()}
-                ${isFilled ? (() => {
-                    const sbGrace = bot._sellback_grace_s || 0;
-                    const sbLeft = bot._sellback_time_left != null ? bot._sellback_time_left : sbGrace;
-                    if (sbGrace <= 0 || sbGrace >= 9999) return '';
-                    const sbMin = Math.floor(sbLeft / 60);
-                    const sbSec = Math.floor(sbLeft % 60);
-                    const sbPct = sbGrace > 0 ? Math.round(((sbGrace - sbLeft) / sbGrace) * 100) : 0;
-                    const sbCol = sbLeft <= 30 ? '#ff4444' : sbLeft <= 60 ? '#ff8800' : '#00aaff';
-                    return `<span style="background:${sbCol}22;color:${sbCol};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;font-family:monospace;">⏱ ${sbMin}:${String(sbSec).padStart(2,'0')}</span>`;
-                })() : ''}
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
-            </div>
-        </div>
-        <div style="background:#060a14;border:1px solid #1e274033;border-radius:8px;padding:10px;">
-            ${isFilled && (isConsolidated || completedRungs > 0) ? '' : `
-            <div style="display:grid;grid-template-columns:30px 1fr 1fr;gap:6px;font-size:9px;font-weight:800;color:#555;text-transform:uppercase;padding-bottom:4px;border-bottom:1px solid #1e2740;margin-bottom:4px;">
-                <span>W</span>
-                <span>YES ${bot.live_yes_bid != null ? `<span style="font-weight:400;color:#00ff8866;text-transform:none;">bid ${bot.live_yes_bid} · ask ${bot.live_yes_ask || '?'}</span>` : ''}</span>
-                <span>NO ${bot.live_no_bid != null ? `<span style="font-weight:400;color:#ff444466;text-transform:none;">bid ${bot.live_no_bid} · ask ${bot.live_no_ask || '?'}</span>` : ''}</span>
-            </div>`}
-            ${rungsHTML}
-        </div>
-        ${avgYes > 0 || avgNo > 0 ? `
-        <div style="display:flex;gap:16px;margin-top:8px;padding:6px 10px;background:#060a14;border-radius:6px;font-size:11px;flex-wrap:wrap;">
-            ${avgYes > 0 ? `<span style="color:#00ff88;">Avg YES: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_no_filled' ? hedgePriceForPnl : avgYes}¢</strong> (${totalYesFill}/${totalExpected})</span>` : ''}
-            ${avgNo > 0 ? `<span style="color:#ff4444;">Avg NO: <strong>${hedgePriceForPnl > 0 && status === 'ladder_arb_yes_filled' ? hedgePriceForPnl : avgNo}¢</strong> (${totalNoFill}/${totalExpected})</span>` : ''}
-            ${combinedAvg > 0 ? `<span style="color:${pnlColor};font-weight:700;">P&L: ${effectiveProfit > 0 ? '+' : ''}${effectiveProfit}¢/ea</span>` : ''}
-            ${cumulativePnl !== 0 ? `<span style="color:${cumulativePnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">Total: ${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl}¢</span>` : ''}
-            ${(() => { const hedged = !!bot.fav_order_id || bot._consolidated || (bot.dog_fill_qty || 0) > 0; const lat = hedged ? bot.hedge_latency_ms : null; const raw = hedged ? bot.raw_hedge_ms : null; return (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;">⚡ ${Math.round(lat)}ms</span>` : '') + (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;"> ⚡raw ${raw.toFixed(1)}ms</span>` : ''); })()}
-        </div>` : ''}
-        ${walkInfo}
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ffaa00;">Widths: ${rungs.map(r => r.width + '¢').join(', ')}</span>
-            <span style="color:#8892a6;">×${qtyPer} each</span>
-            <span style="color:#555;">${phase === 'live' ? '🔴 LIVE' : '⏳ PRE'}</span>
-            ${bot.repost_count ? `<span style="color:#555;">Repost #${bot.repost_count}</span>` : ''}
-        </div>
-        <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
-            <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>
-            <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
-        </div>
     `;
     container.appendChild(item);
 }
@@ -8324,7 +7252,7 @@ async function loadBots() {
                     botsList.appendChild(errDiv);
                 }
                 activeBotCount++;
-                if (bot.status === 'ladder_arb_active') anchoredCount++;
+                if (bot.status === 'market_making_active') anchoredCount++;
                 return;
             }
 
@@ -8362,10 +7290,9 @@ async function loadBots() {
                 dog_filled:           '⚡ DOG FILLED',
                 ladder_posted:        '🪜 LADDER ACTIVE',
                 ladder_filled_no_fav: '⚡ LADDER FILLED',
-                ladder_arb_posted:      '⚡ BOTH LIVE',
-                ladder_arb_active:      '🔥 ACTIVE',
-                ladder_arb_yes_filled:  '✓ YES FILLED',
-                ladder_arb_no_filled:   '✓ NO FILLED',
+                market_making_active:   '📊 QUOTING',
+                mm_depth_pulled:        '📊 PULLED',
+                mm_exiting:             '🚪 EXITING',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
             const phase       = bot.game_phase || 'pregame';
             const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
@@ -8384,10 +7311,9 @@ async function loadBots() {
                 dog_filled:        'leg1_filled',
                 ladder_posted:     'monitoring',
                 ladder_filled_no_fav: 'leg1_filled',
-                ladder_arb_posted:      'monitoring',
-                ladder_arb_active:      'leg1_filled',
-                ladder_arb_yes_filled:  'leg1_filled',
-                ladder_arb_no_filled:   'leg1_filled',
+                market_making_active:   'monitoring',
+                mm_depth_pulled:        'monitoring',
+                mm_exiting:             'leg1_filled',
             }[bot.status] || 'monitoring';
 
             activeBotCount++;
@@ -9091,8 +8017,8 @@ async function showBotDetail(botId) {
         const typeName = typeMap[cat] || cat;
         const color = colorMap[cat] || '#00d4ff';
         const statusDisplayMap = {
-            ladder_arb_posted: 'Both Live', ladder_arb_active: 'Active', ladder_arb_yes_filled: 'YES Filled',
-            ladder_arb_no_filled: 'NO Filled', apex_selling_back: 'Selling Back', awaiting_settlement: '⏳ Settlement',
+            market_making_active: 'Quoting', mm_depth_pulled: 'Pulled', mm_exiting: 'Exiting',
+            awaiting_settlement: '⏳ Settlement',
             completed: 'Completed', stopped: 'Stopped', waiting_repeat: 'Waiting Repeat',
             anchor_posted: 'Anchor Posted', anchor_filled: 'Anchor Filled',
             hedge_posted: 'Hedge Posted', hedge_filled: 'Hedge Filled',

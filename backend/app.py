@@ -2243,7 +2243,6 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
         return None, ''  # not smart mode, use normal repeat logic
     if bot.get('_smart_stopped'):
         return False, 'manual_stop'
-    # Dual exits are neutral — don't count toward consecutive losses
     if exit_type == 'dual_exit':
         return True, 'smart_dual_exit'
     losses = bot.get('consecutive_losses', 0)
@@ -2260,28 +2259,6 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
         bot['consecutive_losses'] = 0
         bot['_smart_wins'] = bot.get('_smart_wins', 0) + 1
         return True, 'smart_win'
-
-def _apex_snap_check(anchor_price, bid_price, qty=1, snap_ceiling=None):
-    """Return True if snapping to bid is profitable. Simple cents check — no fee math.
-    Snap only if combined <= snap_ceiling (default SNAP_CEILING_CENTS)."""
-    combined = anchor_price + bid_price
-    return combined <= (snap_ceiling if snap_ceiling is not None else SNAP_CEILING_CENTS)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ─── Data Migrations ─────────────────────────────────────────────────────────
@@ -3704,14 +3681,35 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['yes_fill_qty'] = bot['fav_fill_qty']
                 else:
                     bot['no_fill_qty'] = bot['fav_fill_qty']
-                # ANY fav fill → cancel dog sell immediately (commit to fav exit path)
+                # Fav fill during dual exit: cancel sell only when FULLY filled
+                # Partial fav fill → keep sell as safety (amend qty down), don't cancel
                 if bot['fav_fill_qty'] > 0 and bot.get('dog_sell_order_id'):
                     _ds_oid = bot['dog_sell_order_id']
-                    bot['_dog_sell_verify_oid'] = _ds_oid  # preserve for completion to verify fills
-                    threading.Thread(target=lambda oid=_ds_oid: _safe_cancel(oid, f'hedge_won_{bot_id}'), daemon=True).start()
-                    bot['dog_sell_order_id'] = None
-                    _full = 'fully' if bot['fav_fill_qty'] >= qty_bot else 'partially'
-                    print(f'⚡ WS DUAL EXIT: {bot_id} hedge {_full} filled ({bot["fav_fill_qty"]}/{qty_bot}) — cancelling dog sell')
+                    _sell_fills = bot.get('dog_sell_fill_qty', 0)
+                    _remaining = qty_bot - bot['fav_fill_qty'] - _sell_fills
+                    if bot['fav_fill_qty'] >= qty_bot or _remaining <= 0:
+                        # Fav fully filled (or combined fills cover all) → cancel sell
+                        bot['_dog_sell_verify_oid'] = _ds_oid
+                        threading.Thread(target=lambda oid=_ds_oid: _safe_cancel(oid, f'hedge_won_{bot_id}'), daemon=True).start()
+                        bot['dog_sell_order_id'] = None
+                        bot['_dual_exit_fav_won'] = True
+                        print(f'⚡ WS DUAL EXIT: {bot_id} hedge fully filled ({bot["fav_fill_qty"]}/{qty_bot}) — cancelling dog sell')
+                    else:
+                        # Partial fav fill → amend sell qty down to remaining
+                        _new_sell_qty = _remaining
+                        _ds_ticker = bot.get('ticker', '')
+                        _ds_side = bot.get('dog_side', 'no')
+                        _ds_price = bot.get('dog_sell_price', 0)
+                        def _amend_sell_down(oid=_ds_oid, tk=_ds_ticker, sd=_ds_side, qty=_new_sell_qty, pr=_ds_price, bid=bot_id):
+                            try:
+                                _kw = {'yes_price': pr} if sd == 'yes' else {'no_price': pr}
+                                api_rate_limiter.wait()
+                                kalshi_client.amend_order(oid, ticker=tk, side=sd, count=qty, action='sell', **_kw)
+                                print(f'📤 WS DUAL EXIT AMEND: {bid} sell qty→{qty} (fav filled {bot.get("fav_fill_qty",0)}/{qty_bot})')
+                            except Exception as _ae:
+                                print(f'⚠ WS DUAL EXIT AMEND FAIL: {bid} {_ae}')
+                        threading.Thread(target=_amend_sell_down, daemon=True).start()
+                        print(f'⚡ WS DUAL EXIT: {bot_id} hedge partial ({bot["fav_fill_qty"]}/{qty_bot}) — amending sell to {_new_sell_qty}')
                 print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
             elif matched == 'dog_sell':
                 bot['dog_sell_fill_qty'] = bot.get('dog_sell_fill_qty', 0) + count
@@ -3721,6 +3719,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     _fav_oid = bot.get('fav_order_id')
                     if _fav_oid:
                         threading.Thread(target=lambda oid=_fav_oid: _safe_cancel(oid, f'dual_sold_{bot_id}'), daemon=True).start()
+                    bot['_dual_exit_sell_won'] = True
                     _full = 'fully' if bot['dog_sell_fill_qty'] >= qty_bot else 'partially'
                     print(f'📤 WS DUAL EXIT: {bot_id} dog {_full} sold ({bot["dog_sell_fill_qty"]}/{qty_bot}) — cancelling hedge')
             save_state()
@@ -3806,124 +3805,88 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             save_state()
             break
 
-    # ── Apex 2.0: Per-rung WS fill matching ──────────────────────────
+    # ── Apex Market Maker: WS fill matching ──────────────────────────
     for bot_id, bot in list(active_bots.items()):
         if bot.get('bot_category') != 'ladder_arb':
             continue
+        if bot.get('type') != 'apex_mm':
+            continue
         status = bot.get('status', '')
-        if status not in ('ladder_arb_posted', 'ladder_arb_active'):
+        if status not in ('market_making_active', 'mm_exiting'):
             continue
 
-        matched_rung = None
         matched_side = None
-        is_hedge_fill = False
+        matched_price = None
+        is_exit_fill = False
 
-        # Check per-rung hedge orders first
-        for idx, rung in enumerate(bot.get('rungs', [])):
-            if order_id == rung.get('hedge_order_id'):
-                matched_rung = idx
-                is_hedge_fill = True
-                break
-            if order_id == rung.get('yes_order_id'):
-                matched_rung = idx
+        # Check YES orders
+        for price_str, level in bot.get('yes_orders', {}).items():
+            if order_id == level.get('oid'):
                 matched_side = 'yes'
-                break
-            elif order_id == rung.get('no_order_id'):
-                matched_rung = idx
-                matched_side = 'no'
+                matched_price = int(price_str)
                 break
 
-        if matched_rung is None:
+        # Check NO orders
+        if not matched_side:
+            for price_str, level in bot.get('no_orders', {}).items():
+                if order_id == level.get('oid'):
+                    matched_side = 'no'
+                    matched_price = int(price_str)
+                    break
+
+        # Check exit sell orders
+        if not matched_side:
+            for _exit_side in ('yes', 'no'):
+                sell_info = bot.get('_exit_sell_oids', {}).get(_exit_side, {})
+                if order_id == sell_info.get('oid'):
+                    is_exit_fill = True
+                    matched_side = _exit_side
+                    break
+
+        if not matched_side:
             continue
 
-        # Lock to prevent race with hedge thread modifying same rung
         with ws_fill_lock:
-            rung = bot['rungs'][matched_rung]
-            qty_per = rung.get('quantity', bot.get('quantity', 1))
-
-            if is_hedge_fill:
-                # Per-rung hedge fill
-                old_hfq = rung.get('hedge_fill_qty', 0)
-                rung['hedge_fill_qty'] = min(old_hfq + count, qty_per)
-                if not rung.get('hedge_fill_at'):
-                    rung['hedge_fill_at'] = time.time()
-                bot_log('APEX_WS_RUNG_HEDGE_FILL', bot_id, {
-                    'rung_idx': matched_rung, 'count': count, 'width': rung.get('width', 0),
-                    'old_fill': old_hfq, 'new_fill': rung['hedge_fill_qty'], 'qty': qty_per,
-                })
-                print(f'△ WS APEX HEDGE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) +{count} → {rung["hedge_fill_qty"]}/{qty_per}')
-
-                # Check if rung fully hedged
-                if rung['hedge_fill_qty'] >= qty_per and not rung.get('completed'):
-                    rung['status'] = 'completed'
-                    rung['completed'] = True
-                    bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-                    _apex_record_rung_pnl(bot_id, matched_rung)
-                    print(f'✅ APEX RUNG COMPLETE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c)')
+            if is_exit_fill:
+                # Exit sell fill — handled by _apex_mm_exit_tick
+                sell_info = bot.get('_exit_sell_oids', {}).get(matched_side, {})
+                old_fill = sell_info.get('_ws_fill_qty', 0)
+                sell_info['_ws_fill_qty'] = old_fill + count
+                print(f'🚪 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count}')
             else:
-                # Anchor/entry fill
-                fill_key = f'{matched_side}_fill_qty'
-                old_fill = rung.get(fill_key, 0)
-                rung[fill_key] = min(old_fill + count, qty_per)
-                if rung[fill_key] >= qty_per and not rung.get(f'{matched_side}_filled_at'):
-                    rung[f'{matched_side}_filled_at'] = time.time()
+                # Ladder fill — update inventory
+                orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
+                level = orders_dict.get(str(matched_price), {})
+                level['fill_qty'] = level.get('fill_qty', 0) + count
 
-                other_side = 'no' if matched_side == 'yes' else 'yes'
-                other_fill = rung.get(f'{other_side}_fill_qty', 0)
+                # Add to inventory
+                bot[f'net_{matched_side}'] = bot.get(f'net_{matched_side}', 0) + count
+                bot[f'total_{matched_side}_cost'] = bot.get(f'total_{matched_side}_cost', 0) + (matched_price * count)
+                total_qty = bot[f'net_{matched_side}']
+                bot[f'avg_{matched_side}_cost'] = round(bot[f'total_{matched_side}_cost'] / total_qty) if total_qty > 0 else 0
 
-                # Track when partial fills start (for monitor grace-period promotion)
-                if rung[fill_key] > 0 and not rung.get('_partial_fill_at'):
-                    rung['_partial_fill_at'] = time.time()
-                    rung['_partial_fill_side'] = matched_side
+                print(f'📊 WS APEX MM FILL: {bot_id} {matched_side.upper()} +{count} @{matched_price}c → net_{matched_side}={bot[f"net_{matched_side}"]} avg={bot[f"avg_{matched_side}_cost"]}c')
 
-                print(f'△ WS APEX FILL: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} +{count} → {rung[fill_key]}/{qty_per}')
-                bot_log('APEX_WS_RUNG_FILL', bot_id, {
-                    'rung_idx': matched_rung, 'side': matched_side, 'count': count,
-                    'width': rung.get('width', 0), 'price': rung.get(f'{matched_side}_price', 0),
-                    'old_fill': old_fill, 'new_fill': rung[fill_key],
+                # Check if this fill closes opposite position (round trip)
+                opposite = 'no' if matched_side == 'yes' else 'yes'
+                opp_held = bot.get(f'net_{opposite}', 0)
+                if opp_held > 0:
+                    close_qty = min(count, opp_held)
+                    _apex_mm_record_round_trip(bot_id, bot, matched_side, matched_price, close_qty)
+                    # Also deduct from this side since it was used to close
+                    bot[f'net_{matched_side}'] = max(0, bot.get(f'net_{matched_side}', 0) - close_qty)
+                    bot[f'total_{matched_side}_cost'] = max(0, bot.get(f'total_{matched_side}_cost', 0) - (matched_price * close_qty))
+                    if bot[f'net_{matched_side}'] > 0:
+                        bot[f'avg_{matched_side}_cost'] = round(bot[f'total_{matched_side}_cost'] / bot[f'net_{matched_side}'])
+                    else:
+                        bot[f'avg_{matched_side}_cost'] = 0
+                        bot[f'total_{matched_side}_cost'] = 0
+
+                bot_log('APEX_MM_WS_FILL', bot_id, {
+                    'side': matched_side, 'price': matched_price, 'count': count,
+                    'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
+                    'realized_pnl': bot.get('realized_pnl_cents', 0),
                 })
-
-                # Both sides filled on this rung → completed (cancel-race or natural)
-                if other_fill >= qty_per and rung[fill_key] >= qty_per and not rung.get('completed'):
-                    rung['status'] = 'completed'
-                    rung['completed'] = True
-                    rung['completed_at'] = time.time()
-                    bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-                    print(f'✅ APEX RUNG DONE: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) both sides filled!')
-                    _apex_record_rung_pnl(bot_id, matched_rung)
-                elif rung[fill_key] > 0 and rung.get('status', 'posted') == 'posted' and other_fill == 0:
-                    # Anchor fill detected from WS — trust it and proceed
-                    rung['anchor_side'] = matched_side
-                    rung['anchor_fill_at'] = time.time()
-                    rung['_obi_at_anchor_fill'] = _apex_obi_snapshot(bot.get('ticker', ''))
-                    rung['status'] = 'anchor_filled'
-                    if not bot.get('first_fill_at'):
-                        bot['first_fill_at'] = time.time()
-                    bot['status'] = 'ladder_arb_active'
-                    # ── Burst detection: track anchor fill sides ──
-                    if '_anchor_fill_log' not in bot:
-                        bot['_anchor_fill_log'] = []
-                    bot['_anchor_fill_log'].append((matched_side, time.time()))
-                    _cutoff = time.time() - 30
-                    bot['_anchor_fill_log'] = [(s, t) for s, t in bot['_anchor_fill_log'] if t > _cutoff]
-                    threading.Thread(
-                        target=_apex_post_rung_hedge,
-                        args=(bot_id, matched_rung),
-                        daemon=True
-                    ).start()
-                    print(f'⚡ APEX ANCHOR: {bot_id} rung#{matched_rung} ({rung.get("width",0)}c) {matched_side.upper()} → hedge thread spawned')
-                elif rung[fill_key] >= qty_per:
-                    if not bot.get('first_fill_at'):
-                        bot['first_fill_at'] = time.time()
-                    bot['status'] = 'ladder_arb_active'
-
-            # Check if ALL rungs are resolved → bot completion
-            all_resolved = all(
-                r.get('status') in ('completed', 'stopped', 'scratched', 'depth_pulled')
-                for r in bot.get('rungs', [])
-            )
-            if all_resolved:
-                threading.Thread(target=_execute_apex_completion, args=(bot_id,), daemon=True).start()
 
             save_state()
         break
@@ -6805,153 +6768,13 @@ def create_bot():
         return jsonify({'error': str(e)}), 500
 
 
-# ═══════════════════════════════════════════════════════════════════
-# LADDER-ARB BOT — unified multi-width arb with averaged walk
-# ═══════════════════════════════════════════════════════════════════
-
-def _calculate_arb_prices_server(yes_bid, no_bid, yes_ask, no_ask, width):
-    """Server-side port of frontend calculateArbPrices().
-    Returns (target_yes, target_no) in cents."""
-    effective_yes_bid = yes_bid
-    effective_no_bid = no_bid
-    target_total = 100 - width
-
-    if effective_yes_bid <= 0 and effective_no_bid <= 0:
-        effective_yes_bid = target_total // 2
-        effective_no_bid = target_total - effective_yes_bid
-    elif effective_yes_bid <= 0:
-        effective_yes_bid = 100 - effective_no_bid - width
-    elif effective_no_bid <= 0:
-        effective_no_bid = 100 - effective_yes_bid - width
-
-    bid_sum = effective_yes_bid + effective_no_bid
-    total_shave = bid_sum - target_total
-
-    yes_spread = (yes_ask - yes_bid) if yes_ask > 0 and yes_bid > 0 else 0
-    no_spread = (no_ask - no_bid) if no_ask > 0 and no_bid > 0 else 0
-    has_room = yes_ask > 0 and no_ask > 0 and (yes_spread > 1 or no_spread > 1)
-
-    yes_is_fav = effective_yes_bid >= effective_no_bid
-
-    if has_room:
-        # Ask-side pricing
-        ask_sum = yes_ask + no_ask
-        ask_shave = max(0, ask_sum - target_total)
-        fav_ask_shave = ask_shave * 6 // 10
-        dog_ask_shave = ask_shave - fav_ask_shave
-        max_yes = max(1, yes_ask - 1)
-        max_no = max(1, no_ask - 1)
-        if yes_is_fav:
-            target_yes = min(max_yes, yes_ask - fav_ask_shave)
-            target_no = min(max_no, no_ask - dog_ask_shave)
-        else:
-            target_yes = min(max_yes, yes_ask - dog_ask_shave)
-            target_no = min(max_no, no_ask - fav_ask_shave)
-        ask_profit = 100 - target_yes - target_no
-        if ask_profit < width:
-            if yes_is_fav:
-                target_yes = max(1, 100 - target_no - width)
-            else:
-                target_no = max(1, 100 - target_yes - width)
-    else:
-        # Bid-side pricing
-        fav_shave = total_shave * 6 // 10
-        dog_shave = total_shave - fav_shave
-        dog_bid_val = effective_no_bid if yes_is_fav else effective_yes_bid
-        dog_max_shave = max(0, dog_bid_val - 1)
-        if dog_shave > dog_max_shave:
-            overflow = dog_shave - dog_max_shave
-            dog_shave = dog_max_shave
-            fav_shave += overflow
-        if yes_is_fav:
-            target_yes = effective_yes_bid - fav_shave
-            target_no = effective_no_bid - dog_shave
-        else:
-            target_yes = effective_yes_bid - dog_shave
-            target_no = effective_no_bid - fav_shave
-        if yes_bid > 0:
-            target_yes = min(target_yes, yes_bid)
-        if no_bid > 0:
-            target_no = min(target_no, no_bid)
-
-    target_yes = max(1, min(target_yes, 98))
-    target_no = max(1, min(target_no, 98))
-
-    # Enforce width: if dog hit 1c floor, push fav down
-    actual_profit = 100 - target_yes - target_no
-    if actual_profit < width:
-        if yes_is_fav:
-            target_yes = max(1, 100 - target_no - width)
-        else:
-            target_no = max(1, 100 - target_yes - width)
-
-    return int(target_yes), int(target_no)
-
-
-
-
-
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# APEX 2.0: Siloed Asymmetric Arbiter
-# Each rung is an independent state machine with its own hedge + time-decay exit.
-# No consolidation, no weighted averaging.
+# APEX MARKET MAKER — continuous quoting with net inventory tracking
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _apex_snap_timer(ticker):
-    """Dynamic snap timer based on game clock.
-    Early game: 60s patience. Mid game: 20s standard. Crunch (<2min): 5s survival."""
-    # Sports without game clocks — always use fixed timer
-    series = ticker.split('-')[0].upper() if ticker else ''
-    if series.startswith('KXATP') or series.startswith('KXWTA'):
-        return 60  # Tennis: long matches, no game clock
-    if series.startswith('KXPGA'):
-        return 60  # Golf: slow, no game clock
-
-    gc = _get_game_context(ticker)
-    if not gc or not gc.get('period'):
-        return 45  # No game data — lean patient
-
-    # Detect sport from ticker prefix
-    series = ticker.split('-')[0].upper() if ticker else ''
-    rule = None
-    for prefix, r in _LATE_GAME_RULES.items():
-        if series.startswith(prefix) and (not rule or len(prefix) > len(rule.get('_prefix', ''))):
-            rule = r
-            rule['_prefix'] = prefix
-
-    if not rule:
-        return 30  # unknown sport
-
-    period = gc.get('period', 0)
-    clock_str = gc.get('clock', '')
-    secs = _parse_clock_seconds(clock_str)
-    final_period = rule.get('final', 4)
-
-    # Halftime — completely pause, never snap
-    if _is_halftime(ticker):
-        return 999999  # effectively infinite — no snap during halftime
-
-    # Crunch time: final period, < 2 min remaining → 5s (survival mode)
-    if period >= final_period and secs is not None and secs <= 120:
-        return 5
-    # OT → 5s (survival mode)
-    if period > final_period:
-        return 5
-    # Late: final period, > 2 min → 20s
-    if period >= final_period:
-        return 20
-    # Mid: second half / later periods (Q3 for NBA, P2 for NHL) → 20s
-    if period > max(1, final_period // 2):
-        return 20
-    # Early game (first half) → 60s patience
-    return 60
-
-def _apex_stop_loss_threshold(width, anchor_price=0):
-    """Drift-based stop-loss: how many cents the anchor bid can drop before quick cut.
-    Small threshold = cut early with tiny loss instead of big late loss."""
-    return 5  # sell back if anchor bid dropped 5¢+ from entry
+APEX_MM_DRIFT_THRESHOLD = 2        # Reprice ladder if midpoint moves 2+ cents
+APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
 
 # ─── Apex OBI: depth-gated posting + book-aware exits ─────────────────────────
@@ -7032,1105 +6855,533 @@ def _apex_depth_recovered(ticker, bot=None):
     return False
 
 
-def _apex_pull_unfilled_rungs(bot_id, bot, reason):
-    """Cancel all unfilled rung orders. Returns count of pulled rungs.
-    Detects fills that arrive during cancel to avoid orphans."""
-    pulled = 0
-    for rung in bot.get('rungs', []):
-        if rung.get('status') != 'posted':
+# ─── Apex MM: Core Functions ──────────────────────────────────────────────────
+
+def _apex_mm_midpoint(ticker):
+    """Calculate midpoint from LocalOrderbook. Returns int cents or None."""
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return None
+    age_s = time.time() - lob.last_update_ts
+    if age_s > 10:
+        return None
+    yes_bid = lob.get_best_bid('yes')
+    no_bid = lob.get_best_bid('no')
+    if not yes_bid or yes_bid <= 0 or not no_bid or no_bid <= 0:
+        return None
+    return round((yes_bid + (100 - no_bid)) / 2)
+
+
+def _apex_mm_levels(midpoint, start_gap, levels, spacing):
+    """Generate YES and NO bid prices for the ladder.
+    YES bids: midpoint - start_gap, midpoint - start_gap - spacing, ...
+    NO bids:  (100 - midpoint) - start_gap, (100 - midpoint) - start_gap - spacing, ...
+    Returns (yes_prices: list[int], no_prices: list[int]) sorted descending."""
+    yes_prices = []
+    no_prices = []
+    no_anchor = 100 - midpoint
+    for i in range(levels):
+        offset = start_gap + (i * spacing)
+        yp = midpoint - offset
+        np = no_anchor - offset
+        if yp >= 1:
+            yes_prices.append(int(yp))
+        if np >= 1:
+            no_prices.append(int(np))
+    return yes_prices, no_prices
+
+
+def _apex_mm_pull_all(bot_id, bot, reason):
+    """Cancel all live ladder orders. Set status to mm_depth_pulled."""
+    now = time.time()
+    cancelled = 0
+    for side_key in ('yes_orders', 'no_orders'):
+        for price, level in list(bot.get(side_key, {}).items()):
+            oid = level.get('oid')
+            if not oid:
+                continue
+            cr = _cancel_with_retry(oid)
+            if cr == 'filled':
+                # Fill arrived during cancel — will be picked up by WS handler
+                pass
+            elif cr:
+                cancelled += 1
+            level['oid'] = None
+    bot['status'] = 'mm_depth_pulled'
+    bot['_pull_count'] = bot.get('_pull_count', 0) + 1
+    bot['_last_pull_at'] = now
+    bot['_last_pull_reason'] = reason
+    bot_log('APEX_MM_PULL', bot_id, {'reason': reason, 'cancelled': cancelled, 'pull_count': bot['_pull_count']})
+    print(f'📊 APEX MM PULL: {bot_id} cancelled {cancelled} orders — {reason} (pull #{bot["_pull_count"]})')
+    save_state()
+
+
+def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
+    """Post the full ladder. Returns True on success.
+    Builds yes_orders and no_orders dicts keyed by price string."""
+    ticker = bot['ticker']
+    qty = bot.get('qty_per_level', 10)
+    yes_paused = bot.get('_yes_side_paused', False)
+    no_paused = bot.get('_no_side_paused', False)
+
+    _order_group_id = None
+    try:
+        _order_group_id = _create_order_group(contracts_limit=qty * (len(yes_prices) + len(no_prices)) * 2)
+    except Exception:
+        pass
+
+    # Build order specs
+    yes_specs = []
+    no_specs = []
+    if not yes_paused:
+        for yp in yes_prices:
+            yes_specs.append({'ticker': ticker, 'side': 'yes', 'action': 'buy', 'count': qty, 'price': yp})
+    if not no_paused:
+        for np in no_prices:
+            no_specs.append({'ticker': ticker, 'side': 'no', 'action': 'buy', 'count': qty, 'price': np})
+
+    yes_results = []
+    no_results = []
+    if yes_specs:
+        yes_results = create_orders_batch(yes_specs, order_group_id=_order_group_id) or []
+    if no_specs:
+        no_results = create_orders_batch(no_specs, order_group_id=_order_group_id) or []
+
+    # Build order tracking dicts
+    yes_orders = {}
+    for i, yp in enumerate(yes_prices):
+        if yes_paused:
             continue
-        if rung.get('yes_fill_qty', 0) > 0 or rung.get('no_fill_qty', 0) > 0:
-            continue  # has partial fill — don't pull
-        _rung_filled = False
-        for side in ('yes', 'no'):
-            oid = rung.get(f'{side}_order_id')
+        result = yes_results[i] if i < len(yes_results) and yes_results[i] else None
+        if result:
+            resp, actual_price = result
+            oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
             if oid:
+                yes_orders[str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
+                bot.setdefault('_all_placed_order_ids', []).append(oid)
+
+    no_orders = {}
+    for i, np in enumerate(no_prices):
+        if no_paused:
+            continue
+        result = no_results[i] if i < len(no_results) and no_results[i] else None
+        if result:
+            resp, actual_price = result
+            oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+            if oid:
+                no_orders[str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
+                bot.setdefault('_all_placed_order_ids', []).append(oid)
+
+    # Merge with existing paused-side orders (keep them if they exist)
+    if yes_paused and bot.get('yes_orders'):
+        yes_orders = bot['yes_orders']
+    if no_paused and bot.get('no_orders'):
+        no_orders = bot['no_orders']
+
+    bot['yes_orders'] = yes_orders
+    bot['no_orders'] = no_orders
+    if _order_group_id:
+        bot['_order_group_id'] = _order_group_id
+        bot.setdefault('_all_order_group_ids', []).append(_order_group_id)
+
+    total_posted = len(yes_orders) + len(no_orders)
+    bot_log('APEX_MM_LADDER_POSTED', bot_id, {
+        'yes_levels': len(yes_orders), 'no_levels': len(no_orders),
+        'qty': qty, 'yes_paused': yes_paused, 'no_paused': no_paused,
+    })
+    print(f'📊 APEX MM POSTED: {bot_id} {len(yes_orders)}Y + {len(no_orders)}N levels @ {qty}qty')
+    return total_posted > 0
+
+
+def _apex_mm_repost_ladder(bot_id, bot):
+    """Recalculate midpoint and repost full ladder at fresh prices."""
+    ticker = bot['ticker']
+    now = time.time()
+
+    # Cooldown check
+    if now - bot.get('_last_pull_at', 0) < APEX_PULL_COOLDOWN_S:
+        return
+
+    midpoint = _apex_mm_midpoint(ticker)
+    if midpoint is None:
+        # Fallback: use WS prices
+        yb = bot.get('live_yes_bid', 0)
+        nb = bot.get('live_no_bid', 0)
+        if yb > 0 and nb > 0:
+            midpoint = round((yb + (100 - nb)) / 2)
+        else:
+            return  # can't calculate midpoint
+
+    yes_prices, no_prices = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'])
+    if not yes_prices and not no_prices:
+        return
+
+    success = _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices)
+    if success:
+        bot['midpoint'] = midpoint
+        bot['status'] = 'market_making_active'
+        bot['posted_at'] = now
+        bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'pull_count': bot.get('_pull_count', 0)})
+        print(f'📊 APEX MM REPOST: {bot_id} midpoint={midpoint} (pull #{bot.get("_pull_count", 0)})')
+    save_state()
+
+
+def _apex_mm_check_inventory(bot_id, bot):
+    """Pause/resume sides based on inventory limits."""
+    inv_limit = bot.get('inventory_limit', 50)
+    hysteresis = APEX_MM_INVENTORY_HYSTERESIS
+
+    # YES side
+    if bot.get('net_yes', 0) > inv_limit and not bot.get('_yes_side_paused'):
+        # Cancel all YES orders
+        for price, level in list(bot.get('yes_orders', {}).items()):
+            oid = level.get('oid')
+            if oid:
+                _cancel_with_retry(oid)
+                level['oid'] = None
+        bot['_yes_side_paused'] = True
+        bot_log('APEX_MM_INV_PAUSE', bot_id, {'side': 'yes', 'net': bot['net_yes'], 'limit': inv_limit})
+        print(f'⚠ APEX MM: {bot_id} YES paused (inv {bot["net_yes"]} > {inv_limit})')
+
+    elif bot.get('_yes_side_paused') and bot.get('net_yes', 0) < inv_limit - hysteresis:
+        # Resume YES quoting
+        bot['_yes_side_paused'] = False
+        midpoint = bot.get('midpoint', 50)
+        yes_prices, _ = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'])
+        qty = bot.get('qty_per_level', 10)
+        for yp in yes_prices:
+            try:
+                resp, actual_price = create_order_maker(bot['ticker'], 'yes', 'buy', qty, yp)
+                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                if oid:
+                    bot['yes_orders'][str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
+                    bot.setdefault('_all_placed_order_ids', []).append(oid)
+            except Exception as e:
+                print(f'⚠ APEX MM repost YES {yp}: {e}')
+        bot_log('APEX_MM_INV_RESUME', bot_id, {'side': 'yes', 'net': bot['net_yes']})
+        print(f'✅ APEX MM: {bot_id} YES resumed (inv {bot["net_yes"]} < {inv_limit - hysteresis})')
+
+    # NO side
+    if bot.get('net_no', 0) > inv_limit and not bot.get('_no_side_paused'):
+        for price, level in list(bot.get('no_orders', {}).items()):
+            oid = level.get('oid')
+            if oid:
+                _cancel_with_retry(oid)
+                level['oid'] = None
+        bot['_no_side_paused'] = True
+        bot_log('APEX_MM_INV_PAUSE', bot_id, {'side': 'no', 'net': bot['net_no'], 'limit': inv_limit})
+        print(f'⚠ APEX MM: {bot_id} NO paused (inv {bot["net_no"]} > {inv_limit})')
+
+    elif bot.get('_no_side_paused') and bot.get('net_no', 0) < inv_limit - hysteresis:
+        bot['_no_side_paused'] = False
+        midpoint = bot.get('midpoint', 50)
+        _, no_prices = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'])
+        qty = bot.get('qty_per_level', 10)
+        for np_price in no_prices:
+            try:
+                resp, actual_price = create_order_maker(bot['ticker'], 'no', 'buy', qty, np_price)
+                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                if oid:
+                    bot['no_orders'][str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
+                    bot.setdefault('_all_placed_order_ids', []).append(oid)
+            except Exception as e:
+                print(f'⚠ APEX MM repost NO {np_price}: {e}')
+        bot_log('APEX_MM_INV_RESUME', bot_id, {'side': 'no', 'net': bot['net_no']})
+        print(f'✅ APEX MM: {bot_id} NO resumed (inv {bot["net_no"]} < {inv_limit - hysteresis})')
+
+
+def _apex_mm_check_loss_limit(bot_id, bot):
+    """Check unrealized P&L. Returns True if loss limit hit (begin exit)."""
+    loss_limit = bot.get('loss_limit_cents', 500)
+    if loss_limit <= 0:
+        return False
+
+    unrealized = 0
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+
+    if net_yes > 0:
+        live_bid = bot.get('live_yes_bid', 0)
+        avg_cost = bot.get('avg_yes_cost', 0)
+        if live_bid > 0 and avg_cost > 0:
+            unrealized += (live_bid - avg_cost) * net_yes
+
+    if net_no > 0:
+        live_bid = bot.get('live_no_bid', 0)
+        avg_cost = bot.get('avg_no_cost', 0)
+        if live_bid > 0 and avg_cost > 0:
+            unrealized += (live_bid - avg_cost) * net_no
+
+    bot['_unrealized_pnl'] = unrealized
+
+    if unrealized < -loss_limit:
+        _apex_mm_begin_exit(bot_id, bot, f'loss_limit ({unrealized}c < -{loss_limit}c)')
+        return True
+    return False
+
+
+def _apex_mm_repost_filled(bot_id, bot):
+    """Repost any fully filled levels (continuous quoting)."""
+    ticker = bot['ticker']
+    qty = bot.get('qty_per_level', 10)
+
+    for side_key, side_name in [('yes_orders', 'yes'), ('no_orders', 'no')]:
+        if bot.get(f'_{side_name}_side_paused'):
+            continue
+        for price_str, level in list(bot.get(side_key, {}).items()):
+            if level.get('fill_qty', 0) >= level.get('qty', qty):
+                # Fully filled — repost at same price
+                old_oid = level.get('oid')
+                price = int(price_str)
+                try:
+                    resp, actual_price = create_order_maker(ticker, side_name, 'buy', qty, price)
+                    oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                    if oid:
+                        level['oid'] = oid
+                        level['fill_qty'] = 0
+                        level['qty'] = qty
+                        bot.setdefault('_all_placed_order_ids', []).append(oid)
+                        print(f'🔄 APEX MM REPOST: {bot_id} {side_name.upper()} @{actual_price}c')
+                except Exception as e:
+                    print(f'⚠ APEX MM repost {side_name} @{price}: {e}')
+
+
+def _apex_mm_drift_check(bot_id, bot):
+    """Reprice ladder if midpoint has moved significantly."""
+    ticker = bot['ticker']
+    current_mid = _apex_mm_midpoint(ticker)
+    if current_mid is None:
+        return
+
+    old_mid = bot.get('midpoint', 50)
+    drift = abs(current_mid - old_mid)
+
+    if drift < APEX_MM_DRIFT_THRESHOLD:
+        return
+
+    # Cancel all unfilled orders and repost at new prices
+    cancelled = 0
+    for side_key in ('yes_orders', 'no_orders'):
+        for price, level in list(bot.get(side_key, {}).items()):
+            oid = level.get('oid')
+            if oid and level.get('fill_qty', 0) < level.get('qty', 1):
                 cr = _cancel_with_retry(oid)
                 if cr == 'filled':
-                    _rung_filled = True
-                    print(f'⚠ APEX PULL: {bot_id} {side} order filled during cancel — aborting pull for this rung')
-                    break
-                rung[f'{side}_order_id'] = None
-        if _rung_filled:
-            continue
-        rung['status'] = 'depth_pulled'
-        rung['_pull_reason'] = reason
-        rung['_pulled_at'] = time.time()
-        pulled += 1
-    if pulled > 0:
-        bot['_pull_count'] = bot.get('_pull_count', 0) + 1
-        bot['_last_pull_at'] = time.time()
-        bot['_last_pull_reason'] = reason
-        bot_log('APEX_DEPTH_PULL', bot_id, {
-            'reason': reason, 'pulled_rungs': pulled,
-            'pull_count': bot.get('_pull_count', 0),
-            'obi': _apex_obi_snapshot(bot.get('ticker', '')),
-        })
-        print(f'🛑 APEX DEPTH PULL: {bot_id} pulled {pulled} rungs — {reason} (cycle {bot.get("_pull_count", 0)})')
-    return pulled
+                    pass  # WS handler picks it up
+                elif cr:
+                    cancelled += 1
+                level['oid'] = None
 
-
-def _apex_post_rung_hedge(bot_id, rung_idx):
-    """Post a per-rung hedge after anchor fill. Called from daemon thread.
-    Each rung fires its own hedge independently — no consolidation."""
-    now = time.time()
-    with ws_fill_lock:
-        bot = active_bots.get(bot_id)
-        if not bot:
-            return
-        rungs = bot.get('rungs', [])
-        if rung_idx >= len(rungs):
-            return
-        rung = rungs[rung_idx]
-        if rung.get('status') not in ('anchor_filled',):
-            return  # already processed or cancelled
-        anchor_side = rung.get('anchor_side')
-        if not anchor_side:
-            return
-        hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-        anchor_price = rung.get(f'{anchor_side}_price', 0)
-        width = rung.get('width', 5)
-        qty = rung.get('quantity', bot.get('quantity', 1))
-        ticker = bot['ticker']
-        _bot_ceiling = bot.get('hard_ceiling', HARD_CEILING_CENTS)
-
-        # Compute hedge price: full profit target
-        target_hedge = 100 - anchor_price - width
-        max_safe = _bot_ceiling - anchor_price
-        hedge_price = max(1, min(target_hedge, max_safe))
-
-        # Store target prices for time-decay
-        rung['target_hedge_price'] = hedge_price
-        rung['scratch_price'] = max(1, min(100 - anchor_price, max_safe))  # breakeven
-        rung['stop_price'] = None  # computed at panic time from live bid
-
-        # Cancel THIS rung's opposite-side order (check if filled first)
-        opp_oid = rung.get(f'{hedge_side}_order_id')
-        opp_filled = rung.get(f'{hedge_side}_fill_qty', 0) >= qty
-
-    # If both sides already filled (cancel-race), instant completion
-    if opp_filled:
-        with ws_fill_lock:
-            rung = active_bots.get(bot_id, {}).get('rungs', [{}] * (rung_idx + 1))[rung_idx]
-            rung['status'] = 'completed'
-            rung['completed'] = True
-            rung['hedge_fill_qty'] = qty
-            rung['hedge_fill_at'] = now
-            bot_log('APEX_RUNG_CANCEL_RACE_COMPLETE', bot_id, {
-                'rung_idx': rung_idx, 'width': width,
-                'yes_price': rung.get('yes_price', 0), 'no_price': rung.get('no_price', 0),
-            })
-            print(f'✅ APEX RUNG CANCEL-RACE: {bot_id} rung#{rung_idx} ({width}c) both sides filled!')
-        _apex_record_rung_pnl(bot_id, rung_idx)
-        save_state()
-        return
-
-    # The opposite-side order IS the hedge — it was posted at creation at the target width.
-    # Don't cancel it, don't post a new one. Just track it and start the snap timer.
-    hedge_oid = opp_oid
-    actual_hedge = rung.get(f'{hedge_side}_price', 0)
-
-    if not hedge_oid:
-        # No opposite order (maybe cancelled externally) — post fresh
-        try:
-            hedge_resp, actual_hedge = create_order_maker(
-                ticker=ticker, side=hedge_side, action='buy',
-                count=qty, price=hedge_price, priority=True,
-                skip_rate_limit=True,
-            )
-            hedge_oid = hedge_resp['order']['order_id']
-            print(f'🆕 APEX RUNG HEDGE (fresh): {bot_id} rung#{rung_idx} ({width}c) → {hedge_side}@{actual_hedge}c x{qty}')
-        except Exception as e:
-            print(f'❌ APEX RUNG HEDGE FAIL: {bot_id} rung#{rung_idx}: {e}')
-            with ws_fill_lock:
-                rung = active_bots.get(bot_id, {}).get('rungs', [{}] * (rung_idx + 1))[rung_idx]
-                rung['status'] = 'snapped'
-                rung['time_stage'] = 'snapped'
-                rung['stage_entered_at'] = now
-            save_state()
-            return
-    else:
-        print(f'🎯 APEX RUNG HEDGE: {bot_id} rung#{rung_idx} ({width}c) {anchor_side}@{anchor_price}c → existing {hedge_side}@{actual_hedge}c (oid={hedge_oid[:12]})')
-
-    # Record hedge latency
-    _hedge_posted_at = time.time()
-    _anchor_fill_at = rung.get('anchor_fill_at')
-    _raw_ms = None
-    _rt_ms = None
-    if _anchor_fill_at:
-        _rt_ms = (_hedge_posted_at - _anchor_fill_at) * 1000
-        _record_latency('fill_to_hedge_apex', _rt_ms, {'bot_id': bot_id, 'rung': rung_idx, 'width': width})
-        _raw_ms = _rt_ms  # for apex, raw ≈ rt (hedge is the existing opposite order, not a new API call)
-        _record_latency('raw_hedge_apex', _raw_ms, {'bot_id': bot_id, 'rung': rung_idx, 'width': width})
-
-    # Store hedge info in rung state
-    with ws_fill_lock:
-        bot = active_bots.get(bot_id)
-        if not bot:
-            return
-        rung = bot['rungs'][rung_idx]
-        rung['hedge_order_id'] = hedge_oid
-        rung['hedge_price'] = actual_hedge or hedge_price
-        rung['target_hedge_price'] = actual_hedge or hedge_price  # remember target for re-snap
-        rung['status'] = 'pending_profit'
-        rung['time_stage'] = 'pending_profit'
-        rung['stage_entered_at'] = now
-        rung['hedge_fill_qty'] = 0
-        rung[f'{hedge_side}_order_id'] = None  # clear old opposite order ref
-        if _rt_ms is not None:
-            rung['hedge_latency_ms'] = round(_rt_ms, 1)
-            rung['raw_hedge_ms'] = round(_raw_ms, 1) if _raw_ms else None
-            bot['hedge_latency_ms'] = round(_rt_ms, 1)
-            bot['raw_hedge_ms'] = round(_raw_ms, 1) if _raw_ms else None
-
-    bot_log('APEX_RUNG_HEDGE_POSTED', bot_id, {
-        'rung_idx': rung_idx, 'width': width, 'anchor_side': anchor_side,
-        'anchor_price': anchor_price, 'hedge_side': hedge_side,
-        'hedge_price': actual_hedge or hedge_price, 'hedge_oid': hedge_oid[:12],
-        'qty': qty, 'target': target_hedge, 'scratch': rung.get('scratch_price'),
-    })
+    # Repost at new midpoint
+    yes_prices, no_prices = _apex_mm_levels(current_mid, bot['start_gap'], bot['levels'], bot['spacing'])
+    _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices)
+    bot['midpoint'] = current_mid
+    bot_log('APEX_MM_DRIFT', bot_id, {'old_mid': old_mid, 'new_mid': current_mid, 'drift': drift, 'cancelled': cancelled})
+    print(f'📊 APEX MM DRIFT: {bot_id} {old_mid} → {current_mid} ({drift}c), repriced')
     save_state()
 
 
-def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
-    """Apex rung monitor. Simple system:
-    1. Poll hedge fill status (backup for WS)
-    2. Profit snap: combined ≤ 96¢ → snap to bid+1, fast fill
-    3. Snap to bid: always follow the market
-    4. Delta-adjusted stop-loss: combined > 100 + threshold → taker exit
-    5. Dead market: bid=0 for 30s → exit"""
+def _apex_mm_begin_exit(bot_id, bot, reason):
+    """Cancel all unfilled orders and begin exit sequence."""
+    # Cancel all live orders
+    for side_key in ('yes_orders', 'no_orders'):
+        for price, level in list(bot.get(side_key, {}).items()):
+            oid = level.get('oid')
+            if oid:
+                _cancel_with_retry(oid)
+                level['oid'] = None
+
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+
+    if net_yes == 0 and net_no == 0:
+        # Flat — done
+        bot['status'] = 'completed'
+        bot['completed_at'] = time.time()
+        bot_log('APEX_MM_COMPLETE', bot_id, {
+            'reason': reason, 'realized_pnl': bot.get('realized_pnl_cents', 0),
+            'round_trips': bot.get('round_trips_completed', 0),
+        })
+        print(f'✅ APEX MM COMPLETE: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
+    else:
+        # Holding inventory — need to sell back
+        bot['status'] = 'mm_exiting'
+        bot['_exit_reason'] = reason
+        bot['_exit_started_at'] = time.time()
+        bot['_exit_sell_oids'] = {}
+
+        ticker = bot['ticker']
+        # Post maker sell orders for held inventory
+        for side, net_qty, avg_cost in [('yes', net_yes, bot.get('avg_yes_cost', 0)), ('no', net_no, bot.get('avg_no_cost', 0))]:
+            if net_qty <= 0:
+                continue
+            live_bid = bot.get(f'live_{side}_bid', 0)
+            sell_price = max(1, live_bid) if live_bid > 0 else max(1, avg_cost - 5)
+            try:
+                resp, actual_price = create_order_maker(ticker, side, 'sell', net_qty, sell_price)
+                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                if oid:
+                    bot['_exit_sell_oids'][side] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time()}
+                    bot.setdefault('_all_placed_order_ids', []).append(oid)
+                    print(f'🚪 APEX MM EXIT: {bot_id} selling {side.upper()} {net_qty}x @{actual_price}c')
+            except Exception as e:
+                print(f'⚠ APEX MM exit sell {side}: {e}')
+
+        bot_log('APEX_MM_EXIT_START', bot_id, {
+            'reason': reason, 'net_yes': net_yes, 'net_no': net_no,
+            'realized_pnl': bot.get('realized_pnl_cents', 0),
+        })
+    save_state()
+
+
+def _apex_mm_exit_tick(bot_id, bot):
+    """Monitor exit sell orders. Follow bid down every 5s."""
     now = time.time()
+    ticker = bot['ticker']
+    all_sold = True
+
+    for side in ('yes', 'no'):
+        sell_info = bot.get('_exit_sell_oids', {}).get(side)
+        if not sell_info:
+            continue
+        oid = sell_info.get('oid')
+        if not oid:
+            continue
+
+        all_sold = False
+        # Check fill status (throttled)
+        if now - sell_info.get('_last_check', 0) < 3:
+            continue
+        sell_info['_last_check'] = now
+
+        if not api_read_limiter.try_wait():
+            continue
+        try:
+            resp = kalshi_client.get_order(oid)
+            order = resp.get('order', resp) if isinstance(resp, dict) else {}
+            filled = _parse_fill_count(order)
+            target = sell_info.get('qty', 0)
+
+            if filled >= target:
+                # Fully sold
+                actual_price = int(order.get('yes_price', 0) or order.get('no_price', 0))
+                net_qty = bot.get(f'net_{side}', 0)
+                avg_cost = bot.get(f'avg_{side}_cost', 0)
+                loss = (avg_cost - actual_price) * target if avg_cost > actual_price else 0
+                bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) - loss
+                bot[f'net_{side}'] = 0
+                bot[f'avg_{side}_cost'] = 0
+                bot[f'total_{side}_cost'] = 0
+                sell_info['oid'] = None
+                sell_info['filled'] = True
+                # Record sellback trade
+                _record_trade({
+                    'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                    'result': 'mm_sellback', 'exit_via': bot.get('_exit_reason', 'exit'),
+                    f'{side}_price': actual_price, 'quantity': target,
+                    'loss_cents': loss, 'net_pnl': -loss,
+                    'timestamp': now, 'fill_source': 'apex_mm_exit',
+                })
+                print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (loss={loss}c)')
+                all_sold = True  # will recheck
+            elif now - sell_info.get('posted_at', now) > 5:
+                # Follow bid down
+                live_bid = bot.get(f'live_{side}_bid', 0)
+                if live_bid > 0 and live_bid != sell_info.get('price', 0):
+                    try:
+                        _cancel_with_retry(oid)
+                        remaining = target - filled
+                        resp2, new_price = create_order_maker(ticker, side, 'sell', remaining, live_bid)
+                        new_oid = resp2.get('order', {}).get('order_id', '') if isinstance(resp2, dict) else ''
+                        if new_oid:
+                            sell_info['oid'] = new_oid
+                            sell_info['price'] = new_price
+                            sell_info['posted_at'] = now
+                            sell_info['qty'] = remaining
+                            bot.setdefault('_all_placed_order_ids', []).append(new_oid)
+                    except Exception as e:
+                        print(f'⚠ APEX MM exit follow bid {side}: {e}')
+        except Exception as e:
+            print(f'⚠ APEX MM exit check {side}: {e}')
+
+    # Check if all sides are done
+    yes_done = not bot.get('_exit_sell_oids', {}).get('yes', {}).get('oid')
+    no_done = not bot.get('_exit_sell_oids', {}).get('no', {}).get('oid')
+    if yes_done and no_done and bot.get('net_yes', 0) <= 0 and bot.get('net_no', 0) <= 0:
+        bot['status'] = 'completed'
+        bot['completed_at'] = now
+        bot_log('APEX_MM_COMPLETE', bot_id, {
+            'reason': bot.get('_exit_reason', 'exit'),
+            'realized_pnl': bot.get('realized_pnl_cents', 0),
+            'round_trips': bot.get('round_trips_completed', 0),
+        })
+        print(f'✅ APEX MM DONE: {bot_id} all exits filled, pnl={bot.get("realized_pnl_cents", 0)}c')
+    save_state()
+
+
+def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
+    """Record P&L when a fill closes position. Uses weighted average cost basis.
+    fill_side: the side that just filled ('yes' or 'no')
+    fill_price: the price of this fill
+    close_qty: how many contracts are closing the opposite side's position"""
+    opposite = 'no' if fill_side == 'yes' else 'yes'
+    opp_avg = bot.get(f'avg_{opposite}_cost', 0)
     ticker = bot.get('ticker', '')
-    anchor_side = rung.get('anchor_side')
-    if not anchor_side:
-        return
-    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-    anchor_price = rung.get(f'{anchor_side}_price', 0)
-    width = rung.get('width', 5)
-    qty = rung.get('quantity', bot.get('quantity', 1))
-    hedge_oid = rung.get('hedge_order_id')
 
-    # ── Poll hedge fill status (backup for WS misses) ──
-    # Uses try_wait() to NEVER block the monitor lock
-    if hedge_oid:
-        if now - rung.get('_last_hedge_poll', 0) >= 5 and api_read_limiter.try_wait():
-            rung['_last_hedge_poll'] = now
-            try:
-                resp = kalshi_client.get_order(hedge_oid)
-                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                filled = _parse_fill_count(ord_data)
-                ord_status = ord_data.get('status', '')
-                if filled >= qty:
-                    rung['hedge_fill_qty'] = filled
-                    rung['hedge_fill_at'] = rung.get('hedge_fill_at') or now
-                    rung['status'] = 'completed'
-                    rung['completed'] = True
-                    print(f'✅ APEX RUNG COMPLETED (poll): {bot_id} rung#{rung_idx} ({width}c) hedge filled')
-                    _apex_record_rung_pnl(bot_id, rung_idx)
-                    save_state()
-                    return
-                elif filled > rung.get('hedge_fill_qty', 0):
-                    rung['hedge_fill_qty'] = filled
-                    if not rung.get('hedge_fill_at'):
-                        rung['hedge_fill_at'] = now
-                if ord_status in ('canceled', 'cancelled'):
-                    print(f'⚠ APEX RUNG: {bot_id} rung#{rung_idx} hedge cancelled externally → will repost')
-                    rung['hedge_order_id'] = None
-                    hedge_oid = None
-            except Exception as e:
-                if '404' in str(e):
-                    rung['hedge_order_id'] = None
-                    hedge_oid = None
+    # P&L: 100 - cost_of_opposite - cost_of_this_fill
+    gross_pnl_per = 100 - opp_avg - fill_price
+    gross_pnl = gross_pnl_per * close_qty
 
-    # Get live market prices — WS first, orderbook fallback every 15s
-    # ALWAYS refresh periodically — WS can silently stop updating, leaving stale prices
-    # Uses try_wait() to NEVER block the monitor lock — skip if rate limit exhausted
-    hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
-    hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
-    anchor_bid_live = bot.get(f'live_{anchor_side}_bid', 0)
-    _ob_stale = now - rung.get('_last_ob_fallback', 0) > 15
-    if hedge_bid <= 0 or anchor_bid_live <= 0 or _ob_stale:
-        if now - rung.get('_last_ob_fallback', 0) > (10 if hedge_bid <= 0 else 15):
-            if api_read_limiter.try_wait():  # non-blocking — skip if burst exhausted
-                rung['_last_ob_fallback'] = now
-                try:
-                    _ob = kalshi_client.get_market_orderbook(bot['ticker'])
-                    _hb = _best_bid(_ob, hedge_side)
-                    _ha = _best_ask(_ob, hedge_side)
-                    _ab = _best_bid(_ob, anchor_side)
-                    if _hb > 0:
-                        hedge_bid = _hb
-                        bot[f'live_{hedge_side}_bid'] = _hb
-                    if _ha > 0:
-                        hedge_ask = _ha
-                        bot[f'live_{hedge_side}_ask'] = _ha
-                    if _ab > 0:
-                        anchor_bid_live = _ab
-                        bot[f'live_{anchor_side}_bid'] = _ab
-                except Exception:
-                    pass
-    current_hedge_price = rung.get('hedge_price', 0)
+    # Fees
+    fee_opp = _kalshi_side_fee_cents(opp_avg, close_qty)
+    fee_this = _kalshi_side_fee_cents(fill_price, close_qty)
+    total_fee = fee_opp + fee_this
 
-    # Hedge order lost? Repost — capped at target during normal game, uncapped after timeout
-    if not hedge_oid and rung.get('hedge_fill_qty', 0) < qty and not rung.get('_sellback_pending'):
-        target_hedge = rung.get('target_hedge_price', 0) or max(1, 100 - anchor_price - width)
-        if rung.get('_timeout_uncapped'):
-            repost_price = hedge_bid if hedge_bid > 0 else target_hedge
-        else:
-            repost_price = min(hedge_bid, target_hedge) if hedge_bid > 0 else target_hedge
-        _apex_snap_hedge(bot_id, bot, rung, rung_idx, repost_price)
-        return
+    net_pnl = gross_pnl - total_fee
 
-    # ── DEAD MARKET: bid=0 for 30s → exit ──
-    if hedge_bid <= 0:
-        if not rung.get('_dead_market_at'):
-            rung['_dead_market_at'] = now
-            return
-        if now - rung['_dead_market_at'] < 30:
-            return
-        _dead_hfq = rung.get('hedge_fill_qty', 0)
-        if hedge_oid:
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(hedge_oid)
-            except Exception:
-                pass
-            rung['hedge_order_id'] = None
-        if _dead_hfq > 0:
-            print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) {_dead_hfq}/{qty} hedge → sellback')
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, _apex_stop_loss_threshold(width, anchor_price))
-        else:
-            rung['status'] = 'completed'
-            rung['completed'] = True
-            rung['_snap_reason'] = 'dead_market'
-            print(f'💀 APEX DEAD MARKET: {bot_id} rung#{rung_idx} ({width}c) no bid 30s → loss')
-            _apex_record_rung_pnl(bot_id, rung_idx)
-        save_state()
-        return
-    rung['_dead_market_at'] = None
+    # Update bot
+    bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + net_pnl
+    bot['round_trips_completed'] = bot.get('round_trips_completed', 0) + 1
 
-    # ── SELLBACK RETRY: if previous sellback failed, retry ──
-    if rung.get('_sellback_pending'):
-        _sl = _apex_stop_loss_threshold(width, anchor_price)
-        _combined_now = anchor_price + hedge_bid
-        if _combined_now <= 100 + _sl:
-            rung['_sellback_pending'] = False  # market recovered
-        else:
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, _combined_now, _sl)
-            return
-
-    # ── Compute game phase + rung age (needed for both profit snap delay and exit timeout) ──
-    anchor_filled_at = rung.get('anchor_fill_at') or rung.get('filled_at') or 0
-    _rung_age = (now - anchor_filled_at) if anchor_filled_at else 0
-    _game_phase = bot.get('game_phase', 'live')
-    _rung_timeout = 999999  # default: no exit timeout (pregame + most of game)
-    _profit_snap_delay = 120  # default: wait 120s before profit snap in normal game
-    # Throttle ESPN check to every 30s per bot (don't hammer ESPN every 2s)
-    _last_gc_check = bot.get('_last_game_context_check', 0)
-    if now - _last_gc_check >= 30:
-        bot['_last_game_context_check'] = now
-        try:
-            _gc = _get_game_context(ticker)
-            if _gc:
-                _new_period = _gc.get('period', 0)
-                _new_clock = _gc.get('clock', '')
-                _old_period = bot.get('_cached_game_period', 0)
-                # Sanity: don't jump forward >1 period at once (ESPN glitch guard)
-                # Allow same or +1, but if it jumps from 2→4 or 0→4 with 0:00, ignore
-                _new_secs = _parse_clock_seconds(_new_clock)
-                _suspicious = (_new_period > _old_period + 1 and _old_period > 0) or \
-                              (_new_period > _old_period and _new_secs is not None and _new_secs == 0 and _old_period > 0)
-                if _suspicious:
-                    print(f'⚠ APEX ESPN GLITCH GUARD: {bot_id} period jumped {_old_period}→{_new_period} clock={_new_clock} — keeping old cache')
-                else:
-                    bot['_cached_game_period'] = _new_period
-                    bot['_cached_game_clock'] = _new_clock
-        except Exception:
-            pass
-    _period = bot.get('_cached_game_period', 0)
-    _clock_secs = _parse_clock_seconds(bot.get('_cached_game_clock', ''))
-    _series = ticker.split('-')[0].upper() if ticker else ''
-    _rule = None
-    for _pref, _r in _LATE_GAME_RULES.items():
-        if _series.startswith(_pref):
-            _rule = _r
-            break
-    if _rule and _period >= _rule['final']:
-        if _clock_secs is not None and _clock_secs <= 120:
-            _rung_timeout = 30   # last 2 min: aggressive 30s
-            _profit_snap_delay = 10  # profit snap after 10s
-        elif _clock_secs is not None and _clock_secs <= 300:
-            _rung_timeout = 90   # last 5 min: 90s
-            _profit_snap_delay = 30  # profit snap after 30s
-        else:
-            _rung_timeout = 180  # early in final period: 3 min
-            _profit_snap_delay = 60  # profit snap after 60s
-        rung['_snap_timer'] = _rung_timeout  # update display
-
-    # ── Book-aware timer modulation: tighten timers when hedge side is thin ──
-    _lob = _local_orderbooks.get(ticker)
-    _hedge_depth = 0
-    _hedge_vanishing = False
-    if _lob and _lob.last_update_ts > 0 and (time.time() - _lob.last_update_ts) < 10:
-        _hedge_depth = _lob.get_total_depth(hedge_side, 3)
-        _hedge_vanishing = _lob.detect_vanishing_liquidity(hedge_side)
-        rung['_hedge_depth'] = round(_hedge_depth)
-        rung['_hedge_vanishing'] = _hedge_vanishing
-        # Modulate timers based on hedge-side depth
-        if _hedge_vanishing or _hedge_depth < 200:
-            # Hedge side evaporating — snap immediately if profitable, fast timeout
-            _profit_snap_delay = min(_profit_snap_delay, 3)
-            _rung_timeout = min(_rung_timeout, 15)
-        elif _hedge_depth < APEX_DEPTH_PULL_MIN:
-            # Thin hedge — cut delays in half
-            _profit_snap_delay = min(_profit_snap_delay, 15)
-            _rung_timeout = min(_rung_timeout, 45)
-        elif _hedge_depth < APEX_DEPTH_RECOVER_MIN:
-            # Moderate hedge — slightly tighter
-            _profit_snap_delay = min(_profit_snap_delay, 30)
-            _rung_timeout = min(_rung_timeout, 90)
-        # Thick depth (>= APEX_DEPTH_RECOVER_MIN) → keep game-phase timers as-is
-
-    # ── PROFIT SNAP: if combined at bid is profitable AND rung has waited long enough ──
-    # Early game: be patient, wait for full-width fill. As game progresses, take profit faster.
-    if _rung_age >= _profit_snap_delay:
-        if hedge_bid > 0 and current_hedge_price > 0 and hedge_bid > current_hedge_price:
-            _profit_combined = anchor_price + hedge_bid
-            if _profit_combined <= 98:  # still profitable after fees
-                _apex_snap_hedge(bot_id, bot, rung, rung_idx, hedge_bid)
-                rung['_snap_reason'] = f'profit_snap_{_profit_combined}c_{int(_rung_age)}s'
-                return
-
-    # ── HARD TIMEOUT: snap to bid or sell back, whichever is cheaper ──
-    # No drift-based stop-loss — anchor bid dropping doesn't affect hedge fill price.
-    # If hedge fills at target width, profit is guaranteed regardless of anchor bid.
-
-    # Update frontend display fields
-    anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)
-    _drop_now = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else 0
-    rung['_midpoint_dist'] = _drop_now
-    rung['_snap_timer'] = _rung_timeout if _rung_timeout < 999999 else None  # only show when active
-    rung['_drift_started_at'] = anchor_filled_at if anchor_filled_at else None
-    rung['_stop_loss_threshold'] = 0  # no drift threshold — time-based only
-
-    if _rung_age >= _rung_timeout and anchor_filled_at:
-        # At timeout: compare completing arb (maker) vs selling anchor (maker), pick cheaper.
-        # Both paths use maker limit orders — no taker fees.
-        _bid_combined = anchor_price + hedge_bid if hedge_bid > 0 else 999
-        _snap_cost = max(0, _bid_combined - 100)  # ¢ loss per contract from completing at bid
-        _sellback_cost = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else anchor_price  # ¢ loss from selling anchor at bid
-
-        # Maker exit patience: just keep the maker sell posted, walk with bid
-        # No taker fallback — maker only
-
-        if not _first_timeout_snap:
-            rung['_first_timeout_snap_at'] = now
-
-        # Both exits are maker — compare costs and pick cheaper
-        if hedge_bid > 0 and _snap_cost <= _sellback_cost:
-            # Complete arb (maker): snap hedge to bid
-            _max_hedge = 100 - anchor_price
-            _uncapped_snap = min(hedge_bid, max(1, _max_hedge + 5))
-            if _uncapped_snap < hedge_bid:
-                # Snap unreachable — switch to maker sellback instead
-                _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid_now)
-                return
-            rung['_snap_reason'] = f'timeout_snap_{_uncapped_snap}c'
-            rung['_timeout_uncapped'] = True
-            print(f'⏰ APEX TIMEOUT SNAP: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s → maker arb @{_uncapped_snap}¢ (snap={_snap_cost}¢ vs sell={_sellback_cost}¢)')
-            bot_log('APEX_TIMEOUT_SNAP', bot_id, {
-                'rung_idx': rung_idx, 'width': width,
-                'anchor_price': anchor_price, 'hedge_bid': hedge_bid,
-                'snap_price': _uncapped_snap, 'combined': anchor_price + _uncapped_snap,
-                'snap_cost': _snap_cost, 'sellback_cost': _sellback_cost,
-                'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
-            })
-            _apex_snap_hedge(bot_id, bot, rung, rung_idx, _uncapped_snap)
-        else:
-            # Sell anchor (maker): cancel hedge, post maker sell at anchor bid
-            print(f'⏰ APEX TIMEOUT MAKER SELL: {bot_id} rung#{rung_idx} ({width}c) {_rung_age:.0f}s, sell={_sellback_cost}¢ vs snap={_snap_cost}¢')
-            bot_log('APEX_TIMEOUT_MAKER_SELL', bot_id, {
-                'rung_idx': rung_idx, 'width': width,
-                'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
-                'hedge_bid': hedge_bid, 'combined': _bid_combined,
-                'snap_cost': _snap_cost, 'sellback_cost': _sellback_cost,
-                'age_s': round(_rung_age, 1), 'timeout_s': _rung_timeout,
-            })
-            _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid_now)
-        return
-
-    # ── SNAP TO BID: follow bid DOWN, but never above target (preserve width profit) ──
-    # If bid drops below target → follow it (better fill price)
-    # If bid is above target → stay at target (maintain profitable width)
-    # After timeout: uncapped — allow up to 100-anchor to complete the arb
-    if rung.get('_timeout_uncapped'):
-        target_hedge = max(1, 100 - anchor_price)  # uncapped: any profitable fill
+    # Smart mode tracking
+    if net_pnl < 0:
+        bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
     else:
-        target_hedge = rung.get('target_hedge_price', 0) or max(1, 100 - anchor_price - width)
-    spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-    bid_price = (hedge_bid + 1) if spread > 1 else hedge_bid
-    snap_price = max(1, min(bid_price, target_hedge))
+        bot['consecutive_losses'] = 0
 
-    rung['_snap_reason'] = f'at_bid_{snap_price}c'
-    needs_snap = (not hedge_oid) or (current_hedge_price != snap_price and now - rung.get('_last_snap', 0) >= 5)
-    if needs_snap:
-        rung['_last_snap'] = now
-        _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
+    # Deduct from opposite inventory
+    opp_net = bot.get(f'net_{opposite}', 0)
+    opp_total_cost = bot.get(f'total_{opposite}_cost', 0)
+    bot[f'net_{opposite}'] = max(0, opp_net - close_qty)
+    bot[f'total_{opposite}_cost'] = max(0, opp_total_cost - (opp_avg * close_qty))
+    if bot[f'net_{opposite}'] > 0:
+        bot[f'avg_{opposite}_cost'] = round(bot[f'total_{opposite}_cost'] / bot[f'net_{opposite}'])
+    else:
+        bot[f'avg_{opposite}_cost'] = 0
+        bot[f'total_{opposite}_cost'] = 0
 
-
-def _apex_snap_hedge(bot_id, bot, rung, rung_idx, new_price):
-    """Amend existing hedge to new_price — same approach as Phantom bid-follow.
-    Same order ID, no orphans, one API call. Falls back to fresh post if no order exists."""
-    anchor_side = rung.get('anchor_side', 'yes')
-    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-    ticker = bot['ticker']
-    total_qty = rung.get('quantity', bot.get('quantity', 1))
-    hedge_oid = rung.get('hedge_order_id')
-    already_filled = rung.get('hedge_fill_qty', 0)
-    remaining = total_qty - already_filled
-    if remaining <= 0:
-        return
-
-    # Skip if already at this price — avoid AMEND_ORDER_NO_OP loops
-    current_price = rung.get('hedge_price', 0)
-    if current_price == new_price and hedge_oid:
-        return
-
-    if hedge_oid:
-        # Amend existing order to new price (like Phantom does)
-        # NOTE: Kalshi amend count = new TOTAL (not remaining). For partial fills,
-        # send original total so only the unfilled portion moves to new price.
-        try:
-            price_kwargs = {f'{hedge_side}_price': new_price}
-            if not api_rate_limiter.try_wait():
-                return  # skip this snap cycle — will retry next tick
-
-            amend_resp = kalshi_client.amend_order(hedge_oid, ticker=ticker, side=hedge_side,
-                                     count=total_qty, action='buy', **price_kwargs)
-            # Capture new order ID if Kalshi reassigned (amend = cancel+repost internally)
-            _amend_ord = amend_resp.get('order', amend_resp) if isinstance(amend_resp, dict) else {}
-            _new_oid = _amend_ord.get('order_id', '')
-            if _new_oid and _new_oid != hedge_oid:
-                rung['hedge_order_id'] = _new_oid
-                bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
-                hedge_oid = _new_oid
-            rung['hedge_price'] = new_price
-            print(f'  📌 HEDGE AMEND: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining}rem (oid={str(hedge_oid)[:12]})')
-            save_state()
-            return
-        except Exception as e:
-            err = str(e)
-            if '404' in err:
-                # Order gone — check if it filled
-                try:
-                    api_read_limiter.wait()
-                    resp = kalshi_client.get_order(hedge_oid)
-                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                    filled = _parse_fill_count(ord_data)
-                    if filled >= total_qty:
-                        rung['hedge_fill_qty'] = filled
-                        rung['hedge_fill_at'] = rung.get('hedge_fill_at') or time.time()
-                        rung['status'] = 'completed'
-                        rung['completed'] = True
-                        print(f'✅ APEX RUNG COMPLETED (amend 404): {bot_id} rung#{rung_idx} hedge already filled')
-                        _apex_record_rung_pnl(bot_id, rung_idx)
-                        save_state()
-                        return
-                    elif filled > already_filled:
-                        rung['hedge_fill_qty'] = filled
-                        already_filled = filled
-                        remaining = total_qty - already_filled
-                except Exception:
-                    pass
-                rung['hedge_order_id'] = None
-                hedge_oid = None
-                print(f'  ⚠ HEDGE GONE: {bot_id} rung#{rung_idx} order 404 → posting fresh')
-            else:
-                # Non-404 amend failure — cancel and repost fresh (partial fill amend
-                # issues, 400 errors, etc). Don't loop on a broken amend forever.
-                print(f'  ⚠ HEDGE AMEND FAIL: {bot_id} rung#{rung_idx}: {e} → cancel+repost')
-                try:
-                    _cancel_with_retry(hedge_oid)
-                    # Check final fill count after cancel
-                    api_read_limiter.wait()
-                    resp = kalshi_client.get_order(hedge_oid)
-                    ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                    filled = _parse_fill_count(ord_data)
-                    if filled >= total_qty:
-                        rung['hedge_fill_qty'] = filled
-                        rung['hedge_fill_at'] = rung.get('hedge_fill_at') or time.time()
-                        rung['status'] = 'completed'
-                        rung['completed'] = True
-                        _apex_record_rung_pnl(bot_id, rung_idx)
-                        save_state()
-                        return
-                    if filled > already_filled:
-                        rung['hedge_fill_qty'] = filled
-                        already_filled = filled
-                        remaining = total_qty - already_filled
-                except Exception:
-                    pass
-                rung['hedge_order_id'] = None
-                hedge_oid = None
-
-    # No existing order — post fresh (initial hedge or after 404)
-    if remaining <= 0:
-        return
-    try:
-        price_kwargs = {f'{hedge_side}_price': new_price}
-        api_rate_limiter.wait()
-        resp = kalshi_client.create_order(
-            ticker=ticker, side=hedge_side, action='buy',
-            count=remaining, order_type='limit', post_only=True,
-            **price_kwargs
-        )
-        new_oid = (resp.get('order', resp) if isinstance(resp, dict) else resp).get('order_id', '')
-        rung['hedge_order_id'] = new_oid
-        rung['hedge_price'] = new_price
-        # Track for cleanup on bot cancel
-        if new_oid:
-            bot.setdefault('_all_placed_order_ids', []).append(new_oid)
-        print(f'  🆕 HEDGE POST: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{new_price}c x{remaining} (oid={new_oid[:12]})')
-        save_state()
-    except Exception as e:
-        print(f'  ❌ HEDGE POST FAIL: {bot_id} rung#{rung_idx}: {e}')
-        rung['hedge_order_id'] = None
-        save_state()
-
-
-def _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid):
-    """Start a maker sellback: cancel hedge, post a maker sell of the anchor position.
-    The sell order tracks like a hedge — checked each tick, snapped to bid."""
-    anchor_side = rung.get('anchor_side', 'yes')
-    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-    anchor_price = rung.get(f'{anchor_side}_price', 0)
-    qty = rung.get('quantity', bot.get('quantity', 1))
-    ticker = bot['ticker']
-    hedge_oid = rung.get('hedge_order_id')
-
-    # 1. Cancel hedge order
-    if hedge_oid:
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order(hedge_oid)
-        except Exception:
-            pass
-        # Check if hedge filled during cancel (race condition win)
-        try:
-            api_read_limiter.wait()
-            resp = kalshi_client.get_order(hedge_oid)
-            ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-            filled = _parse_fill_count(ord_data)
-            if filled >= qty:
-                rung['hedge_fill_qty'] = filled
-                rung['hedge_fill_at'] = time.time()
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                print(f'✅ APEX RUNG (maker-sell cancel-race): {bot_id} rung#{rung_idx} hedge filled during cancel')
-                _apex_record_rung_pnl(bot_id, rung_idx)
-                save_state()
-                return
-            if filled > rung.get('hedge_fill_qty', 0):
-                rung['hedge_fill_qty'] = filled
-        except Exception:
-            pass
-        rung['hedge_order_id'] = None
-
-    # 2. Compute qty to sell (total minus any partial hedge fills)
-    hedged_qty = rung.get('hedge_fill_qty', 0)
-    sell_qty = qty - hedged_qty
-    if sell_qty <= 0:
-        rung['status'] = 'completed'
-        rung['completed'] = True
-        _apex_record_rung_pnl(bot_id, rung_idx)
-        save_state()
-        return
-
-    # 3. Post maker sell at anchor_bid (rests as an ask — maker fees)
-    sell_price = max(1, anchor_bid) if anchor_bid > 0 else max(1, anchor_price - 5)
-    try:
-        resp, actual_price = create_order_maker(
-            ticker=ticker, side=anchor_side, action='sell',
-            count=sell_qty, price=sell_price, priority=True,
-        )
-        sell_oid = resp.get('order', resp).get('order_id', '') if isinstance(resp, dict) else ''
-        rung['_maker_sell_oid'] = sell_oid
-        rung['_maker_sell_price'] = actual_price
-        rung['_maker_sell_at'] = time.time()
-        rung['_maker_sell_qty'] = sell_qty
-        rung['_maker_sell_filled'] = 0
-        rung['status'] = 'maker_exit'
-        rung['_snap_reason'] = f'maker_sell@{actual_price}c'
-        bot.setdefault('_all_placed_order_ids', []).append(sell_oid)
-        print(f'📤 APEX MAKER SELL: {bot_id} rung#{rung_idx} {anchor_side.upper()} sell @{actual_price}¢ x{sell_qty} (oid={sell_oid[:12]})')
-        save_state()
-    except Exception as e:
-        print(f'❌ APEX MAKER SELL FAIL: {bot_id} rung#{rung_idx}: {e} — retry next cycle')
-        rung['_sellback_pending'] = True
-        save_state()
-
-
-def _apex_maker_exit_tick(bot_id, bot, rung, rung_idx):
-    """Monitor a maker sell exit order. Check fill, snap to current bid, exhaust to taker."""
-    now = time.time()
-    sell_oid = rung.get('_maker_sell_oid')
-    anchor_side = rung.get('anchor_side', 'yes')
-    anchor_price = rung.get(f'{anchor_side}_price', 0)
-    ticker = bot['ticker']
-    sell_qty = rung.get('_maker_sell_qty', 0)
-
-    if not sell_oid:
-        # No sell order — taker fallback
-        _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, 0)
-        return
-
-    # 1. Check fill status (every 5s)
-    if now - rung.get('_last_maker_sell_poll', 0) >= 5:
-        rung['_last_maker_sell_poll'] = now
-        if api_read_limiter.try_wait():
-            try:
-                resp = kalshi_client.get_order(sell_oid)
-                ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-                filled = _parse_fill_count(ord_data)
-                if filled >= sell_qty:
-                    # Fully sold — done
-                    rung['_maker_sell_filled'] = filled
-                    sell_price = rung.get('_maker_sell_price', 0)
-                    rung['stop_price'] = sell_price
-                    rung['_sellback_price'] = sell_price
-                    rung['status'] = 'completed'
-                    rung['completed'] = True
-                    print(f'✅ APEX MAKER SELL DONE: {bot_id} rung#{rung_idx} sold {anchor_side}@{sell_price}¢ x{filled}')
-                    _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback')
-                    save_state()
-                    return
-                elif filled > rung.get('_maker_sell_filled', 0):
-                    rung['_maker_sell_filled'] = filled
-                ord_status = ord_data.get('status', '')
-                if ord_status in ('canceled', 'cancelled'):
-                    rung['_maker_sell_oid'] = None
-                    sell_oid = None
-            except Exception as e:
-                if '404' in str(e):
-                    rung['_maker_sell_oid'] = None
-                    sell_oid = None
-
-    # 2. Snap to current bid (follow the market down)
-    anchor_bid_now = bot.get(f'live_{anchor_side}_bid', 0)
-    current_sell_price = rung.get('_maker_sell_price', 0)
-    if anchor_bid_now > 0 and anchor_bid_now != current_sell_price and sell_oid:
-        if now - rung.get('_last_maker_sell_snap', 0) >= 5:
-            rung['_last_maker_sell_snap'] = now
-            # Amend sell order to current bid
-            try:
-                price_kwargs = {f'{anchor_side}_price': anchor_bid_now}
-                if api_rate_limiter.try_wait():
-                    amend_resp = kalshi_client.amend_order(sell_oid, ticker=ticker, side=anchor_side,
-                                                          count=sell_qty, action='sell', **price_kwargs)
-                    _amend_ord = amend_resp.get('order', amend_resp) if isinstance(amend_resp, dict) else {}
-                    _new_oid = _amend_ord.get('order_id', '')
-                    if _new_oid and _new_oid != sell_oid:
-                        rung['_maker_sell_oid'] = _new_oid
-                        bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
-                    rung['_maker_sell_price'] = anchor_bid_now
-                    rung['_snap_reason'] = f'maker_sell@{anchor_bid_now}c'
-            except Exception:
-                pass
-
-    # 3. Exhaustion: if maker sell has been sitting 90s+, taker as last resort
-    _maker_sell_at = rung.get('_maker_sell_at', 0)
-    if _maker_sell_at and (now - _maker_sell_at) >= 90:
-        # Cancel maker sell and do taker
-        if sell_oid:
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(sell_oid)
-            except Exception:
-                pass
-            rung['_maker_sell_oid'] = None
-        print(f'⏰ APEX MAKER SELL EXHAUSTED: {bot_id} rung#{rung_idx} 90s → taker fallback')
-        _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, 0)
-
-
-def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, stop_loss):
-    """Stop-loss exit: cancel hedge, sell anchor back. Cheaper than chasing a runaway hedge.
-    Called when combined price exceeds stop-loss threshold."""
-    anchor_side = rung.get('anchor_side', 'yes')
-    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-    anchor_price = rung.get(f'{anchor_side}_price', 0)
-    qty = rung.get('quantity', bot.get('quantity', 1))
-    ticker = bot['ticker']
-    hedge_oid = rung.get('hedge_order_id')
-    width = rung.get('width', 5)
-
-    # 1. Cancel hedge order
-    if hedge_oid:
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order(hedge_oid)
-        except Exception:
-            pass
-        # Check if hedge filled during cancel (race condition)
-        try:
-            api_read_limiter.wait()
-            resp = kalshi_client.get_order(hedge_oid)
-            ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-            filled = _parse_fill_count(ord_data)
-            if filled >= qty:
-                # Hedge fully filled during cancel — complete normally
-                rung['hedge_fill_qty'] = filled
-                rung['hedge_fill_at'] = time.time()
-                rung['status'] = 'completed'
-                rung['completed'] = True
-                rung['_sellback_pending'] = False
-                print(f'✅ APEX RUNG (cancel-race): {bot_id} rung#{rung_idx} hedge filled during sellback cancel')
-                _apex_record_rung_pnl(bot_id, rung_idx)
-                save_state()
-                return
-            if filled > rung.get('hedge_fill_qty', 0):
-                rung['hedge_fill_qty'] = filled
-        except Exception:
-            pass
-        rung['hedge_order_id'] = None
-
-    # 2. Compute qty to sell back (total - already hedged)
-    hedged_qty = rung.get('hedge_fill_qty', 0)
-    sell_qty = qty - hedged_qty
-    if sell_qty <= 0:
-        rung['status'] = 'completed'
-        rung['completed'] = True
-        rung['_sellback_pending'] = False
-        _apex_record_rung_pnl(bot_id, rung_idx)
-        save_state()
-        return
-
-    # 3. Sell anchor position back as MAKER (post at bid, walk with bid)
-    anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
-    if anchor_bid <= 0:
-        # No bid — flag for retry next cycle
-        rung['_sellback_pending'] = True
-        print(f'⏳ APEX SELLBACK WAITING: {bot_id} rung#{rung_idx} no {anchor_side} bid — retry next cycle')
-        save_state()
-        return
-
-    try:
-        _sell_pk = {'yes_price': anchor_bid} if anchor_side == 'yes' else {'no_price': anchor_bid}
-        api_rate_limiter.wait()
-        resp = kalshi_client.create_order(
-            ticker=ticker, side=anchor_side, action='sell',
-            count=sell_qty, order_type='limit', **_sell_pk
-        )
-        sell_oid = resp.get('order', {}).get('order_id', '')
-        rung['_maker_sell_oid'] = sell_oid
-        rung['_maker_sell_price'] = anchor_bid
-        rung['_maker_sell_at'] = time.time()
-        rung['_maker_sell_qty'] = sell_qty
-        rung['_maker_sell_filled'] = 0
-        rung['status'] = 'maker_exit'
-        rung['_sellback_pending'] = False
-        rung['stop_price'] = anchor_bid
-        rung['_sellback_hedged_qty'] = hedged_qty  # track for cleanup after fill
-        bot.setdefault('_all_placed_order_ids', []).append(sell_oid)
-        print(f'📤 APEX MAKER SELLBACK: {bot_id} rung#{rung_idx} {anchor_side.upper()} sell @{anchor_bid}¢ x{sell_qty}')
-        save_state()
-    except Exception as e:
-        print(f'❌ APEX MAKER SELLBACK FAIL: {bot_id} rung#{rung_idx}: {e} — retry next cycle')
-        rung['_sellback_pending'] = True
-        save_state()
-        return
-
-    # Note: partial hedge cleanup happens after maker sell fills (in _apex_maker_exit_tick)
-
-
-def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
-    """Record P&L for a single completed/stopped rung.
-    Simple: profit = 100 - anchor_price - hedge_price per contract."""
-    now = time.time()
-    with ws_fill_lock:
-        bot = active_bots.get(bot_id)
-        if not bot:
-            return
-        rung = bot['rungs'][rung_idx]
-        if rung.get('_profit_recorded'):
-            return
-        rung['_profit_recorded'] = True
-
-        anchor_side = rung.get('anchor_side') or 'yes'  # None → 'yes' fallback
-        hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-        anchor_price = rung.get(f'{anchor_side}_price', 0)
-        if not anchor_price:
-            # Fallback: use yes/no prices directly (both-sides-fill case)
-            anchor_price = rung.get('yes_price', 0) if anchor_side == 'yes' else rung.get('no_price', 0)
-        width = rung.get('width', 5)
-        qty = rung.get('quantity', bot.get('quantity', 1))
-        ticker = bot['ticker']
-
-        if exit_type == 'panic_taker_sell':
-            # Sold anchor back — loss = anchor_price - sell_price
-            sell_price = rung.get('stop_price', 0)
-            loss_per = max(0, anchor_price - sell_price) if sell_price > 0 else anchor_price
-            profit_cents = 0
-            loss_cents = loss_per * qty
-            # Add fees
-            buy_fee = _kalshi_side_fee_cents(anchor_price, qty)
-            sell_fee = _kalshi_side_fee_cents(sell_price, qty) if sell_price > 0 else 0
-            total_fees = buy_fee + sell_fee
-            loss_cents += total_fees
-            yes_price = anchor_price if anchor_side == 'yes' else sell_price
-            no_price = anchor_price if anchor_side == 'no' else sell_price
-            result_type = 'apex_stop'
-        elif exit_type == 'rung_sellback':
-            # Stop-loss sellback: sold anchor back, possibly with partial hedge fills
-            sell_price = rung.get('stop_price', rung.get('_sellback_price', 0))
-            hedged_qty = rung.get('hedge_fill_qty', 0)
-            sell_qty = qty - hedged_qty
-            # Hedged portion P&L (if any partial fills completed before sellback)
-            hedged_pnl = 0
-            if hedged_qty > 0:
-                h_price = rung.get('hedge_price', 0)
-                hedged_pnl = (100 - anchor_price - h_price) * hedged_qty
-            # Sold-back portion loss
-            sellback_loss = max(0, anchor_price - sell_price) * sell_qty if sell_price > 0 else anchor_price * sell_qty
-            # Fees
-            buy_fee = _kalshi_side_fee_cents(anchor_price, qty)
-            hedge_fee = _kalshi_side_fee_cents(rung.get('hedge_price', 0), hedged_qty) if hedged_qty > 0 else 0
-            sell_fee = _kalshi_side_fee_cents(sell_price, sell_qty) if sell_price > 0 else 0
-            total_fees = buy_fee + hedge_fee + sell_fee
-            net = hedged_pnl - sellback_loss - total_fees
-            profit_cents = max(0, net)
-            loss_cents = max(0, -net)
-            yes_price = anchor_price if anchor_side == 'yes' else (sell_price or 0)
-            no_price = anchor_price if anchor_side == 'no' else (sell_price or 0)
-            result_type = 'apex_sellback'
-        else:
-            # Normal arb completion: both sides filled
-            hedge_price = rung.get('hedge_price', 0)
-            if not hedge_price:
-                # Natural completion (no hedge posted) — use the other side's original price
-                hedge_price = rung.get(f'{hedge_side}_price', 0)
-            hedge_fill_price = hedge_price  # Use posted price (maker)
-            combined = anchor_price + hedge_fill_price
-            spread = 100 - combined
-            buy_fee = _kalshi_side_fee_cents(anchor_price, qty)
-            hedge_fee = _kalshi_side_fee_cents(hedge_fill_price, qty)
-            total_fees = buy_fee + hedge_fee
-            if spread > 0:
-                profit_cents = spread * qty - total_fees
-                loss_cents = 0
-                if profit_cents < 0:
-                    loss_cents = abs(profit_cents)
-                    profit_cents = 0
-            else:
-                profit_cents = 0
-                loss_cents = abs(spread) * qty + total_fees
-            # Show ACTUAL fill prices, not original posted prices
-            if anchor_side == 'yes':
-                yes_price = anchor_price
-                no_price = hedge_fill_price
-            else:
-                yes_price = hedge_fill_price
-                no_price = anchor_price
-            result_type = 'apex_rung'
-
-    # Store net P&L on the rung for frontend display
-    rung['_net_pnl'] = profit_cents - loss_cents
-    rung['_fee_cents'] = total_fees
-
-    if profit_cents > 0:
-        session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + profit_cents
-    if loss_cents > 0:
-        session_pnl['gross_loss_cents'] += loss_cents
-    bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + profit_cents - loss_cents
-    if not bot.get('_first_rung_completed_at'):
-        bot['_first_rung_completed_at'] = now
-
-    combined_price = yes_price + no_price
-    net_pnl = profit_cents - loss_cents
+    # Record trade
     _record_trade({
-        'bot_id': bot_id, 'ticker': ticker,
-        'yes_price': yes_price, 'no_price': no_price,
-        'combined_price': combined_price,
-        'quantity': qty,
-        'profit_cents': profit_cents,
-        'loss_cents': loss_cents,
-        'net_pnl': net_pnl,
-        'fee_cents': total_fees,
-        'result': result_type,
-        'exit_via': exit_type,
-        'rung_idx': rung_idx,
-        'rung_width': width,
-        'anchor_side': anchor_side,
-        'anchor_price': anchor_price,
-        'hedge_price': rung.get('hedge_price', 0),
-        'target_hedge_price': rung.get('target_hedge_price', 0),
-        'time_stage': rung.get('time_stage'),
-        'snapped': rung.get('time_stage') == 'snapped',
-        'timestamp': now,
-        'placed_at': bot.get('created_at', now),
-        'game_phase': bot.get('game_phase', 'live'),
-        'game_context': _get_game_context(ticker),
-        'fill_source': 'apex2_rung',
-        'bot_category': 'ladder_arb',
-        'repeat_cycle': (bot.get('repeats_done', 0) or 0) + 1,
-        'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
-        'smart_mode': bot.get('smart_mode', False),
-        'hedge_latency_ms': rung.get('hedge_latency_ms'),
-        'raw_hedge_ms': rung.get('raw_hedge_ms'),
-        'obi_at_anchor_fill': rung.get('_obi_at_anchor_fill'),
-        'obi_at_exit': _apex_obi_snapshot(ticker),
-        'hedge_depth_at_exit': rung.get('_hedge_depth'),
-    }, bot)
-    print(f'💰 APEX RUNG P&L: {bot_id} rung#{rung_idx} ({width}c) Y{yes_price}+N{no_price}={combined_price}¢ net={net_pnl}c {"(snapped)" if rung.get("time_stage") == "snapped" else "(target)"}')
-
-    bot_log('APEX_RUNG_PNL', bot_id, {
-        'rung_idx': rung_idx, 'width': width, 'profit_cents': profit_cents,
-        'loss_cents': loss_cents, 'net_pnl': net_pnl, 'fee_cents': total_fees,
-        'combined': combined_price, 'snapped': rung.get('time_stage') == 'snapped',
-        'exit_type': exit_type,
-    })
-    save_state()
-
-
-def _record_rung_completion(bot_id, bot, rung):
-    """Record profit for a single completed rung. Called when both sides filled on a rung."""
-    # Guard: set _profit_recorded IMMEDIATELY to prevent race condition double-recording
-    # (monitor + WS handler + completion handler can all call _check_apex_rung_completions)
-    if rung.get('_profit_recorded'):
-        return  # already recorded — shouldn't reach here but guard anyway
-    rung['_profit_recorded'] = True  # set BEFORE any work to prevent concurrent re-entry
-
-    now = time.time()
-    ticker = bot['ticker']
-    qty_per = bot.get('quantity', 1)
-    rq = rung.get('quantity', qty_per)
-    yes_p = rung['yes_price']
-    no_p = rung['no_price']
-    width = rung.get('width', 0)
-
-    # When consolidated, the hedge side was filled at the actual hedge price, not the rung's
-    # original deployment price. Use the real hedge price for accurate P&L.
-    if bot.get('bot_category') == 'ladder_arb' and (bot.get('_consolidated') or bot.get('hedge_history')):
-        hedge_side = 'no' if bot.get('first_fill_side') == 'yes' else 'yes'
-        # Current active hedge price takes priority over history
-        actual_hedge_price = bot.get('hedge_price', 0)
-        if not actual_hedge_price:
-            # Fall back to most recent hedge_history entry
-            for hh in reversed(bot.get('hedge_history', [])):
-                if hh.get('price'):
-                    actual_hedge_price = hh['price']
-                    break
-        if actual_hedge_price > 0:
-            if hedge_side == 'yes':
-                yes_p = actual_hedge_price
-            else:
-                no_p = actual_hedge_price
-
-    pnl_cents = (100 - yes_p - no_p) * rq
-
-    # Fee calculation: anchor side = separate order per rung (ceil per-rung is correct).
-    # Hedge side = single consolidated order — compute fee on total qty and prorate to this rung
-    # to match what Kalshi actually charges (one ceil on full order, not ceil-per-rung).
-    filled_side = bot.get('first_fill_side', 'yes')
-    anchor_price = yes_p if filled_side == 'yes' else no_p
-    hedge_price_val = no_p if filled_side == 'yes' else yes_p
-    anchor_fee = _kalshi_side_fee_cents(anchor_price, rq)
-
-    hedge_total_qty = bot.get('hedge_qty', rq)
-    if hedge_total_qty > 0 and hedge_total_qty != rq:
-        total_hedge_fee = _kalshi_side_fee_cents(hedge_price_val, hedge_total_qty)
-        rung_hedge_fee = round(total_hedge_fee * rq / hedge_total_qty)
-    else:
-        rung_hedge_fee = _kalshi_side_fee_cents(hedge_price_val, rq)
-
-    fee = anchor_fee + rung_hedge_fee
-    net_pnl = pnl_cents - fee
-
-    if net_pnl >= 0:
-        session_pnl['gross_profit_cents'] += net_pnl
-    else:
-        session_pnl['gross_loss_cents'] += abs(net_pnl)
-
-    # Track cumulative P&L on the bot
-    bot['cumulative_pnl'] = bot.get('cumulative_pnl', 0) + net_pnl
-    bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-    if not bot.get('_first_rung_completed_at'):
-        bot['_first_rung_completed_at'] = now
-
-    _record_trade({
-        'bot_id': bot_id, 'ticker': ticker,
-        'yes_price': yes_p, 'no_price': no_p,
-        'quantity': rq,
-        'profit_cents': net_pnl if net_pnl >= 0 else 0,
-        'loss_cents': abs(net_pnl) if net_pnl < 0 else 0,
-        'fee_cents': fee,
-        'result': 'completed' if net_pnl >= 0 else 'arb_loss',
-        'exit_via': 'ladder_arb_rung_complete',
-        'rung_width': width,
-        'rungs_completed': bot.get('completed_rungs_count', 1),
-        'rungs_total': len(bot.get('rungs', [])),
-        'hedge_latency_ms': bot.get('hedge_latency_ms'),
-        'raw_hedge_ms': bot.get('raw_hedge_ms'),
-        'fill_duration_s': round(now - bot['first_fill_at']) if bot.get('first_fill_at') else None,
-        'timestamp': now,
-        'placed_at': bot.get('created_at', now),
-        'arb_width': width,
-        'game_phase': bot.get('game_phase', 'live'),
-        'game_context': _get_game_context(ticker),
-        'fill_source': 'ladder_arb',
-        'bot_category': 'ladder_arb',
-        'type': 'arb',
-        'repeat_cycle': bot.get('repeats_done', 0) + 1,
-        'repeat_total': (bot.get('repeat_count', 0) or 0) + 1,
-        'walk_count': bot.get('walk_count', 0),
-        'hard_ceiling': bot.get('hard_ceiling', 98),
-    }, bot)
-
-    # Calculate hedge latency from rung fill timestamps
-    filled_side = bot.get('first_fill_side', 'yes')
-    hedge_side = 'no' if filled_side == 'yes' else 'yes'
-    anchor_fill_at = rung.get(f'{filled_side}_filled_at')
-    hedge_fill_at = rung.get(f'{hedge_side}_filled_at')
-    hedge_latency_s = round(hedge_fill_at - anchor_fill_at, 1) if anchor_fill_at and hedge_fill_at else None
-
-    print(f'✅ RUNG COMPLETE: {bot_id} width={width}¢ YES@{yes_p}¢ NO@{no_p}¢ +{net_pnl}¢ ({bot.get("completed_rungs_count",1)}/{len(bot.get("rungs",[]))} rungs) hedge_lat={hedge_latency_s}s')
-    bot_log('RUNG_COMPLETE', bot_id, {
-        'rung_idx': bot.get('rungs', []).index(rung) if rung in bot.get('rungs', []) else None,
-        'width': width, 'yes_price': yes_p, 'no_price': no_p,
-        'combined': yes_p + no_p, 'quantity': rq,
-        'gross_pnl': pnl_cents, 'fee': fee, 'net_pnl': net_pnl,
-        'anchor_fill_at': anchor_fill_at, 'hedge_fill_at': hedge_fill_at,
-        'hedge_latency_s': hedge_latency_s,
-        'walk_count': bot.get('walk_count', 0),
-        'completed_rungs': bot.get('completed_rungs_count', 1),
-        'total_rungs': len(bot.get('rungs', [])),
-        'cumulative_pnl': bot.get('cumulative_pnl', 0),
+        'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+        'result': 'mm_round_trip',
+        f'{opposite}_price': opp_avg, f'{fill_side}_price': fill_price,
+        'combined_price': opp_avg + fill_price,
+        'quantity': close_qty,
+        'profit_cents': max(0, net_pnl), 'loss_cents': abs(min(0, net_pnl)),
+        'net_pnl': net_pnl, 'fee_cents': total_fee,
+        'timestamp': time.time(), 'fill_source': 'apex_mm',
+        'round_trip_num': bot.get('round_trips_completed', 0),
     })
 
-    with _pending_ws_actions_lock:
-        _pending_ws_actions.append({
-            'bot_id': bot_id, 'action': 'rung_completed',
-            'width': width, 'profit_cents': net_pnl,
-            'completed_count': bot.get('completed_rungs_count', 1),
-        })
-
-
-def _check_apex_rung_completions(bot_id, bot):
-    """Apex 2.0: Check per-rung completion status. Returns True if all active rungs resolved."""
-    for idx, rung in enumerate(bot.get('rungs', [])):
-        if rung.get('completed') and not rung.get('_profit_recorded'):
-            _apex_record_rung_pnl(bot_id, idx)
-            bot['completed_rungs_count'] = bot.get('completed_rungs_count', 0) + 1
-
-    # Check if all active rungs are resolved
-    all_resolved = True
-    for rung in bot.get('rungs', []):
-        rs = rung.get('status', 'posted')
-        if rs in ('completed', 'stopped', 'scratched', 'posted'):
-            continue
-        all_resolved = False
-        break
-
-    return all_resolved
+    bot_log('APEX_MM_ROUND_TRIP', bot_id, {
+        'fill_side': fill_side, 'fill_price': fill_price, 'close_qty': close_qty,
+        'opp_avg': opp_avg, 'gross_pnl': gross_pnl, 'net_pnl': net_pnl,
+        'fee': total_fee, 'total_realized': bot.get('realized_pnl_cents', 0),
+        'round_trips': bot.get('round_trips_completed', 0),
+        'consec_losses': bot.get('consecutive_losses', 0),
+    })
+    sign = '+' if net_pnl >= 0 else ''
+    print(f'💰 APEX MM RT#{bot["round_trips_completed"]}: {bot_id} {fill_side.upper()} @{fill_price} vs {opposite.upper()} avg@{opp_avg} → {sign}{net_pnl}c (total: {bot["realized_pnl_cents"]}c)')
 
 
 def _cancel_with_retry(oid, max_retries=2):
@@ -8166,145 +7417,33 @@ def _cancel_with_retry(oid, max_retries=2):
 
 
 
-def _execute_apex_completion(bot_id):
-    """Apex 2.0: Handle bot completion when all rungs are resolved.
-    Cancel remaining orders and trigger repeat or final completion."""
-    with ws_fill_lock:
-        bot = active_bots.get(bot_id)
-        if not bot or bot['status'] in ('stopped', 'completed', 'waiting_repeat'):
-            return
-        if bot.get('_bot_completed'):
-            bot['status'] = 'completed'
-            return
-
-        now = time.time()
-        ticker = bot['ticker']
-
-        # Cancel remaining unfilled rung orders
-        og = bot.get('_order_group_id')
-
-    # Cancel via order group (outside lock)
-    if og:
-        try:
-            api_rate_limiter.wait()
-            kalshi_client.cancel_order_group(og)
-        except Exception:
-            pass
-
-    # Cancel individual orders as backup
-    with ws_fill_lock:
-        bot = active_bots.get(bot_id)
-        if not bot:
-            return
-        for rung in bot.get('rungs', []):
-            for side in ('yes', 'no'):
-                oid = rung.get(f'{side}_order_id')
-                if oid:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(oid)
-                    except Exception:
-                        pass
-                    rung[f'{side}_order_id'] = None
-            # Cancel any outstanding hedge orders too
-            hedge_oid = rung.get('hedge_order_id')
-            if hedge_oid and rung.get('status') not in ('completed', 'stopped', 'scratched'):
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(hedge_oid)
-                except Exception:
-                    pass
-                rung['hedge_order_id'] = None
-
-        # Record any unrecorded rung P&L
-        for idx, rung in enumerate(bot.get('rungs', [])):
-            if rung.get('completed') and not rung.get('_profit_recorded'):
-                _apex_record_rung_pnl(bot_id, idx)
-
-        # Total P&L for this cycle — calculate from rungs directly (not net_pnl_cents
-        # which may be stale if some rung P&Ls were recorded by WS before completion handler)
-        total_pnl = sum(r.get('_net_pnl', 0) or 0 for r in bot.get('rungs', []) if r.get('_profit_recorded'))
-        if total_pnl == 0:
-            total_pnl = bot.get('net_pnl_cents', 0)  # fallback to bot-level if rungs don't have _net_pnl
-        completed_count = sum(1 for r in bot.get('rungs', []) if r.get('completed'))
-        bot['completed_rungs_count'] = completed_count
-        bot['_bot_completed'] = True
-
-        bot_log('APEX_COMPLETION', bot_id, {
-            'completed_rungs': completed_count, 'total_rungs': len(bot.get('rungs', [])),
-            'net_pnl_cents': total_pnl,
-        })
-        print(f'🏁 APEX COMPLETE: {bot_id} {completed_count}/{len(bot.get("rungs",[]))} rungs, pnl={total_pnl}c')
-        _audit('APEX_COMPLETED', bot_id, {'ticker': ticker, 'pnl': total_pnl, 'rungs': completed_count})
-
-        # Record run history for frontend display (like phantom)
-        _rung_summaries = []
-        for _rr in bot.get('rungs', []):
-            if _rr.get('_profit_recorded'):
-                _anc_side = _rr.get('anchor_side', '')
-                _anc_p = _rr.get(_anc_side + '_price', 0) if _anc_side else _rr.get('yes_price', 0)
-                _hdg_p = _rr.get('hedge_price', 0) or _rr.get(('no' if _anc_side == 'yes' else 'yes') + '_price', 0)
-                _rung_summaries.append(f'{_anc_p}/{_hdg_p}')
-        bot.setdefault('_run_history', []).append({
-            'run': bot.get('repeats_done', 0) + 1,
-            'pnl': total_pnl,
-            'result': 'win' if total_pnl >= 0 else 'loss',
-            'rungs_completed': completed_count,
-            'total_rungs': len(bot.get('rungs', [])),
-            'qty': bot.get('quantity', 1),
-            'ts': now,
-        })
-
-        # Handle repeat
-        repeats_done = bot.get('repeats_done', 0) + 1
-        bot['repeats_done'] = repeats_done
-        repeat_total = bot.get('repeat_count', 0)
-        _smart_repeat, _ = _smart_mode_should_repeat(bot, total_pnl)
-        _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done <= repeat_total)
-        # Always update lifetime P&L — not just on repeat
-        bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
-        if _will_repeat:
-            bot['status'] = 'waiting_repeat'
-            bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
-            bot['waiting_repeat_since'] = now
-            bot['first_fill_at'] = None
-            bot['_first_rung_completed_at'] = None
-            bot['completed_rungs_count'] = 0
-            bot['net_pnl_cents'] = 0
-            print(f'🔄 APEX REPEAT: {bot_id} cycle {repeats_done}/{repeat_total} → repost')
-        else:
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
-
-        save_state()
-
-
 @app.route('/api/bot/ladder-arb', methods=['POST'])
 def create_ladder_arb_bot():
-    """Apex 2.0: Siloed multi-width arb. Each rung is an independent state machine
-    with its own hedge and time-decay exit protocol. No consolidation."""
+    """Apex Market Maker: continuously quote both sides, collect spread, track net inventory."""
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
 
         data = request.json or {}
         ticker = data.get('ticker', '')
-        widths = data.get('widths', [])
-        quantity = int(data.get('quantity', 1))
-        repeat_count = int(data.get('repeat_count', 0))
-        smart_mode   = bool(data.get('smart_mode', False))
-        if smart_mode:
-            repeat_count = 999  # effectively infinite — smart mode controls stopping
-        hard_ceiling = min(98, max(96, int(data.get('hard_ceiling', HARD_CEILING_CENTS))))
+        start_gap = int(data.get('start_gap', 4))
+        levels = int(data.get('levels', 7))
+        spacing = int(data.get('spacing', 1))
+        qty_per_level = int(data.get('qty_per_level', 10))
+        inventory_limit = int(data.get('inventory_limit', 50))
+        loss_limit_cents = int(data.get('loss_limit_cents', 500))
+        smart_mode = int(data.get('smart_mode', 0))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
-        if not widths or len(widths) < 1:
-            return jsonify({'error': 'Need at least 1 width'}), 400
-
-        widths = sorted(set(int(w) for w in widths if 3 <= int(w) <= 20))
-        if not widths:
-            return jsonify({'error': 'No valid widths (must be 3-20¢)'}), 400
+        if start_gap < 2 or start_gap > 20:
+            return jsonify({'error': 'start_gap must be 2-20'}), 400
+        if levels < 1 or levels > 15:
+            return jsonify({'error': 'levels must be 1-15'}), 400
+        if spacing < 1 or spacing > 5:
+            return jsonify({'error': 'spacing must be 1-5'}), 400
+        if qty_per_level < 1 or qty_per_level > 100:
+            return jsonify({'error': 'qty_per_level must be 1-100'}), 400
 
         # Auto-detect game phase
         manual_phase = data.get('game_phase')
@@ -8313,10 +7452,7 @@ def create_ladder_arb_bot():
         else:
             game_phase = 'live' if _is_game_live(ticker) else 'pregame'
 
-        # Apex has NO late-game block — Meridian rebalancer handles late-game exits
-        # (late game block is only on phantom/anchor bots)
-
-        # Awaiting settlement guard — block if cross-market bot holds positions on this ticker
+        # Awaiting settlement guard
         for _ab in active_bots.values():
             if _ab.get('status') != 'awaiting_settlement':
                 continue
@@ -8327,7 +7463,7 @@ def create_ladder_arb_bot():
             if ticker in _ab_tickers:
                 return jsonify({'error': f'Awaiting settlement on {", ".join(_ab_tickers)} — positions held until Kalshi settles'}), 400
 
-        # One Apex per ticker — prevent duplicate bots on same line
+        # One Apex per ticker
         existing_apex = next(
             (bid for bid, b in active_bots.items()
              if b.get('ticker') == ticker and b.get('bot_category') == 'ladder_arb'
@@ -8337,7 +7473,7 @@ def create_ladder_arb_bot():
         if existing_apex:
             return jsonify({'error': f'Already have an active Apex bot on this line: {existing_apex[:30]}'}), 400
 
-        # Phantom interference check — Apex has both-side orders, phantom positions would net
+        # Phantom interference check
         _phantom_conflict = next(
             (bid for bid, b in active_bots.items()
              if b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
@@ -8346,7 +7482,7 @@ def create_ladder_arb_bot():
             None
         )
         if _phantom_conflict:
-            return jsonify({'error': f'Phantom bot active on {ticker} — Apex positions would interfere: {_phantom_conflict[:30]}'}), 400
+            return jsonify({'error': f'Phantom bot active on {ticker} — MM positions would interfere: {_phantom_conflict[:30]}'}), 400
 
         # Bot cap
         MAX_BOTS_PER_TICKER = 5
@@ -8362,186 +7498,114 @@ def create_ladder_arb_bot():
         api_read_limiter.wait()
         ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
         ob = ob_data.get('orderbook', ob_data)
-        yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-        no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-        live_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
-        live_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
-        live_yes_ask = 100 - live_no_bid if live_no_bid > 0 else 99
-        live_no_ask  = 100 - live_yes_bid if live_yes_bid > 0 else 99
+        yes_levels_ob = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+        no_levels_ob = sorted(ob.get('no', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
+        live_yes_bid = (yes_levels_ob[0][0] if isinstance(yes_levels_ob[0], list) else yes_levels_ob[0].get('price', 0)) if yes_levels_ob else 0
+        live_no_bid = (no_levels_ob[0][0] if isinstance(no_levels_ob[0], list) else no_levels_ob[0].get('price', 0)) if no_levels_ob else 0
 
         if live_yes_bid <= 0:
-            return jsonify({'error': 'No YES bids in orderbook — phantom arb'}), 400
+            return jsonify({'error': 'No YES bids in orderbook'}), 400
         if live_no_bid <= 0:
-            return jsonify({'error': 'No NO bids in orderbook — phantom arb'}), 400
+            return jsonify({'error': 'No NO bids in orderbook'}), 400
 
-        # Drift guard: skip if market is basically decided (dead market)
+        # Drift guard
         drift_max = max(live_yes_bid, live_no_bid)
         if drift_max >= 80:
             return jsonify({'error': f'Drift guard: max side {drift_max}c — market too decided'}), 400
 
-        # Spread-aware entry guard: warn on narrow widths in gapped spreads
-        _yes_spread = live_yes_ask - live_yes_bid if live_yes_ask > live_yes_bid else 0
-        _no_spread = live_no_ask - live_no_bid if live_no_ask > live_no_bid else 0
-        _max_spread = max(_yes_spread, _no_spread)
-        _narrow_in_gap = [w for w in widths if w < 8 and _max_spread > 10]
-        if _narrow_in_gap and not data.get('force_narrow'):
-            return jsonify({
-                'error': f'Spread is {_max_spread}c — narrow widths ({", ".join(str(w) for w in _narrow_in_gap)}c) likely to get adversely selected. Use 8c+ widths or add force_narrow:true to override.',
-                'warning': True, 'spread': _max_spread, 'narrow_widths': _narrow_in_gap,
-            }), 400
+        # Calculate midpoint and generate levels
+        midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
+        yes_prices, no_prices = _apex_mm_levels(midpoint, start_gap, levels, spacing)
 
-        # Compute prices for each width and validate
-        rung_specs = []
-        for w in widths:
-            target_yes, target_no = _calculate_arb_prices_server(
-                live_yes_bid, live_no_bid, live_yes_ask, live_no_ask, w
-            )
-            profit = 100 - target_yes - target_no
-            if profit <= 0:
-                continue
-            if target_yes + target_no >= HARD_CEILING_CENTS:
-                continue
-            if target_yes >= live_yes_ask and live_yes_ask > 0:
-                continue
-            if target_no >= live_no_ask and live_no_ask > 0:
-                continue
-            rung_specs.append({'width': w, 'yes_price': target_yes, 'no_price': target_no, 'rung_qty': quantity})
+        if not yes_prices and not no_prices:
+            return jsonify({'error': f'No valid price levels (midpoint={midpoint}, gap={start_gap}, levels={levels})'}), 400
 
-        if not rung_specs:
-            return jsonify({'error': 'No valid widths after price computation'}), 400
+        # Validate all prices are in range
+        for p in yes_prices + no_prices:
+            if p < 1 or p > 98:
+                return jsonify({'error': f'Price level {p}c out of range (midpoint={midpoint})'}), 400
 
-        # Place orders for all rungs via BATCH API (2 calls instead of 2×N)
-        placed_rungs = []
-        total_qty = 0
-        all_placed_oids = []  # Master list of ALL order IDs for cleanup
+        # Post the ladder
+        print(f'📊 APEX MM CREATING: {ticker} | mid={midpoint} gap={start_gap} levels={levels} spacing={spacing} qty={qty_per_level}')
 
-        _order_group_id = _create_order_group()
-        print(f'△ APEX PLACING: {ticker} | {len(rung_specs)} rungs to place (qty={quantity}) group={(_order_group_id or "none")[:8]}')
+        bot_id = f'amm_{ticker}_{int(time.time() * 1000)}'
+        live_yes_ask = 100 - live_no_bid if live_no_bid > 0 else 99
+        live_no_ask = 100 - live_yes_bid if live_yes_bid > 0 else 99
 
-        # Batch YES orders and NO orders
-        yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': s['rung_qty'], 'price': s['yes_price']} for s in rung_specs]
-        no_specs  = [{'ticker': ticker, 'side': 'no',  'count': s['rung_qty'], 'price': s['no_price']}  for s in rung_specs]
-        yes_results = create_orders_batch(yes_specs, order_group_id=_order_group_id)
-        no_results  = create_orders_batch(no_specs, order_group_id=_order_group_id)
+        # Initialize bot state first (needed by _apex_mm_post_ladder)
+        active_bots[bot_id] = {
+            'ticker': ticker,
+            'bot_category': 'ladder_arb',
+            'type': 'apex_mm',
+            'status': 'market_making_active',
+            'start_gap': start_gap,
+            'levels': levels,
+            'spacing': spacing,
+            'qty_per_level': qty_per_level,
+            'inventory_limit': inventory_limit,
+            'loss_limit_cents': loss_limit_cents,
+            'smart_mode': smart_mode,
+            'midpoint': midpoint,
+            'yes_orders': {},
+            'no_orders': {},
+            'net_yes': 0,
+            'net_no': 0,
+            'avg_yes_cost': 0,
+            'avg_no_cost': 0,
+            'total_yes_cost': 0,
+            'total_no_cost': 0,
+            'realized_pnl_cents': 0,
+            'round_trips_completed': 0,
+            'consecutive_losses': 0,
+            '_pull_count': 0,
+            '_last_pull_at': 0,
+            '_last_pull_reason': '',
+            '_yes_side_paused': False,
+            '_no_side_paused': False,
+            '_unrealized_pnl': 0,
+            '_last_settle_check': 0,
+            'live_yes_bid': live_yes_bid,
+            'live_no_bid': live_no_bid,
+            'live_yes_ask': live_yes_ask,
+            'live_no_ask': live_no_ask,
+            'game_phase': game_phase,
+            'created_at': time.time(),
+            'posted_at': time.time(),
+            'market_type': _detect_market_type(ticker),
+            'spread_line': _extract_spread_line(ticker),
+            '_all_placed_order_ids': [],
+            '_all_order_group_ids': [],
+            '_order_group_id': None,
+        }
 
-        for spec_idx, spec in enumerate(rung_specs):
-            try:
-                if yes_results[spec_idx] is None or no_results[spec_idx] is None:
-                    # Cancel the surviving side to prevent orphan
-                    _orphan_r = yes_results[spec_idx] if no_results[spec_idx] is None else no_results[spec_idx]
-                    if _orphan_r:
-                        try:
-                            _ooid = _orphan_r[0].get('order', {}).get('order_id', '')
-                            if _ooid:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(_ooid)
-                                print(f'  🧹 Rung {spec_idx+1}: cancelled orphan {_ooid[:12]}')
-                        except Exception:
-                            pass
-                    print(f'  ⚠ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ SKIPPED (batch partial failure)')
-                    continue
-                yr, yes_actual = yes_results[spec_idx]
-                nr, no_actual  = no_results[spec_idx]
-                yes_oid = yr['order']['order_id']
-                no_oid  = nr['order']['order_id']
-                all_placed_oids.extend([yes_oid, no_oid])
-                # Recalculate width from actual posted prices (post_only may have adjusted them)
-                actual_width = 100 - yes_actual - no_actual
-                if yes_actual != spec['yes_price'] or no_actual != spec['no_price']:
-                    print(f'  ⚠ PRICE ADJUSTED rung {spec_idx+1}: Y{spec["yes_price"]}→{yes_actual}¢ N{spec["no_price"]}→{no_actual}¢ (width {spec["width"]}→{actual_width}¢)')
-                    bot_log('APEX_RUNG_PRICE_ADJUSTED', '', {
-                        'rung_idx': spec_idx, 'ticker': ticker,
-                        'req_yes': spec['yes_price'], 'actual_yes': yes_actual,
-                        'req_no': spec['no_price'], 'actual_no': no_actual,
-                        'req_width': spec['width'], 'actual_width': actual_width,
-                    })
-                placed_rungs.append({
-                    'width': actual_width,
-                    'yes_price': yes_actual, 'no_price': no_actual,
-                    'yes_order_id': yes_oid, 'no_order_id': no_oid,
-                    'yes_fill_qty': 0, 'no_fill_qty': 0,
-                    'yes_filled_at': None, 'no_filled_at': None,
-                    'quantity': spec['rung_qty'],
-                    # Apex 2.0 per-rung state machine fields
-                    'status': 'posted',
-                    'anchor_side': None,
-                    'anchor_fill_at': None,
-                    'hedge_order_id': None,
-                    'hedge_price': None,
-                    'hedge_fill_qty': 0,
-                    'hedge_fill_at': None,
-                    'time_stage': None,
-                    'stage_entered_at': None,
-                    'stop_loss_cents': _apex_stop_loss_threshold(actual_width),
-                    'completed': False,
-                    '_profit_recorded': False,
-                })
-                total_qty += spec['rung_qty']
-                print(f'  ✅ Rung {spec_idx+1}/{len(rung_specs)}: w={actual_width}¢ Y{yes_actual}¢ N{no_actual}¢ ×{spec["rung_qty"]}')
-            except Exception as rung_err:
-                print(f'  ❌ Rung {spec_idx+1}/{len(rung_specs)}: w={spec["width"]}¢ FAILED: {rung_err}')
-                continue
-
-        if not placed_rungs:
-            return jsonify({'error': 'No rungs placed successfully'}), 500
-        # Sort rungs by width for consistent display
-        placed_rungs.sort(key=lambda r: r['width'])
+        success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_prices, no_prices)
+        if not success:
+            del active_bots[bot_id]
+            return jsonify({'error': 'Failed to post any ladder orders'}), 500
 
         # Subscribe WS
         if ws_manager and ws_manager.connected:
             ws_manager.add_ticker(ticker)
 
-        bot_id = f'larb_{ticker}_{int(time.time() * 1000)}'
-        narrowest_width = min(r['width'] for r in placed_rungs)
-
-        active_bots[bot_id] = {
-            'ticker': ticker,
-            'bot_category': 'ladder_arb',
-            'status': 'ladder_arb_posted',
-            'rungs': placed_rungs,
-            'quantity': quantity,
-            'total_rungs': len(placed_rungs),
-            'game_phase': game_phase,
-            'created_at': time.time(),
-            'posted_at': time.time(),
-            'repeat_count': repeat_count,
-            'repeats_done': 0,
-            'smart_mode': smart_mode,
-            'consecutive_losses': 0,
-            'hard_ceiling': hard_ceiling,
-            'arb_width': narrowest_width,
-            'live_yes_bid': live_yes_bid,
-            'live_no_bid': live_no_bid,
-            'live_yes_ask': live_yes_ask,
-            'live_no_ask': live_no_ask,
-            'last_price_update': time.time(),
-            'market_type': _detect_market_type(ticker),
-            'spread_line': _extract_spread_line(ticker),
-            'timeout_min': _late_game_timeout_min(ticker, live_yes_bid >= live_no_bid, narrowest_width),
-            'first_fill_at': None,
-            'completed_rungs_count': 0,
-            'net_pnl_cents': 0,
-            '_all_placed_order_ids': all_placed_oids,
-            '_order_group_id': _order_group_id,
-            'yes_price': placed_rungs[0]['yes_price'],
-            'no_price': placed_rungs[0]['no_price'],
-            'repost_count': 0,
-        }
         save_state()
 
-        rung_desc = ', '.join(f'{r["width"]}¢: Y{r["yes_price"]}+N{r["no_price"]}×{r["quantity"]}' for r in placed_rungs)
-        bot_log('APEX_CREATED', bot_id, {
-            'rungs': len(placed_rungs), 'widths': [r['width'] for r in placed_rungs],
-            'qty': quantity, 'game_phase': game_phase, 'repeat_count': repeat_count,
+        yes_desc = ','.join(str(p) for p in yes_prices)
+        no_desc = ','.join(str(p) for p in no_prices)
+        bot_log('APEX_MM_CREATED', bot_id, {
+            'midpoint': midpoint, 'start_gap': start_gap, 'levels': levels,
+            'spacing': spacing, 'qty': qty_per_level, 'inv_limit': inventory_limit,
+            'yes_prices': yes_prices, 'no_prices': no_prices,
         })
-        print(f'△ APEX 2.0 CREATED: {bot_id} | {len(placed_rungs)} rungs: {rung_desc}')
+        print(f'📊 APEX MM CREATED: {bot_id} | mid={midpoint} YES=[{yes_desc}] NO=[{no_desc}] qty={qty_per_level}')
 
         return jsonify({
             'success': True,
             'bot_id': bot_id,
-            'rungs': len(placed_rungs),
-            'total_qty': total_qty,
-            'message': f'[APEX 2.0] {len(placed_rungs)} rungs posted: {rung_desc}',
+            'midpoint': midpoint,
+            'yes_levels': len(yes_prices),
+            'no_levels': len(no_prices),
+            'total_orders': len(yes_prices) + len(no_prices),
+            'message': f'Apex MM: {len(yes_prices)}Y + {len(no_prices)}N levels @ mid={midpoint}, qty={qty_per_level}',
         })
 
     except Exception as e:
@@ -11302,6 +10366,9 @@ def _handle_phantom(bot_id, bot, actions):
         _at_breakeven_with_partials = _ceiling_combined >= WALK_CEILING and _has_partial_fills
         if _ceiling_combined < WALK_CEILING:
             bot['_over_ceiling_since'] = None  # under ceiling — clear timer
+            bot.pop('_dual_exit_active', None)
+            bot.pop('_dual_exit_sell_won', None)
+            bot.pop('_dual_exit_fav_won', None)
             # Cancel dog sell if market reverted — hedge is now profitable
             _ds_cancel_oid = bot.get('dog_sell_order_id')
             if _ds_cancel_oid:
@@ -11452,6 +10519,7 @@ def _handle_phantom(bot_id, bot, actions):
             # ── Dual Exit System (same-market only): race hedge vs dog sell ──
             elif not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
+                bot['_dual_exit_active'] = True
                 # Post dog sell at ask — race with hedge
                 # If fav has partial fills, only sell the unfilled remainder
                 _fav_fills_now = bot.get('fav_fill_qty', 0)
@@ -13350,12 +12418,18 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
 
 def _handle_apex(bot_id, bot, actions):
-    """Apex 2.0: Per-rung independent state machines with time-decay exit."""
+    """Apex Market Maker: continuous quoting with net inventory tracking."""
     now = time.time()
     ticker = bot['ticker']
-    status = bot['status']
-    qty_per = bot.get('quantity', 1)
-    phase = bot.get('game_phase', 'pregame')
+    status = bot.get('status', '')
+
+    # Legacy guard: old Apex bots get completed immediately
+    if bot.get('type') != 'apex_mm':
+        bot['status'] = 'completed'
+        bot['completed_at'] = now
+        print(f'🔄 APEX LEGACY: {bot_id} old Apex bot → completed')
+        save_state()
+        return
 
     # Update live bid/ask from WS cache
     try:
@@ -13365,754 +12439,118 @@ def _handle_apex(bot_id, bot, actions):
             bot['live_no_bid'] = ws_p.get('no_bid', 0)
             bot['live_yes_ask'] = ws_p.get('yes_ask', 0)
             bot['live_no_ask'] = ws_p.get('no_ask', 0)
-            _record_price_for_velocity(ticker, ws_p.get('yes_bid', 0), ws_p.get('no_bid', 0))
     except Exception:
         pass
 
-    yes_bid = bot.get('live_yes_bid', 0)
-    no_bid = bot.get('live_no_bid', 0)
+    # ── STATUS: mm_depth_pulled — check recovery ──
+    if status == 'mm_depth_pulled':
+        if bot.get('_pull_count', 0) >= APEX_MAX_PULL_CYCLES:
+            _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')
+            return
+        if _apex_depth_recovered(ticker, bot):
+            _apex_mm_repost_ladder(bot_id, bot)
+        return
 
-    # ── Settlement guard: if market is closed/settled/game over, cancel everything (every 30s) ──
+    # ── STATUS: mm_exiting — monitor exit orders ──
+    if status == 'mm_exiting':
+        _apex_mm_exit_tick(bot_id, bot)
+        return
+
+    # ── STATUS: market_making_active — main logic ──
+    if status != 'market_making_active':
+        return
+
+    # 1. OBI check — pull if hostile
+    should_pull, pull_reason = _apex_should_pull(ticker)
+    if should_pull:
+        _apex_mm_pull_all(bot_id, bot, pull_reason)
+        return
+
+    # 2. Settlement/game-end check (throttled every 30s)
     if now - bot.get('_last_settle_check', 0) >= 30:
         bot['_last_settle_check'] = now
         try:
-            api_read_limiter.wait()
-            mkt_la = kalshi_client.get_market(ticker)
-            mkt_la_data = mkt_la.get('market', mkt_la) if isinstance(mkt_la, dict) else {}
-            mkt_la_status = mkt_la_data.get('status', 'active')
-            mkt_la_result = mkt_la_data.get('result', '')
-            # Also check if game is over (ESPN/milestones) — market may still be "active" on Kalshi
-            _game_over = _is_game_over_cached(ticker)
-            # For posted bots with zero fills, also clean up if market is inactive
-            _all_zero_fills = all(
-                (r.get('yes_fill_qty', 0) == 0 and r.get('no_fill_qty', 0) == 0)
-                for r in bot.get('rungs', [])
-            )
-            if mkt_la_status not in ('active', 'open') or mkt_la_result or (_game_over and _all_zero_fills):
-                # Cancel ALL orders across all rungs
-                for rung in bot.get('rungs', []):
-                    for side in ('yes', 'no'):
-                        oid = rung.get(f'{side}_order_id')
-                        if oid:
-                            try:
-                                api_rate_limiter.wait()
-                                kalshi_client.cancel_order(oid)
-                            except Exception:
-                                pass
-                    # Also cancel per-rung hedges
-                    hedge_oid = rung.get('hedge_order_id')
-                    if hedge_oid:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(hedge_oid)
-                        except Exception:
-                            pass
-                # Cancel via order group too
-                og = bot.get('_order_group_id')
-                if og:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order_group(og)
-                    except Exception:
-                        pass
-                # Record P&L for in-progress rungs before completing
-                for _s_idx, _s_rung in enumerate(bot.get('rungs', [])):
-                    _s_rs = _s_rung.get('status', 'posted')
-                    if _s_rs in ('pending_profit', 'snapped', 'anchor_filled'):
-                        _s_rung['status'] = 'stopped'
-                        _s_rung['completed'] = True
-                        _s_anchor = _s_rung.get('anchor_side')
-                        _s_qty = _s_rung.get('quantity', qty_per)
-                        if _s_anchor and mkt_la_result and not _s_rung.get('_profit_recorded'):
-                            _s_rung['_profit_recorded'] = True
-                            _s_ap = _s_rung.get(f'{_s_anchor}_price', 0)
-                            _s_won = (_s_anchor == mkt_la_result)
-                            _s_fee = _kalshi_side_fee_cents(_s_ap, _s_qty)
-                            if _s_won:
-                                _s_net = (100 - _s_ap) * _s_qty - _s_fee
+            if api_read_limiter.try_wait():
+                mkt = kalshi_client.get_market(ticker)
+                mkt_data = mkt.get('market', mkt) if isinstance(mkt, dict) else {}
+                mkt_status = mkt_data.get('status', 'active')
+                mkt_result = mkt_data.get('result', '')
+                _game_over = _is_game_over_cached(ticker)
+
+                if mkt_status not in ('active', 'open') or mkt_result or _game_over:
+                    net_yes = bot.get('net_yes', 0)
+                    net_no = bot.get('net_no', 0)
+                    if mkt_result:
+                        # Market settled — calculate settlement P&L
+                        for side, net_qty, avg_cost in [('yes', net_yes, bot.get('avg_yes_cost', 0)), ('no', net_no, bot.get('avg_no_cost', 0))]:
+                            if net_qty <= 0:
+                                continue
+                            if mkt_result == side:
+                                # Winner: get 100c per contract
+                                pnl = (100 - avg_cost) * net_qty
                             else:
-                                _s_net = -(_s_ap * _s_qty + _s_fee)
-                            _s_rung['_net_pnl'] = _s_net
-                            bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _s_net
-                            if _s_net >= 0:
-                                session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _s_net
-                            else:
-                                session_pnl['gross_loss_cents'] += abs(_s_net)
+                                # Loser: get 0
+                                pnl = -avg_cost * net_qty
+                            bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
                             _record_trade({
-                                'bot_id': bot_id, 'ticker': ticker,
-                                'yes_price': _s_ap if _s_anchor == 'yes' else 0,
-                                'no_price': _s_ap if _s_anchor == 'no' else 0,
-                                'quantity': _s_qty, 'profit_cents': max(0, _s_net),
-                                'loss_cents': abs(min(0, _s_net)), 'fee_cents': _s_fee,
-                                'result': 'apex_settled_win' if _s_won else 'apex_settled_loss',
-                                'exit_via': 'market_settlement',
-                                'rung_idx': _s_idx, 'rung_width': _s_rung.get('width', 0),
-                                'anchor_side': _s_anchor, 'anchor_price': _s_ap,
-                                'settlement_result': mkt_la_result,
-                                'hedge_status': 'unfilled',
-                                'timestamp': now, 'fill_source': 'apex2_rung',
-                                'bot_category': 'ladder_arb',
-                            }, bot)
-                            print(f'  📊 RUNG#{_s_idx} settled: anchor={_s_anchor}@{_s_ap}c result={mkt_la_result} net={_s_net}c')
-                        elif not _s_rung.get('_profit_recorded'):
-                            _s_rung['_profit_recorded'] = True
-                            print(f'  ⚠ RUNG#{_s_idx} settled: no result yet, marking stopped')
-                    elif _s_rs == 'posted':
-                        _s_rung['status'] = 'stopped'
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                bot['_bot_completed'] = True
-                actions.append({'bot_id': bot_id, 'action': 'ladder_arb_settled', 'result': mkt_la_result})
-                print(f'🏁 APEX SETTLED: {bot_id} market={mkt_la_status} result={mkt_la_result}')
-                _audit('APEX_SETTLED', bot_id, {'ticker': ticker, 'market_status': mkt_la_status, 'result': mkt_la_result})
-                save_state()
-                return
-        except Exception as e:
-            print(f'⚠ apex settlement check {bot_id}: {e}')
-
-    # ── STATE: waiting_repeat — repost all rungs ──
-    if status == 'waiting_repeat':
-        wait_since = bot.get('waiting_repeat_since', now)
-        if not bot.get('smart_mode') and (bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) > bot.get('repeat_count', 0)):
-            # Cancel any remaining orders
-            for rung in bot.get('rungs', []):
-                for side in ('yes', 'no'):
-                    oid = rung.get(f'{side}_order_id')
-                    if oid:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
-                hedge_oid = rung.get('hedge_order_id')
-                if hedge_oid:
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(hedge_oid)
-                    except Exception:
-                        pass
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
-            print(f'🏁 APEX REPEAT DONE: {bot_id} repeats_done={bot.get("repeats_done",0)}/{bot.get("repeat_count",0)}')
-            save_state()
-            return
-        if now - wait_since < 5:
-            return
-
-        # Settlement check: don't repost on finalized markets (throttled to every 60s)
-        if now - bot.get('_last_settle_check_wr', 0) > 60:
-            bot['_last_settle_check_wr'] = now
-            try:
-                api_read_limiter.wait()
-                _wr_mkt = kalshi_client.get_market(ticker)
-                _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
-                _wr_status = _wr_m.get('status', '').lower()
-                if _wr_status in ('finalized', 'settled'):
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
-                    print(f'🏁 APEX SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
-                    bot_log('APEX_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
-                    save_state()
-                    return
-            except Exception as _se:
-                print(f'⚠ apex waiting_repeat settle check {bot_id}: {_se}')
-        # Safety: cancel any leftover orders from previous cycle before reposting
-        _old_og = bot.get('_order_group_id')
-        if _old_og:
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order_group(_old_og)
-            except Exception:
-                pass
-        for _old_r in bot.get('rungs', []):
-            for _os in ('yes', 'no'):
-                _ooid = _old_r.get(f'{_os}_order_id')
-                if _ooid:
-                    _cancel_with_retry(_ooid)
-            for _ok in ('hedge_order_id', 'anchor_order_id', '_old_hedge_oid'):
-                _ooid = _old_r.get(_ok)
-                if _ooid:
-                    _cancel_with_retry(_ooid)
-            # Cancel any tracked order IDs from reposts/amends
-            for _ooid in _old_r.get('_all_order_ids', []):
-                if _ooid:
-                    _cancel_with_retry(_ooid)
-        # Fetch fresh orderbook and repost
-        try:
-            api_read_limiter.wait()
-            ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
-            ob = ob_data.get('orderbook', ob_data)
-            yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-            no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-            fresh_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
-            fresh_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
-            fresh_yes_ask = 100 - fresh_no_bid if fresh_no_bid > 0 else 99
-            fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
-            if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
-                return
-            # Drift guard for repeat: only block if market is basically decided
-            drift_max = max(fresh_yes_bid, fresh_no_bid)
-            if drift_max >= 80:
-                print(f'⏳ APEX DRIFT WAIT: {bot_id} max_side={drift_max}¢ — market too decided, waiting')
-                return
-            valid_specs = []
-            for rung in bot.get('rungs', []):
-                w = rung['width']
-                ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
-                profit = 100 - ty - tn
-                if profit <= 0:
-                    continue
-                valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn})
-            repeat_group_id = _create_order_group()
-            if valid_specs:
-                yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]
-                no_specs  = [{'ticker': ticker, 'side': 'no',  'count': qty_per, 'price': s['no_price']}  for s in valid_specs]
-                yes_results = create_orders_batch(yes_specs, order_group_id=repeat_group_id)
-                no_results  = create_orders_batch(no_specs, order_group_id=repeat_group_id)
-                new_rungs = []
-                for idx, spec in enumerate(valid_specs):
-                    try:
-                        if yes_results[idx] is None or no_results[idx] is None:
-                            # One side failed — cancel the other to prevent orphan
-                            _orphan_result = yes_results[idx] if no_results[idx] is None else no_results[idx]
-                            if _orphan_result:
-                                try:
-                                    _orphan_oid = _orphan_result[0].get('order', {}).get('order_id', '')
-                                    if _orphan_oid:
-                                        api_rate_limiter.wait()
-                                        kalshi_client.cancel_order(_orphan_oid)
-                                        print(f'🧹 APEX ORPHAN PREVENTED: cancelled {_orphan_oid[:12]} (other side failed)')
-                                except Exception:
-                                    pass
-                            continue
-                        yr, ya = yes_results[idx]
-                        nr, na = no_results[idx]
-                        actual_width = 100 - ya - na
-                        new_rungs.append({
-                            'width': actual_width, 'yes_price': ya, 'no_price': na,
-                            'yes_order_id': yr['order']['order_id'],
-                            'no_order_id': nr['order']['order_id'],
-                            'yes_fill_qty': 0, 'no_fill_qty': 0,
-                            'yes_filled_at': None, 'no_filled_at': None,
-                            'quantity': qty_per,
-                            # Apex 2.0 per-rung fields
-                            'status': 'posted', 'anchor_side': None,
-                            'anchor_fill_at': None, 'hedge_order_id': None,
-                            'hedge_price': None, 'hedge_fill_qty': 0,
-                            'hedge_fill_at': None, 'time_stage': None,
-                            'stage_entered_at': None,
-                            'stop_loss_cents': _apex_stop_loss_threshold(actual_width),
-                            'completed': False, '_profit_recorded': False,
-                        })
-                    except Exception:
-                        pass
-            else:
-                new_rungs = []
-            if new_rungs:
-                _repeat_oids = []
-                for _nr in new_rungs:
-                    if _nr.get('yes_order_id'): _repeat_oids.append(_nr['yes_order_id'])
-                    if _nr.get('no_order_id'): _repeat_oids.append(_nr['no_order_id'])
-                bot['_all_placed_order_ids'] = list(set(bot.get('_all_placed_order_ids', []) + _repeat_oids))
-                bot['rungs'] = new_rungs
-                bot['total_rungs'] = len(new_rungs)
-                bot['posted_at'] = now
-                bot['status'] = 'ladder_arb_posted'
-                bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
-                bot['first_fill_at'] = None
-                bot['completed_rungs_count'] = 0
-                bot['repost_count'] = bot.get('repost_count', 0) + 1
-                bot['live_yes_bid'] = fresh_yes_bid
-                bot['live_no_bid'] = fresh_no_bid
-                bot['yes_price'] = new_rungs[0]['yes_price']
-                bot['no_price'] = new_rungs[0]['no_price']
-                bot['_order_group_id'] = repeat_group_id
-                actions.append({'bot_id': bot_id, 'action': 'ladder_arb_repeat_repost'})
-                print(f'🔄 APEX REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs')
-            else:
-                return
-        except Exception as e:
-            print(f'❌ APEX REPEAT {bot_id}: {e}')
-            return
-        save_state()
-        return
-
-    # ── STATE: depth_pulled — rungs pulled due to bad book, waiting for recovery ──
-    if status == 'depth_pulled':
-        if bot.get('_bot_completed'):
-            bot['status'] = 'completed'
-            return
-
-        # Check if we've exhausted pull cycles
-        if bot.get('_pull_count', 0) >= APEX_MAX_PULL_CYCLES:
-            bot['status'] = 'drift_cancelled'
-            bot['completed_at'] = now
-            bot['_cancel_reason'] = f'max_pull_cycles_{APEX_MAX_PULL_CYCLES}'
-            print(f'⏹ APEX MAX PULLS: {bot_id} hit {APEX_MAX_PULL_CYCLES} pull cycles — giving up')
-            save_state()
-            return
-
-        # Cooldown: don't re-post too quickly
-        _last_pull = bot.get('_last_pull_at', 0)
-        if now - _last_pull < APEX_PULL_COOLDOWN_S:
-            return
-
-        # Drift check: if market is decided (bid >= 80), complete — don't wait for depth
-        _drift_yes = bot.get('live_yes_bid', 0)
-        _drift_no = bot.get('live_no_bid', 0)
-        _drift_max = max(_drift_yes, _drift_no)
-        if _drift_max >= 80:
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
-            bot['_stop_reason'] = f'depth_pulled_drift_{_drift_max}c'
-            print(f'⏹ APEX DRIFT COMPLETE: {bot_id} bid={_drift_max}¢ — game decided')
-            save_state()
-            return
-
-        # Check if depth has recovered
-        if _apex_depth_recovered(ticker, bot):
-            # Re-post all depth_pulled rungs with fresh prices
-            try:
-                api_read_limiter.wait()
-                ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
-                ob = ob_data.get('orderbook', ob_data)
-                yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-                no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-                fresh_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
-                fresh_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
-                fresh_yes_ask = 100 - fresh_no_bid if fresh_no_bid > 0 else 99
-                fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
-
-                if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
-                    return  # still no book — wait
-
-                # Drift guard — already checked above with live bids, double-check with fresh
-                drift_max = max(fresh_yes_bid, fresh_no_bid)
-                if drift_max >= 80:
-                    return  # market too decided — don't repost
-
-                new_group_id = _create_order_group()
-                qty_per = bot.get('quantity', 1)
-                valid_specs = []
-                for rung in bot.get('rungs', []):
-                    if rung.get('status') != 'depth_pulled':
-                        continue
-                    w = rung['width']
-                    ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
-                    profit = 100 - ty - tn
-                    if profit <= 0:
-                        continue
-                    valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn})
-
-                if not valid_specs:
-                    return  # no profitable widths at current prices
-
-                yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]
-                no_specs  = [{'ticker': ticker, 'side': 'no',  'count': qty_per, 'price': s['no_price']}  for s in valid_specs]
-                yes_results = create_orders_batch(yes_specs, order_group_id=new_group_id)
-                no_results  = create_orders_batch(no_specs, order_group_id=new_group_id)
-
-                new_rungs = []
-                for idx_s in range(len(valid_specs)):
-                    try:
-                        if yes_results[idx_s] is None or no_results[idx_s] is None:
-                            _orphan_result = yes_results[idx_s] if no_results[idx_s] is None else no_results[idx_s]
-                            if _orphan_result:
-                                try:
-                                    _orphan_oid = _orphan_result[0].get('order', {}).get('order_id', '')
-                                    if _orphan_oid:
-                                        api_rate_limiter.wait()
-                                        kalshi_client.cancel_order(_orphan_oid)
-                                except Exception:
-                                    pass
-                            continue
-                        yr, ya = yes_results[idx_s]
-                        nr, na = no_results[idx_s]
-                        actual_width = 100 - ya - na
-                        new_rungs.append({
-                            'width': actual_width, 'yes_price': ya, 'no_price': na,
-                            'yes_order_id': yr['order']['order_id'],
-                            'no_order_id': nr['order']['order_id'],
-                            'yes_fill_qty': 0, 'no_fill_qty': 0,
-                            'yes_filled_at': None, 'no_filled_at': None,
-                            'quantity': qty_per,
-                            'status': 'posted', 'anchor_side': None,
-                            'anchor_fill_at': None, 'hedge_order_id': None,
-                            'hedge_price': None, 'hedge_fill_qty': 0,
-                            'hedge_fill_at': None, 'time_stage': None,
-                            'stage_entered_at': None,
-                            'stop_loss_cents': _apex_stop_loss_threshold(actual_width),
-                            'completed': False, '_profit_recorded': False,
-                        })
-                    except Exception:
-                        pass
-
-                if new_rungs:
-                    _repost_oids = []
-                    for _nr in new_rungs:
-                        if _nr.get('yes_order_id'): _repost_oids.append(_nr['yes_order_id'])
-                        if _nr.get('no_order_id'): _repost_oids.append(_nr['no_order_id'])
-                    bot['_all_placed_order_ids'] = list(set(bot.get('_all_placed_order_ids', []) + _repost_oids))
-                    bot['rungs'] = new_rungs
-                    bot['total_rungs'] = len(new_rungs)
-                    bot['posted_at'] = now
-                    bot['status'] = 'ladder_arb_posted'
-                    bot['_order_group_id'] = new_group_id
-                    _obi_snap = _apex_obi_snapshot(ticker)
-                    bot_log('APEX_DEPTH_REPOST', bot_id, {
-                        'rungs': len(new_rungs), 'pull_count': bot.get('_pull_count', 0),
-                        'obi': _obi_snap,
-                    })
-                    print(f'✅ APEX DEPTH REPOST: {bot_id} {len(new_rungs)} rungs — book recovered (cycle {bot.get("_pull_count", 0)})')
-                    actions.append({'bot_id': bot_id, 'action': 'depth_repost'})
-            except Exception as e:
-                print(f'❌ APEX DEPTH REPOST {bot_id}: {e}')
-        save_state()
-        return
-
-    # ── STATE: ladder_arb_posted — all rungs live, both sides, waiting for fills ──
-    if status == 'ladder_arb_posted':
-        if bot.get('_bot_completed'):
-            bot['status'] = 'completed'
-            return
-
-        # ── OBI depth check: pull orders if book is hostile ──
-        _should_pull, _pull_reason = _apex_should_pull(ticker)
-        if _should_pull:
-            _pulled = _apex_pull_unfilled_rungs(bot_id, bot, _pull_reason)
-            if _pulled > 0:
-                # Check if ALL rungs are now pulled (no fills happened)
-                _all_pulled = all(r.get('status') in ('depth_pulled', 'stopped', 'completed') for r in bot.get('rungs', []))
-                if _all_pulled:
-                    bot['status'] = 'depth_pulled'
-                else:
-                    # Some rungs had fills — go to active
-                    bot['status'] = 'ladder_arb_active'
-                save_state()
-                return
-
-        # Repost stale orders (60s — apex needs fresh prices)
-        REPOST_AFTER_MIN = 1
-        age_min = (now - bot.get('posted_at', now)) / 60.0
-        if phase == 'live' and age_min >= REPOST_AFTER_MIN:
-            # Check no fills on any rung
-            any_fills = any(
-                r.get('yes_fill_qty', 0) > 0 or r.get('no_fill_qty', 0) > 0
-                for r in bot.get('rungs', [])
-            )
-            if not any_fills:
-                # Cancel per-rung (NOT order-group) to avoid race with incoming fills.
-                # A fill can arrive between the any_fills check and cancel — per-rung
-                # cancel lets us skip rungs that got a fill during the loop.
-                _fill_during_cancel = False
-                for rung in bot.get('rungs', []):
-                    if rung.get('yes_fill_qty', 0) > 0 or rung.get('no_fill_qty', 0) > 0:
-                        _fill_during_cancel = True
-                        continue  # don't cancel — fill arrived
-                    for side in ('yes', 'no'):
-                        oid = rung.get(f'{side}_order_id')
-                        if oid:
-                            _cr = _cancel_with_retry(oid)
-                            if _cr == 'filled':
-                                # Order filled during cancel — DON'T wipe, abort repost
-                                _fill_during_cancel = True
-                                break
-                            rung[f'{side}_order_id'] = None
-                    if _fill_during_cancel:
-                        break
-                if _fill_during_cancel:
-                    # Fill arrived during cancel — abort repost, go to active
-                    bot['status'] = 'ladder_arb_active'
-                    print(f'⚠ APEX REPOST ABORT: {bot_id} fill arrived during cancel — switching to active')
-                    save_state()
-                    return
-
-                # Fetch fresh orderbook and repost
-                try:
-                    new_group_id = _create_order_group()
-                    api_read_limiter.wait()
-                    ob_data = _normalize_orderbook(kalshi_client.get_market_orderbook(ticker))
-                    ob = ob_data.get('orderbook', ob_data)
-                    yes_levels = sorted(ob.get('yes', []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-                    no_levels  = sorted(ob.get('no',  []), key=lambda x: x[0] if isinstance(x, list) else x.get('price', 0), reverse=True)
-                    fresh_yes_bid = (yes_levels[0][0] if isinstance(yes_levels[0], list) else yes_levels[0].get('price', 0)) if yes_levels else 0
-                    fresh_no_bid  = (no_levels[0][0]  if isinstance(no_levels[0], list)  else no_levels[0].get('price', 0))  if no_levels  else 0
-                    fresh_yes_ask = 100 - fresh_no_bid if fresh_no_bid > 0 else 99
-                    fresh_no_ask  = 100 - fresh_yes_bid if fresh_yes_bid > 0 else 99
-
-                    if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
-                        bot['status'] = 'drift_cancelled'
-                        bot['completed_at'] = now
-                        save_state()
-                        return
-
-                    # Drift guard: don't repost if market is basically decided — but don't kill, just wait
-                    drift_max = max(fresh_yes_bid, fresh_no_bid)
-                    if drift_max >= 80:
-                        bot_log('APEX_REPEAT_DRIFT_SKIP', bot_id, {
-                            'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid,
-                            'drift_max': drift_max, 'reason': 'market_decided',
-                        })
-                        print(f'⏳ APEX DRIFT WAIT: {bot_id} max_side={drift_max}¢ — market too decided, waiting')
-                        return
-
-                    valid_specs = []
-                    for rung in bot.get('rungs', []):
-                        w = rung['width']
-                        ty, tn = _calculate_arb_prices_server(fresh_yes_bid, fresh_no_bid, fresh_yes_ask, fresh_no_ask, w)
-                        profit = 100 - ty - tn
-                        if profit <= 0:
-                            continue
-                        valid_specs.append({'width': w, 'yes_price': ty, 'no_price': tn})
-                    new_rungs = []
-                    if valid_specs:
-                        yes_specs = [{'ticker': ticker, 'side': 'yes', 'count': qty_per, 'price': s['yes_price']} for s in valid_specs]
-                        no_specs  = [{'ticker': ticker, 'side': 'no',  'count': qty_per, 'price': s['no_price']}  for s in valid_specs]
-                        yes_results = create_orders_batch(yes_specs, order_group_id=new_group_id)
-                        no_results  = create_orders_batch(no_specs, order_group_id=new_group_id)
-                        for idx, spec in enumerate(valid_specs):
-                            try:
-                                if yes_results[idx] is None or no_results[idx] is None:
-                                    _orphan_r = yes_results[idx] if no_results[idx] is None else no_results[idx]
-                                    if _orphan_r:
-                                        try:
-                                            _ooid = _orphan_r[0].get('order', {}).get('order_id', '')
-                                            if _ooid:
-                                                api_rate_limiter.wait()
-                                                kalshi_client.cancel_order(_ooid)
-                                        except Exception:
-                                            pass
-                                    continue
-                                yr, ya = yes_results[idx]
-                                nr, na = no_results[idx]
-                                actual_width = 100 - ya - na
-                                new_rungs.append({
-                                    'width': actual_width, 'yes_price': ya, 'no_price': na,
-                                    'yes_order_id': yr['order']['order_id'],
-                                    'no_order_id': nr['order']['order_id'],
-                                    'yes_fill_qty': 0, 'no_fill_qty': 0,
-                                    'yes_filled_at': None, 'no_filled_at': None,
-                                    'quantity': qty_per,
-                                    'status': 'posted', 'anchor_side': None,
-                                    'anchor_fill_at': None, 'hedge_order_id': None,
-                                    'hedge_price': None, 'hedge_fill_qty': 0,
-                                    'hedge_fill_at': None, 'time_stage': None,
-                                    'stage_entered_at': None,
-                                    'stop_loss_cents': _apex_stop_loss_threshold(actual_width),
-                                    'completed': False, '_profit_recorded': False,
-                                })
-                            except Exception:
-                                pass
-
-                    if new_rungs:
-                        _repost_oids = []
-                        for _nr in new_rungs:
-                            if _nr.get('yes_order_id'): _repost_oids.append(_nr['yes_order_id'])
-                            if _nr.get('no_order_id'): _repost_oids.append(_nr['no_order_id'])
-                        bot['_all_placed_order_ids'] = list(set(bot.get('_all_placed_order_ids', []) + _repost_oids))
-                        bot['rungs'] = new_rungs
-                        bot['total_rungs'] = len(new_rungs)
-                        bot['posted_at'] = now
-                        bot['repost_count'] = bot.get('repost_count', 0) + 1
-                        bot['live_yes_bid'] = fresh_yes_bid
-                        bot['live_no_bid'] = fresh_no_bid
-                        bot['yes_price'] = new_rungs[0]['yes_price']
-                        bot['no_price'] = new_rungs[0]['no_price']
-                        # Track all group IDs so shutdown can cancel them all
-                        _old_gid = bot.get('_order_group_id')
-                        if _old_gid:
-                            bot.setdefault('_all_order_group_ids', []).append(_old_gid)
-                        bot['_order_group_id'] = new_group_id
-                        actions.append({'bot_id': bot_id, 'action': 'ladder_arb_reposted', 'repost_count': bot['repost_count']})
-                        print(f'🔄 APEX REPOST: {bot_id} #{bot["repost_count"]} — {len(new_rungs)} rungs refreshed')
-                    else:
-                        bot['status'] = 'drift_cancelled'
-                        bot['completed_at'] = now
-                except Exception as e:
-                    print(f'❌ APEX REPOST {bot_id}: {e}')
-
-        save_state()
-        return
-
-    # ── STATE: ladder_arb_active — at least one rung has a fill ──
-    if status == 'ladder_arb_active':
-        if bot.get('_bot_completed'):
-            bot['status'] = 'completed'
-            return
-
-        # Settlement check: if market is inactive/settled, stop all rungs
-        if now - bot.get('_last_settle_check_active', 0) >= 30:
-            bot['_last_settle_check_active'] = now
-            try:
-                if api_read_limiter.try_wait():
-                    _mkt = kalshi_client.get_market(ticker)
-                    _md = _mkt.get('market', _mkt) if isinstance(_mkt, dict) else {}
-                    _ms = _md.get('status', 'active')
-                    if _ms not in ('active', 'open'):
-                        print(f'🏁 APEX MARKET DEAD: {bot_id} market={_ms} — cancelling all orders')
-                        for _r in bot.get('rungs', []):
-                            for _k in ('yes_order_id', 'no_order_id', 'hedge_order_id'):
-                                _oid = _r.get(_k)
-                                if _oid:
-                                    try: kalshi_client.cancel_order(_oid)
-                                    except: pass
-                            if _r.get('status') not in ('completed', 'stopped'):
-                                _r['status'] = 'stopped'
+                                'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                                'result': f'mm_settlement_{mkt_result}', f'{side}_price': avg_cost,
+                                'quantity': net_qty, 'net_pnl': pnl,
+                                'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)),
+                                'timestamp': now, 'fill_source': 'apex_mm_settlement',
+                            })
+                            bot[f'net_{side}'] = 0
+                            bot[f'avg_{side}_cost'] = 0
+                            bot[f'total_{side}_cost'] = 0
                         bot['status'] = 'completed'
                         bot['completed_at'] = now
+                        bot_log('APEX_MM_SETTLED', bot_id, {'result': mkt_result, 'pnl': bot.get('realized_pnl_cents', 0)})
+                        print(f'🏁 APEX MM SETTLED: {bot_id} result={mkt_result} pnl={bot.get("realized_pnl_cents", 0)}c')
+                        # Cancel remaining orders
+                        for side_key in ('yes_orders', 'no_orders'):
+                            for price, level in list(bot.get(side_key, {}).items()):
+                                oid = level.get('oid')
+                                if oid:
+                                    _cancel_with_retry(oid)
+                                    level['oid'] = None
                         save_state()
                         return
-            except Exception:
-                pass
+                    else:
+                        # Market closed/game over but no result yet — begin exit
+                        _apex_mm_begin_exit(bot_id, bot, 'market_closed')
+                        return
+        except Exception as e:
+            pass  # non-critical, retry next tick
 
-        any_active = False
-        all_resolved = True
-        any_filled = False
-        has_posted = False
+    # 3. Inventory limit check
+    _apex_mm_check_inventory(bot_id, bot)
 
-        for idx, rung in enumerate(bot.get('rungs', [])):
-            rs = rung.get('status', 'posted')
-
-            if rs == 'posted':
-                has_posted = True
-                all_resolved = False  # unfilled rung still live — not resolved
-                continue
-            if rs == 'depth_pulled':
-                # Pulled rung = resolved (no position held)
-                continue
-            if rs in ('completed', 'stopped', 'scratched'):
-                any_filled = True
-                continue  # resolved
-
-            any_filled = True
-            all_resolved = False
-
-            # Maker exit: tracked sell order for anchor
-            if rs == 'maker_exit':
-                any_active = True
-                try:
-                    _apex_maker_exit_tick(bot_id, bot, rung, idx)
-                except Exception as _tde:
-                    print(f'❌ MAKER EXIT TICK ERROR: {bot_id} rung#{idx}: {_tde}')
-                continue
-
-            # Active rung with fill — run tick
-            if rs in ('anchor_filled', 'pending_profit', 'snapped',
-                       'profit_window', 'scratch_window', 'panic_window'):
-                any_active = True
-                # Skip if hedge thread is still running (anchor_filled → waiting for thread)
-                if rs == 'anchor_filled':
-                    age = now - (rung.get('anchor_fill_at') or now)
-                    if age > 10:
-                        rung['status'] = 'pending_profit'
-                        print(f'⚠ APEX STALE ANCHOR: {bot_id} rung#{idx} stuck in anchor_filled for {age:.0f}s → pending_profit')
-                    continue
-                # Migrate any old statuses to pending_profit
-                if rs in ('profit_window', 'scratch_window', 'panic_window', 'snapped'):
-                    rung['status'] = 'pending_profit'
-                try:
-                    _apex_time_decay_tick(bot_id, bot, rung, idx)
-                except Exception as _tde:
-                    print(f'❌ TICK ERROR: {bot_id} rung#{idx}: {_tde}')
-
-        # ── OBI depth pull: cancel unfilled POSTED rungs if book is hostile ──
-        if has_posted:
-            _should_pull, _pull_reason = _apex_should_pull(ticker)
-            if _should_pull:
-                _apex_pull_unfilled_rungs(bot_id, bot, _pull_reason)
-                has_posted = False  # recalc — rungs are now depth_pulled, not posted
-
-        # Auto-cancel unfilled POSTED rungs: either 2min after first completion,
-        # or immediately when market has drifted 15¢+ past the rung's posted price.
-        _first_rung_done_at = bot.get('_first_rung_completed_at')
-        _time_cancel = has_posted and _first_rung_done_at and now - _first_rung_done_at > 120
-        if has_posted and (any_active or _time_cancel):
-            for _pr in bot.get('rungs', []):
-                if _pr.get('status') == 'posted' and (_pr.get('yes_fill_qty', 0) == 0 and _pr.get('no_fill_qty', 0) == 0):
-                    _should_cancel = _time_cancel
-                    # Market drift cancel: if YES bid moved 15¢+ from rung's posted price, it's dead
-                    if not _should_cancel and yes_bid > 0:
-                        _rung_yes = _pr.get('yes_price', 0)
-                        if _rung_yes > 0 and abs(yes_bid - _rung_yes) >= 15:
-                            _should_cancel = True
-                    if _should_cancel:
-                        for _ps in ('yes', 'no'):
-                            _poid = _pr.get(f'{_ps}_order_id')
-                            if _poid:
-                                _cancel_with_retry(_poid)
-                                _pr[f'{_ps}_order_id'] = None
-                        _pr['status'] = 'stopped'
-                        _drift_info = f'yes_bid={yes_bid} rung_yes={_pr.get("yes_price",0)}' if not _time_cancel else '2min timeout'
-                        print(f'⏹ APEX AUTO-CANCEL: {bot_id} unfilled rung w={_pr.get("width",0)}c stopped ({_drift_info})')
-            # Re-check if all resolved now
-            all_resolved = all(r.get('status') in ('completed', 'stopped', 'scratched', 'depth_pulled') for r in bot.get('rungs', []))
-
-        # Check if ALL rungs are resolved → bot completion
-        if all_resolved and any_filled:
-            # Guard: if _execute_apex_completion already handled this cycle, skip
-            if bot.get('_bot_completed'):
-                bot['status'] = 'completed'
-                save_state()
-                return
-
-            # Mark completed first to prevent _execute_apex_completion race
-            bot['_bot_completed'] = True
-
-            # Record run history (same as _execute_apex_completion path)
-            completed_count = sum(1 for r in bot.get('rungs', []) if r.get('completed'))
-            total_pnl_hist = bot.get('net_pnl_cents', 0)
-            bot.setdefault('_run_history', []).append({
-                'run': bot.get('repeats_done', 0) + 1,
-                'pnl': total_pnl_hist,
-                'result': 'win' if total_pnl_hist >= 0 else 'loss',
-                'rungs_completed': completed_count,
-                'total_rungs': len(bot.get('rungs', [])),
-                'qty': bot.get('quantity', 1),
-                'ts': now,
-            })
-
-            # Check for repeat
-            repeats_done = bot.get('repeats_done', 0) + 1
-            bot['repeats_done'] = repeats_done
-            repeat_total = bot.get('repeat_count', 0)
-            total_pnl = bot.get('net_pnl_cents', 0)
-            _smart_repeat, _ = _smart_mode_should_repeat(bot, total_pnl)
-            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done <= repeat_total)
-            if _will_repeat:
-                bot['status'] = 'waiting_repeat'
-                bot['_bot_completed'] = False  # CRITICAL: clear so next cycle's monitor ticks run
-                # After stop-loss cycle, add 30s cooldown (vs normal 10s) to avoid cascading losses
-                _had_sellback = any(r.get('_net_pnl', 0) < -10 for r in bot.get('rungs', []))
-                _cooldown = 30 if _had_sellback else 0
-                bot['waiting_repeat_since'] = now + _cooldown  # adds to the existing 10s wait
-                if _had_sellback:
-                    print(f'⏳ APEX STOP-LOSS COOLDOWN: {bot_id} waiting 40s before repeat (stop-loss cycle)')
-                bot['first_fill_at'] = None
-                bot['_first_rung_completed_at'] = None
-                bot['completed_rungs_count'] = 0
-                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + total_pnl
-                bot['net_pnl_cents'] = 0
-                print(f'🔄 APEX CYCLE DONE: {bot_id} {repeats_done}/{repeat_total} pnl={total_pnl}c → repeat')
-            else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                print(f'🏁 APEX COMPLETED: {bot_id} all rungs resolved, pnl={total_pnl}c')
-            _audit('APEX_BOT_CYCLE_DONE', bot_id, {'ticker': ticker, 'pnl': total_pnl, 'will_repeat': _will_repeat})
-
-        save_state()
+    # 4. Unrealized P&L stop
+    if _apex_mm_check_loss_limit(bot_id, bot):
         return
 
-    # Fallback for old statuses — treat as active if any rungs have fills
-    if status in ('ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back'):
-        bot['status'] = 'ladder_arb_active'
-        save_state()
+    # 5. Smart mode check (consecutive losses)
+    smart_limit = bot.get('smart_mode', 0)
+    if smart_limit > 0 and bot.get('consecutive_losses', 0) >= smart_limit:
+        _apex_mm_begin_exit(bot_id, bot, f'smart_stop ({bot["consecutive_losses"]} consecutive losses)')
         return
+
+    # 6. Repost any filled levels (continuous quoting)
+    _apex_mm_repost_filled(bot_id, bot)
+
+    # 7. Drift check — if midpoint moved significantly, reprice ladder
+    _apex_mm_drift_check(bot_id, bot)
+
+    save_state()
 
 
 def _phantom_set_final_status(bot, bot_id=''):
     """Set bot to 'awaiting_settlement' if cross-market with accumulated positions, else 'completed'.
     Returns the status string that was set."""
     now = time.time()
+    bot.pop('_dual_exit_active', None)
+    bot.pop('_dual_exit_sell_won', None)
+    bot.pop('_dual_exit_fav_won', None)
     _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != bot.get('ticker')
     _has_pos = (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0
                 or bot.get('dog_fill_qty', 0) > 0 or bot.get('total_dog_fill_qty', 0) > 0)
@@ -14990,7 +13428,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_active', 'ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back', 'awaiting_settlement', 'depth_pulled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -18781,47 +17219,6 @@ def set_smart_exit_trigger(bot_id):
     return jsonify({'success': True, 'trigger_price': trigger_price, 'loser': _loser_ticker.split('-')[-1]})
 
 
-@app.route('/api/bot/smart-stop/<bot_id>', methods=['POST'])
-def smart_stop_apex(bot_id):
-    """Queue a smart stop: bot finishes current cycle then stops."""
-    bot = active_bots.get(bot_id)
-    if not bot:
-        return jsonify({'error': 'Bot not found'}), 404
-    bot['_smart_stop_pending'] = True
-    bot['repeat_count'] = bot.get('repeats_done', 0)  # no more repeats
-    save_state()
-    print(f'⏹ SMART STOP QUEUED: {bot_id}')
-    return jsonify({'success': True})
-
-
-@app.route('/api/bot/snap/<bot_id>/<int:rung_idx>', methods=['POST'])
-def snap_rung(bot_id, rung_idx):
-    """Manual snap: cancel hedge and repost at bid+1 for immediate fill."""
-    bot = active_bots.get(bot_id)
-    if not bot:
-        return jsonify({'error': 'Bot not found'}), 404
-    rungs = bot.get('rungs', [])
-    if rung_idx >= len(rungs):
-        return jsonify({'error': 'Invalid rung index'}), 400
-    rung = rungs[rung_idx]
-    if rung.get('completed'):
-        return jsonify({'error': 'Rung already completed'}), 400
-    anchor_side = rung.get('anchor_side')
-    if not anchor_side:
-        return jsonify({'error': 'Rung not yet anchored'}), 400
-    hedge_side = 'no' if anchor_side == 'yes' else 'yes'
-    anchor_price = rung.get(f'{anchor_side}_price', 0)
-    hedge_bid = bot.get(f'live_{hedge_side}_bid', 0)
-    hedge_ask = bot.get(f'live_{hedge_side}_ask', 0)
-    spread = (hedge_ask - hedge_bid) if hedge_ask > hedge_bid else 0
-    snap_price = (hedge_bid + 1 if spread > 1 else hedge_bid) if hedge_bid > 0 else max(1, 100 - anchor_price)
-    snap_price = max(1, snap_price)
-    rung['time_stage'] = 'snapped'
-    rung['status'] = 'snapped'
-    rung['_snap_at'] = time.time()
-    _apex_snap_hedge(bot_id, bot, rung, rung_idx, snap_price)
-    print(f'⚡ MANUAL SNAP: {bot_id} rung#{rung_idx} → {hedge_side.upper()} @{snap_price}c')
-    return jsonify({'success': True, 'snap_price': snap_price})
 
 
 @app.route('/api/bot/cancel/<bot_id>', methods=['DELETE'])
@@ -18993,9 +17390,9 @@ def cancel_bot(bot_id):
                     already_cleared_sides.add('no')
                     sold_positions.append(f'ARB_ALREADY_NETTED {qty}x')
 
-            # ── Handle ladder-arb bots ──
+            # ── Handle ladder-arb (Apex MM) bots ──
             elif bot.get('bot_category') == 'ladder_arb':
-                # Cancel rung orders via order group (1 API call) or fall back to individual
+                # Cancel order groups
                 _larb_group_id = bot.get('_order_group_id')
                 if _larb_group_id:
                     try:
@@ -19003,9 +17400,7 @@ def cancel_bot(bot_id):
                         kalshi_client.cancel_order_group(_larb_group_id)
                         cancelled.append(f'GROUP_{_larb_group_id[:8]}')
                     except Exception as e:
-                        print(f'⚠ cancel_bot({bot_id}): group cancel failed: {e} — falling back to individual')
-                        _larb_group_id = None  # trigger individual fallback below
-                # Also cancel all old order groups from prior reposts
+                        print(f'⚠ cancel_bot({bot_id}): group cancel failed: {e}')
                 for _old_gid in bot.get('_all_order_group_ids', []):
                     try:
                         api_rate_limiter.wait()
@@ -19013,63 +17408,55 @@ def cancel_bot(bot_id):
                         cancelled.append(f'OLD_GROUP_{_old_gid[:8]}')
                     except Exception:
                         pass
-                if not _larb_group_id:
-                    for rung in bot.get('rungs', []):
-                        for side in ('yes', 'no'):
-                            oid = rung.get(f'{side}_order_id')
-                            fq = rung.get(f'{side}_fill_qty', 0)
-                            rq = rung.get('quantity', bot.get('quantity', 1))
-                            if oid and fq < rq:
-                                try:
-                                    api_rate_limiter.wait()
-                                    kalshi_client.cancel_order(oid)
-                                    cancelled.append(f'{side.upper()}@{rung.get(f"{side}_price", "?")}c')
-                                except Exception as e:
-                                    print(f'⚠ cancel_bot({bot_id}): cancel {side} rung failed: {e}')
-                # Cancel all historically tracked hedge/placed orders
-                rung_oids = set()
-                for rung in bot.get('rungs', []):
-                    for sk in ('yes_order_id', 'no_order_id', '_maker_sell_oid'):
-                        if rung.get(sk):
-                            rung_oids.add(rung[sk])
-                for oid in bot.get('_all_hedge_order_ids', []):
-                    if oid and oid not in rung_oids:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(oid)
-                            cancelled.append(f'HEDGE_{oid[:8]}')
-                        except Exception:
-                            pass
-                for oid in bot.get('_all_placed_order_ids', []):
-                    if oid and oid not in rung_oids:
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(oid)
-                        except Exception:
-                            pass
-                # Cancel orders from hedge_history (walk-up replacements)
-                for hg in bot.get('hedge_history', []):
-                    for hg_oid in [hg.get('order_id')] + hg.get('order_ids', []):
-                        if hg_oid and hg_oid not in rung_oids:
+                # Cancel all ladder orders
+                for side_key in ('yes_orders', 'no_orders'):
+                    for price_str, level in list(bot.get(side_key, {}).items()):
+                        oid = level.get('oid')
+                        if oid:
                             try:
                                 api_rate_limiter.wait()
-                                kalshi_client.cancel_order(hg_oid)
+                                kalshi_client.cancel_order(oid)
+                                cancelled.append(f'{side_key[:3].upper()}@{price_str}c')
                             except Exception:
                                 pass
-                # Sell back any filled positions on either side
+                # Cancel exit sell orders
+                for _exit_side in ('yes', 'no'):
+                    sell_info = bot.get('_exit_sell_oids', {}).get(_exit_side, {})
+                    _exit_oid = sell_info.get('oid')
+                    if _exit_oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_exit_oid)
+                            cancelled.append(f'EXIT_{_exit_side.upper()}')
+                        except Exception:
+                            pass
+                # Cancel all historically placed orders
+                _known_oids = set()
+                for side_key in ('yes_orders', 'no_orders'):
+                    for level in bot.get(side_key, {}).values():
+                        if level.get('oid'):
+                            _known_oids.add(level['oid'])
+                for oid in bot.get('_all_placed_order_ids', []):
+                    if oid and oid not in _known_oids:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+                # Sell back held inventory
                 for side in ('yes', 'no'):
-                    total_fill = sum(r.get(f'{side}_fill_qty', 0) for r in bot.get('rungs', []))
-                    if total_fill > 0 and side not in already_cleared_sides:
-                        sold, sell_info = execute_sell(ticker, side, total_fill,
-                                                       reason=f'cancel_larb_{side}_{bot_id}')
+                    net_held = bot.get(f'net_{side}', 0)
+                    if net_held > 0 and side not in already_cleared_sides:
+                        sold, sell_info = execute_sell(ticker, side, net_held,
+                                                       reason=f'cancel_mm_{side}_{bot_id}')
                         if sold:
-                            sold_positions.append(f'{side.upper()} {total_fill}x')
+                            sold_positions.append(f'{side.upper()} {net_held}x')
                             sp = (sell_info or {}).get('actual_fill_price', 0)
                             sell_prices[side] = sp
                             if (sell_info or {}).get('order_id') == 'already_cleared':
                                 already_cleared_sides.add(side)
                         else:
-                            warnings.append(f'FAILED to sell {side.upper()} {total_fill}x')
+                            warnings.append(f'FAILED to sell {side.upper()} {net_held}x')
 
             # ── Handle anchor-ladder bots ──
             elif bot.get('bot_category') == 'anchor_ladder':

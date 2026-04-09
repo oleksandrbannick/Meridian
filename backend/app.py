@@ -14763,7 +14763,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_active', 'ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back', 'awaiting_settlement')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'ladder_arb_posted', 'ladder_arb_active', 'ladder_arb_yes_filled', 'ladder_arb_no_filled', 'apex_selling_back', 'awaiting_settlement', 'depth_pulled')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):

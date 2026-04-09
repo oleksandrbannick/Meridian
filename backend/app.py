@@ -11592,11 +11592,27 @@ def _cancel_hedge_verified(bot, bot_id):
     except Exception as e:
         print(f'⚠ HEDGE VERIFY FAILED: {bot_id} order={fav_oid[:12]} — {e}')
         bot_log('HEDGE_VERIFY_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
-        # 404 = order gone from Kalshi — fall back to WS-tracked fills
+        # 404 = order gone from Kalshi — check actual position as ground truth
         _ws_fills = bot.get('fav_fill_qty', 0)
-        if _ws_fills > 0:
-            filled_qty = _ws_fills
-            print(f'⚠ HEDGE VERIFY 404 FALLBACK: {bot_id} using WS fav_fill_qty={_ws_fills}')
+        _pos_fills = 0
+        try:
+            _hedge_ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
+            api_read_limiter.wait()
+            _pos_resp = kalshi_client.get_positions(ticker=_hedge_ticker)
+            _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+            if isinstance(_positions, list):
+                for _p in _positions:
+                    _pos_fills = max(_pos_fills, abs(_p.get('position', 0)))
+            elif isinstance(_positions, dict):
+                _pos_fills = abs(_positions.get('position', 0))
+            if _pos_fills > 0:
+                print(f'⚠ HEDGE VERIFY 404 POSITION CHECK: {bot_id} Kalshi position={_pos_fills} ws={_ws_fills}')
+        except Exception as _pe:
+            print(f'⚠ HEDGE VERIFY POSITION CHECK FAILED: {bot_id}: {_pe}')
+        # Use the highest of: WS fills, Kalshi position
+        filled_qty = max(_ws_fills, _pos_fills)
+        if filled_qty > 0:
+            print(f'⚠ HEDGE VERIFY 404 FALLBACK: {bot_id} using {filled_qty} (ws={_ws_fills} pos={_pos_fills})')
     bot['fav_order_id'] = None
     return filled_qty
 

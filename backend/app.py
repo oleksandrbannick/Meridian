@@ -7143,19 +7143,8 @@ def _apex_time_decay_tick(bot_id, bot, rung, rung_idx):
         _snap_cost = max(0, _bid_combined - 100)  # ¢ loss per contract from completing at bid
         _sellback_cost = max(0, anchor_price - anchor_bid_now) if anchor_bid_now > 0 else anchor_price  # ¢ loss from selling anchor at bid
 
-        # Maker exit exhaustion: if maker exit has been sitting 90s+ post-timeout, taker as last resort
-        _maker_exhaustion_s = 90
-        _first_timeout_snap = rung.get('_first_timeout_snap_at')
-        if _first_timeout_snap and (now - _first_timeout_snap) >= _maker_exhaustion_s:
-            rung['_snap_reason'] = f'maker_exhausted_{int(now - _first_timeout_snap)}s'
-            print(f'⏰ APEX MAKER EXHAUSTED: {bot_id} rung#{rung_idx} ({width}c) maker exit for {now - _first_timeout_snap:.0f}s, no fill → taker sellback')
-            bot_log('APEX_MAKER_EXHAUSTED', bot_id, {
-                'rung_idx': rung_idx, 'width': width,
-                'anchor_price': anchor_price, 'anchor_bid': anchor_bid_now,
-                'hedge_bid': hedge_bid, 'snap_age_s': round(now - _first_timeout_snap, 1),
-            })
-            _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, anchor_price + hedge_bid, 0)
-            return
+        # Maker exit patience: just keep the maker sell posted, walk with bid
+        # No taker fallback — maker only
 
         if not _first_timeout_snap:
             rung['_first_timeout_snap_at'] = now
@@ -7399,9 +7388,9 @@ def _apex_start_maker_sellback(bot_id, bot, rung, rung_idx, anchor_bid):
         print(f'📤 APEX MAKER SELL: {bot_id} rung#{rung_idx} {anchor_side.upper()} sell @{actual_price}¢ x{sell_qty} (oid={sell_oid[:12]})')
         save_state()
     except Exception as e:
-        print(f'❌ APEX MAKER SELL FAIL: {bot_id} rung#{rung_idx}: {e} → taker fallback')
-        # Maker failed — fall back to taker sellback
-        _apex_rung_sellback(bot_id, bot, rung, rung_idx, 0, anchor_price, 0)
+        print(f'❌ APEX MAKER SELL FAIL: {bot_id} rung#{rung_idx}: {e} — retry next cycle')
+        rung['_sellback_pending'] = True
+        save_state()
 
 
 def _apex_maker_exit_tick(bot_id, bot, rung, rung_idx):
@@ -7538,87 +7527,42 @@ def _apex_rung_sellback(bot_id, bot, rung, rung_idx, hedge_bid, combined_now, st
         save_state()
         return
 
-    # 3. Sell anchor position back — TAKER IMMEDIATELY (stop-loss = speed over price)
-    # Old approach waited 3s for maker fill, causing massive slippage in fast markets.
-    sold = False
-    sell_info = None
-    sold, sell_info = execute_sell(ticker, anchor_side, sell_qty,
-                                   reason=f'apex_stop_{bot_id}_r{rung_idx}')
+    # 3. Sell anchor position back as MAKER (post at bid, walk with bid)
+    anchor_bid = bot.get(f'live_{anchor_side}_bid', 0)
+    if anchor_bid <= 0:
+        # No bid — flag for retry next cycle
+        rung['_sellback_pending'] = True
+        print(f'⏳ APEX SELLBACK WAITING: {bot_id} rung#{rung_idx} no {anchor_side} bid — retry next cycle')
+        save_state()
+        return
 
-    if sold:
-        sell_price = 0
-        if sell_info and isinstance(sell_info, dict):
-            sell_price = sell_info.get('price', 0) or sell_info.get('avg_price', 0)
-        if not sell_price:
-            sell_price = bot.get(f'live_{anchor_side}_bid', 0)
-        rung['_sellback_price'] = sell_price
-        rung['stop_price'] = sell_price
-
-        # 4. Clean up partial hedge fills to prevent orphans
-        # If hedge partially filled (e.g. 2/3 NO), those 2 pairs (anchor+hedge) are
-        # stranded — sell BOTH sides to clear the position completely.
-        if hedged_qty > 0:
-            hedge_sell_price = 0
-            anchor_sell_price2 = 0
-            try:
-                _sold_h, _info_h = execute_sell(ticker, hedge_side, hedged_qty,
-                                                reason=f'apex_stop_cleanup_h_{bot_id}_r{rung_idx}')
-                if _sold_h and _info_h:
-                    hedge_sell_price = _info_h.get('price', 0) or _info_h.get('avg_price', 0)
-                print(f'  🧹 CLEANUP: sold {hedged_qty}x {hedge_side} partial hedge @{hedge_sell_price}c')
-            except Exception as _ce:
-                print(f'  ⚠ CLEANUP hedge sell failed: {_ce}')
-            try:
-                _sold_a, _info_a = execute_sell(ticker, anchor_side, hedged_qty,
-                                                reason=f'apex_stop_cleanup_a_{bot_id}_r{rung_idx}')
-                if _sold_a and _info_a:
-                    anchor_sell_price2 = _info_a.get('price', 0) or _info_a.get('avg_price', 0)
-                print(f'  🧹 CLEANUP: sold {hedged_qty}x {anchor_side} hedged anchor @{anchor_sell_price2}c')
-            except Exception as _ce:
-                print(f'  ⚠ CLEANUP anchor sell failed: {_ce}')
-            bot_log('APEX_RUNG_STOP_LOSS_CLEANUP', bot_id, {
-                'rung_idx': rung_idx, 'hedged_qty': hedged_qty,
-                'hedge_side': hedge_side, 'hedge_sell_price': hedge_sell_price,
-                'anchor_sell_price2': anchor_sell_price2,
-            })
-
-        rung['status'] = 'completed'
-        rung['completed'] = True
+    try:
+        _sell_pk = {'yes_price': anchor_bid} if anchor_side == 'yes' else {'no_price': anchor_bid}
+        api_rate_limiter.wait()
+        resp = kalshi_client.create_order(
+            ticker=ticker, side=anchor_side, action='sell',
+            count=sell_qty, order_type='limit', **_sell_pk
+        )
+        sell_oid = resp.get('order', {}).get('order_id', '')
+        rung['_maker_sell_oid'] = sell_oid
+        rung['_maker_sell_price'] = anchor_bid
+        rung['_maker_sell_at'] = time.time()
+        rung['_maker_sell_qty'] = sell_qty
+        rung['_maker_sell_filled'] = 0
+        rung['status'] = 'maker_exit'
         rung['_sellback_pending'] = False
-        loss_est = max(0, anchor_price - sell_price) * sell_qty
-        print(f'🛑 APEX STOP-LOSS: {bot_id} rung#{rung_idx} ({width}c) sold {anchor_side}@{sell_price}c (was @{anchor_price}c) loss~{loss_est}c combined_was={combined_now}c')
-        bot_log('APEX_RUNG_STOP_LOSS', bot_id, {
-            'rung_idx': rung_idx, 'width': width,
-            'anchor_side': anchor_side, 'anchor_price': anchor_price,
-            'sell_price': sell_price, 'sell_qty': sell_qty, 'hedged_qty': hedged_qty,
-            'combined': combined_now, 'stop_loss': stop_loss, 'hedge_bid': hedge_bid,
-        })
-        _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback')
+        rung['stop_price'] = anchor_bid
+        rung['_sellback_hedged_qty'] = hedged_qty  # track for cleanup after fill
+        bot.setdefault('_all_placed_order_ids', []).append(sell_oid)
+        print(f'📤 APEX MAKER SELLBACK: {bot_id} rung#{rung_idx} {anchor_side.upper()} sell @{anchor_bid}¢ x{sell_qty}')
         save_state()
-    else:
-        _sell_attempts = rung.get('_sellback_attempts', 0) + 1
-        rung['_sellback_attempts'] = _sell_attempts
-        if _sell_attempts >= 5:
-            # Give up after 5 failed attempts — force-complete as orphan
-            # Position stays on Kalshi (visible in My Positions as orphan)
-            rung['status'] = 'completed'
-            rung['completed'] = True
-            rung['_sellback_pending'] = False
-            rung['_sellback_orphan'] = True
-            print(f'⚠ APEX STOP-LOSS ORPHAN: {bot_id} rung#{rung_idx} ({width}c) — {_sell_attempts} sell attempts failed, completing as orphan')
-            bot_log('APEX_RUNG_STOP_LOSS_ORPHAN', bot_id, {
-                'rung_idx': rung_idx, 'anchor_side': anchor_side, 'sell_qty': sell_qty,
-                'attempts': _sell_attempts,
-            }, level='WARN')
-            _apex_record_rung_pnl(bot_id, rung_idx, exit_type='rung_sellback_orphan')
-        else:
-            rung['_sellback_pending'] = True
-            print(f'⚠ APEX STOP-LOSS SELL FAIL: {bot_id} rung#{rung_idx} ({width}c) — attempt {_sell_attempts}/5, will retry')
-            bot_log('APEX_RUNG_STOP_LOSS_FAIL', bot_id, {
-                'rung_idx': rung_idx, 'anchor_side': anchor_side, 'sell_qty': sell_qty,
-                'attempt': _sell_attempts,
-            }, level='WARN')
+    except Exception as e:
+        print(f'❌ APEX MAKER SELLBACK FAIL: {bot_id} rung#{rung_idx}: {e} — retry next cycle')
+        rung['_sellback_pending'] = True
         save_state()
+        return
+
+    # Note: partial hedge cleanup happens after maker sell fills (in _apex_maker_exit_tick)
 
 
 def _apex_record_rung_pnl(bot_id, rung_idx, exit_type='arb_complete'):
@@ -11245,14 +11189,17 @@ def _handle_phantom(bot_id, bot, actions):
             elif not bot.get('_over_ceiling_since'):
                 bot['_over_ceiling_since'] = now
                 # Post dog sell at ask — race with hedge
+                # If fav has partial fills, only sell the unfilled remainder
+                _fav_fills_now = bot.get('fav_fill_qty', 0)
+                _sell_qty = qty - _fav_fills_now if _fav_fills_now > 0 else qty
                 _dog_ask_sell = bot.get(f'live_{dog_side}_ask', 0)
-                if _dog_ask_sell > 0 and not bot.get('dog_sell_order_id') and bot.get('fav_fill_qty', 0) == 0:
+                if _dog_ask_sell > 0 and not bot.get('dog_sell_order_id') and _sell_qty > 0:
                     try:
                         _sell_pk = {'yes_price': _dog_ask_sell} if dog_side == 'yes' else {'no_price': _dog_ask_sell}
                         api_rate_limiter.wait()
                         _sell_resp = kalshi_client.create_order(
                             ticker=ticker, side=dog_side, action='sell',
-                            count=qty, order_type='limit', **_sell_pk
+                            count=_sell_qty, order_type='limit', **_sell_pk
                         )
                         _sell_oid = _sell_resp.get('order', {}).get('order_id', '')
                         if _sell_oid:

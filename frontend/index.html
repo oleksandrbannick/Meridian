@@ -2235,7 +2235,8 @@
         // Draw ghosts on all canvases
         drawMiniGhost(document.getElementById('fab-ghost-canvas'));
         drawMiniGhost(document.getElementById('header-ghost-canvas'));
-        drawMiniGhost(document.getElementById('bar-ghost-canvas'));
+        // bar-ghost-canvas is below this script — draw after DOM ready
+        document.addEventListener('DOMContentLoaded', () => drawMiniGhost(document.getElementById('bar-ghost-canvas')));
 
         // ── Floating bot ghost animation in header ──
         (function() {
@@ -3185,7 +3186,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409132100"></script>
+    <script src="app.js?v=20260409132500"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

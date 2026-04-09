@@ -1845,8 +1845,8 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         event_date = m.get('event_date', '')
         event_time = m.get('event_time', '')
         match_date_iso = f"{event_date}T12:00:00Z" if event_date else ''
-        # Actual start time for pregame display (API Tennis times are local tournament time)
-        start_time_iso = f"{event_date}T{event_time}:00" if event_date and event_time else ''
+        # Actual start time for pregame display (API Tennis times are UTC)
+        start_time_iso = f"{event_date}T{event_time}:00Z" if event_date and event_time else ''
 
         # Tournament + round for display
         tournament = m.get('tournament_name', '')

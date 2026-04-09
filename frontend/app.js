@@ -502,22 +502,15 @@ function parseESPNGame(event, sport) {
     // Start time for pregame display
     let startTime = '';
     if (state === 'pre') {
-        // API Tennis provides _start_time in local tournament time (no timezone)
-        // Use it directly if available; fall back to date field for ESPN
+        // Use _start_time (actual start) if available, fall back to date
         const rawStart = event._start_time || '';
         const gameDate = event.date || comp.date || '';
-        if (rawStart) {
-            const d = new Date(rawStart);
+        const timeSource = rawStart || gameDate;
+        if (timeSource) {
+            const d = new Date(timeSource);
             if (!isNaN(d.getTime())) {
-                // Local tournament time — show as-is without timezone label
-                const hrs = d.getHours(), mins = d.getMinutes();
-                const ampm = hrs >= 12 ? 'PM' : 'AM';
-                const h12 = hrs % 12 || 12;
-                startTime = `${h12}:${String(mins).padStart(2,'0')} ${ampm} local`;
+                startTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
             }
-        } else if (gameDate) {
-            const d = new Date(gameDate);
-            startTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
         }
     }
 

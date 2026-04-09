@@ -13401,7 +13401,6 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${_bub('Contracts', totalContracts, 'total pushed', '#00ddff')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#00ffcc')}
                 ${_bub('Ceiling Exits', dualExits + dualExitsFav, `${exitRate}% of trades · ${dualExitsFav} fav · ${dualExits} dog`, '#ff4444')}
-                ${_bub('Sellbacks', sellbacks, `${ltTotal > 0 ? Math.round(sellbacks/ltTotal*100) : 0}% of trades`, '#ff8800')}
                 ${orphans > 0 ? _bub('Orphans', orphans, `${ltTotal > 0 ? Math.round(orphans/ltTotal*100) : 0}% of trades`, '#aa66ff') : ''}
             </div>`;
     }

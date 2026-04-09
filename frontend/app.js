@@ -6140,12 +6140,12 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const _remaining = qty - _sellFills;
                 const _remainPct = qty > 0 ? (_remaining / qty) * 100 : 100;
                 const _borderCol = _hasSell ? '#ff880033' : '#ffaa0033';
-                const _headerLabel = _hasSell ? `📤 SELLING ${dogSide.toUpperCase()}` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
+                const _headerLabel = _hasSell ? `📤 DUAL EXIT · ${dogSide.toUpperCase()} · FILLED ✓` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
                 const _headerCol = _hasSell ? '#ff8800' : '#ffaa00';
                 const _priceLabel = _hasSell ? `${dogPrice}¢ → sell @${_sellPrice}¢` : (isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`);
                 const _barPct = _hasSell ? _remainPct : dogFillPct;
                 const _barCol = _hasSell ? '#ff8800' : dogFillCol;
-                const _barLabel = _hasSell ? `${_remaining}/${qty} left` : `${Math.min(dogFillQty, qty)}/${qty}`;
+                const _barLabel = _hasSell ? `${_remaining}/${qty}` : `${Math.min(dogFillQty, qty)}/${qty}`;
                 return `<div style="background:#060a14;border:1px solid ${_borderCol};border-radius:8px;padding:10px;">
                 <div style="color:${_headerCol};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${_headerLabel}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${_priceLabel}</div>
@@ -6295,7 +6295,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const combined = avgDogPrice + favPrice;
                     const liveCombined = avgDogPrice + Math.max(favPrice, favBid);
                     const atBid = favPrice >= favBid && favBid > 0;
-                    const atCeiling = liveCombined > 101;
+                    const atCeiling = liveCombined > 99;
                     const ceilingStart = bot._over_ceiling_since || 0;
                     const ceilingElapsed = ceilingStart > 0 ? Date.now()/1000 - ceilingStart : 0;
                     const ceilingSecsLeft = Math.max(0, 2 - ceilingElapsed);

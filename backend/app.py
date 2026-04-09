@@ -3430,23 +3430,25 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['yes_fill_qty'] = bot['fav_fill_qty']
                 else:
                     bot['no_fill_qty'] = bot['fav_fill_qty']
-                # Hedge filled — cancel dog sell if dual exit is active
-                if bot['fav_fill_qty'] >= qty_bot and bot.get('dog_sell_order_id'):
+                # ANY fav fill → cancel dog sell immediately (commit to fav exit path)
+                if bot['fav_fill_qty'] > 0 and bot.get('dog_sell_order_id'):
                     _ds_oid = bot['dog_sell_order_id']
                     bot['_dog_sell_verify_oid'] = _ds_oid  # preserve for completion to verify fills
                     threading.Thread(target=lambda oid=_ds_oid: _safe_cancel(oid, f'hedge_won_{bot_id}'), daemon=True).start()
                     bot['dog_sell_order_id'] = None
-                    print(f'⚡ WS DUAL EXIT: {bot_id} hedge filled — cancelling dog sell (verify pending)')
+                    _full = 'fully' if bot['fav_fill_qty'] >= qty_bot else 'partially'
+                    print(f'⚡ WS DUAL EXIT: {bot_id} hedge {_full} filled ({bot["fav_fill_qty"]}/{qty_bot}) — cancelling dog sell')
                 print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
             elif matched == 'dog_sell':
                 bot['dog_sell_fill_qty'] = bot.get('dog_sell_fill_qty', 0) + count
                 print(f'📤 WS DUAL EXIT SELL: {bot_id} +{count} → {bot["dog_sell_fill_qty"]}/{qty_bot}')
-                # Dog sell filled — cancel hedge immediately to prevent race
-                if bot['dog_sell_fill_qty'] >= qty_bot:
+                # ANY dog sell fill → cancel fav immediately (commit to sell exit path)
+                if bot['dog_sell_fill_qty'] > 0:
                     _fav_oid = bot.get('fav_order_id')
                     if _fav_oid:
                         threading.Thread(target=lambda oid=_fav_oid: _safe_cancel(oid, f'dual_sold_{bot_id}'), daemon=True).start()
-                    print(f'📤 WS DUAL EXIT WON: {bot_id} dog fully sold — cancelling hedge')
+                    _full = 'fully' if bot['dog_sell_fill_qty'] >= qty_bot else 'partially'
+                    print(f'📤 WS DUAL EXIT: {bot_id} dog {_full} sold ({bot["dog_sell_fill_qty"]}/{qty_bot}) — cancelling hedge')
             save_state()
         break
 

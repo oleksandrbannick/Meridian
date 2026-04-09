@@ -2058,6 +2058,11 @@ function displayEventRow(eventData, container) {
     const kalshiLive = !liveScore && eventData.markets.some(m => isKalshiLive(m));
     const isLive = !!liveScore || kalshiLive;
     const gameScore = getGameScore(eventData.gameId, sport);
+    // Debug tennis matching
+    if (sport === 'Tennis' && kalshiLive && !gameScore) {
+        const cleaned = (eventData.gameId || '').replace(/^\d+[A-Z]{3}\d+/, '');
+        console.warn(`🎾 MATCH FAIL: gameId=${eventData.gameId} cleaned=${cleaned} sport=${sport} keys=Tennis:${cleaned} inLookup=${!!allGameData['Tennis:'+cleaned]} allKeys=${Object.keys(allGameData).filter(k=>k.startsWith('Tennis:')).slice(0,10).join(',')}`);
+    }
     const emoji = getSportEmoji(sport);
 
     // Compute game signal — factors in score, period, edge (not just liquidity)

@@ -2411,7 +2411,7 @@ def _migrate_007_backfill_anchor_depth():
     updated = 0
     for t in trade_history:
         if t.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
-            continue
+            continue  # keep anchor_ladder for historical trade migration
         if t.get('anchor_depth') is not None:
             continue
         t['anchor_depth'] = 5
@@ -3320,7 +3320,7 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                 continue
             if bot.get('ticker') != ticker:
                 continue
-            if bot.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+            if bot.get('bot_category') != 'anchor_dog':
                 continue
             dog_order_id = bot.get('dog_order_id')
             if not dog_order_id:
@@ -3358,7 +3358,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
     """Instant drop: if any phantom bot's hedge is above the fav bid, amend down immediately.
     Called on every WS price tick — must be fast. Only acts when price > bid (overpaying)."""
     for bot_id, bot in list(active_bots.items()):
-        if bot.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+        if bot.get('bot_category') != 'anchor_dog':
             continue
         if bot.get('status') != 'fav_hedge_posted':
             continue
@@ -3459,9 +3459,10 @@ ws_fill_lock = threading.RLock()
 # instantly. The #1 speed priority in the entire app.
 import queue as _queue_mod
 _hedge_worker_queue = _queue_mod.Queue()
+_HEDGE_WORKER_COUNT = 4  # parallel hedges — no bot waits on another's API call
 
 def _hedge_worker_loop():
-    """Dedicated worker thread — always alive, waiting for hedge jobs."""
+    """Pre-warmed worker thread — blocks on queue.get(), fires instantly on fill."""
     while True:
         try:
             job = _hedge_worker_queue.get()
@@ -3472,8 +3473,8 @@ def _hedge_worker_loop():
         except Exception as e:
             print(f'⚠ HEDGE WORKER ERROR: {e}')
 
-_hedge_worker_thread = threading.Thread(target=_hedge_worker_loop, daemon=True)
-_hedge_worker_thread.start()
+for _i in range(_HEDGE_WORKER_COUNT):
+    threading.Thread(target=_hedge_worker_loop, daemon=True, name=f'hedge-worker-{_i}').start()
 
 # ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
 # This ensures the frontend sees 'completed' / 'timeout_exit' actions even when
@@ -3500,8 +3501,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             continue
         if bot.get('type') == 'watch':
             continue
-        # Skip phantom/ladder bots — handled by dedicated anchor-dog/ladder sections below
-        if bot.get('bot_category') in ('anchor_dog', 'anchor_ladder'):
+        # Skip phantom bots — handled by dedicated anchor-dog section below
+        if bot.get('bot_category') == 'anchor_dog':
             continue
         status = bot.get('status', '')
         if status in ('stopped', 'completed'):
@@ -7601,7 +7602,7 @@ def create_ladder_arb_bot():
         # Phantom interference check
         _phantom_conflict = next(
             (bid for bid, b in active_bots.items()
-             if b.get('bot_category') in ('anchor_dog', 'anchor_ladder')
+             if b.get('bot_category') == 'anchor_dog'
              and b.get('status') not in ('completed', 'stopped', 'cancelled', 'dead')
              and (b.get('ticker') == ticker or b.get('hedge_ticker') == ticker)),
             None
@@ -7788,7 +7789,7 @@ def _check_phantom_netting_risk(ticker, hedge_ticker, dog_side, cross_market):
                 return (f'Apex bot active on {b_ticker} — phantom hedge would interfere with Apex positions', bid)
 
         # Only check phantom-vs-phantom from here
-        if b_cat not in ('anchor_dog', 'anchor_ladder'):
+        if b_cat != 'anchor_dog':
             continue
 
         # ── Guard 2: Duplicate check (existing logic) ──
@@ -13592,7 +13593,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'ladder_posted', 'ladder_filled_no_fav', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -13622,14 +13623,6 @@ def _run_monitor():
                     _handle_phantom(bot_id, bot, actions)
                 except Exception as ad_err:
                     print(f'❌ anchor_dog monitor {bot_id}: {ad_err}')
-                continue
-
-            # ── ANCHOR-LADDER BOT HANDLING ─────────────────────────────
-            if bot.get('bot_category') == 'anchor_ladder':
-                try:
-                    _handle_phantom_ladder(bot_id, bot, actions)
-                except Exception as al_err:
-                    print(f'❌ anchor_ladder monitor {bot_id}: {al_err}')
                 continue
 
             # ── LADDER-ARB BOT HANDLING ──────────────────────────────
@@ -13833,7 +13826,7 @@ def _run_monitor():
                         pass  # If API fails, proceed with normal monitoring
 
                 # ── WAITING_REPEAT for Regular Arb: re-post at current bid+1 ──
-                if bot.get('status') == 'waiting_repeat' and bot.get('bot_category') not in ('ladder_arb', 'anchor_dog', 'anchor_ladder'):
+                if bot.get('status') == 'waiting_repeat' and bot.get('bot_category') not in ('ladder_arb', 'anchor_dog'):
                     wait_since = bot.get('waiting_repeat_since', now)
                     if now < wait_since:
                         continue  # still in linger period
@@ -17630,38 +17623,6 @@ def cancel_bot(bot_id):
                         else:
                             warnings.append(f'FAILED to sell {side.upper()} {net_held}x')
 
-            # ── Handle anchor-ladder bots ──
-            elif bot.get('bot_category') == 'anchor_ladder':
-                dog_side = bot.get('dog_side', 'no')
-                # Cancel all unfilled rung orders
-                for rung in bot.get('rungs', []):
-                    if rung.get('order_id') and rung.get('fill_qty', 0) < rung.get('qty', 1):
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(rung['order_id'])
-                            cancelled.append(f'rung@{rung["price"]}c')
-                        except Exception as e:
-                            print(f'⚠ cancel_bot({bot_id}): cancel rung failed: {e}')
-                # Cancel fav order if posted
-                if bot.get('fav_order_id'):
-                    try:
-                        api_rate_limiter.wait()
-                        kalshi_client.cancel_order(bot['fav_order_id'])
-                        cancelled.append('FAV')
-                    except Exception as e:
-                        print(f'⚠ cancel_bot({bot_id}): cancel fav failed: {e}')
-                # Sell back any filled dog contracts
-                total_fill = sum(r.get('fill_qty', 0) for r in bot.get('rungs', []))
-                if total_fill > 0:
-                    sold, sell_info = execute_sell(ticker, dog_side, total_fill,
-                                                   reason=f'cancel_ladder_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'{dog_side.upper()} {total_fill}x')
-                        sp = (sell_info or {}).get('actual_fill_price', 0)
-                        sell_prices[dog_side] = sp
-                    else:
-                        warnings.append(f'FAILED to sell {dog_side.upper()} {total_fill}x')
-
             # ── Handle arb bots ──
             else:
                 # ── Scenario: YES fully filled, NO still resting → amend NO to complete arb ──
@@ -18134,7 +18095,7 @@ def _sweep_orphaned_orders():
             t = b.get('ticker', '')
             cat = b.get('bot_category', '')
             btype = b.get('type', '')
-            if cat in ('anchor_dog', 'anchor_ladder'):
+            if cat == 'anchor_dog':
                 dog_side = b.get('dog_side', '')
                 fav_side = b.get('fav_side', '')
                 _hedge_t = b.get('hedge_ticker', t)  # cross-market: fav on different ticker
@@ -19293,7 +19254,7 @@ def get_active_positions():
                 _bcat = b.get('bot_category', '')
                 _btype = b.get('type', '')
                 _has_net_fills = False
-                if _bcat in ('anchor_dog', 'anchor_ladder'):
+                if _bcat == 'anchor_dog':
                     _yes_f = _si(b.get('yes_fill_qty', 0))
                     _no_f = _si(b.get('no_fill_qty', 0))
                     _has_net_fills = _yes_f != _no_f  # one-sided = position exists on Kalshi
@@ -19319,7 +19280,7 @@ def get_active_positions():
                         _bot_breakdown[key] = {}
                     _bot_breakdown[key][label] = _bot_breakdown[key].get(label, 0) + q
 
-            if cat in ('anchor_dog', 'anchor_ladder'):
+            if cat == 'anchor_dog':
                 dog_side = b.get('dog_side', '')
                 dog_fills = _si(b.get('total_dog_fill_qty')) or _si(b.get('dog_fill_qty'))
                 if dog_fills == 0 and b.get('rungs'):
@@ -19647,7 +19608,7 @@ def _run_startup():
     # the fills are from a previous process and the hedge never ran.
     # Clear them so the bot starts fresh — the old positions are orphans.
     for _bid, _bot in list(active_bots.items()):
-        if _bot.get('bot_category') not in ('anchor_dog', 'anchor_ladder'):
+        if _bot.get('bot_category') != 'anchor_dog':
             continue
         if _bot.get('status') != 'dog_anchor_posted':
             continue
@@ -19752,7 +19713,7 @@ def _run_startup():
                                 print(f'🔧 STALE ORDER: {_bid[:30]} rung {_ok}={_oid[:12]} not on Kalshi → cleared')
                                 _rung[_ok] = None
                                 _stale_total += 1
-                elif _bcat in ('anchor_dog', 'anchor_ladder'):
+                elif _bcat == 'anchor_dog':
                     for _rung in _bot.get('rungs', []):
                         _oid = _rung.get('order_id')
                         if _oid and _oid not in _resting_ids:
@@ -19805,7 +19766,7 @@ def _run_startup():
                 # Include completed/awaiting bots with one-sided fills (positions await settlement)
                 if _bst in ('completed', 'stopped', 'cancelled', 'awaiting_settlement'):
                     _cat = b.get('bot_category', '')
-                    if _cat in ('anchor_dog', 'anchor_ladder'):
+                    if _cat == 'anchor_dog':
                         _yf = _safe_int(b.get('yes_fill_qty', 0))
                         _nf = _safe_int(b.get('no_fill_qty', 0))
                         if _yf == _nf:
@@ -19829,7 +19790,7 @@ def _run_startup():
                         _mq = _safe_int(b.get(f'fill_qty_{_leg}')) or _safe_int(b.get('quantity', 1))
                         if _mt and _mq > 0:
                             managed_qty[(_mt, _ms)] = managed_qty.get((_mt, _ms), 0) + _mq
-                elif cat in ('anchor_dog', 'anchor_ladder'):
+                elif cat == 'anchor_dog':
                     dog_side = b.get('dog_side', '')
                     # Use total_dog_fill_qty (survives repeats) > dog_fill_qty (reset) > quantity (fallback)
                     dog_qty = _safe_int(b.get('total_dog_fill_qty')) or _safe_int(b.get('dog_fill_qty')) or _safe_int(b.get('quantity'))
@@ -19990,7 +19951,7 @@ def get_risk_exposure_endpoint():
             count = bot.get('count', bot.get('quantity', bot.get('qty', 1)))
 
             # Calculate capital at risk for this bot
-            if cat in ('anchor_dog', 'anchor_ladder'):
+            if cat == 'anchor_dog':
                 dog_price = bot.get('dog_price', 0)
                 risk = dog_price * count
             elif cat == 'middle':
@@ -21063,7 +21024,7 @@ def _execute_chat_tool(tool_name, tool_input):
                     'created_at': b.get('created_at', ''),
                 }
                 # Show relevant prices based on bot type
-                if cat in ('anchor_dog', 'anchor_ladder'):
+                if cat == 'anchor_dog':
                     info['dog_side'] = b.get('dog_side', '')
                     info['dog_price'] = b.get('dog_price', 0)
                     info['fav_price'] = b.get('fav_price', 0)
@@ -22103,7 +22064,7 @@ def claude_chat():
             for b in bots[:15]:
                 cat = b.get('bot_category', b.get('type', '?'))
                 status = b.get('status', '?')
-                if cat in ('anchor_dog', 'anchor_ladder'):
+                if cat == 'anchor_dog':
                     dog_side = b.get('dog_side', 'no')
                     dog_price = b.get('dog_price', b.get('yes_price' if dog_side == 'yes' else 'no_price', '?'))
                     fav_price = b.get('fav_price', 0)

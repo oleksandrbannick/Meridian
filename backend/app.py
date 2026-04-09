@@ -1749,11 +1749,18 @@ def _fetch_api_tennis_scoreboard(tour_filter):
             print(f'⚠️ API Tennis fetch failed: {e}')
             all_matches = []
 
-    # Filter by tour: ATP Singles/Doubles or WTA Singles/Doubles
-    tour_upper = tour_filter.upper()
-    filtered = [m for m in all_matches
-                if tour_upper in (m.get('event_type_type') or '').upper()
-                and 'DOUBLES' not in (m.get('event_type_type') or '').upper()]
+    # Filter by tour: ATP/WTA Singles + Challengers (no doubles, no ITF)
+    # Kalshi has ATP, WTA, ATP Challenger, and WTA Challenger markets
+    tour_lower = tour_filter.lower()
+    def _tennis_match_filter(m):
+        t = (m.get('event_type_type') or '').lower()
+        if 'doubles' in t:
+            return False
+        if tour_lower == 'atp':
+            return 'atp' in t or 'challenger men' in t
+        else:  # wta
+            return 'wta' in t or 'challenger women' in t
+    filtered = [m for m in all_matches if _tennis_match_filter(m)]
 
     # Transform into ESPN-like event format for parseESPNGame()
     events = []

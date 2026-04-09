@@ -12,7 +12,7 @@ Meridian is a sports arbitrage trading terminal for Kalshi binary options. It ru
 ## Bot Types (user-facing → internal)
 | Name | `type` | `bot_category` | Description |
 |------|--------|----------------|-------------|
-| Apex 2.0 | arb | ladder_arb | Multi-width arb ladder, per-rung independent hedging with time-decay |
+| Apex MM | apex_mm | ladder_arb | Market maker: continuous quoting, net inventory, spread collection |
 | Phantom | — | anchor_dog | Posts dog leg only, instant hedge on fill |
 | Phantom Ladder | — | anchor_ladder | Multi-rung dog with instant hedges |
 | Scout | watch | bet | Stop-loss / take-profit on a position |
@@ -25,17 +25,18 @@ Meridian is a sports arbitrage trading terminal for Kalshi binary options. It ru
 - **WS Fill Handler**: `_ws_realtime_fill_handler()` — instant hedge on WS fill events
 - **Precalc System**: `_precalc_phantom_hedge()` / `_precalc_phantom_ladder_hedges()` — zero-compute on hot path
 
-## Apex 2.0 — Per-Rung Siloed Arbiter
-Apex uses independent per-rung hedging (no consolidation). Each rung:
-- Posts YES+NO limit orders independently
-- On anchor fill → spawns daemon thread to post per-rung hedge
-- Time-decay stages: **profit** (0-15s, target price) → **scratch** (15-30s, breakeven) → **panic** (30s+, stop-loss/taker)
-- Bot statuses: `ladder_arb_posted` → `ladder_arb_active` → `waiting_repeat` / `completed`
-- Rung statuses: `posted` → `anchor_filled` → `pending_profit` → `snapped` → `completed`
-- **Two-Step Protocol**: Step 1 (pending_profit, 0-30s) hedge at target width. Step 2 (snapped, 30s+) cancel+replace at bid+1.
-- Cancel+replace (never amend) — avoids 400 errors and orphans
-- Key functions: `_apex_post_rung_hedge()`, `_apex_time_decay_tick()`, `_apex_cancel_replace_hedge()`, `_apex_record_rung_pnl()`
-- All rungs use same quantity (no width scaling)
+## Apex Market Maker — Continuous Spread Collector
+Apex MM continuously quotes both sides with a 1¢-spaced ladder, collecting spread as fills trickle in:
+- Config: `start_gap` (min edge from midpoint), `levels` (per side), `spacing`, `qty_per_level`, `inventory_limit`, `loss_limit_cents`, `smart_mode`
+- Midpoint from LocalOrderbook: `(yes_bid + (100 - no_bid)) / 2`
+- YES bids: midpoint - start_gap - i*spacing; NO bids: (100-midpoint) - start_gap - i*spacing
+- Net inventory tracking with weighted average cost basis (no per-rung isolation)
+- Round trip P&L: `100 - avg_opposite_cost - fill_price` per close
+- Bot statuses: `market_making_active` → `mm_depth_pulled` → `mm_exiting` → `completed`
+- OBI/depth gating reused from existing system (`_apex_should_pull`, `_apex_depth_recovered`)
+- Drift reprice: if midpoint moves 2+ cents, cancel unfilled and repost at new prices
+- Inventory limit: pause one side when net exceeds limit, resume with hysteresis
+- Key functions: `_apex_mm_midpoint()`, `_apex_mm_levels()`, `_apex_mm_post_ladder()`, `_apex_mm_repost_filled()`, `_apex_mm_record_round_trip()`, `_handle_apex()`
 
 ## Critical Rules
 - **No fee calculations in bot logic** — only in P&L tracking. 98¢ combined = breakeven

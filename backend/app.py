@@ -6878,23 +6878,28 @@ def _apex_mm_midpoint(ticker):
     return round((yes_bid + (100 - no_bid)) / 2)
 
 
-def _apex_mm_levels(midpoint, start_gap, levels, spacing):
-    """Generate YES and NO bid prices for the ladder.
-    YES bids: midpoint - start_gap, midpoint - start_gap - spacing, ...
-    NO bids:  (100 - midpoint) - start_gap, (100 - midpoint) - start_gap - spacing, ...
-    Returns (yes_prices: list[int], no_prices: list[int]) sorted descending."""
-    yes_prices = []
-    no_prices = []
+def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=True):
+    """Generate YES and NO bid prices + quantities for the ladder.
+    Auto-scale: deeper levels get more contracts (pulls weighted avg down).
+    Returns (yes_levels: list[(price, qty)], no_levels: list[(price, qty)]) sorted descending by price."""
+    yes_levels = []
+    no_levels = []
     no_anchor = 100 - midpoint
     for i in range(levels):
         offset = start_gap + (i * spacing)
         yp = midpoint - offset
         np = no_anchor - offset
+        # Auto-scale: level 0 = base_qty, deeper levels get more
+        if scale and levels > 1:
+            scale_factor = 1.0 + (i * 1.0 / (levels - 1))  # 1.0x at closest, 2.0x at deepest
+        else:
+            scale_factor = 1.0
+        level_qty = max(1, round(base_qty * scale_factor))
         if yp >= 1:
-            yes_prices.append(int(yp))
+            yes_levels.append((int(yp), level_qty))
         if np >= 1:
-            no_prices.append(int(np))
-    return yes_prices, no_prices
+            no_levels.append((int(np), level_qty))
+    return yes_levels, no_levels
 
 
 def _apex_mm_pull_all(bot_id, bot, reason):
@@ -6922,17 +6927,17 @@ def _apex_mm_pull_all(bot_id, bot, reason):
     save_state()
 
 
-def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
-    """Post the full ladder. Returns True on success.
-    Builds yes_orders and no_orders dicts keyed by price string."""
+def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
+    """Post the full ladder. Accepts list of (price, qty) tuples.
+    Returns True on success. Builds yes_orders and no_orders dicts keyed by price string."""
     ticker = bot['ticker']
-    qty = bot.get('qty_per_level', 10)
     yes_paused = bot.get('_yes_side_paused', False)
     no_paused = bot.get('_no_side_paused', False)
 
+    total_contracts = sum(q for _, q in yes_levels) + sum(q for _, q in no_levels)
     _order_group_id = None
     try:
-        _order_group_id = _create_order_group(contracts_limit=qty * (len(yes_prices) + len(no_prices)) * 2)
+        _order_group_id = _create_order_group(contracts_limit=total_contracts * 2)
     except Exception:
         pass
 
@@ -6940,11 +6945,11 @@ def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
     yes_specs = []
     no_specs = []
     if not yes_paused:
-        for yp in yes_prices:
-            yes_specs.append({'ticker': ticker, 'side': 'yes', 'action': 'buy', 'count': qty, 'price': yp})
+        for price, qty in yes_levels:
+            yes_specs.append({'ticker': ticker, 'side': 'yes', 'action': 'buy', 'count': qty, 'price': price})
     if not no_paused:
-        for np in no_prices:
-            no_specs.append({'ticker': ticker, 'side': 'no', 'action': 'buy', 'count': qty, 'price': np})
+        for price, qty in no_levels:
+            no_specs.append({'ticker': ticker, 'side': 'no', 'action': 'buy', 'count': qty, 'price': price})
 
     yes_results = []
     no_results = []
@@ -6955,7 +6960,7 @@ def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
 
     # Build order tracking dicts
     yes_orders = {}
-    for i, yp in enumerate(yes_prices):
+    for i, (price, qty) in enumerate(yes_levels):
         if yes_paused:
             continue
         result = yes_results[i] if i < len(yes_results) and yes_results[i] else None
@@ -6967,7 +6972,7 @@ def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
                 bot.setdefault('_all_placed_order_ids', []).append(oid)
 
     no_orders = {}
-    for i, np in enumerate(no_prices):
+    for i, (price, qty) in enumerate(no_levels):
         if no_paused:
             continue
         result = no_results[i] if i < len(no_results) and no_results[i] else None
@@ -6978,7 +6983,7 @@ def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
                 no_orders[str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
                 bot.setdefault('_all_placed_order_ids', []).append(oid)
 
-    # Merge with existing paused-side orders (keep them if they exist)
+    # Merge with existing paused-side orders
     if yes_paused and bot.get('yes_orders'):
         yes_orders = bot['yes_orders']
     if no_paused and bot.get('no_orders'):
@@ -6991,16 +6996,18 @@ def _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices):
         bot.setdefault('_all_order_group_ids', []).append(_order_group_id)
 
     total_posted = len(yes_orders) + len(no_orders)
+    yes_qty = sum(l.get('qty', 0) for l in yes_orders.values())
+    no_qty = sum(l.get('qty', 0) for l in no_orders.values())
     bot_log('APEX_MM_LADDER_POSTED', bot_id, {
         'yes_levels': len(yes_orders), 'no_levels': len(no_orders),
-        'qty': qty, 'yes_paused': yes_paused, 'no_paused': no_paused,
+        'yes_qty': yes_qty, 'no_qty': no_qty,
     })
-    print(f'📊 APEX MM POSTED: {bot_id} {len(yes_orders)}Y + {len(no_orders)}N levels @ {qty}qty')
+    print(f'📊 APEX MM POSTED: {bot_id} {len(yes_orders)}Y({yes_qty}x) + {len(no_orders)}N({no_qty}x)')
     return total_posted > 0
 
 
 def _apex_mm_repost_ladder(bot_id, bot):
-    """Recalculate midpoint and repost full ladder at fresh prices."""
+    """Recalculate midpoint and repost full ladder at fresh prices after OBI recovery."""
     ticker = bot['ticker']
     now = time.time()
 
@@ -7010,36 +7017,52 @@ def _apex_mm_repost_ladder(bot_id, bot):
 
     midpoint = _apex_mm_midpoint(ticker)
     if midpoint is None:
-        # Fallback: use WS prices
         yb = bot.get('live_yes_bid', 0)
         nb = bot.get('live_no_bid', 0)
         if yb > 0 and nb > 0:
             midpoint = round((yb + (100 - nb)) / 2)
         else:
-            return  # can't calculate midpoint
+            return
 
-    yes_prices, no_prices = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'])
-    if not yes_prices and not no_prices:
-        return
+    base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
 
-    success = _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices)
-    if success:
+    # If holding inventory, repost with skew. Otherwise symmetric.
+    if net_yes > 0 or net_no > 0:
+        # Let skew_reprice handle it on next tick
         bot['midpoint'] = midpoint
         bot['status'] = 'market_making_active'
         bot['posted_at'] = now
-        bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'pull_count': bot.get('_pull_count', 0)})
-        print(f'📊 APEX MM REPOST: {bot_id} midpoint={midpoint} (pull #{bot.get("_pull_count", 0)})')
+        bot['_last_skew_at'] = 0  # force immediate skew
+        # Post empty so skew_reprice has something to cancel
+        bot['yes_orders'] = {}
+        bot['no_orders'] = {}
+        bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'skew_pending': True})
+        print(f'📊 APEX MM REPOST: {bot_id} mid={midpoint} (skew pending, holding inventory)')
+    else:
+        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty)
+        if not yes_levels and not no_levels:
+            return
+        success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
+        if success:
+            bot['midpoint'] = midpoint
+            bot['status'] = 'market_making_active'
+            bot['posted_at'] = now
+            bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'pull_count': bot.get('_pull_count', 0)})
+            print(f'📊 APEX MM REPOST: {bot_id} mid={midpoint} symmetric (pull #{bot.get("_pull_count", 0)})')
     save_state()
 
 
 def _apex_mm_check_inventory(bot_id, bot):
-    """Pause/resume sides based on inventory limits."""
+    """Pause/resume sides based on inventory limits. Skew handles repricing."""
     inv_limit = bot.get('inventory_limit', 50)
+    if inv_limit <= 0:
+        return
     hysteresis = APEX_MM_INVENTORY_HYSTERESIS
 
-    # YES side
+    # YES side: pause if over limit, resume if back under
     if bot.get('net_yes', 0) > inv_limit and not bot.get('_yes_side_paused'):
-        # Cancel all YES orders
         for price, level in list(bot.get('yes_orders', {}).items()):
             oid = level.get('oid')
             if oid:
@@ -7048,22 +7071,9 @@ def _apex_mm_check_inventory(bot_id, bot):
         bot['_yes_side_paused'] = True
         bot_log('APEX_MM_INV_PAUSE', bot_id, {'side': 'yes', 'net': bot['net_yes'], 'limit': inv_limit})
         print(f'⚠ APEX MM: {bot_id} YES paused (inv {bot["net_yes"]} > {inv_limit})')
-
     elif bot.get('_yes_side_paused') and bot.get('net_yes', 0) < inv_limit - hysteresis:
-        # Resume YES quoting
         bot['_yes_side_paused'] = False
-        midpoint = bot.get('midpoint', 50)
-        yes_prices, _ = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'])
-        qty = bot.get('qty_per_level', 10)
-        for yp in yes_prices:
-            try:
-                resp, actual_price = create_order_maker(bot['ticker'], 'yes', 'buy', qty, yp)
-                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
-                if oid:
-                    bot['yes_orders'][str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
-                    bot.setdefault('_all_placed_order_ids', []).append(oid)
-            except Exception as e:
-                print(f'⚠ APEX MM repost YES {yp}: {e}')
+        bot['_last_skew_at'] = 0  # force skew reprice to repost YES
         bot_log('APEX_MM_INV_RESUME', bot_id, {'side': 'yes', 'net': bot['net_yes']})
         print(f'✅ APEX MM: {bot_id} YES resumed (inv {bot["net_yes"]} < {inv_limit - hysteresis})')
 
@@ -7077,21 +7087,9 @@ def _apex_mm_check_inventory(bot_id, bot):
         bot['_no_side_paused'] = True
         bot_log('APEX_MM_INV_PAUSE', bot_id, {'side': 'no', 'net': bot['net_no'], 'limit': inv_limit})
         print(f'⚠ APEX MM: {bot_id} NO paused (inv {bot["net_no"]} > {inv_limit})')
-
     elif bot.get('_no_side_paused') and bot.get('net_no', 0) < inv_limit - hysteresis:
         bot['_no_side_paused'] = False
-        midpoint = bot.get('midpoint', 50)
-        _, no_prices = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'])
-        qty = bot.get('qty_per_level', 10)
-        for np_price in no_prices:
-            try:
-                resp, actual_price = create_order_maker(bot['ticker'], 'no', 'buy', qty, np_price)
-                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
-                if oid:
-                    bot['no_orders'][str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
-                    bot.setdefault('_all_placed_order_ids', []).append(oid)
-            except Exception as e:
-                print(f'⚠ APEX MM repost NO {np_price}: {e}')
+        bot['_last_skew_at'] = 0  # force skew reprice to repost NO
         bot_log('APEX_MM_INV_RESUME', bot_id, {'side': 'no', 'net': bot['net_no']})
         print(f'✅ APEX MM: {bot_id} NO resumed (inv {bot["net_no"]} < {inv_limit - hysteresis})')
 
@@ -7126,64 +7124,169 @@ def _apex_mm_check_loss_limit(bot_id, bot):
     return False
 
 
-def _apex_mm_repost_filled(bot_id, bot):
-    """Repost any fully filled levels (continuous quoting)."""
-    ticker = bot['ticker']
-    qty = bot.get('qty_per_level', 10)
-
-    for side_key, side_name in [('yes_orders', 'yes'), ('no_orders', 'no')]:
-        if bot.get(f'_{side_name}_side_paused'):
-            continue
-        for price_str, level in list(bot.get(side_key, {}).items()):
-            if level.get('fill_qty', 0) >= level.get('qty', qty):
-                # Fully filled — repost at same price
-                old_oid = level.get('oid')
-                price = int(price_str)
-                try:
-                    resp, actual_price = create_order_maker(ticker, side_name, 'buy', qty, price)
-                    oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
-                    if oid:
-                        level['oid'] = oid
-                        level['fill_qty'] = 0
-                        level['qty'] = qty
-                        bot.setdefault('_all_placed_order_ids', []).append(oid)
-                        print(f'🔄 APEX MM REPOST: {bot_id} {side_name.upper()} @{actual_price}c')
-                except Exception as e:
-                    print(f'⚠ APEX MM repost {side_name} @{price}: {e}')
+APEX_MM_SKEW_FACTOR = 1         # Cents to shift per unit of net inventory
+APEX_MM_SKEW_INTERVAL_S = 5     # Only reprice every 5s to avoid API churn
 
 
-def _apex_mm_drift_check(bot_id, bot):
-    """Reprice ladder if midpoint has moved significantly."""
-    ticker = bot['ticker']
-    current_mid = _apex_mm_midpoint(ticker)
-    if current_mid is None:
+def _apex_mm_skew_reprice(bot_id, bot):
+    """Inventory skew repricing. When holding inventory:
+    - Exit side: move orders closer to market (aggressive, fill faster)
+    - Entry side: pull orders back (defensive, stop accumulating)
+    When flat: do nothing (symmetric ladder already posted)."""
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    now = time.time()
+
+    # No inventory = no skew needed, ladder sits as-is
+    if net_yes == 0 and net_no == 0:
+        # If we were skewed before and now flat, reprice fresh symmetric ladder
+        if bot.get('_skew_active'):
+            bot['_skew_active'] = False
+            _apex_mm_reprice_symmetric(bot_id, bot)
         return
 
-    old_mid = bot.get('midpoint', 50)
-    drift = abs(current_mid - old_mid)
-
-    if drift < APEX_MM_DRIFT_THRESHOLD:
+    # Throttle repricing to avoid API spam
+    if now - bot.get('_last_skew_at', 0) < APEX_MM_SKEW_INTERVAL_S:
         return
 
-    # Cancel all unfilled orders and repost at new prices
+    ticker = bot['ticker']
+    midpoint = _apex_mm_midpoint(ticker)
+    if midpoint is None:
+        yb = bot.get('live_yes_bid', 0)
+        nb = bot.get('live_no_bid', 0)
+        if yb > 0 and nb > 0:
+            midpoint = round((yb + (100 - nb)) / 2)
+        else:
+            return
+
+    base_gap = bot.get('start_gap', 2)
+    levels = bot.get('levels', 7)
+    spacing = bot.get('spacing', 1)
+    base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+    no_anchor = 100 - midpoint
+
+    # Determine which side is heavy (entry) and which needs to exit
+    if net_yes > net_no:
+        # Long YES — need NO fills to close. NO = exit (aggressive), YES = entry (defensive)
+        exit_side = 'no'
+        entry_side = 'yes'
+        net_held = net_yes - net_no
+    else:
+        # Long NO — need YES fills to close. YES = exit (aggressive), NO = entry (defensive)
+        exit_side = 'yes'
+        entry_side = 'no'
+        net_held = net_no - net_yes
+
+    # Calculate skew: how many cents to shift
+    skew = min(base_gap, max(1, round(net_held * APEX_MM_SKEW_FACTOR / base_qty)))
+
+    # Exit side: post closer to market (reduce gap by skew)
+    exit_gap = max(1, base_gap - skew)
+    # Entry side: post further from market (increase gap by skew)
+    entry_gap = base_gap + skew
+
+    # Breakeven cap: exit price must ensure combined < 100 to be profitable
+    # If long YES at avg_yes_cost, NO exit must be < 100 - avg_yes_cost
+    # If long NO at avg_no_cost, YES exit must be < 100 - avg_no_cost
+    if exit_side == 'no':
+        avg_held_cost = bot.get('avg_yes_cost', 0)
+        max_exit_price = (100 - avg_held_cost - 2) if avg_held_cost > 0 else 99  # 2c min profit
+    else:
+        avg_held_cost = bot.get('avg_no_cost', 0)
+        max_exit_price = (100 - avg_held_cost - 2) if avg_held_cost > 0 else 99  # 2c min profit
+
+    # Generate skewed levels
+    exit_levels = []
+    entry_levels = []
+    for i in range(levels):
+        offset_exit = exit_gap + (i * spacing)
+        offset_entry = entry_gap + (i * spacing)
+        # Auto-scale qty
+        if levels > 1:
+            scale_factor = 1.0 + (i * 1.0 / (levels - 1))
+        else:
+            scale_factor = 1.0
+        level_qty = max(1, round(base_qty * scale_factor))
+
+        if exit_side == 'yes':
+            ep = midpoint - offset_exit
+            np_entry = no_anchor - offset_entry
+        else:
+            ep = no_anchor - offset_exit
+            np_entry = midpoint - offset_entry
+
+        # Cap exit price at breakeven - ensure every exit fill is profitable
+        ep = min(ep, max_exit_price)
+
+        if ep >= 1:
+            exit_levels.append((int(ep), level_qty))
+        if np_entry >= 1:
+            entry_levels.append((int(np_entry), level_qty))
+
+    if exit_side == 'yes':
+        new_yes_levels = exit_levels
+        new_no_levels = entry_levels
+    else:
+        new_yes_levels = entry_levels
+        new_no_levels = exit_levels
+
+    # Cancel all current unfilled orders
     cancelled = 0
     for side_key in ('yes_orders', 'no_orders'):
-        for price, level in list(bot.get(side_key, {}).items()):
+        for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
-            if oid and level.get('fill_qty', 0) < level.get('qty', 1):
+            if oid:
                 cr = _cancel_with_retry(oid)
                 if cr == 'filled':
-                    pass  # WS handler picks it up
+                    pass  # WS handler catches it
                 elif cr:
                     cancelled += 1
                 level['oid'] = None
 
-    # Repost at new midpoint
-    yes_prices, no_prices = _apex_mm_levels(current_mid, bot['start_gap'], bot['levels'], bot['spacing'])
-    _apex_mm_post_ladder(bot_id, bot, yes_prices, no_prices)
-    bot['midpoint'] = current_mid
-    bot_log('APEX_MM_DRIFT', bot_id, {'old_mid': old_mid, 'new_mid': current_mid, 'drift': drift, 'cancelled': cancelled})
-    print(f'📊 APEX MM DRIFT: {bot_id} {old_mid} → {current_mid} ({drift}c), repriced')
+    # Post skewed ladder
+    _apex_mm_post_ladder(bot_id, bot, new_yes_levels, new_no_levels)
+    bot['midpoint'] = midpoint
+    bot['_last_skew_at'] = now
+    bot['_skew_active'] = True
+    bot['_skew_direction'] = f'exit_{exit_side}'
+    bot['_skew_exit_gap'] = exit_gap
+    bot['_skew_entry_gap'] = entry_gap
+
+    bot_log('APEX_MM_SKEW', bot_id, {
+        'net_yes': net_yes, 'net_no': net_no, 'net_held': net_held,
+        'exit_side': exit_side, 'exit_gap': exit_gap, 'entry_gap': entry_gap,
+        'skew': skew, 'midpoint': midpoint, 'cancelled': cancelled,
+    })
+    print(f'📊 APEX MM SKEW: {bot_id} long {exit_side.upper() if exit_side == "no" else "YES"} → {exit_side.upper()} exit gap={exit_gap} entry gap={entry_gap} (skew={skew})')
+
+
+def _apex_mm_reprice_symmetric(bot_id, bot):
+    """Reprice to symmetric ladder at current midpoint. Called when net returns to flat."""
+    ticker = bot['ticker']
+    midpoint = _apex_mm_midpoint(ticker)
+    if midpoint is None:
+        yb = bot.get('live_yes_bid', 0)
+        nb = bot.get('live_no_bid', 0)
+        if yb > 0 and nb > 0:
+            midpoint = round((yb + (100 - nb)) / 2)
+        else:
+            return
+
+    base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty)
+
+    # Cancel all current orders
+    for side_key in ('yes_orders', 'no_orders'):
+        for price_str, level in list(bot.get(side_key, {}).items()):
+            oid = level.get('oid')
+            if oid:
+                _cancel_with_retry(oid)
+                level['oid'] = None
+
+    _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
+    bot['midpoint'] = midpoint
+    bot_log('APEX_MM_SYMMETRIC', bot_id, {'midpoint': midpoint, 'reason': 'flat_reprice'})
+    print(f'📊 APEX MM FLAT: {bot_id} repriced symmetric @ mid={midpoint}')
     save_state()
 
 
@@ -7530,15 +7633,15 @@ def create_ladder_arb_bot():
         if drift_max >= 80:
             return jsonify({'error': f'Drift guard: max side {drift_max}c — market too decided'}), 400
 
-        # Calculate midpoint and generate levels
+        # Calculate midpoint and generate levels with auto-scale qty
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
-        yes_prices, no_prices = _apex_mm_levels(midpoint, start_gap, levels, spacing)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level)
 
-        if not yes_prices and not no_prices:
+        if not yes_levels and not no_levels:
             return jsonify({'error': f'No valid price levels (midpoint={midpoint}, gap={start_gap}, levels={levels})'}), 400
 
         # Validate all prices are in range
-        for p in yes_prices + no_prices:
+        for p, q in yes_levels + no_levels:
             if p < 1 or p > 98:
                 return jsonify({'error': f'Price level {p}c out of range (midpoint={midpoint})'}), 400
 
@@ -7559,6 +7662,7 @@ def create_ladder_arb_bot():
             'levels': levels,
             'spacing': spacing,
             'qty_per_level': qty_per_level,
+            'base_qty': qty_per_level,
             'inventory_limit': inventory_limit,
             'loss_limit_cents': loss_limit_cents,
             'smart_mode': smart_mode,
@@ -7595,7 +7699,7 @@ def create_ladder_arb_bot():
             '_order_group_id': None,
         }
 
-        success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_prices, no_prices)
+        success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_levels, no_levels)
         if not success:
             del active_bots[bot_id]
             return jsonify({'error': 'Failed to post any ladder orders'}), 500
@@ -7606,23 +7710,28 @@ def create_ladder_arb_bot():
 
         save_state()
 
-        yes_desc = ','.join(str(p) for p in yes_prices)
-        no_desc = ','.join(str(p) for p in no_prices)
+        yes_desc = ','.join(f'{p}c×{q}' for p, q in yes_levels)
+        no_desc = ','.join(f'{p}c×{q}' for p, q in no_levels)
+        total_yes_qty = sum(q for _, q in yes_levels)
+        total_no_qty = sum(q for _, q in no_levels)
         bot_log('APEX_MM_CREATED', bot_id, {
             'midpoint': midpoint, 'start_gap': start_gap, 'levels': levels,
-            'spacing': spacing, 'qty': qty_per_level, 'inv_limit': inventory_limit,
-            'yes_prices': yes_prices, 'no_prices': no_prices,
+            'spacing': spacing, 'base_qty': qty_per_level, 'inv_limit': inventory_limit,
+            'yes_levels': [(p, q) for p, q in yes_levels],
+            'no_levels': [(p, q) for p, q in no_levels],
         })
-        print(f'📊 APEX MM CREATED: {bot_id} | mid={midpoint} YES=[{yes_desc}] NO=[{no_desc}] qty={qty_per_level}')
+        print(f'📊 APEX MM CREATED: {bot_id} | mid={midpoint} YES=[{yes_desc}] NO=[{no_desc}] base_qty={qty_per_level}')
 
         return jsonify({
             'success': True,
             'bot_id': bot_id,
             'midpoint': midpoint,
-            'yes_levels': len(yes_prices),
-            'no_levels': len(no_prices),
-            'total_orders': len(yes_prices) + len(no_prices),
-            'message': f'Apex MM: {len(yes_prices)}Y + {len(no_prices)}N levels @ mid={midpoint}, qty={qty_per_level}',
+            'yes_levels': len(yes_levels),
+            'no_levels': len(no_levels),
+            'total_orders': len(yes_levels) + len(no_levels),
+            'total_yes_qty': total_yes_qty,
+            'total_no_qty': total_no_qty,
+            'message': f'Apex MM: {len(yes_levels)}Y({total_yes_qty}x) + {len(no_levels)}N({total_no_qty}x) @ mid={midpoint}',
         })
 
     except Exception as e:
@@ -12482,7 +12591,28 @@ def _handle_apex(bot_id, bot, actions):
     # 1. OBI check — pull if hostile (MM uses deeper book view)
     should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH)
     if should_pull:
-        _apex_mm_pull_all(bot_id, bot, pull_reason)
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if net_yes > 0 or net_no > 0:
+            # Holding inventory: only pull ENTRY side, keep EXIT side live
+            entry_side_key = 'yes_orders' if net_yes > net_no else 'no_orders'
+            cancelled = 0
+            for price, level in list(bot.get(entry_side_key, {}).items()):
+                oid = level.get('oid')
+                if oid:
+                    cr = _cancel_with_retry(oid)
+                    if cr and cr != 'filled':
+                        cancelled += 1
+                    level['oid'] = None
+            bot['_pull_count'] = bot.get('_pull_count', 0) + 1
+            bot['_last_pull_at'] = time.time()
+            bot['_last_pull_reason'] = f'{pull_reason} (entry only)'
+            bot_log('APEX_MM_PULL_ENTRY', bot_id, {'reason': pull_reason, 'cancelled': cancelled, 'entry_side': entry_side_key[:3]})
+            print(f'📊 APEX MM PULL ENTRY: {bot_id} cancelled {cancelled} {entry_side_key[:3]} orders — {pull_reason} (keeping exit side)')
+            save_state()
+        else:
+            # Flat: pull everything
+            _apex_mm_pull_all(bot_id, bot, pull_reason)
         return
 
     # 2. Settlement/game-end check (throttled every 30s)
@@ -12554,11 +12684,8 @@ def _handle_apex(bot_id, bot, actions):
         _apex_mm_begin_exit(bot_id, bot, f'smart_stop ({bot["consecutive_losses"]} consecutive losses)')
         return
 
-    # 6. Repost any filled levels (continuous quoting)
-    _apex_mm_repost_filled(bot_id, bot)
-
-    # 7. Drift check — if midpoint moved significantly, reprice ladder
-    _apex_mm_drift_check(bot_id, bot)
+    # 6. Inventory skew — push exit side aggressive, pull entry side back
+    _apex_mm_skew_reprice(bot_id, bot)
 
     save_state()
 

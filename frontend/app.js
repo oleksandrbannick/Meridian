@@ -3734,7 +3734,8 @@ function setTradeMode(mode) {
         if (arbBtn) { arbBtn.style.background = '#00d4ff22'; arbBtn.style.color = '#00d4ff'; arbBtn.style.borderBottom = '2px solid #00d4ff'; }
         iconEl.textContent = '📊';
         titleEl.textContent = 'Apex MM';
-        subtitleEl.textContent = 'Market Maker · Spread Collector';
+        subtitleEl.textContent = 'Market Maker · Inventory Skew';
+        if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('apex-form-ghost'), 'apex');
         updateMMPreview();
     }
 }
@@ -5559,35 +5560,39 @@ function updateMMPreview() {
     const gap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
-    const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
+    const baseQty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 5;
     const noAnchor = 100 - mid;
-    const yesPrices = [], noPrices = [];
+    const yesLevels = [], noLevels = [];
     for (let i = 0; i < levels; i++) {
         const offset = gap + (i * spacing);
         const yp = mid - offset;
         const np = noAnchor - offset;
-        if (yp >= 1) yesPrices.push(yp);
-        if (np >= 1) noPrices.push(np);
+        const scale = levels > 1 ? 1.0 + (i * 1.0 / (levels - 1)) : 1.0;
+        const lq = Math.max(1, Math.round(baseQty * scale));
+        if (yp >= 1) yesLevels.push({p: yp, q: lq});
+        if (np >= 1) noLevels.push({p: np, q: lq});
     }
-    const minCombined = yesPrices.length && noPrices.length ? yesPrices[yesPrices.length-1] + noPrices[noPrices.length-1] : 0;
-    const maxCombined = yesPrices.length && noPrices.length ? yesPrices[0] + noPrices[0] : 0;
-    const totalOrders = yesPrices.length + noPrices.length;
-    const capitalAtRisk = (yesPrices.reduce((a,b) => a+b, 0) + noPrices.reduce((a,b) => a+b, 0)) * qty;
+    const totalYesQty = yesLevels.reduce((a, l) => a + l.q, 0);
+    const totalNoQty = noLevels.reduce((a, l) => a + l.q, 0);
+    const minCombined = yesLevels.length && noLevels.length ? yesLevels[yesLevels.length-1].p + noLevels[noLevels.length-1].p : 0;
+    const maxCombined = yesLevels.length && noLevels.length ? yesLevels[0].p + noLevels[0].p : 0;
+    const capitalAtRisk = (yesLevels.reduce((a,l) => a + l.p * l.q, 0) + noLevels.reduce((a,l) => a + l.p * l.q, 0));
     el.innerHTML = `
         <div style="display:flex;gap:16px;margin-bottom:8px;">
             <div style="flex:1;">
                 <div style="color:#00ff88;font-weight:700;font-size:10px;margin-bottom:3px;">YES BIDS</div>
-                <div style="color:#00ff88;font-size:13px;font-weight:600;">${yesPrices.map(p=>p+'¢').join(', ')}</div>
+                <div style="color:#00ff88;font-size:12px;font-weight:600;">${yesLevels.map(l=>l.p+'¢ ×'+l.q).join(', ')}</div>
             </div>
             <div style="flex:1;">
                 <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:3px;">NO BIDS</div>
-                <div style="color:#ff4444;font-size:13px;font-weight:600;">${noPrices.map(p=>p+'¢').join(', ')}</div>
+                <div style="color:#ff4444;font-size:12px;font-weight:600;">${noLevels.map(l=>l.p+'¢ ×'+l.q).join(', ')}</div>
             </div>
         </div>
         <div style="color:#8892a6;font-size:10px;line-height:1.6;">
-            Midpoint: <strong style="color:#fff;">${mid}¢</strong> · ${totalOrders} orders (${yesPrices.length}Y + ${noPrices.length}N) · ${qty}x each<br>
-            Closest combined: ${maxCombined}¢ (${100-maxCombined}¢ profit) · Deepest: ${minCombined}¢ (${100-minCombined}¢ profit)<br>
+            Midpoint: <strong style="color:#fff;">${mid}¢</strong> · ${yesLevels.length + noLevels.length} orders · YES ${totalYesQty}x / NO ${totalNoQty}x<br>
+            Closest: ${maxCombined}¢ combined (+${100-maxCombined}¢) · Deepest: ${minCombined}¢ (+${100-minCombined}¢)<br>
             Capital at risk: <strong style="color:#ffaa33;">$${(capitalAtRisk/100).toFixed(2)}</strong>
+            · <span style="color:#00d4ff;">Inventory skew active when holding</span>
         </div>`;
 }
 
@@ -6347,6 +6352,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const liveNoBid = bot.live_no_bid || 0;
     const liveYesAsk = bot.live_yes_ask || 0;
     const liveNoAsk = bot.live_no_ask || 0;
+    const skewActive = bot._skew_active || false;
+    const skewDirection = bot._skew_direction || '';
+    const skewExitGap = bot._skew_exit_gap || 0;
+    const skewEntryGap = bot._skew_entry_gap || 0;
+    const invLimit = bot.inventory_limit || 0;
 
     const pnlColor = totalPnl >= 0 ? '#00ff88' : '#ff4444';
     const pnlSign = totalPnl >= 0 ? '+' : '';
@@ -6365,7 +6375,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
     }
 
-    // Room = 100 - yes_bid - no_bid
+    // Room
     const room = (liveYesBid > 0 && liveNoBid > 0) ? 100 - liveYesBid - liveNoBid : -1;
     const roomCol = room >= 6 ? '#00ff88' : room >= 3 ? '#ffaa00' : '#ff4444';
 
@@ -6384,33 +6394,62 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         obiHtml = `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | YES depth: ${yesD} | NO depth: ${noD}">OBI: ${label} (${yesD}/${noD})</span>`;
     }
 
+    // Skew banner
+    let skewBanner = '';
+    if (skewActive && (netYes > 0 || netNo > 0)) {
+        const longSide = netYes > netNo ? 'YES' : 'NO';
+        const exitSide = netYes > netNo ? 'NO' : 'YES';
+        const netHeld = Math.abs(netYes - netNo);
+        const avgCost = netYes > netNo ? avgYesCost : avgNoCost;
+        const breakeven = 100 - avgCost;
+        skewBanner = `<div style="padding:8px 10px;background:#00d4ff11;border:1px solid #00d4ff33;border-radius:6px;margin-bottom:8px;font-size:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:#00d4ff;font-weight:700;">SKEW ACTIVE — pushing ${exitSide} exit</span>
+                <span style="color:#8892a6;">exit gap: ${skewExitGap}¢ · entry gap: ${skewEntryGap}¢</span>
+            </div>
+            <div style="color:#8892a6;margin-top:3px;">Long ${longSide} ${netHeld}x @ avg ${avgCost}¢ · ${exitSide} breakeven: <strong style="color:#00ff88;">${breakeven}¢</strong></div>
+        </div>`;
+    }
+
     // Inventory section
     let invHtml = '';
     if (netYes > 0 || netNo > 0) {
         invHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
         if (netYes > 0) {
+            const pct = invLimit > 0 ? Math.min(100, Math.round(netYes / invLimit * 100)) : 0;
             invHtml += `<div style="padding:6px 10px;background:#00ff8811;border:1px solid #00ff8833;border-radius:6px;">
-                <div style="color:#00ff88;font-size:9px;font-weight:800;margin-bottom:2px;">HOLDING YES</div>
-                <div style="display:flex;justify-content:space-between;align-items:baseline;">
-                    <span style="color:#fff;font-weight:800;font-size:16px;">${netYes}x</span>
-                    <span style="color:#8892a6;font-size:10px;">avg ${avgYesCost}¢</span>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                    <span style="color:#00ff88;font-size:9px;font-weight:800;">HOLDING YES</span>
+                    <span style="color:#8892a6;font-size:9px;">${netYes}/${invLimit}</span>
                 </div>
+                <div style="color:#fff;font-weight:800;font-size:16px;margin-bottom:2px;">${netYes}x <span style="color:#8892a6;font-size:11px;font-weight:400;">avg ${avgYesCost}¢</span></div>
+                <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:#00ff88;border-radius:2px;"></div></div>
             </div>`;
-        } else {
-            invHtml += '<div></div>';
-        }
+        } else { invHtml += '<div></div>'; }
         if (netNo > 0) {
+            const pct = invLimit > 0 ? Math.min(100, Math.round(netNo / invLimit * 100)) : 0;
             invHtml += `<div style="padding:6px 10px;background:#ff444411;border:1px solid #ff444433;border-radius:6px;">
-                <div style="color:#ff4444;font-size:9px;font-weight:800;margin-bottom:2px;">HOLDING NO</div>
-                <div style="display:flex;justify-content:space-between;align-items:baseline;">
-                    <span style="color:#fff;font-weight:800;font-size:16px;">${netNo}x</span>
-                    <span style="color:#8892a6;font-size:10px;">avg ${avgNoCost}¢</span>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                    <span style="color:#ff4444;font-size:9px;font-weight:800;">HOLDING NO</span>
+                    <span style="color:#8892a6;font-size:9px;">${netNo}/${invLimit}</span>
                 </div>
+                <div style="color:#fff;font-weight:800;font-size:16px;margin-bottom:2px;">${netNo}x <span style="color:#8892a6;font-size:11px;font-weight:400;">avg ${avgNoCost}¢</span></div>
+                <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:#ff4444;border-radius:2px;"></div></div>
             </div>`;
-        } else {
-            invHtml += '<div></div>';
-        }
+        } else { invHtml += '<div></div>'; }
         invHtml += '</div>';
+    }
+
+    // Pull reason
+    let pullInfo = '';
+    if (status === 'mm_depth_pulled' && bot._last_pull_reason) {
+        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">Pulled: ${bot._last_pull_reason} · waiting for depth recovery</div>`;
+    }
+
+    // Exit reason
+    let exitInfo = '';
+    if (status === 'mm_exiting' && bot._exit_reason) {
+        exitInfo = `<div style="padding:6px 10px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ff8800;font-weight:600;">Exiting: ${bot._exit_reason} · selling inventory at ask (maker)</div>`;
     }
 
     // Ladder columns
@@ -6418,42 +6457,46 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const noOrders = bot.no_orders || {};
     const sortedYes = Object.entries(yesOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
     const sortedNo = Object.entries(noOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
-    const qty = bot.qty_per_level || 10;
+    const baseQty = bot.base_qty || bot.qty_per_level || 10;
 
     let yesLadder = '', noLadder = '';
     for (const [price, level] of sortedYes) {
         const filled = level.fill_qty || 0;
+        const qty = level.qty || baseQty;
         const active = level.oid ? true : false;
-        const isFull = filled >= (level.qty || qty);
+        const isFull = filled >= qty;
         const bg = isFull ? '#00ff8822' : active ? '#00ff8808' : 'transparent';
         const col = isFull ? '#00ff88' : active ? '#00d4ff' : '#334';
         const fillCol = filled > 0 ? '#00ff88' : '#334';
-        yesLadder += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:${bg};border-radius:3px;"><span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span><span style="color:${fillCol};font-size:10px;font-weight:600;">${filled}/${level.qty || qty}</span></div>`;
+        yesLadder += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:${bg};border-radius:3px;">
+            <span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span>
+            <span style="color:${fillCol};font-size:10px;font-weight:600;">${filled}/${qty}</span>
+        </div>`;
     }
     for (const [price, level] of sortedNo) {
         const filled = level.fill_qty || 0;
+        const qty = level.qty || baseQty;
         const active = level.oid ? true : false;
-        const isFull = filled >= (level.qty || qty);
+        const isFull = filled >= qty;
         const bg = isFull ? '#ff444422' : active ? '#ff444408' : 'transparent';
         const col = isFull ? '#ff4444' : active ? '#00d4ff' : '#334';
         const fillCol = filled > 0 ? '#ff4444' : '#334';
-        noLadder += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:${bg};border-radius:3px;"><span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span><span style="color:${fillCol};font-size:10px;font-weight:600;">${filled}/${level.qty || qty}</span></div>`;
+        noLadder += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:${bg};border-radius:3px;">
+            <span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span>
+            <span style="color:${fillCol};font-size:10px;font-weight:600;">${filled}/${qty}</span>
+        </div>`;
     }
 
-    const yesPaused = bot._yes_side_paused ? '<span style="color:#ffaa00;font-size:8px;font-weight:700;"> PAUSED</span>' : '';
-    const noPaused = bot._no_side_paused ? '<span style="color:#ffaa00;font-size:8px;font-weight:700;"> PAUSED</span>' : '';
+    const yesPaused = bot._yes_side_paused ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">PAUSED</span>' : '';
+    const noPaused = bot._no_side_paused ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">PAUSED</span>' : '';
 
-    // Pull reason display
-    let pullInfo = '';
-    if (status === 'mm_depth_pulled' && bot._last_pull_reason) {
-        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">Pulled: ${bot._last_pull_reason} · waiting for book recovery</div>`;
-    }
-
-    // Exit reason display
-    let exitInfo = '';
-    if (status === 'mm_exiting' && bot._exit_reason) {
-        exitInfo = `<div style="padding:6px 10px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ff8800;font-weight:600;">Exiting: ${bot._exit_reason} · selling inventory at ask</div>`;
-    }
+    // Determine which side is exit vs entry for column labels
+    const yesIsExit = skewActive && skewDirection === 'exit_yes';
+    const noIsExit = skewActive && skewDirection === 'exit_no';
+    const yesLabel = yesIsExit ? 'YES BIDS — EXIT' : noIsExit ? 'YES BIDS — ENTRY' : 'YES BIDS';
+    const noLabel = noIsExit ? 'NO BIDS — EXIT' : yesIsExit ? 'NO BIDS — ENTRY' : 'NO BIDS';
+    const yesBorderCol = yesIsExit ? '#00ff8833' : noIsExit ? '#00d4ff22' : '#00d4ff22';
+    const noBorderCol = noIsExit ? '#ff444433' : yesIsExit ? '#00d4ff22' : '#00d4ff22';
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${accentCol}33;border-left:3px solid ${accentCol};border-radius:12px;padding:14px;margin-bottom:10px;`;
@@ -6465,6 +6508,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="background:${accentCol}22;color:${accentCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
                 ${smartMode > 0 ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
+                <span style="color:#556;font-size:10px;">${ageStr}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
@@ -6474,6 +6518,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         ${pullInfo}
         ${exitInfo}
+        ${skewBanner}
         ${invHtml}
 
         ${realizedPnl !== 0 || roundTrips > 0 ? `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;">
@@ -6483,30 +6528,30 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>` : ''}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-            <div style="background:#060a14;border:1px solid #00d4ff22;border-radius:8px;padding:8px;">
+            <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:#00ff88;font-size:9px;font-weight:800;">YES BIDS${yesPaused}</span>
+                    <span style="color:${yesIsExit ? '#00ff88' : '#00d4ff'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
                 </div>
                 <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#00ff88;">${liveYesBid || '?'}¢</strong> · ask <strong style="color:#00ff88;">${liveYesAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#334;">—</span>'}</div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#334;">No orders</span>'}</div>
             </div>
-            <div style="background:#060a14;border:1px solid #00d4ff22;border-radius:8px;padding:8px;">
+            <div style="background:#060a14;border:1px solid ${noBorderCol};border-radius:8px;padding:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:#ff4444;font-size:9px;font-weight:800;">NO BIDS${noPaused}</span>
+                    <span style="color:${noIsExit ? '#ff4444' : '#00d4ff'};font-size:9px;font-weight:800;">${noLabel}${noPaused}</span>
                 </div>
                 <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">—</span>'}</div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">No orders</span>'}</div>
             </div>
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#00d4ff;font-weight:600;">Width: ${width}¢</span>
-            <span style="color:#8892a6;">Midpoint: ${midpoint}¢</span>
-            <span style="color:#8892a6;">×${qty}/level</span>
+            <span style="color:#8892a6;">Mid: ${midpoint}¢</span>
+            <span style="color:#8892a6;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x</span>
+            <span style="color:#8892a6;">Levels: ${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room <= 2 ? 700 : 400};">${room <= 2 ? '⚠ ' : ''}Room: ${room}¢</span>` : ''}
             ${obiHtml}
             ${pullCount > 0 ? `<span style="color:#ffaa00;">OBI Pulls: ${pullCount}</span>` : ''}
-            <span style="color:#556;">${ageStr}</span>
         </div>
     `;
     container.appendChild(item);

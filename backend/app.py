@@ -4589,7 +4589,7 @@ def _phantom_ladder_sell_back(bot_id, bot, avg_price, fav_bid, total_cost, actio
     repeat_total = bot.get('repeat_count', 0)
     _sb_pnl_for_smart = profit_cents - loss_cents  # positive = profitable sellback, negative = loss
     _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _sb_pnl_for_smart)
-    _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+    _will_repeat = _smart_repeat if _smart_repeat is not None else (True if bot.get('smart_mode') else repeats_done_now <= repeat_total)
     if _will_repeat:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now
@@ -9961,7 +9961,7 @@ def _handle_phantom(bot_id, bot, actions):
             _ro_repeat_total = bot.get('repeat_count', 0)
             _ro_last_pnl = bot.get('_last_pnl', 0)
             _ro_smart_repeat, _ro_smart_reason = _smart_mode_should_repeat(bot, _ro_last_pnl, exit_type='dual_exit')
-            _ro_will_repeat = _ro_smart_repeat if _ro_smart_repeat is not None else (_ro_repeats_done <= _ro_repeat_total)
+            _ro_will_repeat = _ro_smart_repeat if _ro_smart_repeat is not None else (True if bot.get('smart_mode') else _ro_repeats_done <= _ro_repeat_total)
             if _ro_will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3
@@ -10891,7 +10891,7 @@ def _handle_phantom(bot_id, bot, actions):
             repeat_total = bot.get('repeat_count', 0)
             # Smart mode override
             _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
-            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+            _will_repeat = _smart_repeat if _smart_repeat is not None else (True if bot.get('smart_mode') else repeats_done_now <= repeat_total)
             # Track accumulated cross-market positions before fill reset
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
             if _is_cross:
@@ -11198,7 +11198,7 @@ def _handle_phantom(bot_id, bot, actions):
                             _cr_repeats = bot.get('repeats_done', 0) + 1
                             bot['repeats_done'] = _cr_repeats
                             _cr_smart_repeat, _cr_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='dual_exit')
-                            _cr_will = _cr_smart_repeat if _cr_smart_repeat is not None else (_cr_repeats <= bot.get('repeat_count', 0))
+                            _cr_will = _cr_smart_repeat if _cr_smart_repeat is not None else (True if bot.get('smart_mode') else _cr_repeats <= bot.get('repeat_count', 0))
                             if _cr_will:
                                 bot['status'] = 'waiting_repeat'
                                 bot['waiting_repeat_since'] = now + 3
@@ -11389,7 +11389,7 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['repeats_done'] = _de_repeats_done
                     _de_repeat_total = bot.get('repeat_count', 0)
                     _de_smart_repeat, _de_smart_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='dual_exit')
-                    _de_will_repeat = _de_smart_repeat if _de_smart_repeat is not None else (_de_repeats_done <= _de_repeat_total)
+                    _de_will_repeat = _de_smart_repeat if _de_smart_repeat is not None else (True if bot.get('smart_mode') else _de_repeats_done <= _de_repeat_total)
                     if _de_will_repeat:
                         bot['status'] = 'waiting_repeat'
                         bot['waiting_repeat_since'] = now + 3
@@ -12901,7 +12901,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
             _bot_pnl = net_pnl - _strag_loss_total
             # Smart mode override — use _bot_pnl (includes straggler losses) not net_pnl
             _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _bot_pnl)
-            _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+            _will_repeat = _smart_repeat if _smart_repeat is not None else (True if bot.get('smart_mode') else repeats_done_now <= repeat_total)
             # Record run history before resetting fills
             bot.setdefault('_run_history', []).append({
                 'run': repeats_done_now,
@@ -13271,7 +13271,7 @@ def _handle_apex(bot_id, bot, actions):
     # ── STATE: waiting_repeat — repost all rungs ──
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
-        if bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) > bot.get('repeat_count', 0):
+        if not bot.get('smart_mode') and (bot.get('repeat_count', 0) <= 0 or bot.get('repeats_done', 0) > bot.get('repeat_count', 0)):
             # Cancel any remaining orders
             for rung in bot.get('rungs', []):
                 for side in ('yes', 'no'):
@@ -14538,7 +14538,7 @@ def _phantom_sell_back(bot_id, bot, dog_price, fav_bid, total_cost, actions):
     repeat_total = bot.get('repeat_count', 0)
     _sb_pnl = profit_cents - loss_cents  # positive = profitable sellback, negative = loss
     _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _sb_pnl)
-    _will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
+    _will_repeat = _smart_repeat if _smart_repeat is not None else (True if bot.get('smart_mode') else repeats_done_now <= repeat_total)
     if _will_repeat:
         bot['status'] = 'waiting_repeat'
         bot['waiting_repeat_since'] = now

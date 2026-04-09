@@ -11220,105 +11220,10 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # ── Take-profit cross: hit the ask to lock in profit ──
-        # When the hedge walks up chasing the bid, profit shrinks toward zero.
-        # If crossing the ask NOW still gives combined <= 95¢ (5¢+ gross profit),
-        # cross the spread and take the money instead of walking to breakeven.
-        # Ceiling 98: try maker first (1s), then cross as taker if combined <= 98.
-        # At 98¢ combined: gross 2¢/contract, taker fee ~0.7¢, net ~1.3¢.
-        # Better than sitting at bid and risking sellback (-10-20¢/contract).
-        TAKE_PROFIT_CEILING = 98  # match walk ceiling
-        # Tiered wait: match the WS delayed taker window — wide spreads get more maker time
-        _posted_combined = dog_price + current_fav_price
-        # Monitor taker: must wait longer than WS delayed taker (1s) to avoid racing it.
-        # Monitor polls every ~2s, so wait_s starts at ~2 on first poll — naturally after WS.
-        _skip_take_profit = True  # disabled: taker cross pays ask price, eats entire profit margin
-        _min_wait_for_taker = 2.0  # WS fires at 1s, monitor catches at 2s+ as backup
-        if (not _skip_take_profit and current_fav_ask > 0 and current_fav_ask >= current_fav_price
-                and wait_s >= _min_wait_for_taker
-                and bot.get('fav_fill_qty', 0) < qty):  # guard: don't cross if already filled
-            cross_combined = dog_price + current_fav_ask
-            if cross_combined <= TAKE_PROFIT_CEILING:
-                # Cross the spread — cancel post_only order and place taker order
-                # Amending a post_only order can't cross; must cancel + repost without post_only
-                try:
-                    _phantom_drop_lock.acquire()
-                    try:
-                        old_fav_order_id = bot.get('fav_order_id', fav_order_id)
-                        # Step 1: Cancel the existing post_only order
-                        api_rate_limiter.wait()
-                        _cancel_ok = False
-                        try:
-                            kalshi_client.cancel_order(old_fav_order_id)
-                            _cancel_ok = True
-                        except Exception as _ce:
-                            # Cancel failed — order may be filled already. Verify before proceeding.
-                            try:
-                                api_read_limiter.wait()
-                                _chk = kalshi_client.get_order(old_fav_order_id)
-                                _chk_ord = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
-                                if _parse_fill_count(_chk_ord) >= qty:
-                                    bot['fav_fill_qty'] = qty
-                                    print(f'💰 PHANTOM TAKE PROFIT SKIP: {bot_id} fav already filled during cancel — completing next cycle')
-                                    return
-                            except Exception:
-                                pass
-                            print(f'⚠ PHANTOM {bot_id}: take-profit cancel failed ({_ce}) — aborting cross')
-                            return
-                        # Step 2: Place new order at ask WITHOUT post_only (taker)
-                        # CRITICAL: subtract already-filled qty from the cancelled maker order
-                        # to avoid double-buying (5 filled maker + 10 taker = 5 orphaned)
-                        _already_filled = bot.get('fav_fill_qty', 0)
-                        _remaining = qty - _already_filled
-                        if _remaining <= 0:
-                            print(f'💰 PHANTOM TAKE PROFIT SKIP: {bot_id} already fully filled ({_already_filled}/{qty}) — no taker needed')
-                            return
-                        price_kwargs = {'yes_price': current_fav_ask} if fav_side == 'yes' else {'no_price': current_fav_ask}
-                        api_rate_limiter.wait()
-                        resp = kalshi_client.create_order(
-                            ticker=hedge_ticker, side=fav_side, action='buy',
-                            count=_remaining, order_type='limit', **price_kwargs
-                        )
-                        new_order_id = resp.get('order', {}).get('order_id', '')
-                        # Track old order ID for orphan cleanup
-                        bot.setdefault('_all_hedge_order_ids', []).append(old_fav_order_id)
-                        bot['fav_order_id'] = new_order_id
-                    finally:
-                        _phantom_drop_lock.release()
-                    _profit = 100 - cross_combined
-                    walk_count = bot.get('fav_walk_count', 0) + 1
-                    print(f'💰 PHANTOM TAKE PROFIT: {bot_id} cancel+cross ask {current_fav_price}¢→{current_fav_ask}¢ '
-                          f'(combined={cross_combined}¢ profit={_profit}¢/ea bid={current_fav_bid}¢ wait={wait_s:.1f}s order={new_order_id[-8:]})')
-                    bot_log('PHANTOM_TAKE_PROFIT_CROSS', bot_id, {
-                        'old_price': current_fav_price, 'cross_price': current_fav_ask,
-                        'fav_bid': current_fav_bid, 'fav_ask': current_fav_ask,
-                        'dog_price': dog_price, 'combined': cross_combined,
-                        'profit_per_contract': _profit, 'wait_s': round(wait_s, 1),
-                        'new_order_id': new_order_id,
-                    })
-                    bot['fav_price'] = current_fav_ask
-                    bot['fav_walk_count'] = walk_count
-                    bot['fav_last_walk_at'] = now
-                    bot['_fav_was_taker'] = True  # flag for fee tracking
-                    if fav_side == 'yes':
-                        bot['yes_price'] = current_fav_ask
-                    else:
-                        bot['no_price'] = current_fav_ask
-                    save_state()
-                    actions.append({'bot_id': bot_id, 'action': 'anchor_fav_take_profit_cross',
-                                    'old_price': current_fav_price, 'new_price': current_fav_ask,
-                                    'combined': cross_combined})
-                except Exception as e:
-                    print(f'❌ PHANTOM {bot_id}: take-profit cross failed: {e}')
-                return
-
-        # ── Emergency exit: combined at bid > 98 → dual exit handles it ──
-        # If ceiling section didn't catch it, restart the dual exit from here
+        # Ensure dual exit is triggered if ceiling section missed it
         _be_combined_at_bid = dog_price + current_fav_bid if current_fav_bid > 0 else 0
-        if _be_combined_at_bid > WALK_CEILING and wait_s >= 3 and bot.get('fav_fill_qty', 0) < qty:
-            if not bot.get('_over_ceiling_since'):
-                bot['_over_ceiling_since'] = now  # trigger dual exit next cycle
-            # Don't return — fall through to walk system so fav snaps up to ceiling cap
+        if _be_combined_at_bid > WALK_CEILING and not bot.get('_over_ceiling_since') and bot.get('fav_fill_qty', 0) < qty:
+            bot['_over_ceiling_since'] = now
 
         # Walk target: always bid — walk up to 98¢ combined (profit cap)
         walk_target = current_fav_bid

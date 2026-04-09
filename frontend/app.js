@@ -6545,6 +6545,38 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${skewBanner}
         ${invHtml}
 
+        ${(() => {
+            // Exit/hedge order display
+            const exitSide = netYes > netNo ? 'no' : netNo > netYes ? 'yes' : null;
+            const exitOid = exitSide ? bot[`_${exitSide}_exit_oid`] : null;
+            const exitPrice = bot._exit_price || 0;
+            const walkCount = bot._exit_walk_count || 0;
+            const netHeld = Math.abs(netYes - netNo);
+            const heldSide = netYes > netNo ? 'YES' : 'NO';
+            const heldAvg = netYes > netNo ? avgYesCost : avgNoCost;
+            const combined = heldAvg + exitPrice;
+            const estProfit = 100 - combined;
+            if (!exitSide || netHeld === 0) return '';
+            const exitCol = exitSide === 'yes' ? '#00ff88' : '#ff4444';
+            const exitLabel = exitSide.toUpperCase();
+            const combCol = combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : combined <= 100 ? '#ff8800' : '#ff4444';
+            return `<div style="padding:8px 10px;background:#060a14;border:1px solid ${exitCol}33;border-radius:6px;margin-bottom:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:${exitCol};font-size:9px;font-weight:800;">HEDGE — ${exitLabel} EXIT${walkCount > 0 ? ' · WALKING' : ''}${exitOid ? '' : ' · PENDING'}</span>
+                    <span style="color:${combCol};font-size:11px;font-weight:700;">${heldAvg}+${exitPrice}=${combined}¢ · ${estProfit >= 0 ? '+' : ''}${estProfit}¢/ea</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="color:${exitCol};font-weight:700;font-size:14px;">${exitPrice}¢</span>
+                    <span style="color:#8892a6;font-size:10px;">×${netHeld}</span>
+                    <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
+                        <div style="width:0%;height:100%;background:${exitCol};border-radius:3px;"></div>
+                    </div>
+                    <span style="color:#556;font-size:10px;">0/${netHeld}</span>
+                </div>
+                ${walkCount > 0 ? `<div style="color:#ffaa00;font-size:9px;margin-top:3px;">Walk: ${walkCount} steps from profit target</div>` : ''}
+            </div>`;
+        })()}
+
         ${realizedPnl !== 0 || roundTrips > 0 ? `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;">
             <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}¢</strong></span>
             ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unrealized: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}¢</strong></span>` : ''}

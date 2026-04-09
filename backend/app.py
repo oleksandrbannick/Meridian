@@ -17234,6 +17234,9 @@ PNL_LOSS_RESULTS = (
     'anchor_sellback_position_cleared',  # phantom: sellback with position already cleared
     'apex_settled_loss',  # apex: market settled against hedge
     'manual_exit_apex',  # apex: manual exit (zero P&L)
+    'mm_sellback',  # apex MM: exit sell (can be + or -, reclassified by actual P&L)
+    'mm_settlement_yes',  # apex MM: market settled YES
+    'mm_settlement_no',  # apex MM: market settled NO
 )
 PNL_WIN_RESULTS = (
     'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
@@ -17241,6 +17244,7 @@ PNL_WIN_RESULTS = (
     'take_profit_watch',  # straight bet take-profit hit
     'apex_rung',  # Apex 2.0 per-rung arb completion
     'apex_settled_win',  # apex: market settled in favor of hedge
+    'mm_round_trip',  # apex MM: spread capture round-trip
     'partial_arb',  # phantom ladder: partial hedge fill at ceiling (typically breakeven)
     'anchor_partial_arb',  # phantom: partial arb completion
     'anchor_race_fill',  # phantom: race condition partial hedge fill

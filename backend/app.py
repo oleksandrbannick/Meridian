@@ -6677,8 +6677,8 @@ def _apex_stop_loss_threshold(width, anchor_price=0):
 # Pull unfilled orders when book conditions are hostile; re-post when they recover.
 APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-3 depth < this (contracts/dollars)
 APEX_DEPTH_PULL_OBI = 0.7       # Pull if |OBI| > this (market too one-sided)
-APEX_DEPTH_RECOVER_MIN = 300    # Re-post when both sides > this (match pull threshold)
-APEX_DEPTH_RECOVER_OBI = 0.7    # Re-post when |OBI| < this (match pull threshold)
+APEX_DEPTH_RECOVER_MIN = 350    # Re-post when both sides > this (slight buffer above pull)
+APEX_DEPTH_RECOVER_OBI = 0.65   # Re-post when |OBI| < this (slight buffer below pull)
 APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
 APEX_MAX_PULL_CYCLES = 8        # Stop re-posting after this many pull/repost cycles
 
@@ -13447,10 +13447,15 @@ def _handle_apex(bot_id, bot, actions):
                 if fresh_yes_bid <= 0 or fresh_no_bid <= 0:
                     return  # still no book — wait
 
-                # Drift guard
+                # Drift guard — market too decided, complete instead of waiting forever
                 drift_max = max(fresh_yes_bid, fresh_no_bid)
                 if drift_max >= 80:
-                    return  # market too decided — wait
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    bot['_stop_reason'] = f'depth_pulled_drift_{drift_max}c'
+                    print(f'⏹ APEX DRIFT COMPLETE: {bot_id} bid={drift_max}¢ — game decided, completing')
+                    save_state()
+                    return
 
                 new_group_id = _create_order_group()
                 qty_per = bot.get('quantity', 1)

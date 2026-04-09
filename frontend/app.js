@@ -5503,6 +5503,52 @@ function updateAllWidthsPreview() {
         </div>`;
 }
 
+let _mmSelectedWidth = 4;
+let _mmSelectedLevels = 7;
+
+function selectMMWidth(w) {
+    _mmSelectedWidth = w;
+    document.getElementById('mm-start-gap').value = Math.round(w / 2);
+    document.querySelectorAll('.mm-width-btn').forEach(btn => {
+        const bw = parseInt(btn.dataset.width);
+        if (bw === w) {
+            btn.style.borderColor = '#00d4ff66';
+            btn.style.color = '#00d4ff';
+        } else {
+            btn.style.borderColor = '#1e274066';
+            btn.style.color = '#fff';
+        }
+    });
+    updateMMPreview();
+}
+
+function selectMMLevels(n) {
+    _mmSelectedLevels = n;
+    document.getElementById('mm-levels').value = n;
+    document.querySelectorAll('.mm-levels-btn').forEach(btn => {
+        const bl = parseInt(btn.dataset.levels);
+        if (bl === n) {
+            btn.style.borderColor = '#00d4ff66';
+            btn.style.color = '#00d4ff';
+        } else {
+            btn.style.borderColor = '#1e274066';
+            btn.style.color = '#fff';
+        }
+    });
+    updateMMMaxDefault();
+    updateMMPreview();
+}
+
+function updateMMMaxDefault() {
+    const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
+    const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
+    const maxEl = document.getElementById('mm-inventory-limit');
+    const hintEl = document.getElementById('mm-max-hint');
+    const defaultMax = levels * qty;
+    if (maxEl) maxEl.value = defaultMax;
+    if (hintEl) hintEl.textContent = `Max contracts held (default: ${levels}×${qty})`;
+}
+
 function updateMMPreview() {
     const el = document.getElementById('mm-ladder-preview');
     if (!el || !currentArbMarket) return;
@@ -5510,7 +5556,7 @@ function updateMMPreview() {
     const noBid = currentArbMarket.no_bid || 0;
     if (yesBid <= 0 || noBid <= 0) { el.innerHTML = '<span style="color:#ff4444;">No orderbook data</span>'; return; }
     const mid = Math.round((yesBid + (100 - noBid)) / 2);
-    const gap = parseInt(document.getElementById('mm-start-gap')?.value) || 4;
+    const gap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
     const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
@@ -5540,7 +5586,7 @@ function updateMMPreview() {
         </div>
         <div style="color:#8892a6;font-size:10px;line-height:1.6;">
             Midpoint: <strong style="color:#fff;">${mid}¢</strong> · ${totalOrders} orders (${yesPrices.length}Y + ${noPrices.length}N) · ${qty}x each<br>
-            Combined range: ${minCombined}¢–${maxCombined}¢ · Profit range: ${100-maxCombined}¢–${100-minCombined}¢/trip<br>
+            Closest combined: ${maxCombined}¢ (${100-maxCombined}¢ profit) · Deepest: ${minCombined}¢ (${100-minCombined}¢ profit)<br>
             Capital at risk: <strong style="color:#ffaa33;">$${(capitalAtRisk/100).toFixed(2)}</strong>
         </div>`;
 }
@@ -5548,16 +5594,16 @@ function updateMMPreview() {
 async function deployMarketMaker() {
     if (!currentArbMarket) { alert('No market selected'); return; }
     const ticker = currentArbMarket.ticker;
-    const startGap = parseInt(document.getElementById('mm-start-gap')?.value) || 4;
+    const startGap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
     const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
-    const invLimit = parseInt(document.getElementById('mm-inventory-limit')?.value) || 50;
-    const lossLimitDollars = parseInt(document.getElementById('mm-loss-limit')?.value) || 5;
+    const invLimit = parseInt(document.getElementById('mm-inventory-limit')?.value) || (levels * qtyPerLevel);
     const smartChecked = document.getElementById('mm-smart-mode')?.checked;
-    const smartLimit = smartChecked ? (parseInt(document.getElementById('mm-smart-limit')?.value) || 2) : 0;
+    const smartLimit = smartChecked ? 2 : 0;
+    const width = _mmSelectedWidth;
 
-    if (!confirm(`Deploy Apex Market Maker\n\nMarket: ${ticker}\nGap: ${startGap}¢ · Levels: ${levels} · Spacing: ${spacing}¢\nQty/level: ${qtyPerLevel} · Inv limit: ${invLimit}\nLoss limit: $${lossLimitDollars}${smartLimit ? ` · Smart: stop after ${smartLimit} losses` : ''}\n\nContinue?`)) return;
+    if (!confirm(`Deploy Market Maker\n\nMarket: ${ticker}\nMin Width: ${width}¢ · Levels: ${levels} · Qty: ${qtyPerLevel}/level\nMax one-side: ${invLimit} contracts\n${smartLimit ? `Smart: stop after ${smartLimit} losing round trips` : 'No smart mode'}\n\nContinue?`)) return;
 
     const deployBtn = document.getElementById('deploy-btn');
     if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = 'Deploying...'; }
@@ -5571,8 +5617,9 @@ async function deployMarketMaker() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ticker, start_gap: startGap, levels, spacing,
-                qty_per_level: qtyPerLevel, inventory_limit: invLimit,
-                loss_limit_cents: lossLimitDollars * 100,
+                qty_per_level: qtyPerLevel,
+                inventory_limit: invLimit,
+                loss_limit_cents: 0,
                 smart_mode: smartLimit,
             }),
         });
@@ -5737,14 +5784,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
                             }
                         }
-                        const _orphanRow = r.orphan_pnl != null ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">
+                        // Orphan sub-row: check run entry first, then bot._last_orphan as fallback
+                        const _oData = r.orphan_pnl != null ? r : (r.result === 'dual_exit' && bot._last_orphan ? bot._last_orphan : null);
+                        const _orphanRow = _oData ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">
                             <span></span>
                             <span style="display:flex;align-items:center;gap:3px;">
                                 <span style="color:#aa66ff;font-weight:700;">↳ orphan</span>
-                                <span style="color:#aa66ff;">bought ${r.orphan_buy || '?'}¢ → sold ${r.orphan_sell || '?'}¢</span>
+                                <span style="color:#aa66ff;">bought ${_oData.orphan_buy ?? _oData.buy ?? '?'}¢ → sold ${_oData.orphan_sell ?? _oData.sell ?? '?'}¢</span>
                             </span>
-                            <span style="color:#aa66ff;font-weight:700;">x${r.orphan_qty || '?'}</span>
-                            <span style="color:${r.orphan_pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.orphan_pnl >= 0 ? '+' : ''}${r.orphan_pnl}¢</span>
+                            <span style="color:#aa66ff;font-weight:700;">x${_oData.orphan_qty ?? _oData.qty ?? '?'}</span>
+                            <span style="color:${(_oData.orphan_pnl ?? _oData.pnl ?? 0) >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${(_oData.orphan_pnl ?? _oData.pnl ?? 0) >= 0 ? '+' : ''}${_oData.orphan_pnl ?? _oData.pnl ?? 0}¢</span>
                         </div>` : '';
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
@@ -6268,17 +6317,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
 function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
+    const ageStr = ageMin >= 60 ? `${Math.floor(ageMin/60)}h ${ageMin%60}m` : `${ageMin}m`;
     const status = bot.status || 'market_making_active';
     const isCompleted = status === 'completed' || status === 'stopped';
 
     const statusMap = {
         'market_making_active': ['QUOTING', '#00d4ff'],
-        'mm_depth_pulled': ['PULLED', '#ffaa00'],
+        'mm_depth_pulled': ['PULLED — WAITING', '#ffaa00'],
         'mm_exiting': ['EXITING', '#ff8800'],
         'completed': ['DONE', '#00ff88'],
         'stopped': ['STOPPED', '#ff4444'],
     };
-    const [statusLabel, borderCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
+    const [statusLabel, accentCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
 
     const netYes = bot.net_yes || 0;
     const netNo = bot.net_no || 0;
@@ -6286,97 +6336,178 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const avgNoCost = bot.avg_no_cost || 0;
     const realizedPnl = bot.realized_pnl_cents || 0;
     const unrealizedPnl = bot._unrealized_pnl || 0;
+    const totalPnl = realizedPnl + unrealizedPnl;
     const roundTrips = bot.round_trips_completed || 0;
     const midpoint = bot.midpoint || 0;
     const pullCount = bot._pull_count || 0;
     const consLosses = bot.consecutive_losses || 0;
     const smartMode = bot.smart_mode || 0;
+    const width = (bot.start_gap || 0) * 2;
+    const liveYesBid = bot.live_yes_bid || 0;
+    const liveNoBid = bot.live_no_bid || 0;
+    const liveYesAsk = bot.live_yes_ask || 0;
+    const liveNoAsk = bot.live_no_ask || 0;
 
-    const pnlColor = realizedPnl >= 0 ? '#00ff88' : '#ff4444';
-    const unrealColor = unrealizedPnl >= 0 ? '#00ff88' : '#ff4444';
-    const pnlSign = realizedPnl >= 0 ? '+' : '';
-    const unrealSign = unrealizedPnl >= 0 ? '+' : '';
+    const pnlColor = totalPnl >= 0 ? '#00ff88' : '#ff4444';
+    const pnlSign = totalPnl >= 0 ? '+' : '';
 
-    // Inventory badge
-    let invBadge = '';
-    if (netYes > 0) invBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">YES ${netYes}x @${avgYesCost}c</span>`;
-    if (netNo > 0) invBadge += `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-left:4px;">NO ${netNo}x @${avgNoCost}c</span>`;
-    if (!invBadge) invBadge = '<span style="color:#556;font-size:10px;">FLAT</span>';
+    // Team name
+    const teamName = typeof formatBotDisplayName === 'function'
+        ? formatBotDisplayName(bot.ticker || '', bot.spread_line || '')
+        : (bot.ticker || '').split('-').pop();
 
-    // Ladder display
-    let yesLadder = '', noLadder = '';
+    // Live score
+    let liveScoreHtml = '';
+    if (gameScores) {
+        const parts = (bot.ticker || '').split('-');
+        const gk = gameKey || (parts.length >= 2 ? parts[1] : parts[0]);
+        const gs = gameScores[gk] || null;
+        if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
+    }
+
+    // Room = 100 - yes_bid - no_bid
+    const room = (liveYesBid > 0 && liveNoBid > 0) ? 100 - liveYesBid - liveNoBid : -1;
+    const roomCol = room >= 6 ? '#00ff88' : room >= 3 ? '#ffaa00' : '#ff4444';
+
+    // OBI
+    let obiHtml = '';
+    if (bot._obi != null) {
+        const obi = bot._obi;
+        const absObi = Math.abs(obi);
+        let label, color;
+        if (absObi < 0.15) { label = 'Balanced'; color = '#556'; }
+        else if (absObi < 0.3) { label = obi > 0 ? 'YES building' : 'NO building'; color = obi > 0 ? '#00ff88' : '#ff4444'; }
+        else if (absObi < 0.6) { label = obi > 0 ? 'YES pressure' : 'NO pressure'; color = obi > 0 ? '#00ff88' : '#ff4444'; }
+        else { label = obi > 0 ? 'YES sweep!' : 'NO sweep!'; color = '#ff4444'; }
+        const yesD = bot._yes_depth_top3 != null ? Math.round(bot._yes_depth_top3) : '?';
+        const noD = bot._no_depth_top3 != null ? Math.round(bot._no_depth_top3) : '?';
+        obiHtml = `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | YES depth: ${yesD} | NO depth: ${noD}">OBI: ${label} (${yesD}/${noD})</span>`;
+    }
+
+    // Inventory section
+    let invHtml = '';
+    if (netYes > 0 || netNo > 0) {
+        invHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
+        if (netYes > 0) {
+            invHtml += `<div style="padding:6px 10px;background:#00ff8811;border:1px solid #00ff8833;border-radius:6px;">
+                <div style="color:#00ff88;font-size:9px;font-weight:800;margin-bottom:2px;">HOLDING YES</div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                    <span style="color:#fff;font-weight:800;font-size:16px;">${netYes}x</span>
+                    <span style="color:#8892a6;font-size:10px;">avg ${avgYesCost}¢</span>
+                </div>
+            </div>`;
+        } else {
+            invHtml += '<div></div>';
+        }
+        if (netNo > 0) {
+            invHtml += `<div style="padding:6px 10px;background:#ff444411;border:1px solid #ff444433;border-radius:6px;">
+                <div style="color:#ff4444;font-size:9px;font-weight:800;margin-bottom:2px;">HOLDING NO</div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                    <span style="color:#fff;font-weight:800;font-size:16px;">${netNo}x</span>
+                    <span style="color:#8892a6;font-size:10px;">avg ${avgNoCost}¢</span>
+                </div>
+            </div>`;
+        } else {
+            invHtml += '<div></div>';
+        }
+        invHtml += '</div>';
+    }
+
+    // Ladder columns
     const yesOrders = bot.yes_orders || {};
     const noOrders = bot.no_orders || {};
     const sortedYes = Object.entries(yesOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
     const sortedNo = Object.entries(noOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
+    const qty = bot.qty_per_level || 10;
 
+    let yesLadder = '', noLadder = '';
     for (const [price, level] of sortedYes) {
         const filled = level.fill_qty || 0;
-        const qty = level.qty || bot.qty_per_level || 10;
         const active = level.oid ? true : false;
-        const bg = filled >= qty ? '#00ff8833' : active ? '#00ff8811' : '#0a0e1a';
-        const col = filled >= qty ? '#00ff88' : active ? '#00ff88' : '#556';
-        yesLadder += `<div style="background:${bg};padding:2px 6px;border-radius:3px;display:flex;justify-content:space-between;"><span style="color:${col};font-weight:600;">${price}c</span><span style="color:#556;font-size:9px;">${filled}/${qty}</span></div>`;
+        const isFull = filled >= (level.qty || qty);
+        const bg = isFull ? '#00ff8822' : active ? '#00ff8808' : 'transparent';
+        const col = isFull ? '#00ff88' : active ? '#00d4ff' : '#334';
+        const fillCol = filled > 0 ? '#00ff88' : '#334';
+        yesLadder += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:${bg};border-radius:3px;"><span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span><span style="color:${fillCol};font-size:10px;font-weight:600;">${filled}/${level.qty || qty}</span></div>`;
     }
     for (const [price, level] of sortedNo) {
         const filled = level.fill_qty || 0;
-        const qty = level.qty || bot.qty_per_level || 10;
         const active = level.oid ? true : false;
-        const bg = filled >= qty ? '#ff444433' : active ? '#ff444411' : '#0a0e1a';
-        const col = filled >= qty ? '#ff4444' : active ? '#ff4444' : '#556';
-        noLadder += `<div style="background:${bg};padding:2px 6px;border-radius:3px;display:flex;justify-content:space-between;"><span style="color:${col};font-weight:600;">${price}c</span><span style="color:#556;font-size:9px;">${filled}/${qty}</span></div>`;
+        const isFull = filled >= (level.qty || qty);
+        const bg = isFull ? '#ff444422' : active ? '#ff444408' : 'transparent';
+        const col = isFull ? '#ff4444' : active ? '#00d4ff' : '#334';
+        const fillCol = filled > 0 ? '#ff4444' : '#334';
+        noLadder += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:${bg};border-radius:3px;"><span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span><span style="color:${fillCol};font-size:10px;font-weight:600;">${filled}/${level.qty || qty}</span></div>`;
     }
 
-    const yesPaused = bot._yes_side_paused ? ' <span style="color:#ffaa00;font-size:9px;">(PAUSED)</span>' : '';
-    const noPaused = bot._no_side_paused ? ' <span style="color:#ffaa00;font-size:9px;">(PAUSED)</span>' : '';
+    const yesPaused = bot._yes_side_paused ? '<span style="color:#ffaa00;font-size:8px;font-weight:700;"> PAUSED</span>' : '';
+    const noPaused = bot._no_side_paused ? '<span style="color:#ffaa00;font-size:8px;font-weight:700;"> PAUSED</span>' : '';
 
-    // Game score
-    const gs = gameScores?.[gameKey || bot.ticker?.split('-')[0]];
-    const scoreBadge = gs ? buildScoreBadgeHtml(gs, 'compact') : '';
+    // Pull reason display
+    let pullInfo = '';
+    if (status === 'mm_depth_pulled' && bot._last_pull_reason) {
+        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">Pulled: ${bot._last_pull_reason} · waiting for book recovery</div>`;
+    }
 
-    // Smart mode display
-    const smartInfo = smartMode > 0 ? `<span style="color:#00e5ff;font-size:9px;">Smart:${consLosses}/${smartMode}L</span>` : '';
+    // Exit reason display
+    let exitInfo = '';
+    if (status === 'mm_exiting' && bot._exit_reason) {
+        exitInfo = `<div style="padding:6px 10px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ff8800;font-weight:600;">Exiting: ${bot._exit_reason} · selling inventory at ask</div>`;
+    }
 
     const item = document.createElement('div');
-    item.className = 'bot-item';
-    item.style.cssText = 'background:#0d1120;border:1px solid ' + borderCol + '44;border-radius:8px;padding:10px 12px;margin-bottom:6px;';
+    item.style.cssText = `background:#0f1419;border:1px solid ${accentCol}33;border-left:3px solid ${accentCol};border-radius:12px;padding:14px;margin-bottom:10px;`;
     item.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <div style="display:flex;align-items:center;gap:6px;">
-                ${botIconImg('apex', 16)}
-                <span style="color:#fff;font-weight:700;font-size:12px;">Apex MM</span>
-                <span style="background:${borderCol}22;color:${borderCol};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
-                ${scoreBadge}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="color:#00d4ff;font-weight:800;font-size:10px;letter-spacing:.08em;">APEX MM</span>
+                <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
+                <span style="background:${accentCol}22;color:${accentCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
+                ${liveScoreHtml}
+                ${smartMode > 0 ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
             </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-                <span style="color:${pnlColor};font-weight:700;font-size:12px;">${pnlSign}${realizedPnl}c</span>
-                ${smartInfo}
-                <span style="color:#556;font-size:10px;">${ageMin}m</span>
-            </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-            <span style="color:#8892a6;font-size:10px;">mid=${midpoint}c</span>
-            <span style="color:#8892a6;font-size:10px;">gap=${bot.start_gap || 0}</span>
-            <span style="color:#8892a6;font-size:10px;">lvl=${bot.levels || 0}</span>
-            <span style="color:#8892a6;font-size:10px;">qty=${bot.qty_per_level || 0}</span>
-            ${pullCount > 0 ? `<span style="color:#ffaa00;font-size:10px;">pulls:${pullCount}</span>` : ''}
-            <span style="color:#8892a6;font-size:10px;">RT:${roundTrips}</span>
-        </div>
-        <div style="margin-bottom:6px;">${invBadge}</div>
-        ${unrealizedPnl !== 0 ? `<div style="color:${unrealColor};font-size:10px;margin-bottom:4px;">Unrealized: ${unrealSign}${unrealizedPnl}c</div>` : ''}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
-            <div>
-                <div style="color:#00ff88;font-weight:700;font-size:9px;margin-bottom:2px;">YES BIDS${yesPaused}</div>
-                <div style="display:flex;flex-direction:column;gap:1px;font-size:11px;">${yesLadder || '<span style="color:#556;">--</span>'}</div>
-            </div>
-            <div>
-                <div style="color:#ff4444;font-weight:700;font-size:9px;margin-bottom:2px;">NO BIDS${noPaused}</div>
-                <div style="display:flex;flex-direction:column;gap:1px;font-size:11px;">${noLadder || '<span style="color:#556;">--</span>'}</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
+                ${!isCompleted ? `<button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>` : ''}
             </div>
         </div>
-        ${!isCompleted ? `<div style="display:flex;gap:6px;">
-            <button onclick="cancelBot('${botId}')" style="padding:4px 10px;background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Cancel</button>
+
+        ${pullInfo}
+        ${exitInfo}
+        ${invHtml}
+
+        ${realizedPnl !== 0 || roundTrips > 0 ? `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;">
+            <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}¢</strong></span>
+            ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unrealized: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}¢</strong></span>` : ''}
+            <span style="color:#8892a6;">Round Trips: <strong style="color:#fff;">${roundTrips}</strong></span>
         </div>` : ''}
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <div style="background:#060a14;border:1px solid #00d4ff22;border-radius:8px;padding:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:#00ff88;font-size:9px;font-weight:800;">YES BIDS${yesPaused}</span>
+                </div>
+                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#00ff88;">${liveYesBid || '?'}¢</strong> · ask <strong style="color:#00ff88;">${liveYesAsk || '?'}¢</strong></div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#334;">—</span>'}</div>
+            </div>
+            <div style="background:#060a14;border:1px solid #00d4ff22;border-radius:8px;padding:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:#ff4444;font-size:9px;font-weight:800;">NO BIDS${noPaused}</span>
+                </div>
+                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">—</span>'}</div>
+            </div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
+            <span style="color:#00d4ff;font-weight:600;">Width: ${width}¢</span>
+            <span style="color:#8892a6;">Midpoint: ${midpoint}¢</span>
+            <span style="color:#8892a6;">×${qty}/level</span>
+            ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room <= 2 ? 700 : 400};">${room <= 2 ? '⚠ ' : ''}Room: ${room}¢</span>` : ''}
+            ${obiHtml}
+            ${pullCount > 0 ? `<span style="color:#ffaa00;">OBI Pulls: ${pullCount}</span>` : ''}
+            <span style="color:#556;">${ageStr}</span>
+        </div>
     `;
     container.appendChild(item);
 }
@@ -12612,8 +12743,8 @@ function filterPhantomLog() {
         const favSide = dogSide === 'yes' ? 'no' : 'yes';
         const dogCol = dogSide === 'yes' ? '#00ff88' : '#ff4444';
         const favCol = favSide === 'yes' ? '#00ff88' : '#ff4444';
-        const dogPrice = t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?';
-        const favPrice = isDualExit ? (t.sell_back_price || t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?') : (t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?');
+        const dogPrice = isOrphanRecovery ? (t.orphan_buy_price || t.dog_price || '?') : (t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?');
+        const favPrice = isOrphanRecovery ? (t.orphan_sell_price || t.sell_back_price || '?') : (isDualExit ? (t.sell_back_price || t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?') : (t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?'));
         const combined = (typeof dogPrice === 'number' && typeof favPrice === 'number') ? dogPrice + favPrice : null;
         const qty = t.quantity || 1;
         const taker = t.taker ? 'TKR' : 'MKR';
@@ -12671,17 +12802,23 @@ function filterPhantomLog() {
 
             <!-- Trade detail: 2-column anchor/hedge -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${dogCol}18;">
-                    <div style="color:#ffaa00;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">👻 Anchor</div>
+                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isOrphanRecovery ? '#aa66ff18' : dogCol + '18'};">
+                    <div style="color:${isOrphanRecovery ? '#aa66ff' : '#ffaa00'};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isOrphanRecovery ? '👻 Orphan Held' : '👻 Anchor'}</div>
                     <div style="display:flex;align-items:baseline;gap:4px;">
-                        <span style="color:${dogCol};font-weight:800;font-size:16px;">${dogPrice}¢</span>
-                        <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()}</span>
+                        <span style="color:${isOrphanRecovery ? '#aa66ff' : dogCol};font-weight:800;font-size:16px;">${dogPrice}¢</span>
+                        <span style="color:#5a6484;font-size:10px;">${(isOrphanRecovery ? (t.orphan_side || dogSide) : dogSide).toUpperCase()}</span>
                     </div>
                     <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty}${typeof dogPrice === 'number' ? ` · $${((qty * dogPrice) / 100).toFixed(2)}` : ''}</div>
                 </div>
-                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isSellback || isDualExit ? (isDualExit ? '#00aaff18' : '#ff444418') : '#00aaff18'};">
-                    <div style="color:${isSellback ? '#ff4444' : (isDualExit ? '#00aaff' : '#00aaff')};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isSellback ? '🔙 Sold Back' : (isDualExit ? '📤 Sold Back' : '⭐ Hedge')}${!isSellback && !isDualExit && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
-                    ${isSellback || isDualExit
+                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isOrphanRecovery ? '#aa66ff18' : (isSellback || isDualExit ? (isDualExit ? '#00aaff18' : '#ff444418') : '#00aaff18')};">
+                    <div style="color:${isOrphanRecovery ? '#aa66ff' : (isSellback ? '#ff4444' : (isDualExit ? '#00aaff' : '#00aaff'))};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isOrphanRecovery ? '📤 Sold' : (isSellback ? '🔙 Sold Back' : (isDualExit ? '📤 Sold Back' : '⭐ Hedge'))}${!isSellback && !isDualExit && !isOrphanRecovery && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
+                    ${isOrphanRecovery
+                        ? `<div style="display:flex;align-items:baseline;gap:4px;">
+                            <span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${favPrice}¢</span>
+                            <span style="color:#5a6484;font-size:10px;">${(t.orphan_side || dogSide).toUpperCase()}</span>
+                        </div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Bought ${dogPrice}¢ → Sold ${favPrice}¢${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
+                        : isSellback || isDualExit
                         ? `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${(isDualExit ? t.sell_back_price : t.sell_back_price) > 0 ? (isDualExit ? t.sell_back_price : t.sell_back_price) + '¢' : 'Failed'}</span>
                             <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()} back</span>

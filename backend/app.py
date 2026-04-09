@@ -1814,8 +1814,8 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         p2_set_parts = []
         current_set = len(scores) or 1
         for s in scores:
-            s1 = int(s.get('score_first', 0))
-            s2 = int(s.get('score_second', 0))
+            s1 = int(float(s.get('score_first', 0)))
+            s2 = int(float(s.get('score_second', 0)))
             p1_set_parts.append(f'{s1}-{s2}')
             p2_set_parts.append(f'{s2}-{s1}')
             # A set is won at 6+ games with 2+ lead, or 7 (tiebreak)
@@ -1884,7 +1884,7 @@ def _fetch_api_tennis_scoreboard(tour_filter):
                             'displayName': p1,
                             'logo': '',
                         },
-                        'linescores': [{'value': int(s.get('score_first', 0))} for s in scores],
+                        'linescores': [{'value': int(float(s.get('score_first', 0)))} for s in scores],
                         'setScores': p1_set_str,
                     },
                     {
@@ -1897,7 +1897,7 @@ def _fetch_api_tennis_scoreboard(tour_filter):
                             'displayName': p2,
                             'logo': '',
                         },
-                        'linescores': [{'value': int(s.get('score_second', 0))} for s in scores],
+                        'linescores': [{'value': int(float(s.get('score_second', 0)))} for s in scores],
                         'setScores': p2_set_str,
                     },
                 ],
@@ -6779,12 +6779,14 @@ APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far
 
 # ─── Apex OBI: depth-gated posting + book-aware exits ─────────────────────────
 # Pull unfilled orders when book conditions are hostile; re-post when they recover.
-APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-3 depth < this (contracts/dollars)
+APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-5 depth < this (contracts/dollars)
 APEX_DEPTH_PULL_OBI = 0.7       # Pull if |OBI| > this (market too one-sided)
 APEX_DEPTH_RECOVER_MIN = 350    # Re-post when both sides > this (slight buffer above pull)
 APEX_DEPTH_RECOVER_OBI = 0.65   # Re-post when |OBI| < this (slight buffer below pull)
 APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
-APEX_MAX_PULL_CYCLES = 8        # Stop re-posting after this many pull/repost cycles
+APEX_MAX_PULL_CYCLES = 8        # Phantom: stop re-posting after 8 pulls
+APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, keeps reposting
+APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than phantom's top-3)
 
 
 def _apex_obi_snapshot(ticker):
@@ -6805,9 +6807,9 @@ def _apex_obi_snapshot(ticker):
     }
 
 
-def _apex_should_pull(ticker):
+def _apex_should_pull(ticker, depth_levels=3):
     """Check if book conditions are hostile for Apex. Returns (should_pull, reason) tuple.
-    Uses LocalOrderbook — zero API calls."""
+    Uses LocalOrderbook — zero API calls. depth_levels: how many levels to check (3 for phantom, 5 for MM)."""
     lob = _local_orderbooks.get(ticker)
     if not lob or lob.last_update_ts <= 0:
         return False, ''  # no data — don't pull blind
@@ -6815,9 +6817,9 @@ def _apex_should_pull(ticker):
     if age_s > 10:
         return False, ''  # stale data — don't act on old book
 
-    yes_depth = lob.get_total_depth('yes', 3)
-    no_depth = lob.get_total_depth('no', 3)
-    obi = lob.get_weighted_obi()
+    yes_depth = lob.get_total_depth('yes', depth_levels)
+    no_depth = lob.get_total_depth('no', depth_levels)
+    obi = lob.get_weighted_obi(depth=depth_levels)
     vanish_yes = lob.detect_vanishing_liquidity('yes')
     vanish_no = lob.detect_vanishing_liquidity('no')
 
@@ -7211,12 +7213,16 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
         bot['_exit_sell_oids'] = {}
 
         ticker = bot['ticker']
-        # Post maker sell orders for held inventory
+        # Post maker sell orders for held inventory (at ask = 100 - opposite_bid, maker not taker)
         for side, net_qty, avg_cost in [('yes', net_yes, bot.get('avg_yes_cost', 0)), ('no', net_no, bot.get('avg_no_cost', 0))]:
             if net_qty <= 0:
                 continue
+            opposite = 'no' if side == 'yes' else 'yes'
+            opp_bid = bot.get(f'live_{opposite}_bid', 0)
+            live_ask = (100 - opp_bid) if opp_bid > 0 else 0
             live_bid = bot.get(f'live_{side}_bid', 0)
-            sell_price = max(1, live_bid) if live_bid > 0 else max(1, avg_cost - 5)
+            # Post at ask (maker). Fall back to bid+1 if no ask data.
+            sell_price = max(1, live_ask) if live_ask > 0 else max(1, live_bid + 1) if live_bid > 0 else max(1, avg_cost)
             try:
                 resp, actual_price = create_order_maker(ticker, side, 'sell', net_qty, sell_price)
                 oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
@@ -7263,12 +7269,17 @@ def _apex_mm_exit_tick(bot_id, bot):
             target = sell_info.get('qty', 0)
 
             if filled >= target:
-                # Fully sold
-                actual_price = int(order.get('yes_price', 0) or order.get('no_price', 0))
-                net_qty = bot.get(f'net_{side}', 0)
+                # Fully sold — use our posted price (reliable), fallback to Kalshi response
+                actual_price = sell_info.get('price', 0) or int(order.get('yes_price', 0) or order.get('no_price', 0))
+                # Try to get real fill price from Kalshi if available
+                _kalshi_price = int(order.get('yes_price', 0) or order.get('no_price', 0))
+                if _kalshi_price > 0:
+                    actual_price = _kalshi_price
                 avg_cost = bot.get(f'avg_{side}_cost', 0)
-                loss = (avg_cost - actual_price) * target if avg_cost > actual_price else 0
-                bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) - loss
+                # Selling back: loss = cost - sell_price (positive if sold below cost)
+                pnl_per = actual_price - avg_cost  # negative if sold below cost
+                pnl = pnl_per * target
+                bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
                 bot[f'net_{side}'] = 0
                 bot[f'avg_{side}_cost'] = 0
                 bot[f'total_{side}_cost'] = 0
@@ -7278,20 +7289,22 @@ def _apex_mm_exit_tick(bot_id, bot):
                 _record_trade({
                     'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
                     'result': 'mm_sellback', 'exit_via': bot.get('_exit_reason', 'exit'),
-                    f'{side}_price': actual_price, 'quantity': target,
-                    'loss_cents': loss, 'net_pnl': -loss,
+                    f'{side}_price': actual_price, 'avg_cost': avg_cost, 'quantity': target,
+                    'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                     'timestamp': now, 'fill_source': 'apex_mm_exit',
                 })
-                print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (loss={loss}c)')
+                print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c)')
                 all_sold = True  # will recheck
             elif now - sell_info.get('posted_at', now) > 5:
-                # Follow bid down
-                live_bid = bot.get(f'live_{side}_bid', 0)
-                if live_bid > 0 and live_bid != sell_info.get('price', 0):
+                # Follow ask down (maker sell = post at ask, not bid)
+                opposite = 'no' if side == 'yes' else 'yes'
+                opp_bid = bot.get(f'live_{opposite}_bid', 0)
+                live_ask = (100 - opp_bid) if opp_bid > 0 else 0
+                if live_ask > 0 and live_ask != sell_info.get('price', 0):
                     try:
                         _cancel_with_retry(oid)
                         remaining = target - filled
-                        resp2, new_price = create_order_maker(ticker, side, 'sell', remaining, live_bid)
+                        resp2, new_price = create_order_maker(ticker, side, 'sell', remaining, live_ask)
                         new_oid = resp2.get('order', {}).get('order_id', '') if isinstance(resp2, dict) else ''
                         if new_oid:
                             sell_info['oid'] = new_oid
@@ -9184,34 +9197,36 @@ def _handle_phantom(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(_ro_orphan_net)
             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _ro_orphan_net
             bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _ro_orphan_net
-            # Track orphan P&L on bot AND on the run history entry it belongs to
+            # Store orphan data directly on the bot — simple, reliable, no fragile mutation
             bot['_orphan_recovery_pnl'] = bot.get('_orphan_recovery_pnl', 0) + _ro_orphan_net
             bot['_orphan_recovery_count'] = bot.get('_orphan_recovery_count', 0) + 1
+            # Bot-level orphan record: frontend reads this directly (not tied to a run entry)
+            bot['_last_orphan'] = {
+                'pnl': _ro_orphan_net, 'qty': _orphan_qty,
+                'buy': _ro_fav_price, 'sell': _sell_price,
+                'side': _orphan_side, 'ts': time.time(),
+            }
+            # Also write to the run_history entry for completeness (best-effort)
             _rh = bot.get('_run_history', [])
-            # Find the dual_exit run that created this orphan (last DE run, not necessarily last run)
-            _orphan_target = None
             for _ri in reversed(_rh):
                 if _ri.get('result') == 'dual_exit' and 'orphan_pnl' not in _ri:
-                    _orphan_target = _ri
+                    _ri['orphan_pnl'] = _ro_orphan_net
+                    _ri['orphan_qty'] = _orphan_qty
+                    _ri['orphan_buy'] = _ro_fav_price
+                    _ri['orphan_sell'] = _sell_price
                     break
-            if not _orphan_target and _rh:
-                _orphan_target = _rh[-1]  # fallback to last run
-            if _orphan_target:
-                _orphan_target['orphan_pnl'] = _ro_orphan_net
-                _orphan_target['orphan_qty'] = _orphan_qty
-                _orphan_target['orphan_buy'] = _ro_fav_price
-                _orphan_target['orphan_sell'] = _sell_price
-                print(f'📝 ORPHAN→RUN: {bot_id} wrote orphan_pnl={_ro_orphan_net} buy={_ro_fav_price} sell={_sell_price} to run#{_orphan_target.get("run")} (result={_orphan_target.get("result")})')
-            else:
-                print(f'⚠ ORPHAN→RUN: {bot_id} NO target found in _run_history ({len(_rh)} entries: {[r.get("result") for r in _rh]})')
+            print(f'📝 ORPHAN RECOVERED: {bot_id} pnl={_ro_orphan_net} buy={_ro_fav_price}→sell={_sell_price} x{_orphan_qty} (bot._last_orphan set)')
+            save_state()
             _record_trade({
                 'bot_id': bot_id, 'ticker': _orphan_ticker,
-                'yes_price': _ro_fav_price if _orphan_side == 'yes' else 0,
-                'no_price': _ro_fav_price if _orphan_side == 'no' else 0,
+                'yes_price': _ro_fav_price if _orphan_side == 'yes' else _sell_price,
+                'no_price': _ro_fav_price if _orphan_side == 'no' else _sell_price,
                 'quantity': _orphan_qty,
                 'profit_cents': max(0, _ro_orphan_net), 'loss_cents': max(0, -_ro_orphan_net),
                 'fee_cents': _ro_orphan_fee, 'result': 'race_orphan_cleared',
                 'exit_via': 'race_orphan_sell', 'bot_category': 'anchor_dog',
+                'dog_side': _orphan_side, 'fav_side': 'yes' if _orphan_side == 'no' else 'no',
+                'dog_price': _ro_fav_price, 'fav_price': _sell_price,
                 'sell_back_price': _sell_price,
                 'orphan_side': _orphan_side,
                 'orphan_buy_price': _ro_fav_price,
@@ -12444,7 +12459,7 @@ def _handle_apex(bot_id, bot, actions):
 
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
-        if bot.get('_pull_count', 0) >= APEX_MAX_PULL_CYCLES:
+        if bot.get('_pull_count', 0) >= APEX_MM_MAX_PULL_CYCLES:
             _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')
             return
         if _apex_depth_recovered(ticker, bot):
@@ -12460,8 +12475,8 @@ def _handle_apex(bot_id, bot, actions):
     if status != 'market_making_active':
         return
 
-    # 1. OBI check — pull if hostile
-    should_pull, pull_reason = _apex_should_pull(ticker)
+    # 1. OBI check — pull if hostile (MM uses deeper book view)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH)
     if should_pull:
         _apex_mm_pull_all(bot_id, bot, pull_reason)
         return
@@ -16208,6 +16223,14 @@ def list_bots():
                 bot['_dog_depth_top3'] = round(_lob.get_total_depth(_dog_side, 3))
                 bot['_fav_depth_top3'] = round(_lob.get_total_depth(_fav_side, 3))
                 bot['_obi_age_ms'] = round((time.time() - _lob.last_update_ts) * 1000)
+
+        # Apex MM — OBI + depth signals
+        if bot.get('bot_category') == 'ladder_arb' and bot.get('type') == 'apex_mm' and bot.get('ticker'):
+            _lob = _local_orderbooks.get(bot['ticker'])
+            if _lob and _lob.last_update_ts > 0:
+                bot['_obi'] = round(_lob.get_weighted_obi(), 2)
+                bot['_yes_depth_top3'] = round(_lob.get_total_depth('yes', 3))
+                bot['_no_depth_top3'] = round(_lob.get_total_depth('no', 3))
 
         # Middle bots — dual tickers (ticker_a / ticker_b)
         if bot.get('type') == 'middle':

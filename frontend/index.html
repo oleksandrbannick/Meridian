@@ -1096,53 +1096,56 @@
                 <div id="arb-section" style="display:none;">
                     <!-- Strategy description -->
                     <div id="apex-mode-desc" style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00d4ff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;">
-                        <strong style="color:#00d4ff;">📊 Apex Market Maker</strong> — Continuously quotes both sides of the spread. Collects profit as fills trickle in. Tracks net inventory, auto-reposts, drift-reprices. OBI depth gating protects against hostile books.
+                        <strong style="color:#00d4ff;">Apex Market Maker</strong> — Quotes both sides, collects spread on fills, auto-reposts. OBI depth gating pulls when book is hostile. Exits at end of game.
                     </div>
 
                     <!-- Risk warning area -->
                     <div id="bot-risk-warnings"></div>
 
-                    <!-- MM Configuration -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Start Gap</label>
-                            <input type="number" id="mm-start-gap" min="2" max="20" value="4" oninput="updateMMPreview()"
-                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Min edge from midpoint</div>
+                    <!-- Min Width selector (button grid) -->
+                    <div style="margin-bottom:14px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                            <span style="color:#8892a6;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Min Width</span>
+                            <span style="color:#556;font-size:9px;">Combined cost = 100 - width</span>
                         </div>
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Levels</label>
-                            <input type="number" id="mm-levels" min="1" max="15" value="7" oninput="updateMMPreview()"
-                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Price levels per side</div>
-                        </div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Spacing</label>
-                            <input type="number" id="mm-spacing" min="1" max="5" value="1" oninput="updateMMPreview()"
-                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Gap between levels</div>
-                        </div>
-                        <div>
-                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Qty / Level</label>
-                            <input type="number" id="mm-qty-per-level" min="1" max="100" value="10" oninput="updateMMPreview()"
-                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Contracts per level</div>
+                        <div style="display:grid;grid-template-columns:repeat(7, 1fr);gap:5px;" id="mm-width-grid">
+                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="padding:8px 2px;background:#0a0e1a;border:2px solid #00d4ff66;border-radius:8px;color:#00d4ff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">4¢</button>
+                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">5¢</button>
+                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">6¢</button>
+                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">7¢</button>
+                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">8¢</button>
+                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">10¢</button>
+                            <button onclick="selectMMWidth(12)" class="mm-width-btn" data-width="12" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">12¢</button>
                         </div>
                     </div>
+
+                    <!-- Levels selector (button grid) -->
+                    <div style="margin-bottom:14px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                            <span style="color:#8892a6;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Levels</span>
+                            <span style="color:#556;font-size:9px;">Price rungs per side (1¢ apart)</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:5px;" id="mm-levels-grid">
+                            <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">3</button>
+                            <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">5</button>
+                            <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="padding:8px 2px;background:#0a0e1a;border:2px solid #00d4ff66;border-radius:8px;color:#00d4ff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">7</button>
+                            <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="padding:8px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:14px;">10</button>
+                        </div>
+                    </div>
+
+                    <!-- Qty + Max Exposure -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
                         <div>
-                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Inv. Limit</label>
-                            <input type="number" id="mm-inventory-limit" min="10" max="500" value="50"
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Contracts</label>
+                            <input type="number" id="mm-qty-per-level" min="1" max="100" value="10" oninput="updateMMPreview(); updateMMMaxDefault();"
                                    style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Max contracts one side</div>
+                            <div style="color:#556;font-size:9px;margin-top:2px;">Per level</div>
                         </div>
                         <div>
-                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Loss Limit ($)</label>
-                            <input type="number" id="mm-loss-limit" min="1" max="100" value="5"
+                            <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Max One-Side</label>
+                            <input type="number" id="mm-inventory-limit" min="1" max="500" value="70" oninput=""
                                    style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Unrealized loss stop</div>
+                            <div id="mm-max-hint" style="color:#556;font-size:9px;margin-top:2px;">Max contracts held (default: 7×10)</div>
                         </div>
                     </div>
 
@@ -1152,18 +1155,20 @@
                             <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00e5ff;">
                             <span style="color:#00e5ff;font-size:11px;font-weight:600;">Smart Mode</span>
                         </label>
-                        <span style="color:#556;font-size:10px;">Stop after</span>
-                        <input type="number" id="mm-smart-limit" min="1" max="10" value="2"
-                               style="width:40px;padding:4px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:12px;text-align:center;">
-                        <span style="color:#556;font-size:10px;">consecutive losing round trips</span>
+                        <span style="color:#556;font-size:9px;">stop after 2 consecutive losing round trips</span>
                     </div>
+
+                    <!-- Hidden fields with defaults -->
+                    <input type="hidden" id="mm-start-gap" value="2">
+                    <input type="hidden" id="mm-levels" value="7">
+                    <input type="hidden" id="mm-spacing" value="1">
 
                     <!-- Ladder Preview -->
                     <div id="mm-ladder-preview" style="margin-bottom:16px;padding:10px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;font-size:11px;"></div>
 
                     <!-- Action buttons -->
                     <div style="display:flex;gap:10px;">
-                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00d4ff 0%,#0099cc 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">📊 Deploy Market Maker</button>
+                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:12px;background:linear-gradient(135deg,#00d4ff 0%,#0099cc 100%);color:#000;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">Deploy Market Maker</button>
                         <button onclick="closeModal()" style="padding:12px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
@@ -3172,7 +3177,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260410060000"></script>
+    <script src="app.js?v=20260410063200"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

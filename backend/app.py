@@ -9932,6 +9932,27 @@ def _handle_phantom(bot_id, bot, actions):
                     # Also check WS-tracked fills as fallback (404 bug: cancel_hedge may return 0)
                     _ws_fav_fills = bot.get('fav_fill_qty', 0)
                     _hedge_fills = max(_hedge_fills, _ws_fav_fills)
+                    # Last resort: check actual Kalshi position (cancel can 404 + get_order can lie)
+                    if _hedge_fills == 0:
+                        try:
+                            api_read_limiter.wait()
+                            _pos_resp = kalshi_client.get_positions(ticker=hedge_ticker)
+                            _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                            _pos_qty = 0
+                            if isinstance(_positions, list):
+                                for _p in _positions:
+                                    _pos_qty = max(_pos_qty, abs(_p.get('position', 0)))
+                            elif isinstance(_positions, dict):
+                                _pos_qty = abs(_positions.get('position', 0))
+                            if _pos_qty > 0:
+                                _hedge_fills = _pos_qty
+                                print(f'⚠ DUAL EXIT POSITION CHECK: {bot_id} order said 0 fills but Kalshi position={_pos_qty} — recovering')
+                                bot_log('DUAL_EXIT_POSITION_RECOVERY', bot_id, {
+                                    'pos_qty': _pos_qty, 'ws_fills': _ws_fav_fills,
+                                    'hedge_ticker': hedge_ticker,
+                                }, level='WARN')
+                        except Exception as _pe:
+                            print(f'⚠ DUAL EXIT POSITION CHECK FAILED: {bot_id}: {_pe}')
                     # If hedge had ANY fills, sell them back as maker (they're orphaned)
                     if _hedge_fills > 0:
                         print(f'⚠ DUAL EXIT HEDGE RACE: {bot_id} hedge had {_hedge_fills} fills — flagging for maker sell')

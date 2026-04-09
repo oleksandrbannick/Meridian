@@ -7145,9 +7145,12 @@ def _apex_mm_skew_reprice(bot_id, bot):
             _apex_mm_reprice_symmetric(bot_id, bot)
         return
 
-    # Throttle repricing to avoid API spam
-    if now - bot.get('_last_skew_at', 0) < APEX_MM_SKEW_INTERVAL_S:
-        return
+    # Only reprice when inventory CHANGES — not on a timer
+    # Compare current net to what we last skewed for
+    last_skew_net = bot.get('_last_skew_net', (0, 0))
+    current_net = (net_yes, net_no)
+    if current_net == tuple(last_skew_net) and bot.get('_skew_active'):
+        return  # inventory hasn't changed, ladder is already skewed correctly
 
     ticker = bot['ticker']
     midpoint = _apex_mm_midpoint(ticker)
@@ -7251,13 +7254,15 @@ def _apex_mm_skew_reprice(bot_id, bot):
     bot['_skew_direction'] = f'exit_{exit_side}'
     bot['_skew_exit_gap'] = exit_gap
     bot['_skew_entry_gap'] = entry_gap
+    bot['_last_skew_net'] = [net_yes, net_no]
 
+    long_side = 'YES' if net_yes > net_no else 'NO'
     bot_log('APEX_MM_SKEW', bot_id, {
         'net_yes': net_yes, 'net_no': net_no, 'net_held': net_held,
         'exit_side': exit_side, 'exit_gap': exit_gap, 'entry_gap': entry_gap,
         'skew': skew, 'midpoint': midpoint, 'cancelled': cancelled,
     })
-    print(f'📊 APEX MM SKEW: {bot_id} long {exit_side.upper() if exit_side == "no" else "YES"} → {exit_side.upper()} exit gap={exit_gap} entry gap={entry_gap} (skew={skew})')
+    print(f'📊 APEX MM SKEW: {bot_id} long {long_side} {net_held}x → {exit_side.upper()} exit gap={exit_gap} entry gap={entry_gap} (skew={skew})')
 
 
 def _apex_mm_reprice_symmetric(bot_id, bot):

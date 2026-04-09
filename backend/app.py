@@ -4826,6 +4826,10 @@ def _execute_ws_completion(bot_id):
             bot['first_fill_at'] = None
             bot['first_leg'] = None
             bot['dog_filled_at'] = None
+            if bot.get('raw_hedge_ms') is not None:
+                bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
+            if bot.get('hedge_latency_ms') is not None:
+                bot['_last_hedge_latency_ms'] = bot['hedge_latency_ms']
             bot['raw_hedge_ms'] = None
             bot['hedge_latency_ms'] = None
             bot['fav_order_id'] = None
@@ -10914,6 +10918,10 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
                 bot['dog_filled_at'] = None
+                if bot.get('raw_hedge_ms') is not None:
+                    bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
+                if bot.get('hedge_latency_ms') is not None:
+                    bot['_last_hedge_latency_ms'] = bot['hedge_latency_ms']
                 bot['raw_hedge_ms'] = None
                 bot['hedge_latency_ms'] = None
                 bot['hedge_fill_latency_ms'] = None
@@ -11787,6 +11795,8 @@ def _handle_phantom(bot_id, bot, actions):
             bot['fav_walk_count'] = 0
             bot['fav_last_walk_at'] = None
             bot['dog_filled_at'] = None
+            if bot.get('raw_hedge_ms') is not None:
+                bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
             bot['raw_hedge_ms'] = None
             bot['hedge_latency_ms'] = None
             bot['_sellback_attempts'] = 0
@@ -12208,6 +12218,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['total_dog_fill_qty'] = 0
                 bot['dog_fill_qty'] = 0
                 bot['dog_filled_at'] = None
+                if bot.get('raw_hedge_ms') is not None:
+                    bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
                 bot['raw_hedge_ms'] = None
                 bot['hedge_latency_ms'] = None
                 bot['fav_order_id'] = None
@@ -12902,6 +12914,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 bot['_last_result'] = 'win' if _bot_pnl >= 0 else 'loss'
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _bot_pnl
                 bot['dog_filled_at'] = None
+                if bot.get('raw_hedge_ms') is not None:
+                    bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
                 bot['raw_hedge_ms'] = None
                 bot['hedge_latency_ms'] = None
                 bot['fav_order_id'] = None

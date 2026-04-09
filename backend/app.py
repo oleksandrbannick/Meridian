@@ -2626,6 +2626,12 @@ def load_state():
             continue
         if t.get('fill_source') == 'apex2_rung':
             continue
+        # Phantom repeating bots reuse bot_id across runs — never dedup them
+        if t.get('bot_category') in ('anchor_dog', 'anchor_ladder'):
+            continue
+        # Apex MM round trips are frequent, same bot_id — never dedup
+        if t.get('fill_source', '').startswith('apex_mm'):
+            continue
         if bid in _seen_bots and abs(ts - _seen_bots[bid]) < 60:
             _remove_idx.add(i)
         else:

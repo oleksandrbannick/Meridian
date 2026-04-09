@@ -403,6 +403,13 @@ async function loadLiveScores() {
         // Tennis: both ATP and WTA use sport='Tennis' to match detectSport()
         addGames(atpRes, 'Tennis');
         addGames(wtaRes, 'Tennis');
+        // Debug: log tennis score loading
+        const tennisGames = games.filter(g => g.sport === 'Tennis');
+        if (tennisGames.length > 0) {
+            console.log(`🎾 Tennis scores loaded: ${tennisGames.length} matches`);
+            tennisGames.filter(g => g.state === 'in').forEach(g =>
+                console.log(`  LIVE: ${g.awayAbbr} ${g.awayScore}(${g.awaySetScores}) vs ${g.homeAbbr} ${g.homeScore}(${g.homeSetScores}) — ${g.periodLabel} ${g.gameScoreDisplay || ''}`));
+        }
 
         // Build lookup tables — keyed by sport:abbreviation to avoid cross-sport collisions
         // (e.g. HOU = Rockets NBA, Texans NFL, Astros MLB)

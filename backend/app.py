@@ -3753,7 +3753,18 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     matched_price = int(price_str)
                     break
 
-        # Check exit sell orders
+        # Check single exit order (amend system)
+        is_amend_exit_fill = False
+        if not matched_side:
+            for _exit_side in ('yes', 'no'):
+                if order_id == bot.get(f'_{_exit_side}_exit_oid'):
+                    matched_side = _exit_side
+                    is_amend_exit_fill = True
+                    # Price comes from the exit order we posted
+                    matched_price = bot.get('_exit_price', 0)
+                    break
+
+        # Check exit sell orders (end-of-game sellback)
         if not matched_side:
             for _exit_side in ('yes', 'no'):
                 sell_info = bot.get('_exit_sell_oids', {}).get(_exit_side, {})
@@ -3766,12 +3777,49 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             continue
 
         with ws_fill_lock:
-            if is_exit_fill:
-                # Exit sell fill — handled by _apex_mm_exit_tick
+            if is_amend_exit_fill:
+                # Exit order fill — closing position via the amend system
+                opposite = 'no' if matched_side == 'yes' else 'yes'
+                opp_held = bot.get(f'net_{opposite}', 0)
+                close_qty = min(count, opp_held)
+                exit_price = matched_price or bot.get('_exit_price', 0)
+
+                if close_qty > 0:
+                    _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
+                    # Also deduct from this side (the exit buy)
+                    # Actually exit fills don't add to net — they close opposite
+                    print(f'💰 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x')
+
+                # Log fill
+                bot.setdefault('_fill_log', []).append({
+                    'side': matched_side, 'price': exit_price, 'qty': count,
+                    'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
+                    'ts': time.time(), 'is_exit': True,
+                })
+
+                # Check if flat → cycle reset
+                net_yes = bot.get('net_yes', 0)
+                net_no = bot.get('net_no', 0)
+                if net_yes == 0 and net_no == 0:
+                    bot[f'_{matched_side}_exit_oid'] = None
+                    threading.Thread(target=_apex_mm_cycle_reset, args=(bot_id, bot), daemon=True).start()
+                    print(f'📊 APEX MM FLAT: {bot_id} → cycle reset')
+                elif abs(net_yes - net_no) > 0:
+                    # Still holding some — amend exit order with reduced count
+                    threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, matched_side), daemon=True).start()
+
+                bot_log('APEX_MM_EXIT_FILL', bot_id, {
+                    'side': matched_side, 'price': exit_price, 'count': count,
+                    'close_qty': close_qty, 'net_yes': net_yes, 'net_no': net_no,
+                    'realized_pnl': bot.get('realized_pnl_cents', 0),
+                })
+
+            elif is_exit_fill:
+                # Exit sell fill (end-of-game sellback) — handled by _apex_mm_exit_tick
                 sell_info = bot.get('_exit_sell_oids', {}).get(matched_side, {})
                 old_fill = sell_info.get('_ws_fill_qty', 0)
                 sell_info['_ws_fill_qty'] = old_fill + count
-                print(f'🚪 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count}')
+                print(f'🚪 WS APEX MM SELLBACK FILL: {bot_id} {matched_side.upper()} +{count}')
             else:
                 # Ladder fill — update inventory
                 orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
@@ -3817,10 +3865,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     'realized_pnl': bot.get('realized_pnl_cents', 0),
                 })
 
-                # Rolling Wave: only move exit side on fill, leave entry alone
+                # Amend exit order: create or update single exit order
                 if status == 'market_making_active':
                     threading.Thread(
-                        target=_apex_mm_rolling_wave,
+                        target=_apex_mm_amend_exit,
                         args=(bot_id, bot, matched_side),
                         daemon=True
                     ).start()
@@ -6334,129 +6382,185 @@ def _apex_mm_check_loss_limit(bot_id, bot):
 
 
 
-def _apex_mm_rolling_wave(bot_id, bot, fill_side):
-    """Rolling Wave: on fill, ONLY move the EXIT side closer. Leave entry side untouched.
-    Called from WS fill handler immediately on fill — event-driven, not loop-driven.
-    fill_side: which side just filled ('yes' or 'no')."""
+
+def _apex_mm_amend_exit(bot_id, bot, fill_side):
+    """Amend or create the single exit order after an entry fill.
+    Called from WS fill handler. Uses amend to keep order ID stable — no orphans."""
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
+    ticker = bot.get('ticker', '')
 
-    # If flat after this fill, reprice symmetric for next cycle
-    if net_yes == 0 and net_no == 0:
-        if bot.get('_skew_active'):
-            bot['_skew_active'] = False
-            _apex_mm_reprice_symmetric(bot_id, bot)
-        return
-
-    # Determine exit side (side we need fills on to close position)
+    # Determine which side we're long and what the exit side is
     if net_yes > net_no:
-        exit_side = 'no'    # long YES, need NO fills
+        held_side = 'yes'
+        exit_side = 'no'
         avg_held = bot.get('avg_yes_cost', 0)
         net_held = net_yes - net_no
-    else:
-        exit_side = 'yes'   # long NO, need YES fills
+    elif net_no > net_yes:
+        held_side = 'no'
+        exit_side = 'yes'
         avg_held = bot.get('avg_no_cost', 0)
         net_held = net_no - net_yes
+    else:
+        return  # flat, no exit needed
 
-    # If this fill was on the EXIT side (closing position), no need to move anything
-    # The existing orders are fine — we're getting closer to flat
-    if fill_side == exit_side:
+    # Calculate exit price: breakeven with 4c profit target
+    exit_price = max(1, min(98, 100 - avg_held - 4))
+    exit_oid = bot.get(f'_{exit_side}_exit_oid')
+    price_kwarg = {f'{exit_side}_price': exit_price}
+
+    try:
+        if exit_oid:
+            # Amend existing exit order — same ID, new price + count
+            api_rate_limiter.wait(priority=True)
+            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                      count=net_held, action='buy', **price_kwarg)
+            print(f'📊 APEX MM AMEND EXIT: {bot_id} {exit_side.upper()} @{exit_price}c x{net_held} (avg_{held_side}={avg_held}c)')
+        else:
+            # First fill — create exit order
+            resp, actual_price = create_order_maker(ticker, exit_side, 'buy', net_held, exit_price)
+            oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+            if oid:
+                bot[f'_{exit_side}_exit_oid'] = oid
+                bot.setdefault('_all_placed_order_ids', []).append(oid)
+                print(f'📊 APEX MM EXIT CREATED: {bot_id} {exit_side.upper()} @{actual_price}c x{net_held} (oid={oid[:12]})')
+            else:
+                print(f'⚠ APEX MM EXIT CREATE FAILED: {bot_id} no order_id in response')
+                return
+
+        bot['_exit_price'] = exit_price
+        bot['_exit_posted_at'] = time.time()
+        bot['_exit_walk_count'] = 0
+        bot['_exit_walk_started'] = 0
+        bot['_skew_active'] = True
+        bot['_skew_direction'] = f'exit_{exit_side}'
+    except Exception as e:
+        err_str = str(e)
+        if 'filled' in err_str.lower() or 'complete' in err_str.lower():
+            # Exit order already filled during amend — WS handler will catch it
+            print(f'⚡ APEX MM EXIT FILLED DURING AMEND: {bot_id} — WS handler will process')
+        else:
+            print(f'⚠ APEX MM AMEND EXIT ERROR: {bot_id} {e}')
+
+    bot_log('APEX_MM_AMEND_EXIT', bot_id, {
+        'exit_side': exit_side, 'exit_price': exit_price, 'net_held': net_held,
+        'avg_held': avg_held, 'had_oid': bool(exit_oid),
+    })
+
+
+def _apex_mm_walk_up(bot_id, bot):
+    """Walk the exit order toward breakeven if stuck. Called from monitor loop.
+    Only walks when: exit exists, patience expired, market is within range."""
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if net_yes == 0 and net_no == 0:
+        return  # flat, nothing to walk
+
+    # Which exit?
+    if net_yes > net_no:
+        exit_side = 'no'
+        avg_held = bot.get('avg_yes_cost', 0)
+    else:
+        exit_side = 'yes'
+        avg_held = bot.get('avg_no_cost', 0)
+
+    exit_oid = bot.get(f'_{exit_side}_exit_oid')
+    if not exit_oid:
+        return  # no exit order posted
+
+    now = time.time()
+    exit_posted_at = bot.get('_exit_posted_at', now)
+    current_price = bot.get('_exit_price', 0)
+    breakeven_price = 100 - avg_held  # combined = 100, 0 profit
+    max_loss_price = 100 - avg_held + 3  # combined = 103, 3c loss max
+
+    # Patience: wait before walking (game-clock aware)
+    ticker = bot.get('ticker', '')
+    _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 0
+    if _urgency >= 3:
+        patience_s = 15   # late game — walk fast
+        walk_interval = 3
+    elif _urgency >= 2:
+        patience_s = 30   # mid game
+        walk_interval = 5
+    else:
+        patience_s = 60   # early game — be patient
+        walk_interval = 10
+
+    age = now - exit_posted_at
+    if age < patience_s:
+        return  # still waiting at profit target
+
+    # Speed limit: only walk if exit price is within 2c of actual market bid
+    live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
+    if live_exit_bid > 0 and current_price < live_exit_bid - 2:
+        # Market is more than 2c above our exit — don't chase, wait for bounce
         return
 
-    # This fill was on the ENTRY side (accumulating) — move EXIT side more aggressive
-    ticker = bot['ticker']
-    midpoint = _apex_mm_midpoint(ticker)
-    if midpoint is None:
-        yb = bot.get('live_yes_bid', 0)
-        nb = bot.get('live_no_bid', 0)
-        if yb > 0 and nb > 0:
-            midpoint = round((yb + (100 - nb)) / 2)
-        else:
+    # Walk interval check
+    walk_started = bot.get('_exit_walk_started', 0)
+    if walk_started == 0:
+        bot['_exit_walk_started'] = now
+        walk_started = now
+    if now - walk_started < walk_interval * bot.get('_exit_walk_count', 0):
+        return  # not time for next walk step yet
+
+    # Already at or past breakeven? Stop walking.
+    if current_price >= breakeven_price:
+        # At breakeven and still not filling — sellback territory
+        if current_price >= max_loss_price:
+            _apex_mm_begin_exit(bot_id, bot, 'walk_maxed')
+            return
+        # Continue to breakeven but no further for now
+        if current_price >= breakeven_price:
             return
 
-    base_gap = bot.get('start_gap', 2)
-    levels = bot.get('levels', 7)
-    spacing = bot.get('spacing', 1)
-    base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+    # Walk 1c
+    new_price = min(current_price + 1, max_loss_price)
+    try:
+        price_kwarg = {f'{exit_side}_price': new_price}
+        net_held = abs(net_yes - net_no)
+        api_rate_limiter.wait()
+        kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                  count=net_held, action='buy', **price_kwarg)
+        bot['_exit_price'] = new_price
+        bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + 1
+        combined = avg_held + new_price
+        print(f'📊 APEX MM WALK: {bot_id} {exit_side.upper()} {current_price}→{new_price}c (combined={combined}c, walk #{bot["_exit_walk_count"]})')
+        bot_log('APEX_MM_WALK', bot_id, {
+            'exit_side': exit_side, 'old_price': current_price, 'new_price': new_price,
+            'combined': combined, 'walk_count': bot['_exit_walk_count'],
+        })
+    except Exception as e:
+        if 'filled' in str(e).lower():
+            print(f'⚡ APEX MM WALK FILLED: {bot_id} — exit filled during walk amend')
+        else:
+            print(f'⚠ APEX MM WALK ERROR: {bot_id} {e}')
 
-    # Skew: more inventory = tighter exit gap
-    skew = min(base_gap - 1, max(1, round(net_held * 1.0 / max(1, base_qty))))
-    exit_gap = max(1, base_gap - skew)
 
-    # Breakeven cap: exit must be profitable (4c min after fees)
-    max_exit_price = (100 - avg_held - 4) if avg_held > 0 else 99
+def _apex_mm_cycle_reset(bot_id, bot):
+    """Reset for new cycle when net returns to flat. Cancel entry ladder, fresh reprice."""
+    ticker = bot.get('ticker', '')
 
-    # Generate new exit levels
-    if exit_side == 'yes':
-        anchor = midpoint
-    else:
-        anchor = 100 - midpoint
-
-    new_exit_levels = []
-    for i in range(levels):
-        offset = exit_gap + (i * spacing)
-        ep = anchor - offset
-        ep = min(ep, max_exit_price)
-        # Auto-scale
-        scale_factor = 1.0 + (i * 1.0 / (levels - 1)) if levels > 1 else 1.0
-        level_qty = max(1, round(base_qty * scale_factor))
-        if ep >= 1:
-            new_exit_levels.append((int(ep), level_qty))
-
-    # Only cancel EXIT side orders, leave ENTRY side completely alone
-    exit_orders_key = f'{exit_side}_orders'
-    cancelled = 0
-    for price_str, level in list(bot.get(exit_orders_key, {}).items()):
-        oid = level.get('oid')
+    # Clear exit OIDs
+    for side in ('yes', 'no'):
+        oid = bot.get(f'_{side}_exit_oid')
         if oid:
-            cr = _cancel_with_retry(oid)
-            if cr == 'filled':
-                # Cancel-race fill! Add to inventory.
-                _qty = level.get('qty', 1)
-                bot[f'net_{exit_side}'] = bot.get(f'net_{exit_side}', 0) + _qty
-                bot[f'total_{exit_side}_cost'] = bot.get(f'total_{exit_side}_cost', 0) + (int(price_str) * _qty)
-                _net = bot[f'net_{exit_side}']
-                bot[f'avg_{exit_side}_cost'] = round(bot[f'total_{exit_side}_cost'] / _net) if _net > 0 else 0
-                print(f'⚡ APEX MM CANCEL-RACE: {bot_id} {exit_side.upper()} filled @{price_str}c during cancel → net={_net}')
-            elif cr:
-                cancelled += 1
-            level['oid'] = None
+            try:
+                _cancel_with_retry(oid)
+            except Exception:
+                pass
+        bot[f'_{side}_exit_oid'] = None
 
-    # Post new exit levels
-    exit_specs = []
-    for price, qty in new_exit_levels:
-        exit_specs.append({'ticker': ticker, 'side': exit_side, 'action': 'buy', 'count': qty, 'price': price})
+    # Cancel remaining entry orders
+    for side_key in ('yes_orders', 'no_orders'):
+        for price_str, level in list(bot.get(side_key, {}).items()):
+            oid = level.get('oid')
+            if oid:
+                _cancel_with_retry(oid)
+                level['oid'] = None
 
-    if exit_specs:
-        results = create_orders_batch(exit_specs) or []
-        new_orders = {}
-        for i, (price, qty) in enumerate(new_exit_levels):
-            result = results[i] if i < len(results) and results[i] else None
-            if result:
-                resp, actual_price = result
-                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
-                if oid:
-                    new_orders[str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
-                    bot.setdefault('_all_placed_order_ids', []).append(oid)
-        bot[exit_orders_key] = new_orders
-
-    bot['midpoint'] = midpoint
-    bot['_skew_active'] = True
-    bot['_skew_direction'] = f'exit_{exit_side}'
-    bot['_skew_exit_gap'] = exit_gap
-
-    long_side = 'YES' if net_yes > net_no else 'NO'
-    bot_log('APEX_MM_WAVE', bot_id, {
-        'fill_side': fill_side, 'exit_side': exit_side, 'net_held': net_held,
-        'exit_gap': exit_gap, 'max_exit': max_exit_price, 'midpoint': midpoint,
-        'cancelled': cancelled, 'new_levels': len(new_exit_levels),
-    })
-    print(f'📊 APEX MM WAVE: {bot_id} {fill_side.upper()} filled → moving {exit_side.upper()} exit closer (gap={exit_gap}, {len(new_exit_levels)} levels, breakeven<{max_exit_price}c)')
-
-
-def _apex_mm_reprice_symmetric(bot_id, bot):
-    """Reprice to symmetric ladder at current midpoint. Called when net returns to flat."""
-    ticker = bot['ticker']
+    # Fresh symmetric ladder
     midpoint = _apex_mm_midpoint(ticker)
     if midpoint is None:
         yb = bot.get('live_yes_bid', 0)
@@ -6468,20 +6572,17 @@ def _apex_mm_reprice_symmetric(bot_id, bot):
 
     base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
     yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty)
-
-    # Cancel all current orders
-    for side_key in ('yes_orders', 'no_orders'):
-        for price_str, level in list(bot.get(side_key, {}).items()):
-            oid = level.get('oid')
-            if oid:
-                _cancel_with_retry(oid)
-                level['oid'] = None
-
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
-    bot_log('APEX_MM_SYMMETRIC', bot_id, {'midpoint': midpoint, 'reason': 'flat_reprice'})
-    print(f'📊 APEX MM FLAT: {bot_id} repriced symmetric @ mid={midpoint}')
+    bot['_skew_active'] = False
+    bot['_skew_direction'] = ''
+    bot['_exit_price'] = 0
+    bot['_exit_walk_count'] = 0
+    bot['_exit_walk_started'] = 0
+    bot['_exit_posted_at'] = 0
     save_state()
+    bot_log('APEX_MM_CYCLE_RESET', bot_id, {'midpoint': midpoint})
+    print(f'📊 APEX MM CYCLE RESET: {bot_id} flat → fresh ladder @ mid={midpoint}')
 
 
 def _apex_mm_begin_exit(bot_id, bot, reason):
@@ -6886,6 +6987,14 @@ def create_ladder_arb_bot():
             '_last_pull_reason': '',
             '_yes_side_paused': False,
             '_no_side_paused': False,
+            '_yes_exit_oid': None,
+            '_no_exit_oid': None,
+            '_exit_price': 0,
+            '_exit_posted_at': 0,
+            '_exit_walk_count': 0,
+            '_exit_walk_started': 0,
+            '_fill_log': [],
+            '_rt_log': [],
             '_unrealized_pnl': 0,
             '_last_settle_check': 0,
             'live_yes_bid': live_yes_bid,
@@ -11544,7 +11653,8 @@ def _handle_apex(bot_id, bot, actions):
         _apex_mm_begin_exit(bot_id, bot, f'smart_stop ({bot["consecutive_losses"]} consecutive losses)')
         return
 
-    # 6. Rolling wave handles skew in WS fill handler — nothing to do here
+    # 6. Walk-up: if exit order stuck, gradually amend toward breakeven
+    _apex_mm_walk_up(bot_id, bot)
 
     save_state()
 

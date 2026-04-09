@@ -527,16 +527,18 @@
             </div>
 
             <!-- Signal Legend + Claude chat button -->
-            <div id="signal-legend" style="margin-bottom:12px;display:flex;gap:8px;align-items:stretch;">
-                <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="flex:1;display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px;user-select:none;">
-                    <span style="font-size:11px;color:#8892a6;font-weight:600;">👻 What do the ghosts mean?</span>
-                    <span class="arrow" style="font-size:10px;color:#556;">▸</span>
+            <div id="signal-legend" style="margin-bottom:12px;position:relative;">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <div onclick="document.getElementById('legend-body').classList.toggle('hidden');this.querySelector('.arrow').textContent=document.getElementById('legend-body').classList.contains('hidden')?'▸':'▾'" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#11152088;border:1px solid #1e2740;border-radius:8px;user-select:none;">
+                        <span style="font-size:11px;color:#8892a6;font-weight:600;">👻 What do the ghosts mean?</span>
+                        <span class="arrow" style="font-size:10px;color:#556;">▸</span>
+                    </div>
+                    <button onclick="toggleClaudeChat()" style="background:#0c1020;border:1px solid #d9770655;border-radius:8px;padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all 0.2s;white-space:nowrap;" onmouseover="this.style.background='#d9770618';this.style.borderColor='#d97706';this.style.boxShadow='0 0 12px rgba(217,119,6,0.2)'" onmouseout="this.style.background='#0c1020';this.style.borderColor='#d9770655';this.style.boxShadow='none'">
+                        <canvas id="markets-ghost-canvas" width="16" height="16" style="image-rendering:pixelated;width:18px;height:18px;"></canvas>
+                        <span style="color:#d97706;font-size:11px;font-weight:700;">Ask Claude</span>
+                    </button>
                 </div>
-                <button onclick="toggleClaudeChat()" style="background:#0c1020;border:1px solid #d9770655;border-radius:8px;padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all 0.2s;white-space:nowrap;" onmouseover="this.style.background='#d9770618';this.style.borderColor='#d97706';this.style.boxShadow='0 0 12px rgba(217,119,6,0.2)'" onmouseout="this.style.background='#0c1020';this.style.borderColor='#d9770655';this.style.boxShadow='none'">
-                    <canvas id="markets-ghost-canvas" width="16" height="16" style="image-rendering:pixelated;width:18px;height:18px;"></canvas>
-                    <span style="color:#d97706;font-size:11px;font-weight:700;">Ask Claude</span>
-                </button>
-                <div id="legend-body" class="hidden" style="background:#0d1120;border:1px solid #1e2740;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;">
+                <div id="legend-body" class="hidden" style="position:absolute;top:100%;left:0;right:0;z-index:100;background:#0d1120;border:1px solid #1e2740;border-radius:0 0 8px 8px;padding:14px 16px;font-size:11px;line-height:1.7;box-shadow:0 8px 32px rgba(0,0,0,0.5);max-height:60vh;overflow-y:auto;">
 
                     <div style="color:#8892a6;margin-bottom:10px;">Ghost icons on each market show which bots are <strong style="color:#ccc;">active</strong> or <strong style="color:#ccc;">recommended</strong> for that line.</div>
 
@@ -3029,7 +3031,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409123000"></script>
+    <script src="app.js?v=20260409123500"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <div style="display:flex;align-items:center;gap:12px;">

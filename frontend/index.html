@@ -449,7 +449,7 @@
     <!-- ─── Header ─────────────────────────────────────────────── -->
     <div class="header" style="position:relative;overflow:hidden;">
         <!-- Floating ghost background -->
-        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.22;"></canvas>
+        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.35;"></canvas>
         <h1 style="display:flex;align-items:center;gap:14px;position:relative;z-index:1;">
             <!-- Meridian logo mark -->
             <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
@@ -2358,18 +2358,12 @@
             }
 
             const drawFns = [drawPhantom, drawApex, drawMeridian, drawScout];
-            const ghosts = [];
-            for (let i = 0; i < 8; i++) {
-                ghosts.push({
-                    draw: drawFns[i % 4],
-                    x: Math.random() * 500 + i * 90,
-                    y: 2 + Math.random() * 20,
-                    vx: 0.12 + Math.random() * 0.2,
-                    scale: 1.0 + Math.random() * 0.6,
-                    bobPhase: Math.random() * Math.PI * 2,
-                    bobSpeed: 0.008 + Math.random() * 0.008,
-                });
-            }
+            const ghosts = [
+                { draw: drawPhantom,  x: 40,  y: 6,  vx: 0.18, scale: 2.2, bobPhase: 0,           bobSpeed: 0.01  },
+                { draw: drawApex,     x: 200, y: 10, vx: 0.14, scale: 2.0, bobPhase: Math.PI*0.5,  bobSpeed: 0.012 },
+                { draw: drawMeridian, x: 380, y: 4,  vx: 0.22, scale: 2.3, bobPhase: Math.PI,      bobSpeed: 0.009 },
+                { draw: drawScout,    x: 550, y: 8,  vx: 0.16, scale: 2.1, bobPhase: Math.PI*1.5,  bobSpeed: 0.011 },
+            ];
 
             let dpr = 1, cw = 0, ch = 0;
             function resize() {
@@ -3189,7 +3183,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409130000"></script>
+    <script src="app.js?v=20260409130500"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

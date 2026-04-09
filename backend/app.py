@@ -7236,7 +7236,9 @@ def create_anchor_bot():
 
 @app.route('/api/bot/ladder', methods=['POST'])
 def create_ladder_bot():
-    """Create a multi-rung anchor-ladder bot."""
+    """REMOVED — phantom ladder is dead code. Use single phantom (anchor) instead."""
+    return jsonify({'error': 'Phantom Ladder has been removed. Use single Phantom instead.'}), 410
+    # Dead code below — original implementation removed
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not logged in'}), 401
@@ -10502,217 +10504,12 @@ def _handle_phantom_ladder(bot_id, bot, actions):
     bot['completed_at'] = time.time()
     save_state()
     return
+    # (remaining anchor_ladder dead code removed — ~1000 lines of waiting_repeat, ladder_posted,
+    #  ladder_filled_no_fav, fav_hedge_posted state handlers were here)
+    pass  # end of stub
 
-    # ── STATE: waiting_repeat — (dead code removed) ──
-    if status == 'waiting_repeat':
-        # Check if smart stop was requested — go back to awaiting_settlement if cross-market
-        if bot.get('_smart_stop_pending') or bot.get('_smart_stopped'):
-            _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-            if _is_cross and bot.get('_cross_settled_qty', 0) > 0:
-                bot['status'] = 'awaiting_settlement'
-                bot['awaiting_since'] = now
-                bot['_smart_stopped'] = True
-                print(f'⏹ SMART STOP → AWAITING: {bot_id} returning to settlement (cross-market positions held)')
-            else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                print(f'⏹ SMART STOP → COMPLETED: {bot_id}')
-            save_state()
-            return
-
-        wait_since = bot.get('waiting_repeat_since', now)
-        if now - wait_since < 5:  # 5s cooldown
-            return
-
-        # Settlement check: don't keep waiting on finalized markets (throttled to every 60s)
-        if now - bot.get('_last_settle_check_wr', 0) > 60:
-            bot['_last_settle_check_wr'] = now
-            try:
-                api_read_limiter.wait()
-                _wr_mkt = kalshi_client.get_market(ticker)
-                _wr_m = _wr_mkt.get('market', _wr_mkt) if isinstance(_wr_mkt, dict) else {}
-                _wr_status = _wr_m.get('status', '').lower()
-                if _wr_status in ('finalized', 'settled'):
-                    print(f'🏁 PHANTOM LADDER SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
-                    bot_log('PHANTOM_LADDER_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
-                    _phantom_set_final_status(bot, bot_id)
-                    bot['_smart_stopped'] = True
-                    bot['_smart_stop_reason'] = 'final'
-                    save_state()
-                    return
-            except Exception as _se:
-                print(f'⚠ ladder waiting_repeat settle check {bot_id}: {_se}')
-
-        bot_log('PHANTOM_LADDER_WAITING_REPEAT_CHECK', bot_id, {
-            'wait_s': round(now - wait_since, 1),
-            'repeats_done': bot.get('repeats_done', 0),
-            'repeat_count': bot.get('repeat_count', 0),
-        })
-        qty = bot.get('quantity', 1)
-        anchor_depth = bot.get('anchor_depth', 5)
-        try:
-            api_read_limiter.wait()
-            ob = kalshi_client.get_market_orderbook(ticker)
-            current_dog_bid = _best_bid(ob, dog_side)
-            current_dog_ask = _best_ask(ob, dog_side)
-
-            # ── Dog flip detection: if dog side > 50¢, it's now the fav ──
-            if current_dog_bid > 50:
-                _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-                if _is_cross:
-                    # Cross-market: swap ticker and hedge_ticker (dog is now the other side)
-                    old_ticker = ticker
-                    bot['ticker'] = bot['hedge_ticker']
-                    bot['hedge_ticker'] = old_ticker
-                    ticker = bot['ticker']
-                    hedge_ticker = bot['hedge_ticker']
-                    print(f'🔄 DOG FLIP: {bot_id} swapping tickers: anchor={ticker} hedge={old_ticker} (dog was {current_dog_bid}¢)')
-                    bot_log('PHANTOM_DOG_FLIP', bot_id, {'old_ticker': old_ticker, 'new_ticker': ticker, 'old_dog_bid': current_dog_bid})
-                    # Re-fetch orderbook for new ticker
-                    api_read_limiter.wait()
-                    ob = kalshi_client.get_market_orderbook(ticker)
-                    current_dog_bid = _best_bid(ob, dog_side)
-                    current_dog_ask = _best_ask(ob, dog_side)
-                    # Subscribe WS to new ticker
-                    if ws_manager and ws_manager.connected:
-                        ws_manager.add_ticker(ticker)
-                else:
-                    # Same-market: swap dog_side
-                    old_dog = dog_side
-                    dog_side = 'yes' if dog_side == 'no' else 'no'
-                    bot['dog_side'] = dog_side
-                    bot['fav_side'] = old_dog
-                    print(f'🔄 DOG FLIP: {bot_id} swapping sides: dog={dog_side} (was {old_dog}, bid was {current_dog_bid}¢)')
-                    bot_log('PHANTOM_DOG_FLIP', bot_id, {'old_side': old_dog, 'new_side': dog_side, 'old_dog_bid': current_dog_bid})
-                    current_dog_bid = _best_bid(ob, dog_side)
-                    current_dog_ask = _best_ask(ob, dog_side)
-            if current_dog_bid <= 0:
-                # No bids at all — market is completely dead, stop the bot
-                _phantom_set_final_status(bot, bot_id)
-                bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
-                save_state()
-                return
-            # Hedge fill drift guard: at this bot's target width, would the hedge still fill?
-            fav_side = bot.get('fav_side', 'no' if dog_side == 'yes' else 'yes')
-            if hedge_ticker != ticker:
-                api_read_limiter.wait()
-                _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
-            else:
-                _fav_ob = ob
-            _current_fav_bid = _best_bid(_fav_ob, fav_side)
-            _avg_dog_est = max(1, current_dog_bid - anchor_depth)  # estimate new avg dog price
-            # Drift guard: stop if dog dead, rung price at floor, or price too high
-            _first_rung_est = max(1, current_dog_bid - anchor_depth)
-            _rung_spacing = bot.get('rung_spacing', 2)
-            _num_rungs = len(bot.get('rungs', []))
-            _lowest_rung_est = max(1, _first_rung_est - ((_num_rungs - 1) * _rung_spacing)) if _num_rungs > 0 else _first_rung_est
-            _ladder_drift_stop = False
-            _ladder_drift_reason = ''
-            if current_dog_bid <= 1:
-                _ladder_drift_stop = True
-                _ladder_drift_reason = 'dog_dead'
-            elif _lowest_rung_est <= 3:
-                _ladder_drift_stop = True
-                _ladder_drift_reason = f'rung_floor_{_lowest_rung_est}c'
-            elif _first_rung_est > 40:
-                _ladder_drift_stop = True
-                _ladder_drift_reason = f'price_too_high_{_first_rung_est}c'
-            if _ladder_drift_stop:
-                bot_log('PHANTOM_LADDER_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'first_rung': _first_rung_est,
-                    'lowest_rung': _lowest_rung_est, 'reason': _ladder_drift_reason,
-                })
-                _phantom_set_final_status(bot, bot_id)
-                bot['repeat_count'] = 0
-                print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ first_rung={_first_rung_est}¢ lowest={_lowest_rung_est}¢ — {_ladder_drift_reason}, stopping')
-                save_state()
-                return
-
-            # Batch-place all rungs for new cycle — depth floor anchored to rung 0
-            repeat_ph_group = _create_order_group()
-            repeat_specs = []
-            repeat_qtys = []
-            _first_rung_price = _first_rung_est
-            _lowest_rung_price = _lowest_rung_est
-            for rung in bot.get('rungs', []):
-                rung_price = max(1, anchor_base - anchor_depth - (len(repeat_specs) * _rung_spacing))
-                rung_qty = rung.get('qty', qty)
-                repeat_specs.append({'ticker': ticker, 'side': dog_side, 'count': rung_qty, 'price': rung_price})
-                repeat_qtys.append(rung_qty)
-
-            new_rungs = []
-            if repeat_specs:
-                repeat_results = create_orders_batch(repeat_specs, order_group_id=repeat_ph_group)
-                for j, result in enumerate(repeat_results):
-                    if result is None:
-                        print(f'⚠ PHANTOM REPEAT rung {j} failed (batch partial)')
-                        continue
-                    resp, actual = result
-                    new_rungs.append({
-                        'price': actual, 'qty': repeat_qtys[j],
-                        'order_id': resp['order']['order_id'],
-                        'fill_qty': 0, 'filled_at': None,
-                    })
-
-            if new_rungs:
-                bot['rungs'] = new_rungs
-                bot['total_dog_qty'] = sum(r['qty'] for r in new_rungs)
-                bot['total_dog_fill_qty'] = 0
-                bot['dog_fill_qty'] = 0
-                bot['dog_filled_at'] = None
-                if bot.get('raw_hedge_ms') is not None:
-                    bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
-                bot['raw_hedge_ms'] = None
-                bot['hedge_latency_ms'] = None
-                bot['fav_order_id'] = None
-                bot['fav_fill_qty'] = 0
-                bot['fav_price'] = None
-                bot['yes_fill_qty'] = 0
-                bot['no_fill_qty'] = 0
-                bot['_hedge_fired'] = False
-                bot['_trade_recorded'] = False
-                bot['_over_ceiling_since'] = None  # clear so next run starts clean
-                bot['_sweep_timer_started'] = False
-                bot['_sellback_attempts'] = 0
-                bot['fav_walk_count'] = 0
-                bot['fav_last_walk_at'] = None
-                bot['avg_fill_price'] = None
-                bot['hedge_qty'] = None
-                bot['first_fill_at'] = None  # clear stale latency from prior cycle
-                bot['status'] = 'ladder_posted'
-                bot['posted_at'] = now
-                bot['_order_group_id'] = repeat_ph_group
-                ws_rp = (ws_manager.get_price(ticker) if ws_manager else None) or {}
-                bot['_bid_at_post'] = ws_rp.get(f'{dog_side}_bid', 0)
-                bot['_last_repost_at'] = 0
-                # Pre-calculate hedge prices + avg prices for new rung prices
-                bot['_precalc_hedge_prices'], bot['_precalc_avg_prices'] = _precalc_phantom_ladder_hedges(
-                    new_rungs, bot.get('target_width', 5), dog_side
-                )
-                rung_desc = ', '.join(f'{r["price"]}¢×{r["qty"]}' for r in new_rungs)
-                print(f'🔄 PHANTOM LADDER REPEAT: {bot_id} cycle {bot.get("repeats_done",0)}/{bot.get("repeat_count",0)} — {len(new_rungs)} rungs: {rung_desc}')
-                bot_log('PHANTOM_LADDER_REPEAT_POSTED', bot_id, {
-                    'cycle': bot.get('repeats_done', 0), 'total_cycles': bot.get('repeat_count', 0),
-                    'rungs': len(new_rungs), 'first_price': new_rungs[0]['price'] if new_rungs else 0,
-                    'rung_desc': rung_desc,
-                })
-                _audit('LADDER_REANCHOR', bot_id, {'ticker': ticker, 'rungs': len(new_rungs), 'first_price': new_rungs[0]['price'] if new_rungs else 0, 'cycle': bot.get('repeats_done', 0)})
-                _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_reanchor')
-                save_state()
-            else:
-                print(f'❌ PHANTOM REPEAT {bot_id}: no rungs placed — waiting')
-                bot_log('PHANTOM_LADDER_REPEAT_NO_RUNGS', bot_id, {}, level='WARN')
-        except Exception as e:
-            print(f'❌ PHANTOM REPEAT {bot_id}: {e}')
-            bot_log('PHANTOM_LADDER_REPEAT_ERROR', bot_id, {'error': str(e)[:300]}, level='ERROR')
-        return
-
-    # ── STATE: ladder_posted — rungs are live, watching for fills + bounce ──
-    if status == 'ladder_posted':
-        # Get current dog bid from WS cache or orderbook
-        ws_p = (ws_manager.get_price(ticker) if ws_manager else None) or {}
-        current_dog_bid = ws_p.get(f'{dog_side}_bid', 0) or 0
+    if False and status == 'ladder_posted':
+        current_dog_bid = 0
         if current_dog_bid <= 0:
             try:
                 api_read_limiter.wait()
@@ -19238,30 +19035,6 @@ CLAUDE_TOOLS = [
         }
     },
     {
-        "name": "create_anchor_ladder",
-        "description": "Create a Phantom Ladder bot — multi-rung stealth anchor with multiple price levels, hedges on fill.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Market ticker"},
-                "dog_side": {"type": "string", "enum": ["yes", "no"]},
-                "rungs": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "dog_price": {"type": "integer"},
-                            "count": {"type": "integer"}
-                        },
-                        "required": ["dog_price", "count"]
-                    }
-                },
-                "timeout": {"type": "integer"}
-            },
-            "required": ["ticker", "dog_side", "rungs"]
-        }
-    },
-    {
         "name": "cancel_bot",
         "description": "Cancel a specific bot by ID. Filled positions will be sold at market.",
         "input_schema": {
@@ -19964,14 +19737,6 @@ def _execute_chat_tool(tool_name, tool_input):
                 'dog_price': tool_input['dog_price'],
                 'quantity': tool_input['count'],
                 'hedge_timeout_s': tool_input.get('timeout', 300),
-            }, timeout=15)
-            return r.json()
-        elif tool_name == 'create_anchor_ladder':
-            r = requests.post(f'{base}/bot/ladder', json={
-                'ticker': tool_input['ticker'],
-                'dog_side': tool_input['dog_side'],
-                'rungs': tool_input['rungs'],
-                'timeout': tool_input.get('timeout', 300),
             }, timeout=15)
             return r.json()
         elif tool_name == 'cancel_bot':

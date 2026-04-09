@@ -5910,6 +5910,15 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
                             }
                         }
+                        const _orphanRow = r.orphan_pnl != null ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">
+                            <span></span>
+                            <span style="display:flex;align-items:center;gap:3px;">
+                                <span style="color:#aa66ff;font-weight:700;">↳ orphan</span>
+                                <span style="color:#aa66ff;">bought ${r.orphan_buy || '?'}¢ → sold ${r.orphan_sell || '?'}¢</span>
+                            </span>
+                            <span style="color:#aa66ff;font-weight:700;">x${r.orphan_qty || '?'}</span>
+                            <span style="color:${r.orphan_pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.orphan_pnl >= 0 ? '+' : ''}${r.orphan_pnl}¢</span>
+                        </div>` : '';
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
                             <span style="display:flex;align-items:center;gap:3px;">
@@ -5923,14 +5932,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             </span>
                             <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
                             <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
-                        </div>`;
+                        </div>${_orphanRow}`;
                     }).join('')}
-                ${(bot._orphan_recovery_pnl || 0) !== 0 ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;border-top:1px solid #141a24;font-size:11px;">
-                    <span style="color:#aa66ff;font-weight:700;font-size:10px;">🔄</span>
-                    <span style="color:#aa66ff;font-weight:600;">Orphan recovery ×${bot._orphan_recovery_count || 1}</span>
-                    <span></span>
-                    <span style="color:${bot._orphan_recovery_pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${bot._orphan_recovery_pnl >= 0 ? '+' : ''}${bot._orphan_recovery_pnl}¢</span>
-                </div>` : ''}
                 </div>` : _runs > 1 ? `
                 <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
                 <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">

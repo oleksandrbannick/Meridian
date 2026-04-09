@@ -9860,9 +9860,15 @@ def _handle_phantom(bot_id, bot, actions):
                 session_pnl['gross_loss_cents'] += abs(_ro_orphan_net)
             bot['net_pnl_cents'] = bot.get('net_pnl_cents', 0) + _ro_orphan_net
             bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + _ro_orphan_net
-            # Track orphan P&L separately so frontend can display it
+            # Track orphan P&L on bot AND on the run history entry it belongs to
             bot['_orphan_recovery_pnl'] = bot.get('_orphan_recovery_pnl', 0) + _ro_orphan_net
             bot['_orphan_recovery_count'] = bot.get('_orphan_recovery_count', 0) + 1
+            _rh = bot.get('_run_history', [])
+            if _rh:
+                _rh[-1]['orphan_pnl'] = _ro_orphan_net
+                _rh[-1]['orphan_qty'] = _orphan_qty
+                _rh[-1]['orphan_buy'] = _ro_fav_price
+                _rh[-1]['orphan_sell'] = _sell_price
             _record_trade({
                 'bot_id': bot_id, 'ticker': _orphan_ticker,
                 'yes_price': _ro_fav_price if _orphan_side == 'yes' else 0,

@@ -5458,18 +5458,22 @@ def _refresh_espn_cache():
     }
     for sport, path in sport_paths.items():
         try:
-            url = f'https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard'
-            # NCAAB/NCAAW: groups=50 includes NIT/CBI/CIT (default only shows conf tournaments)
-            params = {}
-            if sport in ('ncaab', 'ncaaw'):
-                params['groups'] = '50'
-            resp = requests.get(url, params=params, timeout=4)
-            resp.raise_for_status()
-            raw_data = resp.json()
+            # Tennis: use API Tennis for much better coverage (ESPN misses most matches)
+            if sport in ('atp', 'wta') and _API_TENNIS_KEY:
+                raw_data = _fetch_api_tennis_scoreboard(sport)
+            else:
+                url = f'https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard'
+                # NCAAB/NCAAW: groups=50 includes NIT/CBI/CIT (default only shows conf tournaments)
+                params = {}
+                if sport in ('ncaab', 'ncaaw'):
+                    params['groups'] = '50'
+                resp = requests.get(url, params=params, timeout=4)
+                resp.raise_for_status()
+                raw_data = resp.json()
 
-            # Tennis: flatten groupings into events using shared helper
-            if sport in ('atp', 'wta'):
-                raw_data = _flatten_tennis_scoreboard(raw_data)
+                # Tennis ESPN fallback: flatten groupings into events
+                if sport in ('atp', 'wta'):
+                    raw_data = _flatten_tennis_scoreboard(raw_data)
 
             events = raw_data.get('events', [])
             for ev in events:

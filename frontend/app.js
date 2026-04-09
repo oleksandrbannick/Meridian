@@ -6283,7 +6283,24 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
-                    + '</div>';
+                    + '</div>'
+                    + (() => {
+                        const _o = r.orphan_pnl != null ? r : (r.result === 'dual_exit' && bot._last_orphan ? bot._last_orphan : null);
+                        if (!_o) return '';
+                        const _ob = _o.orphan_buy ?? _o.buy ?? '?';
+                        const _os = _o.orphan_sell ?? _o.sell ?? '?';
+                        const _oq = _o.orphan_qty ?? _o.qty ?? '?';
+                        const _op = _o.orphan_pnl ?? _o.pnl ?? 0;
+                        return '<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">'
+                            + '<span></span>'
+                            + '<span style="display:flex;align-items:center;gap:3px;">'
+                            + '<span style="color:#aa66ff;font-weight:700;">↳ orphan</span>'
+                            + '<span style="color:#aa66ff;">bought ' + _ob + '¢ → sold ' + _os + '¢</span>'
+                            + '</span>'
+                            + '<span style="color:#aa66ff;font-weight:700;">x' + _oq + '</span>'
+                            + '<span style="color:' + (_op >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (_op >= 0 ? '+' : '') + _op + '¢</span>'
+                            + '</div>';
+                    })();
                 }).join('');
                 html += '</div>';
             }

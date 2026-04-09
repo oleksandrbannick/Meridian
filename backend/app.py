@@ -9436,6 +9436,9 @@ def _handle_phantom(bot_id, bot, actions):
                     except Exception:
                         pass
                 _phantom_set_final_status(bot, bot_id)
+                # Always tag as settled so frontend shows "MARKET SETTLED" (not generic "COMPLETE")
+                bot['_smart_stopped'] = True
+                bot['_smart_stop_reason'] = 'final'
                 bot_log('PHANTOM_SETTLED_CLEANUP', bot_id, {'prev_status': status, 'mkt_status': _mkt.get('status')})
                 print(f'🧹 SETTLED CLEANUP: {bot_id} market {_mkt.get("status")} → {bot["status"]}')
                 save_state()
@@ -9619,6 +9622,8 @@ def _handle_phantom(bot_id, bot, actions):
             print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
             _safe_cancel(dog_order_id, f'phantom ending cancel {bot_id}')
             _phantom_set_final_status(bot, bot_id)
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_reason'] = 'final'
             actions.append({'bot_id': bot_id, 'action': 'anchor_game_ending_cancel'})
             save_state()
             return
@@ -10449,6 +10454,8 @@ def _handle_phantom(bot_id, bot, actions):
                     }, bot)
                     print(f'🏁 PHANTOM GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
                     _phantom_set_final_status(bot, bot_id)
+                    bot['_smart_stopped'] = True
+                    bot['_smart_stop_reason'] = 'final'
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return
@@ -11042,6 +11049,8 @@ def _handle_phantom(bot_id, bot, actions):
                     print(f'🏁 PHANTOM SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
                     bot_log('PHANTOM_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
                     _phantom_set_final_status(bot, bot_id)
+                    bot['_smart_stopped'] = True
+                    bot['_smart_stop_reason'] = 'final'
                     save_state()
                     return
             except Exception as _se:
@@ -11466,6 +11475,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     'bot_category': 'anchor_ladder',
                 }, bot)
             _phantom_set_final_status(bot, bot_id)
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_reason'] = 'final'
             bot['_trade_recorded'] = True
             _audit('LADDER_SETTLED', bot_id, {'ticker': ticker, 'market_status': mkt_al_status, 'result': mkt_al_result, 'total_fill': total_fill})
             _audit_position_check(bot_id, ticker, dog_side, 'after_ladder_settlement')
@@ -11509,6 +11520,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                     print(f'🏁 PHANTOM LADDER SETTLED IN WAIT: {bot_id} market {ticker} is {_wr_status}')
                     bot_log('PHANTOM_LADDER_SETTLED_WAITING_REPEAT', bot_id, {'ticker': ticker, 'market_status': _wr_status})
                     _phantom_set_final_status(bot, bot_id)
+                    bot['_smart_stopped'] = True
+                    bot['_smart_stop_reason'] = 'final'
                     save_state()
                     return
             except Exception as _se:

@@ -403,13 +403,6 @@ async function loadLiveScores() {
         // Tennis: both ATP and WTA use sport='Tennis' to match detectSport()
         addGames(atpRes, 'Tennis');
         addGames(wtaRes, 'Tennis');
-        // Debug: log tennis score loading
-        const tennisGames = games.filter(g => g.sport === 'Tennis');
-        if (tennisGames.length > 0) {
-            console.log(`🎾 Tennis scores loaded: ${tennisGames.length} matches`);
-            tennisGames.filter(g => g.state === 'in').forEach(g =>
-                console.log(`  LIVE: ${g.awayAbbr} ${g.awayScore}(${g.awaySetScores}) vs ${g.homeAbbr} ${g.homeScore}(${g.homeSetScores}) — ${g.periodLabel} ${g.gameScoreDisplay || ''}`));
-        }
 
         // Build lookup tables — keyed by sport:abbreviation to avoid cross-sport collisions
         // (e.g. HOU = Rockets NBA, Texans NFL, Astros MLB)
@@ -2058,20 +2051,6 @@ function displayEventRow(eventData, container) {
     const kalshiLive = !liveScore && eventData.markets.some(m => isKalshiLive(m));
     const isLive = !!liveScore || kalshiLive;
     const gameScore = getGameScore(eventData.gameId, sport);
-    // Debug tennis matching
-    if (sport === 'Tennis' && kalshiLive && !gameScore) {
-        const cleaned = (eventData.gameId || '').replace(/^\d+[A-Z]{3}\d+/, '');
-        const entry = allGameData['Tennis:'+cleaned];
-        if (entry) {
-            const dateMatch = (eventData.gameId||'').match(/^(\d{2})([A-Z]{3})(\d{2})/);
-            const monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
-            const tY = 2000+parseInt(dateMatch[1]), tM = monthMap[dateMatch[2]], tD = parseInt(dateMatch[3]);
-            const ed = new Date(entry.gameDate);
-            console.warn(`🎾 DATE REJECT: gameId=${eventData.gameId} tickerDate=${tY}-${tM+1}-${tD} espnDate=${entry.gameDate} localDate=${ed.getFullYear()}-${ed.getMonth()+1}-${ed.getDate()} state=${entry.state}`);
-        } else {
-            console.warn(`🎾 NOT IN LOOKUP: gameId=${eventData.gameId} cleaned=${cleaned}`);
-        }
-    }
     const emoji = getSportEmoji(sport);
 
     // Compute game signal — factors in score, period, edge (not just liquidity)

@@ -449,7 +449,7 @@
     <!-- ─── Header ─────────────────────────────────────────────── -->
     <div class="header" style="position:relative;overflow:hidden;">
         <!-- Floating ghost background -->
-        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.12;"></canvas>
+        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.22;"></canvas>
         <h1 style="display:flex;align-items:center;gap:14px;position:relative;z-index:1;">
             <!-- Meridian logo mark -->
             <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
@@ -2236,43 +2236,138 @@
         drawMiniGhost(document.getElementById('header-ghost-canvas'));
         drawMiniGhost(document.getElementById('bar-ghost-canvas'));
 
-        // ── Floating ghost background animation in header ──
+        // ── Floating bot ghost animation in header ──
         (function() {
             const canvas = document.getElementById('header-ghosts-bg');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
-            const ghostColors = ['#ff9900', '#00d4ff', '#cc66ff', '#00ff88', '#ff9900', '#00d4ff', '#cc66ff', '#00ff88'];
+            const p = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, 1, 1); };
 
-            // Simple pixel ghost shape (drawn directly — no SVG dependency)
-            function drawPixelGhost(x, y, size, color) {
-                const s = size / 12; // scale factor
-                ctx.fillStyle = color;
-                // Head dome
-                ctx.fillRect(x + 3*s, y, 6*s, s);
-                ctx.fillRect(x + 2*s, y + s, 8*s, s);
-                ctx.fillRect(x + s, y + 2*s, 10*s, s);
+            // ── Phantom: ghost + kitty ──
+            function drawPhantom(ox, oy, s) {
+                ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
+                const A='#d97706', L='#f59e0b', D='#92400e', B='#0c1020';
+                // Dome
+                [8,9,10,11].forEach(x => p(x,0,D));
+                for(let x=6;x<=13;x++) p(x,1,D); for(let x=6;x<=13;x++) p(x,1, x<10?L:A);
+                for(let x=5;x<=14;x++) p(x,2, x<9?L:A);
                 // Body
-                for (let r = 3; r <= 9; r++) ctx.fillRect(x, y + r*s, 12*s, s);
-                // Wavy bottom
-                ctx.fillRect(x, y + 10*s, 3*s, s);
-                ctx.fillRect(x + 4*s, y + 10*s, 3*s, 2*s);
-                ctx.fillRect(x + 9*s, y + 10*s, 3*s, s);
+                for(let y=3;y<=10;y++) for(let x=4;x<=15;x++) p(x,y, x<8&&y<6?L:A);
+                // Dark edges
+                for(let y=3;y<=10;y++) { p(3,y,D); p(16,y,D); }
                 // Eyes
-                ctx.fillStyle = '#0c1020';
-                ctx.fillRect(x + 3*s, y + 4*s, 2*s, 2*s);
-                ctx.fillRect(x + 7*s, y + 4*s, 2*s, 2*s);
+                for(let x=6;x<=7;x++) for(let y=5;y<=7;y++) p(x,y,B);
+                for(let x=11;x<=12;x++) for(let y=5;y<=7;y++) p(x,y,B);
+                p(6,5,'#00ff88'); p(11,5,'#00ff88');
+                // Mouth
+                p(9,9,B); p(10,9,B);
+                // Wavy bottom tentacles
+                for(let x=4;x<=6;x++) p(x,11,A);
+                for(let x=8;x<=10;x++) { p(x,11,A); p(x,12,A); }
+                for(let x=12;x<=14;x++) p(x,11,A);
+                // ── Kitty companion ──
+                const K='#d97706', KL='#f59e0b', KB='#0c1020';
+                // Ears
+                p(18,5,K); p(21,5,K);
+                p(17,6,K); p(18,6,KL); p(21,6,KL); p(22,6,K);
+                // Head
+                for(let x=17;x<=22;x++) for(let y=7;y<=10;y++) p(x,y, x<20?KL:K);
+                // Eyes
+                p(18,8,KB); p(21,8,KB);
+                // Nose + mouth
+                p(19,9,KB); p(20,9,KB);
+                // Body
+                for(let x=18;x<=21;x++) p(x,11,K);
+                // Tail
+                p(22,10,K); p(23,9,K); p(24,8,K);
+                ctx.restore();
             }
 
+            // ── Apex: angular robot ──
+            function drawApex(ox, oy, s) {
+                ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
+                const A='#0ea5e9', L='#38bdf8', D='#0369a1', B='#0c1020';
+                // Antenna
+                p(9,0,L); p(10,0,L); p(9,1,A); p(10,1,A);
+                p(9,2,D); p(10,2,D);
+                // Head/body angular
+                for(let x=5;x<=14;x++) p(x,3,D);
+                for(let x=4;x<=15;x++) for(let y=4;y<=12;y++) p(x,y, x<9&&y<7?L:A);
+                // Dark edges
+                for(let y=4;y<=12;y++) { p(3,y,D); p(16,y,D); }
+                p(4,3,D); p(15,3,D);
+                // Rectangular eyes
+                for(let x=6;x<=7;x++) for(let y=6;y<=8;y++) p(x,y,B);
+                for(let x=11;x<=12;x++) for(let y=6;y<=8;y++) p(x,y,B);
+                p(6,6,L); p(11,6,L);
+                // Mouth line
+                for(let x=7;x<=12;x++) p(x,10,D);
+                // Flat bottom
+                for(let x=4;x<=15;x++) p(x,13,D);
+                ctx.restore();
+            }
+
+            // ── Meridian: round with crown ──
+            function drawMeridian(ox, oy, s) {
+                ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
+                const A='#a855f7', L='#c084fc', D='#7c3aed', B='#0c1020';
+                // Crown/horns
+                p(5,0,L); p(6,1,A); p(9,0,L); p(10,1,A); p(13,0,L); p(14,1,A);
+                // Round head
+                for(let x=6;x<=13;x++) p(x,2,D);
+                for(let x=5;x<=14;x++) for(let y=3;y<=5;y++) p(x,y, x<10?L:A);
+                // Round body
+                for(let x=4;x<=15;x++) for(let y=6;y<=11;y++) p(x,y, x<9&&y<9?L:A);
+                for(let x=5;x<=14;x++) p(x,12,A);
+                // Dark edges
+                for(let y=6;y<=11;y++) { p(3,y,D); p(16,y,D); }
+                // Round eyes
+                for(let x=6;x<=7;x++) for(let y=7;y<=8;y++) p(x,y,B);
+                for(let x=11;x<=12;x++) for(let y=7;y<=8;y++) p(x,y,B);
+                p(6,7,A); p(11,7,A);
+                // Smile
+                p(8,10,D); p(9,11,D); p(10,11,D); p(11,10,D);
+                // Arms
+                p(2,8,A); p(1,7,A); p(17,8,A); p(18,7,A);
+                ctx.restore();
+            }
+
+            // ── Scout: round with antenna ball ──
+            function drawScout(ox, oy, s) {
+                ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
+                const A='#22c55e', L='#4ade80', D='#15803d', B='#0c1020';
+                // Antenna + ball
+                p(9,0,L); p(10,0,L); p(9,1,A); p(10,1,A);
+                p(8,0,L); p(11,0,L); // ball
+                // Round head+body
+                for(let x=6;x<=13;x++) p(x,2,D);
+                for(let x=5;x<=14;x++) for(let y=3;y<=5;y++) p(x,y, x<10?L:A);
+                for(let x=4;x<=15;x++) for(let y=6;y<=11;y++) p(x,y, x<9&&y<8?L:A);
+                for(let x=5;x<=14;x++) p(x,12,A);
+                // Edges
+                for(let y=6;y<=11;y++) { p(3,y,D); p(16,y,D); }
+                // Round eyes
+                for(let x=6;x<=7;x++) for(let y=7;y<=8;y++) p(x,y,B);
+                for(let x=11;x<=12;x++) for(let y=7;y<=8;y++) p(x,y,B);
+                p(7,7,L); p(12,7,L);
+                // Smile
+                p(8,10,D); p(9,11,D); p(10,11,D); p(11,10,D);
+                // Arms
+                p(2,8,A); p(1,7,L); p(17,8,A); p(18,7,L);
+                ctx.restore();
+            }
+
+            const drawFns = [drawPhantom, drawApex, drawMeridian, drawScout];
             const ghosts = [];
             for (let i = 0; i < 8; i++) {
                 ghosts.push({
-                    color: ghostColors[i],
-                    x: Math.random() * 600 + i * 80,
-                    y: 4 + Math.random() * 30,
-                    vx: 0.15 + Math.random() * 0.25,
-                    size: 16 + Math.random() * 12,
+                    draw: drawFns[i % 4],
+                    x: Math.random() * 500 + i * 90,
+                    y: 2 + Math.random() * 20,
+                    vx: 0.12 + Math.random() * 0.2,
+                    scale: 1.0 + Math.random() * 0.6,
                     bobPhase: Math.random() * Math.PI * 2,
-                    bobSpeed: 0.01 + Math.random() * 0.01,
+                    bobSpeed: 0.008 + Math.random() * 0.008,
                 });
             }
 
@@ -2290,13 +2385,12 @@
             function animate() {
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 ctx.clearRect(0, 0, cw, ch);
-
                 ghosts.forEach(g => {
                     g.x += g.vx;
                     g.bobPhase += g.bobSpeed;
                     const bobY = Math.sin(g.bobPhase) * 3;
-                    if (g.x > cw + 40) g.x = -g.size - 20;
-                    drawPixelGhost(g.x, g.y + bobY, g.size, g.color);
+                    if (g.x > cw + 60) g.x = -30 * g.scale - 20;
+                    g.draw(g.x, g.y + bobY, g.scale);
                 });
                 requestAnimationFrame(animate);
             }
@@ -3095,7 +3189,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409125000"></script>
+    <script src="app.js?v=20260409130000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

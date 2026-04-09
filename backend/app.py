@@ -2488,7 +2488,7 @@ def run_migrations():
         # Also rewrite trades.jsonl so deleted trades don't come back on restart
         try:
             with open(TRADES_FILE, 'w') as _tf:
-                for t in trade_history[:2000]:
+                for t in trade_history:
                     _tf.write(json.dumps(t, default=str) + '\n')
             print(f'📝 trades.jsonl rewritten after migrations ({len(trade_history)} trades)')
         except Exception as _je:
@@ -2507,7 +2507,7 @@ def save_state():
             with open(tmp, 'w') as f:
                 json.dump({
                     'active_bots': active_bots,
-                    'trade_history': trade_history[:2000],
+                    'trade_history': trade_history,
                     'session_pnl': session_pnl,
                     'opening_lines': _opening_lines,
                     'pnl_resets': pnl_resets,
@@ -2623,7 +2623,7 @@ def load_state():
                 print(f'🔁 Recovered {recovered} trades from trades.jsonl (were missing from data.json)')
             # Rewrite trades.jsonl from the merged list to prune duplicates/old entries
             with open(TRADES_FILE, 'w') as _tf:
-                for t in trade_history[:2000]:
+                for t in trade_history:
                     _tf.write(json.dumps(t, default=str) + '\n')
         except Exception as _jle:
             print(f'⚠ trades.jsonl merge failed: {_jle}')

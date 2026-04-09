@@ -11808,25 +11808,6 @@ async function loadLatency() {
     }
 }
 
-// Update bottom status bar latency display
-async function updateBottomLatency() {
-    const el = document.getElementById('bottom-latency');
-    if (!el) return;
-    try {
-        const resp = await fetch(`${API_BASE}/latency`);
-        const data = await resp.json();
-        const ping = data.live_ping_ms;
-        const orderPlace = data.order_place || {};
-        const ms = ping != null ? Math.round(ping) : (orderPlace.median ? Math.round(orderPlace.median) : null);
-        if (ms != null) {
-            const col = ms < 200 ? '#00ff88' : ms < 500 ? '#ffaa00' : '#ff4444';
-            el.innerHTML = `<span style="color:${col};">⏱ ${ms}ms</span>`;
-        }
-    } catch (e) { /* silent */ }
-}
-// Start bottom bar latency updates
-updateBottomLatency();
-setInterval(updateBottomLatency, 15000);
 
 async function resetPnL() {
     await fetch(`${API_BASE}/pnl/reset`, { method: 'POST' });

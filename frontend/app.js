@@ -4153,25 +4153,30 @@ function updateAnchorPreview() {
             const fGaps = _obCache.favGaps || 0;
             const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
-            // Sport-specific minimums — calibrated from 992 phantom trades:
-            // Tennis@5c: 60% WR +6.1c. NBA@5c: 52% -7c, @6c: 60% +6.6c.
-            // MLB@5c: 51% -11.8c (loses at EVERY depth). NHL@5c: 25%, @8c: 86% +80c.
+            // Sport-specific minimums — recalibrated from 493 phantom trades (Apr 4-7 2026):
+            // Tennis@5c: 77% WR +$28.89. NBA@5c: 52% -7c, @6c: 60% +6.6c.
+            // MLB: bleeds at EVERY depth (51% WR@5c -$15.25). NHL@5c: 25%, @7c+: profitable.
+            // Depth 7 overall: 65.9% WR, +37c/trade (best risk/reward).
+            // Depth 4: 42.9% WR -55.6c/trade WITHOUT retreat. With WS retreat, needs clean book.
             const _recSport = detectSport(_obTicker);
-            const _sportMinDepth = { 'Tennis': 5, 'NBA': 6, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_recSport] || 5;
+            const _sportMinDepth = { 'Tennis': 4, 'NBA': 6, 'MLB': 7, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 6 }[_recSport] || 5;
             // Liquidity-based depth: fav contracts/level determines how fast hedge fills.
             // Thin book = wider depth needed (slow fill, price can move against you).
+            // Thick book = tighter depth safe (hedge fills instantly, WS retreat protects).
             let recDepth = _sportMinDepth;
             let reasons = [];
-            if (_sportMinDepth > 5) reasons.push(`${_recSport.toLowerCase()}: min ${_sportMinDepth}¢`);
+            if (_sportMinDepth > 4) reasons.push(`${_recSport.toLowerCase()}: min ${_sportMinDepth}¢`);
             const dogWall = _obCache.dogWall || {};
             const favConc = _obCache.favConc || 0;
             // Primary: fav contracts/level (liquidity = fill probability)
-            // More liquid = tighter depth OK. Thin = wider for safety.
+            // Data shows: thick fav (50+/lvl) + no gaps = 4¢ viable on tennis.
+            // Moderate fav (10-20/lvl) = 6¢ minimum. Light/thin = 7-8¢.
             let _fplDepth = 5;
-            if (fpl >= 50) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl thick`); }
-            else if (fpl >= 20) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl solid`); }
-            else if (fpl >= 10) { _fplDepth = 6; reasons.push(`fav ${fpl}/lvl moderate`); }
-            else if (fpl >= 5) { _fplDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
+            if (fpl >= 50) { _fplDepth = 4; reasons.push(`fav ${fpl}/lvl thick`); }
+            else if (fpl >= 30) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl solid`); }
+            else if (fpl >= 15) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl decent`); }
+            else if (fpl >= 8) { _fplDepth = 6; reasons.push(`fav ${fpl}/lvl moderate`); }
+            else if (fpl >= 4) { _fplDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
             else { _fplDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
             recDepth = Math.max(recDepth, _fplDepth);
             // Dog wall check: need enough contracts protecting you at the chosen depth
@@ -4194,6 +4199,7 @@ function updateAnchorPreview() {
                 if (dGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${dGaps} dog gaps`); }
                 else if (dGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${dGaps} dog gaps`); }
                 else if (dGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${dGaps} dog gaps`); }
+                else if (dGaps >= 1 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`${dGaps} dog gap — too tight for 4¢`); }
             } else if (dGaps >= 3) {
                 reasons.push(`${dGaps} dog gaps (packed — minor)`);
             }
@@ -4201,16 +4207,19 @@ function updateAnchorPreview() {
             if (fGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${fGaps} fav gaps`); }
             else if (fGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${fGaps} fav gaps`); }
+            else if (fGaps >= 1 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`${fGaps} fav gap — too tight for 4¢`); }
             // Fav concentration: if 80%+ is one wall level, it's fragile — bump minimum depth
             if (favConc > 0.8) { recDepth = Math.max(recDepth, 6); reasons.push(`fav ${Math.round(favConc*100)}% wall`); }
+            else if (favConc > 0.65 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`fav ${Math.round(favConc*100)}% concentrated`); }
             // ── Sweep impact check ──
             // The sweep that reaches your depth must eat through dogWall[recDepth] contracts.
             // If that sweep dwarfs the fav top-3, the fill event is too large — fav side
-            // may degrade (MM pulls, price impact). Pull depth shallower until the sweep
-            // is within the fav's absorption capacity.
+            // may degrade (MM pulls, price impact). Pull depth shallower BUT never below
+            // the safety floor set by liquidity/gaps above — only reduce within safe range.
             const favTop3 = _obCache.favTop3 || 0;
+            const _safeFloor = recDepth;  // lock in the safety floor before sweep adjusts down
             if (favTop3 > 0) {
-                while (recDepth > _sportMinDepth && (dogWall[recDepth] || 0) > favTop3 * 2) {
+                while (recDepth > _safeFloor && (dogWall[recDepth] || 0) > favTop3 * 2) {
                     recDepth--;
                 }
                 const sweepAtRec = dogWall[Math.min(recDepth, 12)] || 0;
@@ -4228,8 +4237,8 @@ function updateAnchorPreview() {
                 recDepth = Math.max(recDepth, recDepth + _qtyBump);
                 reasons.push(`qty ${_userQty} > safe ${maxQty}`);
             }
-            // Hard floor: never below 5¢ regardless of any reduction
-            recDepth = Math.max(recDepth, 5);
+            // Hard floor: 4¢ absolute minimum (WS retreat provides protection)
+            recDepth = Math.max(recDepth, 4);
             // Hard cap recDepth to wall data range
             recDepth = Math.min(recDepth, 12);
             const recNote = reasons.join(' · ');

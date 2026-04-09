@@ -447,8 +447,10 @@
 </head>
 <body>
     <!-- ─── Header ─────────────────────────────────────────────── -->
-    <div class="header">
-        <h1 style="display:flex;align-items:center;gap:14px;">
+    <div class="header" style="position:relative;overflow:hidden;">
+        <!-- Floating ghost background -->
+        <canvas id="header-ghosts-bg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.12;"></canvas>
+        <h1 style="display:flex;align-items:center;gap:14px;position:relative;z-index:1;">
             <!-- Meridian logo mark -->
             <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
                 <defs>
@@ -485,11 +487,11 @@
                 <span style="color:#4a5568;font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;">Sports Trading Terminal</span>
             </span>
         </h1>
-        <div class="balance-info" id="balance-display" style="display:none;">
+        <div class="balance-info" id="balance-display" style="display:none;position:relative;z-index:1;">
             <div>Balance: <span id="balance-amount">$0.00</span></div>
             <div>Portfolio: <span id="portfolio-value">$0.00</span></div>
         </div>
-        <button id="login-status" class="btn btn-primary" onclick="window.location.reload()">Logged In ✓</button>
+        <button id="login-status" class="btn btn-primary" onclick="window.location.reload()" style="position:relative;z-index:1;">Logged In ✓</button>
     </div>
 
     <!-- ─── Tab Navigation ────────────────────────────────────── -->
@@ -2239,6 +2241,85 @@
         drawMiniGhost(document.getElementById('bar-ghost-canvas'));
         drawMiniGhost(document.getElementById('markets-ghost-canvas'));
 
+        // ── Floating ghost background animation in header ──
+        (function() {
+            const canvas = document.getElementById('header-ghosts-bg');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const botTypes = ['phantom', 'apex', 'meridian', 'scout'];
+            const colors = { phantom: '#ff9900', apex: '#00d4ff', meridian: '#cc66ff', scout: '#00ff88' };
+
+            // Pre-render each bot SVG to an offscreen canvas (deferred until app.js loads)
+            const sprites = {};
+            const spriteSize = 28;
+            let spritesLoaded = false;
+            function loadSprites() {
+                if (spritesLoaded || !window.botIconSvg) return;
+                spritesLoaded = true;
+                botTypes.forEach(type => {
+                    const off = document.createElement('canvas');
+                    off.width = spriteSize; off.height = spriteSize;
+                    const oc = off.getContext('2d');
+                    const svg = botIconSvg(type, spriteSize);
+                    if (!svg) return;
+                    const img = new Image();
+                    img.src = 'data:image/svg+xml;base64,' + btoa(svg);
+                    img.onload = () => { oc.drawImage(img, 0, 0, spriteSize, spriteSize); };
+                    sprites[type] = { canvas: off, img };
+                });
+            }
+
+            // Create floating ghost particles
+            const ghosts = [];
+            for (let i = 0; i < 8; i++) {
+                ghosts.push({
+                    type: botTypes[i % 4],
+                    x: Math.random() * 800,
+                    y: Math.random() * 60 + 5,
+                    vx: (Math.random() - 0.3) * 0.3,
+                    vy: Math.sin(Math.random() * Math.PI) * 0.15,
+                    size: 18 + Math.random() * 14,
+                    bobPhase: Math.random() * Math.PI * 2,
+                    bobSpeed: 0.008 + Math.random() * 0.008,
+                });
+            }
+
+            function resize() {
+                const rect = canvas.parentElement.getBoundingClientRect();
+                canvas.width = rect.width * (window.devicePixelRatio || 1);
+                canvas.height = rect.height * (window.devicePixelRatio || 1);
+                ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+            }
+            resize();
+            window.addEventListener('resize', resize);
+
+            function animate() {
+                if (!spritesLoaded) loadSprites();
+                const w = canvas.width / (window.devicePixelRatio || 1);
+                const h = canvas.height / (window.devicePixelRatio || 1);
+                ctx.clearRect(0, 0, w, h);
+
+                ghosts.forEach(g => {
+                    g.x += g.vx;
+                    g.bobPhase += g.bobSpeed;
+                    const bobY = Math.sin(g.bobPhase) * 4;
+
+                    // Wrap around
+                    if (g.x > w + 40) g.x = -g.size - 10;
+                    if (g.x < -g.size - 40) g.x = w + 10;
+
+                    const sprite = sprites[g.type];
+                    if (sprite && sprite.canvas) {
+                        ctx.drawImage(sprite.canvas, g.x, g.y + bobY, g.size, g.size);
+                    }
+                });
+
+                requestAnimationFrame(animate);
+            }
+            // Delay start to let SVGs load
+            setTimeout(animate, 200);
+        })();
+
         const input = document.getElementById('claude-chat-input');
         const sendBtn = document.getElementById('claude-chat-send');
         input.addEventListener('input', () => {
@@ -3031,7 +3112,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260409123500"></script>
+    <script src="app.js?v=20260409124500"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <div style="display:flex;align-items:center;gap:12px;">

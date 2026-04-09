@@ -10269,39 +10269,14 @@ def _handle_phantom(bot_id, bot, actions):
                 _is_cross = bot.get('cross_market') and bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
                 _has_settled_positions = _is_cross and bot.get('_cross_settled_qty', 0) > 0
                 if current_dog_bid <= 1 or current_dog_bid < _min_viable_bid:
-                    print(f'🛑 PHANTOM DEAD MARKET: {bot_id} dog bid={current_dog_bid}¢ (need ≥{_min_viable_bid}¢) — cancelling')
-                    _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
-                    for _dm_key in ('fav_order_id', 'hedge_order_id'):
-                        _dm_oid = bot.get(_dm_key)
-                        if _dm_oid:
-                            _safe_cancel(_dm_oid, f'phantom dead market {_dm_key} {bot_id}')
-                    for _dm_oid in bot.get('_all_dog_order_ids', []):
-                        if _dm_oid and _dm_oid != dog_order_id:
-                            _safe_cancel(_dm_oid, f'phantom dead market old dog {bot_id}')
-                    # Cross-market with accumulated positions → awaiting settlement
-                    if _has_settled_positions:
-                        bot['status'] = 'awaiting_settlement'
-                        bot['awaiting_since'] = now
-                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty_dog', bot.get('_cross_settled_qty', 0))
-                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty_fav', bot.get('_cross_settled_qty', 0))
-                        print(f'⏳ PHANTOM GAME OVER: {bot_id} holding {bot["_cross_settled_qty"]}x cross-market — awaiting settlement')
-                        bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot['_cross_settled_qty'], 'trigger': 'dead_market'})
-                    else:
-                        # Preserve repeats — dead market is temporary, don't count as a cycle
-                        _repeat_count = bot.get('repeat_count', 0)
-                        _repeats_done = bot.get('repeats_done', 0)
-                        if _repeat_count > 0 and _repeats_done < _repeat_count:
-                            bot['status'] = 'waiting_repeat'
-                            bot['waiting_repeat_since'] = time.time()
-                            print(f'🔄 DEAD MARKET REPEAT: {bot_id} — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
-                        else:
-                            bot['status'] = 'completed'
-                            bot['completed_at'] = now
-                            bot['repeat_count'] = 0
-                            bot['_stop_reason'] = f'dead market (bid {current_dog_bid}¢)'
-                    bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'will_repeat': bot['status'] == 'waiting_repeat', 'awaiting': bot['status'] == 'awaiting_settlement'})
-                    _audit('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid})
-                    actions.append({'bot_id': bot_id, 'action': 'anchor_dead_market_cancel'})
+                    # Pull order and wait — same as price floor system
+                    if dog_order_id:
+                        _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
+                        bot['dog_order_id'] = None
+                    if not bot.get('_price_floor_pulled'):
+                        print(f'⏸ PHANTOM DEAD MARKET: {bot_id} bid={current_dog_bid}¢ (need ≥{_min_viable_bid}¢) — pulled, waiting for recovery')
+                        bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'min_viable': _min_viable_bid})
+                        bot['_price_floor_pulled'] = True
                     save_state()
                     return
 

@@ -5774,7 +5774,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _depCap = _comb > 0 ? 100 - _comb : 0;
                         const _depFloor = bot.anchor_depth || 0;
                         const _isSellback = r.result === 'sellback';
-                        const _isDualExit = r.result === 'dual_exit';
+                        const _isDualExit = r.result === 'dual_exit' || r.result === 'ceiling_exit';
                         const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
                         // Depth badge: Wins: green depth, Dual exit: blue "DE", Sellback: red "SB"
                         let _depBadge = '';
@@ -5789,19 +5789,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                                 _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
                             }
                         }
-                        // Orphan sub-row: check run entry first, then bot._last_orphan as fallback
-                        const _rhArr = bot._run_history || [];
-                        const _isLastDE2 = r.result === 'dual_exit' && !_rhArr.slice(i + 1).some(x => x.result === 'dual_exit');
-                        const _oData = r.orphan_pnl != null ? r : (_isLastDE2 && bot._last_orphan ? bot._last_orphan : null);
-                        const _orphanRow = _oData ? `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">
-                            <span></span>
-                            <span style="display:flex;align-items:center;gap:3px;">
-                                <span style="color:#aa66ff;font-weight:700;">↳ orphan</span>
-                                <span style="color:#aa66ff;">bought ${_oData.orphan_buy ?? _oData.buy ?? '?'}¢ → sold ${_oData.orphan_sell ?? _oData.sell ?? '?'}¢</span>
-                            </span>
-                            <span style="color:#aa66ff;font-weight:700;">x${_oData.orphan_qty ?? _oData.qty ?? '?'}</span>
-                            <span style="color:${(_oData.orphan_pnl ?? _oData.pnl ?? 0) >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${(_oData.orphan_pnl ?? _oData.pnl ?? 0) >= 0 ? '+' : ''}${_oData.orphan_pnl ?? _oData.pnl ?? 0}¢</span>
-                        </div>` : '';
+                        const _orphanRow = '';
                         return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                             <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
                             <span style="display:flex;align-items:center;gap:3px;">
@@ -5874,7 +5862,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': bot._dual_exit_active ? (bot._dual_exit_sell_won ? '📤 SELL WON' : bot._dual_exit_fav_won ? '⭐ HEDGE WON' : '⏱ DUAL EXIT') : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._ceiling_exit_active ? '📤 CEILING EXIT' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isAwaitingSettlement ? '⏳ SETTLED' : _isSmartStopped ? '⏹ SMART STOP' : '✅ COMPLETE',
         'stopped': _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
         'awaiting_settlement': '⏳ SETTLED',
@@ -5882,7 +5870,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': bot._dual_exit_active ? '#ff8800' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
+        'fav_hedge_posted': bot._ceiling_exit_active ? '#ff8800' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
         'completed': _isAwaitingSettlement ? '#818cf8' : _isSmartStopped ? '#00e5ff' : '#00ff88',
         'stopped': _isSmartStopped ? '#00e5ff' : '#ff4444',
         'awaiting_settlement': '#818cf8',
@@ -6033,7 +6021,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const _remainPct = qty > 0 ? (_remaining / qty) * 100 : 100;
                 const _isPulled = !!bot._price_floor_pulled;
                 const _borderCol = _isPulled ? '#ff444433' : _hasSell ? '#ff880033' : '#ffaa0033';
-                const _headerLabel = _isPulled ? `⏸ PULLED · ${dogSide.toUpperCase()} · WAITING` : _hasSell ? `📤 DUAL EXIT · ${dogSide.toUpperCase()} · FILLED ✓` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
+                const _headerLabel = _isPulled ? `⏸ PULLED · ${dogSide.toUpperCase()} · WAITING` : _hasSell ? `📤 CEILING EXIT · ${dogSide.toUpperCase()} · FILLED ✓` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
                 const _headerCol = _isPulled ? '#ff4444' : _hasSell ? '#ff8800' : '#ffaa00';
                 const _priceLabel = _hasSell ? `${dogPrice}¢ → sell @${_sellPrice}¢` : (isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`);
                 const _barPct = _hasSell ? _remainPct : dogFillPct;
@@ -6208,7 +6196,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const dogSellPrice = bot.dog_sell_price || 0;
                     const dogSellFills = bot.dog_sell_fill_qty || 0;
                     const statusIcon = hasDualExit ? '📤' : atCeiling ? '🔴' : atBid ? '🎯' : '⚡';
-                    const statusText = hasDualExit ? 'DUAL EXIT RACING' : atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
+                    const statusText = hasDualExit ? 'CEILING EXIT' : atBid ? (atCeiling ? 'AT CEILING' : 'AT BID') : 'SNAPPING TO BID';
                     const statusCol = hasDualExit ? '#ff8800' : atCeiling ? '#ff4444' : atBid ? '#00ff88' : '#00aaff';
                     const _deSellP = bot.dog_sell_price || 0;
                     const _deSellFills = bot.dog_sell_fill_qty || 0;
@@ -6227,28 +6215,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 return '';
             })()}
         </div>
-        ${(() => {
-            // Race orphan sell indicator
-            const _roQty = bot._race_orphan_fav_qty || 0;
-            if (_roQty <= 0) return '';
-            const _roSide = bot._race_orphan_fav_side || bot.fav_side || 'yes';
-            const _roPrice = bot._race_orphan_sell_price || 0;
-            const _roOid = bot._race_orphan_sell_oid;
-            const _roTicker = bot._race_orphan_fav_ticker || bot.hedge_ticker || bot.ticker || '';
-            const _roTeam = _roTicker.split('-').pop() || _roTicker;
-            return `<div style="margin-top:8px;background:#aa66ff08;border:1px solid #aa66ff33;border-radius:8px;padding:10px 12px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                    <span style="color:#aa66ff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Orphan Recovery</span>
-                    <span style="color:${_roOid ? '#00ff88' : '#ffaa00'};font-size:9px;font-weight:600;">${_roOid ? 'SELLING' : 'POSTING...'}</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:12px;font-size:12px;">
-                    <span style="color:#e8ecf2;font-weight:700;">${_roQty}x</span>
-                    <span style="color:${_roSide === 'yes' ? '#00ff88' : '#ff4444'};font-weight:700;">${_roSide.toUpperCase()}</span>
-                    ${_roPrice > 0 ? `<span style="color:#aa66ff;font-weight:700;">@${_roPrice}\u00a2</span>` : ''}
-                    <span style="color:#555;font-size:10px;">${_roTeam}</span>
-                </div>
-            </div>`;
-        })()}
+        ${''}
         ${(() => {
             // Run history breakdown (for completed/awaiting/multi-run bots)
             const _rh = bot._run_history || [];
@@ -6268,7 +6235,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const _comb2 = (r.dog_price || 0) + (r.fav_price || 0);
                     const _combCol2 = _comb2 <= 96 ? '#00ff88' : _comb2 <= 98 ? '#ffaa00' : '#ff4444';
                     const _isSB2 = r.result === 'sellback';
-                    const _isDualExit = r.result === 'dual_exit';
+                    const _isDualExit = r.result === 'dual_exit' || r.result === 'ceiling_exit';
                     const _isExit = _isSB2 || _isDualExit;
                     const _exitCol = _isDualExit ? '#00aaff' : '#ffaa00';
                     const _exitLabel = _isDualExit ? 'EXIT' : 'SB';
@@ -6286,25 +6253,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>'
-                    + (() => {
-                        // Only use bot._last_orphan fallback on the LAST dual_exit in the list (not all of them)
-                        const _isLastDE = r.result === 'dual_exit' && !_rh.slice(i + 1).some(x => x.result === 'dual_exit');
-                        const _o = r.orphan_pnl != null ? r : (_isLastDE && bot._last_orphan ? bot._last_orphan : null);
-                        if (!_o) return '';
-                        const _ob = _o.orphan_buy ?? _o.buy ?? '?';
-                        const _os = _o.orphan_sell ?? _o.sell ?? '?';
-                        const _oq = _o.orphan_qty ?? _o.qty ?? '?';
-                        const _op = _o.orphan_pnl ?? _o.pnl ?? 0;
-                        return '<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:2px 6px;font-size:10px;background:#aa66ff08;">'
-                            + '<span></span>'
-                            + '<span style="display:flex;align-items:center;gap:3px;">'
-                            + '<span style="color:#aa66ff;font-weight:700;">↳ orphan</span>'
-                            + '<span style="color:#aa66ff;">bought ' + _ob + '¢ → sold ' + _os + '¢</span>'
-                            + '</span>'
-                            + '<span style="color:#aa66ff;font-weight:700;">x' + _oq + '</span>'
-                            + '<span style="color:' + (_op >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (_op >= 0 ? '+' : '') + _op + '¢</span>'
-                            + '</div>';
-                    })();
+                    + '';
                 }).join('');
                 html += '</div>';
             }
@@ -11314,7 +11263,7 @@ let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDays = [];      // Array of YYYY-MM-DD strings, empty = full history
 let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
 let _phantomActiveDepth = 'all';   // Depth floor filter for Phantom history panels
-let _phantomActiveExit = 'all';    // Exit type filter: all | arb | dual_exit | orphan
+let _phantomActiveExit = 'all';    // Exit type filter: all | arb | ceiling_exit
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
@@ -11848,25 +11797,15 @@ async function loadTradeHistoryList() {
                     parts.push(`<span style="color:#8892a6;">Sold back @ <strong style="color:#ffaa00">${sellAt}¢</strong></span>`);
                     parts.push(`<span style="color:${diffCol};font-weight:700;">${diff >= 0 ? '+' : ''}${diff}¢/contract</span>`);
                     if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
-                } else if (t.exit_via && t.exit_via.startsWith('dual_exit') && t.dog_price && t.sell_back_price) {
-                    // Dual exit: show buy → sell, not fake arb
+                } else if (t.exit_via && (t.exit_via.startsWith('dual_exit') || t.exit_via.startsWith('ceiling_exit') || t.exit_via === 'cross_ceiling_dog_sold') && t.dog_price && t.sell_back_price) {
+                    // Ceiling exit: show buy → sell, not fake arb
                     const _deSide = (t.dog_side || 'yes').toUpperCase();
                     const _deCol = t.dog_side === 'yes' ? '#00ff88' : '#ff4444';
                     const _deDiff = t.sell_back_price - t.dog_price;
                     parts.push(`<span style="color:#8892a6;">Bought <strong style="color:${_deCol}">${_deSide}</strong> @ <strong style="color:#fff">${t.dog_price}¢</strong> × ${t.quantity || 1}</span>`);
                     parts.push(`<span style="color:#8892a6;">Sold @ <strong style="color:#ff8800">${t.sell_back_price}¢</strong></span>`);
                     parts.push(`<span style="color:${_deDiff >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${_deDiff >= 0 ? '+' : ''}${_deDiff}¢/ea</span>`);
-                    parts.push(`<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">DUAL EXIT</span>`);
-                } else if (t.result === 'race_orphan_cleared') {
-                    // Orphan recovery: show buy → sell
-                    const _orBuy = t.orphan_buy_price || t.yes_price || 0;
-                    const _orSell = t.orphan_sell_price || t.no_price || 0;
-                    const _orSide = (t.orphan_side || t.fav_side || 'no').toUpperCase();
-                    const _orDiff = _orSell - _orBuy;
-                    parts.push(`<span style="color:#8892a6;">Orphan <strong style="color:#aa66ff">${_orSide}</strong> bought @ <strong style="color:#fff">${_orBuy}¢</strong> × ${t.quantity || 1}</span>`);
-                    parts.push(`<span style="color:#8892a6;">Sold @ <strong style="color:#aa66ff">${_orSell}¢</strong></span>`);
-                    parts.push(`<span style="color:${_orDiff >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${_orDiff >= 0 ? '+' : ''}${_orDiff}¢/ea</span>`);
-                    parts.push(`<span style="background:#aa66ff22;color:#aa66ff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">ORPHAN</span>`);
+                    parts.push(`<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">CEILING EXIT</span>`);
                 } else if (isManualExit && t.sell_price != null) {
                     // Manual exit: show what was sold
                     const _meSide = (t.dog_side || 'yes').toUpperCase();
@@ -12509,10 +12448,8 @@ function renderDogStatsAndDepth(trades, pnl) {
         const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
         const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
         const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
-        const dualExits = trades.filter(t => t.result === 'anchor_dual_exit').length;
-        const dualExitsFav = trades.filter(t => t.dual_exit_active || t.exit_via === 'dual_exit_arb_complete').length;
-        const orphans = trades.filter(t => t.result === 'race_orphan_cleared').length;
-        const totalExits = sellbacks + dualExits + dualExitsFav;
+        const ceilingExits = trades.filter(t => t.result === 'anchor_dual_exit' || t.result === 'ceiling_exit' || t.dual_exit_active || t.ceiling_exit_active || t.exit_via === 'dual_exit_arb_complete' || t.exit_via === 'ceiling_exit_arb_complete').length;
+        const totalExits = sellbacks + ceilingExits;
 
         const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all' || _phantomActiveExit !== 'all';
         let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
@@ -12547,7 +12484,7 @@ function renderDogStatsAndDepth(trades, pnl) {
         let captureRatio = 0, avgCapture = '—', avgFloorDisp = '—';
         const dcTrades = trades.filter(t => {
             if (!t.anchor_depth || t.anchor_depth <= 0) return false;
-            if (t.result === 'anchor_dual_exit') return false;
+            if (t.result === 'anchor_dual_exit' || t.result === 'ceiling_exit') return false;
             const ds = t.dog_side || t.first_leg || 'no';
             const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
             const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price) || 0;
@@ -12584,8 +12521,7 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${!isFiltered ? _bub('Daily P&L', `${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol) : ''}
                 ${_bub('Win Rate', `${ltWinRate}%`, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
                 ${_bub('Avg Profit', ltAvgProfit === '—' ? '—' : `${parseFloat(ltAvgProfit)>=0?'+':''}${ltAvgProfit}¢`, `${ltTotal} trades`, ltAvgCol)}
-                ${_bub('Ceiling Exits', dualExits + dualExitsFav, `${exitRate}% of trades · ${dualExitsFav} fav · ${dualExits} dog`, '#ff4444')}
-                ${orphans > 0 ? _bub('Orphans', orphans, `${ltTotal > 0 ? Math.round(orphans/ltTotal*100) : 0}% of trades`, '#aa66ff') : ''}
+                ${_bub('Ceiling Exits', ceilingExits, `${exitRate}% of trades`, '#ff4444')}
                 ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#8892a6')}
                 ${_bub('Contracts', totalContracts, 'total pushed', '#00ddff')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#00ffcc')}
@@ -12607,7 +12543,7 @@ function renderDogStatsAndDepth(trades, pnl) {
             if (net >= 0 && (t.profit_cents||0) > 0) depthMap[d].wins++;
             else if (net < 0) depthMap[d].losses++;
             // Depth capture per floor
-            if (t.result !== 'anchor_dual_exit') {
+            if (t.result !== 'anchor_dual_exit' && t.result !== 'ceiling_exit') {
                 const ds = t.dog_side || t.first_leg || 'no';
                 const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
                 const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price) || 0;
@@ -12689,20 +12625,16 @@ function renderDogSportBreakdown(allTrades) {
     // Exit type filter pills
     const exitPanel = document.getElementById('dog-exit-filter');
     if (exitPanel) {
-        const exitCounts = { arb: 0, de_fav: 0, de_dog: 0, orphan: 0 };
+        const exitCounts = { arb: 0, exit: 0 };
         allTrades.forEach(t => {
-            if (t.result === 'anchor_dual_exit') exitCounts.de_dog++;
-            else if (t.result === 'race_orphan_cleared') exitCounts.orphan++;
-            else if (t.dual_exit_active || t.exit_via === 'dual_exit_arb_complete') exitCounts.de_fav++;
+            if (t.result === 'anchor_dual_exit' || t.result === 'ceiling_exit' || t.result === 'race_orphan_cleared' || t.exit_via === 'ceiling_exit_arb_complete' || t.exit_via === 'dual_exit_arb_complete' || t.ceiling_exit_active || t.dual_exit_active) exitCounts.exit++;
             else exitCounts.arb++;
         });
         const pills = [
             { key: 'all', label: 'All', count: allTrades.length, col: '#8892a6' },
             { key: 'arb', label: 'Complete Arb', count: exitCounts.arb, col: '#00ff88' },
-            { key: 'de_fav', label: 'DE Fav Won', count: exitCounts.de_fav, col: '#00ddaa' },
-            { key: 'de_dog', label: 'DE Dog Sold', count: exitCounts.de_dog, col: '#00aaff' },
+            { key: 'exit', label: 'Ceiling Exit', count: exitCounts.exit, col: '#ff8800' },
         ];
-        if (exitCounts.orphan > 0) pills.push({ key: 'orphan', label: 'Orphan', count: exitCounts.orphan, col: '#aa66ff' });
         exitPanel.innerHTML = `
             <h4 style="color:#00aaff;font-size:12px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">By Exit Type</h4>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -12722,10 +12654,8 @@ function _applyPhantomFilters(trades) {
     if (_phantomActiveSport !== 'all') f = f.filter(t => (t.sport||'Other') === _phantomActiveSport);
     if (_phantomActiveDepth !== 'all') f = f.filter(t => (t.anchor_depth||0) === _phantomActiveDepth);
     if (_phantomActiveExit !== 'all') {
-        if (_phantomActiveExit === 'arb') f = f.filter(t => !t.dual_exit_active && t.exit_via !== 'dual_exit_arb_complete' && t.result !== 'anchor_dual_exit' && t.result !== 'race_orphan_cleared');
-        else if (_phantomActiveExit === 'de_fav') f = f.filter(t => t.dual_exit_active || t.exit_via === 'dual_exit_arb_complete');
-        else if (_phantomActiveExit === 'de_dog') f = f.filter(t => t.result === 'anchor_dual_exit');
-        else if (_phantomActiveExit === 'orphan') f = f.filter(t => t.result === 'race_orphan_cleared');
+        if (_phantomActiveExit === 'arb') f = f.filter(t => !t.dual_exit_active && !t.ceiling_exit_active && !t.exit_via?.startsWith('dual_exit') && !t.exit_via?.startsWith('ceiling_exit') && t.result !== 'anchor_dual_exit' && t.result !== 'ceiling_exit' && t.result !== 'race_orphan_cleared');
+        else if (_phantomActiveExit === 'exit') f = f.filter(t => t.dual_exit_active || t.ceiling_exit_active || t.exit_via?.startsWith('dual_exit') || t.exit_via?.startsWith('ceiling_exit') || t.result === 'anchor_dual_exit' || t.result === 'ceiling_exit' || t.result === 'race_orphan_cleared');
     }
     return f;
 }
@@ -12851,9 +12781,8 @@ function filterPhantomLog() {
         const dateStr = dt.toLocaleDateString([], {month:'short',day:'numeric'});
         const net = (t.profit_cents||0) - (t.loss_cents||0);
         const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
-        const isDualExit = t.result === 'anchor_dual_exit';
-        const isDualExitArb = t.exit_via === 'dual_exit_arb_complete' || t.dual_exit_active;
-        const isOrphanRecovery = t.result === 'race_orphan_cleared';
+        const isCeilingExit = t.result === 'anchor_dual_exit' || t.result === 'ceiling_exit';
+        const isCeilingExitArb = t.exit_via === 'dual_exit_arb_complete' || t.exit_via === 'ceiling_exit_arb_complete' || t.dual_exit_active || t.ceiling_exit_active;
         const isWin = net > 0;
         const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
         const teamName = formatBotDisplayName(t.ticker||'', '');
@@ -12863,8 +12792,8 @@ function filterPhantomLog() {
         const favSide = dogSide === 'yes' ? 'no' : 'yes';
         const dogCol = dogSide === 'yes' ? '#00ff88' : '#ff4444';
         const favCol = favSide === 'yes' ? '#00ff88' : '#ff4444';
-        const dogPrice = isOrphanRecovery ? (t.orphan_buy_price || t.dog_price || '?') : (t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?');
-        const favPrice = isOrphanRecovery ? (t.orphan_sell_price || t.sell_back_price || '?') : (isDualExit ? (t.sell_back_price || t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?') : (t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?'));
+        const dogPrice = t.dog_price || t.avg_dog_price || (dogSide === 'yes' ? t.yes_price : t.no_price) || '?';
+        const favPrice = isCeilingExit ? (t.sell_back_price || t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?') : (t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?');
         const combined = (typeof dogPrice === 'number' && typeof favPrice === 'number') ? dogPrice + favPrice : null;
         const qty = t.quantity || 1;
         const taker = t.taker ? 'TKR' : 'MKR';
@@ -12877,16 +12806,14 @@ function filterPhantomLog() {
 
         // Status pill
         let statusText, statusBg, statusFg;
-        if (isOrphanRecovery) {
-            statusText = 'ORPHAN RECOVERY'; statusBg = 'rgba(170,102,255,0.15)'; statusFg = '#aa66ff';
-        } else if (isSellback) {
+        if (isSellback) {
             statusText = 'SELLBACK'; statusBg = 'rgba(255,68,68,0.15)'; statusFg = '#ff4444';
-        } else if (isDualExit) {
-            statusText = 'DUAL EXIT'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
-        } else if (isDualExitArb && isWin) {
-            statusText = 'DE ARB ✓'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
-        } else if (isDualExitArb && !isWin) {
-            statusText = 'DE ARB'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
+        } else if (isCeilingExit) {
+            statusText = 'CEILING EXIT'; statusBg = 'rgba(255,136,0,0.15)'; statusFg = '#ff8800';
+        } else if (isCeilingExitArb && isWin) {
+            statusText = 'COMPLETED'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
+        } else if (isCeilingExitArb && !isWin) {
+            statusText = 'COMPLETED'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
         } else if (isWin) {
             statusText = 'COMPLETED'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
         } else {
@@ -12922,28 +12849,22 @@ function filterPhantomLog() {
 
             <!-- Trade detail: 2-column anchor/hedge -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isOrphanRecovery ? '#aa66ff18' : dogCol + '18'};">
-                    <div style="color:${isOrphanRecovery ? '#aa66ff' : '#ffaa00'};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isOrphanRecovery ? '👻 Orphan Held' : '👻 Anchor'}</div>
+                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${dogCol + '18'};">
+                    <div style="color:#ffaa00;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">👻 Anchor</div>
                     <div style="display:flex;align-items:baseline;gap:4px;">
-                        <span style="color:${isOrphanRecovery ? '#aa66ff' : dogCol};font-weight:800;font-size:16px;">${dogPrice}¢</span>
-                        <span style="color:#5a6484;font-size:10px;">${(isOrphanRecovery ? (t.orphan_side || dogSide) : dogSide).toUpperCase()}</span>
+                        <span style="color:${dogCol};font-weight:800;font-size:16px;">${dogPrice}¢</span>
+                        <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()}</span>
                     </div>
                     <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty}${typeof dogPrice === 'number' ? ` · $${((qty * dogPrice) / 100).toFixed(2)}` : ''}</div>
                 </div>
-                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isOrphanRecovery ? '#aa66ff18' : (isSellback || isDualExit ? (isDualExit ? '#00aaff18' : '#ff444418') : '#00aaff18')};">
-                    <div style="color:${isOrphanRecovery ? '#aa66ff' : (isSellback ? '#ff4444' : (isDualExit ? '#00aaff' : '#00aaff'))};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isOrphanRecovery ? '📤 Sold' : (isSellback ? '🔙 Sold Back' : (isDualExit ? '📤 Sold Back' : '⭐ Hedge'))}${!isSellback && !isDualExit && !isOrphanRecovery && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
-                    ${isOrphanRecovery
+                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isSellback || isCeilingExit ? (isCeilingExit ? '#ff880018' : '#ff444418') : '#00aaff18'};">
+                    <div style="color:${isSellback ? '#ff4444' : (isCeilingExit ? '#ff8800' : '#00aaff')};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isSellback ? '🔙 Sold Back' : (isCeilingExit ? '📤 Sold Back' : '⭐ Hedge')}${!isSellback && !isCeilingExit && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
+                    ${isSellback || isCeilingExit
                         ? `<div style="display:flex;align-items:baseline;gap:4px;">
-                            <span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${favPrice}¢</span>
-                            <span style="color:#5a6484;font-size:10px;">${(t.orphan_side || dogSide).toUpperCase()}</span>
-                        </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Bought ${dogPrice}¢ → Sold ${favPrice}¢${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
-                        : isSellback || isDualExit
-                        ? `<div style="display:flex;align-items:baseline;gap:4px;">
-                            <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${(isDualExit ? t.sell_back_price : t.sell_back_price) > 0 ? (isDualExit ? t.sell_back_price : t.sell_back_price) + '¢' : 'Failed'}</span>
+                            <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${t.sell_back_price > 0 ? t.sell_back_price + '¢' : 'Failed'}</span>
                             <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()} back</span>
                         </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${isDualExit ? 'Bought ' + dogPrice + '¢ → Sold ' + (t.sell_back_price||'?') + '¢' : (net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢')}${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${isCeilingExit ? 'Bought ' + dogPrice + '¢ → Sold ' + (t.sell_back_price||'?') + '¢' : (net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢')}${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
                         : `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${favCol};font-weight:800;font-size:16px;">${favPrice}¢</span>
                             <span style="color:#5a6484;font-size:10px;">${favSide.toUpperCase()}</span>
@@ -12960,7 +12881,7 @@ function filterPhantomLog() {
                 ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}
                 ${t.fill_duration_s != null ? `<span style="color:#5a6484;">fill ${t.fill_duration_s}s</span>` : ''}
                 ${t.anchor_depth ? `<span style="color:#ff66aa;font-weight:600;">Depth:${t.anchor_depth}¢</span>` : ''}
-                ${t.anchor_depth && combined != null && !isDualExit ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB ' : ''}${_tw}¢</span>`; })() : ''}
+                ${t.anchor_depth && combined != null && !isCeilingExit ? (() => { const _tw = 100 - combined; const _df = t.anchor_depth; const _cc = _tw >= _df ? '#00ff88' : _tw >= _df - 2 ? '#ffaa00' : '#ff4444'; return `<span style="color:${isSellback ? '#ff4444' : _cc};font-weight:700;background:${isSellback ? '#ff4444' : _cc}15;padding:1px 6px;border-radius:4px;font-size:10px;">${isSellback ? 'SB ' : ''}${_tw}¢</span>`; })() : ''}
                 <span style="color:${takerCol};font-weight:600;font-size:9px;background:${takerCol}15;padding:1px 5px;border-radius:3px;">${taker}</span>
                 <span style="color:#3a4560;font-size:9px;">${sportName}</span>
             </div>

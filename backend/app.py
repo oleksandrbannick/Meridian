@@ -10061,6 +10061,7 @@ def _handle_phantom(bot_id, bot, actions):
                     'dog_bid': _pf_ws_bid, 'new_price': _pf_new_price, 'depth': _pf_depth,
                 })
                 bot['_price_floor_pulled'] = False
+                bot['_drift_pull_logged'] = False
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 bot['_bid_at_post'] = _pf_ws_bid
@@ -11740,20 +11741,17 @@ def _handle_phantom(bot_id, bot, actions):
             elif new_dog_price > 35:
                 new_dog_price = 35  # park at ceiling, don't stop
             if _drift_stop:
-                bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
-                    'dog_bid': current_dog_bid, 'new_dog_price': new_dog_price,
-                    'reason': _drift_reason,
-                })
-                _is_cross_drift = hedge_ticker and hedge_ticker != ticker and (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0)
-                if _is_cross_drift:
-                    bot['status'] = 'awaiting_settlement'
-                    bot['awaiting_since'] = now
-                    print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — {_drift_reason}, awaiting settlement (cross-market)')
-                else:
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
-                    print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid={current_dog_bid}¢ new_price={new_dog_price}¢ — {_drift_reason}, stopping')
-                bot['repeat_count'] = 0
+                # Pull and wait — don't stop the bot
+                bot['status'] = 'dog_anchor_posted'
+                bot['_price_floor_pulled'] = True
+                bot['dog_order_id'] = None
+                if not bot.get('_drift_pull_logged'):
+                    bot['_drift_pull_logged'] = True
+                    print(f'⏸ PHANTOM DRIFT PULL: {bot_id} bid={current_dog_bid}¢ — {_drift_reason}, waiting for recovery')
+                    bot_log('PHANTOM_REPEAT_DRIFT_SKIP', bot_id, {
+                        'dog_bid': current_dog_bid, 'new_dog_price': new_dog_price,
+                        'reason': _drift_reason,
+                    })
                 save_state()
                 return
 

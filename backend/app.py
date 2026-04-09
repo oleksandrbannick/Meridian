@@ -8470,13 +8470,21 @@ def create_anchor_bot():
         fav_shave = 0  # fav always posts at bid, no shave needed
 
         # Smart pricing: always anchor_depth below bid — strict depth floor
+        _start_pulled = False
         if live_dog_bid > 0:
             smart_price = max(1, live_dog_bid - anchor_depth)
             if smart_price < 2:
-                return jsonify({'error': f'Dog price too low ({smart_price}¢) — bid {live_dog_bid}¢ minus depth {anchor_depth}¢ is below 2¢ floor. Reduce depth or wait for market to move.'}), 400
-            print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} '
-                  f'depth={anchor_depth}¢ → {smart_price}¢ (frontend sent {dog_price}¢)')
-            dog_price = smart_price
+                # Price too low — create bot in pulled mode, will repost when bid recovers
+                _start_pulled = True
+                dog_price = 1  # placeholder
+                print(f'⏸ SMART PRICE: bid={live_dog_bid}¢ depth={anchor_depth}¢ → {smart_price}¢ < 2¢ floor — starting pulled')
+            else:
+                print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} '
+                      f'depth={anchor_depth}¢ → {smart_price}¢ (frontend sent {dog_price}¢)')
+                dog_price = smart_price
+        elif live_dog_bid <= 0:
+            _start_pulled = True
+            dog_price = 1
 
         if cross_market and hedge_ticker != ticker:
             fav_side = dog_side  # same side, different ticker
@@ -8500,12 +8508,15 @@ def create_anchor_bot():
             _fav_warning = f'⚠ Fav {fav_side} depth thin ({_fav_depth_init} contracts in top 3¢, need ≥{_min_fav_init}) — hedge may not fill'
             print(f'⚠ PHANTOM FAV THIN: {_fav_warning}')
 
-        # Place ONLY the dog order — maker, post_only
-        dog_resp, actual_dog_price = create_order_maker(
-            ticker=ticker, side=dog_side, action='buy',
-            count=quantity, price=dog_price
-        )
-        dog_order_id = dog_resp['order']['order_id']
+        # Place ONLY the dog order — maker, post_only (skip if starting pulled)
+        dog_order_id = None
+        actual_dog_price = dog_price
+        if not _start_pulled:
+            dog_resp, actual_dog_price = create_order_maker(
+                ticker=ticker, side=dog_side, action='buy',
+                count=quantity, price=dog_price
+            )
+            dog_order_id = dog_resp['order']['order_id']
 
         # Subscribe WS
         if ws_manager.connected:
@@ -8514,9 +8525,12 @@ def create_anchor_bot():
                 ws_manager.add_ticker(hedge_ticker)
 
         import uuid as _uuid
-        bot_id = f"anchor_{ticker}_{dog_order_id[-8:]}"
+        if dog_order_id:
+            bot_id = f"anchor_{ticker}_{dog_order_id[-8:]}"
+        else:
+            bot_id = f"anchor_{ticker}_{_uuid.uuid4().hex[:8]}"
         if bot_id in active_bots:
-            bot_id = f"anchor_{ticker}_{dog_order_id[-8:]}_{int(time.time() * 1000)}"
+            bot_id = f"anchor_{ticker}_{_uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
 
         active_bots[bot_id] = {
             'ticker':              ticker,
@@ -8562,8 +8576,9 @@ def create_anchor_bot():
             '_precalc_hedge_price': _precalc_phantom_hedge(actual_dog_price, target_width, dog_side, quantity),
             '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
             '_last_repost_at':     0,
-            '_all_dog_order_ids':  [dog_order_id],
+            '_all_dog_order_ids':  [dog_order_id] if dog_order_id else [],
             '_fav_depth':          _fav_depth_init,
+            '_price_floor_pulled': _start_pulled,
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {

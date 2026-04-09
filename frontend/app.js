@@ -13397,11 +13397,11 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${!isFiltered ? _bub('Daily P&L', `${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol) : ''}
                 ${_bub('Win Rate', `${ltWinRate}%`, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
                 ${_bub('Avg Profit', ltAvgProfit === '—' ? '—' : `${parseFloat(ltAvgProfit)>=0?'+':''}${ltAvgProfit}¢`, `${ltTotal} trades`, ltAvgCol)}
+                ${_bub('Ceiling Exits', dualExits + dualExitsFav, `${exitRate}% of trades · ${dualExitsFav} fav · ${dualExits} dog`, '#ff4444')}
+                ${orphans > 0 ? _bub('Orphans', orphans, `${ltTotal > 0 ? Math.round(orphans/ltTotal*100) : 0}% of trades`, '#aa66ff') : ''}
                 ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#8892a6')}
                 ${_bub('Contracts', totalContracts, 'total pushed', '#00ddff')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#00ffcc')}
-                ${_bub('Ceiling Exits', dualExits + dualExitsFav, `${exitRate}% of trades · ${dualExitsFav} fav · ${dualExits} dog`, '#ff4444')}
-                ${orphans > 0 ? _bub('Orphans', orphans, `${ltTotal > 0 ? Math.round(orphans/ltTotal*100) : 0}% of trades`, '#aa66ff') : ''}
             </div>`;
     }
 

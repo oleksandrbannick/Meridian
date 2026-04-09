@@ -12654,6 +12654,33 @@ async function loadTradeHistoryList() {
                     parts.push(`<span style="color:#8892a6;">Sold back @ <strong style="color:#ffaa00">${sellAt}¢</strong></span>`);
                     parts.push(`<span style="color:${diffCol};font-weight:700;">${diff >= 0 ? '+' : ''}${diff}¢/contract</span>`);
                     if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
+                } else if (t.exit_via && t.exit_via.startsWith('dual_exit') && t.dog_price && t.sell_back_price) {
+                    // Dual exit: show buy → sell, not fake arb
+                    const _deSide = (t.dog_side || 'yes').toUpperCase();
+                    const _deCol = t.dog_side === 'yes' ? '#00ff88' : '#ff4444';
+                    const _deDiff = t.sell_back_price - t.dog_price;
+                    parts.push(`<span style="color:#8892a6;">Bought <strong style="color:${_deCol}">${_deSide}</strong> @ <strong style="color:#fff">${t.dog_price}¢</strong> × ${t.quantity || 1}</span>`);
+                    parts.push(`<span style="color:#8892a6;">Sold @ <strong style="color:#ff8800">${t.sell_back_price}¢</strong></span>`);
+                    parts.push(`<span style="color:${_deDiff >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${_deDiff >= 0 ? '+' : ''}${_deDiff}¢/ea</span>`);
+                    parts.push(`<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">DUAL EXIT</span>`);
+                } else if (t.result === 'race_orphan_cleared') {
+                    // Orphan recovery: show buy → sell
+                    const _orBuy = t.orphan_buy_price || t.yes_price || 0;
+                    const _orSell = t.orphan_sell_price || t.no_price || 0;
+                    const _orSide = (t.orphan_side || t.fav_side || 'no').toUpperCase();
+                    const _orDiff = _orSell - _orBuy;
+                    parts.push(`<span style="color:#8892a6;">Orphan <strong style="color:#aa66ff">${_orSide}</strong> bought @ <strong style="color:#fff">${_orBuy}¢</strong> × ${t.quantity || 1}</span>`);
+                    parts.push(`<span style="color:#8892a6;">Sold @ <strong style="color:#aa66ff">${_orSell}¢</strong></span>`);
+                    parts.push(`<span style="color:${_orDiff >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${_orDiff >= 0 ? '+' : ''}${_orDiff}¢/ea</span>`);
+                    parts.push(`<span style="background:#aa66ff22;color:#aa66ff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">ORPHAN</span>`);
+                } else if (isManualExit && t.sell_price != null) {
+                    // Manual exit: show what was sold
+                    const _meSide = (t.dog_side || 'yes').toUpperCase();
+                    const _meEntry = t.dog_price || (t.dog_side === 'yes' ? t.yes_price : t.no_price) || 0;
+                    const _meSell = t.sell_price || 0;
+                    parts.push(`<span style="color:#8892a6;">Held <strong style="color:#ffaa00">${_meSide}</strong> @ <strong style="color:#fff">${_meEntry}¢</strong> × ${t.quantity || 1}</span>`);
+                    parts.push(`<span style="color:#8892a6;">Sold @ <strong style="color:#ff4444">${_meSell}¢</strong></span>`);
+                    parts.push(`<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">MANUAL EXIT</span>`);
                 } else {
                     // Unified arb detail row — same format for all arbs (clean fills and amended)
                     const leg = (t.first_leg || 'yes').toUpperCase();

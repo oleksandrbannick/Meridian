@@ -5022,7 +5022,7 @@ def auto_reset_daily_pnl():
         save_state()
 
 # ─── Bot Config (Upgrades #4, #8) ─────────────────────────────────────────────
-REPOST_AFTER_MINUTES = 3    # Re-post orders that haven't filled after this long (fallback timer)
+REPOST_AFTER_MINUTES = 1.5  # Re-post orders that haven't filled after this long (fallback timer)
 
 
 def _phantom_gap_threshold(bot, current_dog_bid):
@@ -5048,9 +5048,9 @@ def _phantom_gap_threshold(bot, current_dog_bid):
     if volatility > 8:
         thresh, cd, cond = 8, 30, 'volatile'
     elif volatility > 3:
-        thresh, cd, cond = 5, 20, 'normal'
+        thresh, cd, cond = 4, 12, 'normal'
     else:
-        thresh, cd, cond = 3, 15, 'calm'
+        thresh, cd, cond = 3, 8, 'calm'
     bot['_volatility'] = volatility
     bot['_market_condition'] = cond
     bot['_gap_threshold'] = thresh

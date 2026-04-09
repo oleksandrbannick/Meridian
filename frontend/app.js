@@ -12850,10 +12850,11 @@ function filterPhantomLog() {
         const timeStr = dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
         const dateStr = dt.toLocaleDateString([], {month:'short',day:'numeric'});
         const net = (t.profit_cents||0) - (t.loss_cents||0);
-        const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
+        const isSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback' || t.result === 'anchor_sellback_position_cleared';
         const isDualExit = t.result === 'anchor_dual_exit';
         const isDualExitArb = t.exit_via === 'dual_exit_arb_complete' || t.dual_exit_active;
         const isOrphanRecovery = t.result === 'race_orphan_cleared';
+        const isSettlement = (t.result || '').startsWith('settled_');
         const isWin = net > 0;
         const netCol = net > 0 ? '#00ff88' : net < 0 ? '#ff4444' : '#8892a6';
         const teamName = formatBotDisplayName(t.ticker||'', '');
@@ -12887,6 +12888,10 @@ function filterPhantomLog() {
             statusText = 'DE ARB ✓'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
         } else if (isDualExitArb && !isWin) {
             statusText = 'DE ARB'; statusBg = 'rgba(0,170,255,0.15)'; statusFg = '#00aaff';
+        } else if (isSettlement && isWin) {
+            statusText = 'SETTLED WIN'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
+        } else if (isSettlement) {
+            statusText = 'SETTLED'; statusBg = 'rgba(255,170,0,0.15)'; statusFg = '#ffaa00';
         } else if (isWin) {
             statusText = 'COMPLETED'; statusBg = 'rgba(0,255,136,0.12)'; statusFg = '#00ff88';
         } else {
@@ -12931,13 +12936,18 @@ function filterPhantomLog() {
                     <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty}${typeof dogPrice === 'number' ? ` · $${((qty * dogPrice) / 100).toFixed(2)}` : ''}</div>
                 </div>
                 <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isOrphanRecovery ? '#aa66ff18' : (isSellback || isDualExit ? (isDualExit ? '#00aaff18' : '#ff444418') : '#00aaff18')};">
-                    <div style="color:${isOrphanRecovery ? '#aa66ff' : (isSellback ? '#ff4444' : (isDualExit ? '#00aaff' : '#00aaff'))};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isOrphanRecovery ? '📤 Sold' : (isSellback ? '🔙 Sold Back' : (isDualExit ? '📤 Sold Back' : '⭐ Hedge'))}${!isSellback && !isDualExit && !isOrphanRecovery && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
+                    <div style="color:${isOrphanRecovery ? '#aa66ff' : (isSettlement ? '#ffaa00' : (isSellback ? '#ff4444' : (isDualExit ? '#00aaff' : '#00aaff')))};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isOrphanRecovery ? '📤 Sold' : (isSettlement ? '🏁 Settled' : (isSellback ? '🔙 Sold Back' : (isDualExit ? '📤 Sold Back' : '⭐ Hedge')))}${!isSellback && !isDualExit && !isOrphanRecovery && !isSettlement && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
                     ${isOrphanRecovery
                         ? `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${favPrice}¢</span>
                             <span style="color:#5a6484;font-size:10px;">${(t.orphan_side || dogSide).toUpperCase()}</span>
                         </div>
                         <div style="color:#5a6484;font-size:10px;margin-top:2px;">Bought ${dogPrice}¢ → Sold ${favPrice}¢${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
+                        : isSettlement
+                        ? `<div style="display:flex;align-items:baseline;gap:4px;">
+                            <span style="color:${net >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${net >= 0 ? 'Won' : 'Lost'}</span>
+                        </div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Hedge never filled · ${net >= 0 ? '+' : ''}${net}¢</div>`
                         : isSellback || isDualExit
                         ? `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${(isDualExit ? t.sell_back_price : t.sell_back_price) > 0 ? (isDualExit ? t.sell_back_price : t.sell_back_price) + '¢' : 'Failed'}</span>

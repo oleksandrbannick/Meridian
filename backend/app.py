@@ -9978,6 +9978,24 @@ def _handle_phantom(bot_id, bot, actions):
     # ── STATE: dog_anchor_posted — waiting for dog to fill ────────
     if status == 'dog_anchor_posted':
         dog_order_id = bot.get('dog_order_id')
+        if not dog_order_id and bot.get('_price_floor_pulled'):
+            # Price floor pulled — check if bid recovered enough to repost
+            _pf_ws_bid = bot.get(f'live_{dog_side}_bid', 0)
+            _pf_depth = bot.get('anchor_depth', 5)
+            _pf_new_price = max(1, _pf_ws_bid - _pf_depth) if _pf_ws_bid > 0 else 0
+            if _pf_new_price >= 2:
+                # Bid recovered — repost via waiting_repeat (handles the full repost flow)
+                print(f'✅ PHANTOM PRICE RECOVERY: {bot_id} bid={_pf_ws_bid}¢ → can post @{_pf_new_price}¢ (was pulled)')
+                bot_log('PHANTOM_PRICE_FLOOR_RECOVERY', bot_id, {
+                    'dog_bid': _pf_ws_bid, 'new_price': _pf_new_price, 'depth': _pf_depth,
+                })
+                bot['_price_floor_pulled'] = False
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = now
+                bot['_bid_at_post'] = _pf_ws_bid
+                save_state()
+            # else: still below floor, keep waiting (settlement check in price floor block handles game over)
+            return
         if not dog_order_id:
             # Lost order ID — check old order IDs for cancel-race fills before giving up
             _old_ids = bot.get('_all_dog_order_ids', [])
@@ -10280,22 +10298,34 @@ def _handle_phantom(bot_id, bot, actions):
                 if new_dog_price > 35:
                     new_dog_price = 35
 
-                # Price floor: don't repost at < 2¢ — stop at 1¢
+                # Price floor: don't repost at < 2¢ — pull order and wait for recovery
                 if new_dog_price < 2:
-                    print(f'🛑 PHANTOM PRICE FLOOR: {bot_id} new_price={new_dog_price}¢ (bid={current_dog_bid}¢ depth={anchor_depth}¢) — too low, cancelling')
-                    _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
-                    _is_cross_pf = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-                    _has_fills_pf = (bot.get('_cross_settled_qty', 0) > 0) or (bot.get('dog_fill_qty', 0) > 0)
-                    if _is_cross_pf and _has_fills_pf:
-                        bot['status'] = 'awaiting_settlement'
-                        bot['awaiting_since'] = now
-                    else:
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                    bot['repeat_count'] = 0
-                    bot_log('PHANTOM_PRICE_FLOOR_STOP', bot_id, {
-                        'dog_bid': current_dog_bid, 'new_price': new_dog_price, 'depth': anchor_depth,
-                    })
+                    # Cancel the order but keep bot alive — game might swing back
+                    if dog_order_id:
+                        _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
+                        bot['dog_order_id'] = None
+                    if not bot.get('_price_floor_pulled'):
+                        print(f'⏸ PHANTOM PRICE FLOOR: {bot_id} bid={current_dog_bid}¢ depth={anchor_depth}¢ → pulled, waiting for recovery')
+                        bot_log('PHANTOM_PRICE_FLOOR_PULL', bot_id, {
+                            'dog_bid': current_dog_bid, 'new_price': new_dog_price, 'depth': anchor_depth,
+                        })
+                        bot['_price_floor_pulled'] = True
+                    # Check if market is truly dead (settled/finalized)
+                    if now - bot.get('_last_settle_check_pf', 0) > 30:
+                        bot['_last_settle_check_pf'] = now
+                        try:
+                            api_read_limiter.wait()
+                            _pf_mkt = kalshi_client.get_market(ticker)
+                            _pf_mkt_data = _pf_mkt.get('market', _pf_mkt) if isinstance(_pf_mkt, dict) else {}
+                            if _pf_mkt_data.get('status', '').lower() in ('settled', 'finalized'):
+                                print(f'🏁 PHANTOM SETTLED DURING FLOOR: {bot_id} — market settled')
+                                bot['status'] = 'completed'
+                                bot['completed_at'] = now
+                                bot['repeat_count'] = 0
+                                save_state()
+                                return
+                        except Exception:
+                            pass
                     save_state()
                     return
 

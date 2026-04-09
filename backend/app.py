@@ -9940,6 +9940,9 @@ def _handle_phantom(bot_id, bot, actions):
                 _orphan_target['orphan_qty'] = _orphan_qty
                 _orphan_target['orphan_buy'] = _ro_fav_price
                 _orphan_target['orphan_sell'] = _sell_price
+                print(f'📝 ORPHAN→RUN: {bot_id} wrote orphan_pnl={_ro_orphan_net} buy={_ro_fav_price} sell={_sell_price} to run#{_orphan_target.get("run")} (result={_orphan_target.get("result")})')
+            else:
+                print(f'⚠ ORPHAN→RUN: {bot_id} NO target found in _run_history ({len(_rh)} entries: {[r.get("result") for r in _rh]})')
             _record_trade({
                 'bot_id': bot_id, 'ticker': _orphan_ticker,
                 'yes_price': _ro_fav_price if _orphan_side == 'yes' else 0,

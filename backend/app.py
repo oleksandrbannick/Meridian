@@ -11118,6 +11118,27 @@ def _handle_phantom(bot_id, bot, actions):
                 _ceiling_elapsed = now - bot['_over_ceiling_since']
                 _dog_sell_oid = bot.get('dog_sell_order_id')
 
+                # ── Retry posting dog sell if it was never posted or got cleared ──
+                if not _dog_sell_oid and bot.get('fav_fill_qty', 0) == 0:
+                    _dog_ask_retry = bot.get(f'live_{dog_side}_ask', 0)
+                    if _dog_ask_retry > 0:
+                        try:
+                            _sell_pk = {'yes_price': _dog_ask_retry} if dog_side == 'yes' else {'no_price': _dog_ask_retry}
+                            api_rate_limiter.wait()
+                            _sell_resp = kalshi_client.create_order(
+                                ticker=ticker, side=dog_side, action='sell',
+                                count=qty, order_type='limit', **_sell_pk
+                            )
+                            _sell_oid = _sell_resp.get('order', {}).get('order_id', '')
+                            if _sell_oid:
+                                bot['dog_sell_order_id'] = _sell_oid
+                                bot['dog_sell_price'] = _dog_ask_retry
+                                bot['dog_sell_fill_qty'] = 0
+                                _dog_sell_oid = _sell_oid
+                                print(f'📤 PHANTOM DUAL EXIT RETRY: {bot_id} sell@{_dog_ask_retry}¢ (was missing)')
+                        except Exception as _de:
+                            print(f'⚠ PHANTOM DUAL EXIT SELL RETRY FAILED: {bot_id}: {_de}')
+
                 # ── Check if dog sell filled (WS tracks fills, API as backup) ──
                 _dog_sell_fills = bot.get('dog_sell_fill_qty', 0)
                 if _dog_sell_oid and _dog_sell_fills < qty:

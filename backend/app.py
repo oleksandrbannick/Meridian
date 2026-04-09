@@ -5305,9 +5305,10 @@ REPOST_AFTER_MINUTES = 1.5  # Re-post orders that haven't filled after this long
 
 def _phantom_gap_threshold(bot, current_dog_bid):
     """Adaptive gap threshold based on recent bid volatility.
-    Calm market (bid moved <3¢ in 60s) → 3¢ gap triggers repost, 15s cooldown
-    Normal (3-8¢ in 60s) → 5¢ gap, 20s cooldown
-    Volatile (>8¢ in 60s) → 8¢ gap, 30s cooldown
+    Uses total movement (sum of absolute deltas) not range — catches bouncing.
+    Calm (<5¢ total movement in 60s) → 3¢ gap, 8s cooldown
+    Normal (5-12¢ in 60s) → 4¢ gap, 12s cooldown
+    Volatile (>12¢ in 60s) → 8¢ gap, 30s cooldown
     Returns (gap_threshold, cooldown_seconds)."""
     bid_history = bot.get('_bid_history', [])
     now = time.time()
@@ -5319,13 +5320,15 @@ def _phantom_gap_threshold(bot, current_dog_bid):
         bot['_volatility'] = 0
         bot['_market_condition'] = 'calm'
         bot['_gap_threshold'] = 3
-        bot['_gap_cooldown'] = 15
-        return 3, 15
+        bot['_gap_cooldown'] = 8
+        return 3, 8
     bids = [b for _, b in bid_history]
-    volatility = max(bids) - min(bids)
-    if volatility > 8:
+    # Total movement: sum of absolute deltas between consecutive samples
+    # e.g. 49→51→48→50 = |2|+|3|+|2| = 7¢ — catches oscillation that range misses
+    volatility = sum(abs(bids[i] - bids[i-1]) for i in range(1, len(bids)))
+    if volatility > 12:
         thresh, cd, cond = 8, 30, 'volatile'
-    elif volatility > 3:
+    elif volatility > 5:
         thresh, cd, cond = 4, 12, 'normal'
     else:
         thresh, cd, cond = 3, 8, 'calm'
@@ -8706,7 +8709,7 @@ def create_anchor_bot():
         # Smart pricing: always anchor_depth below bid — strict depth floor
         _start_pulled = False
         if live_dog_bid > 0:
-            smart_price = max(1, live_dog_bid - anchor_depth)
+            smart_price = min(40, max(1, live_dog_bid - anchor_depth))
             if smart_price < 2:
                 # Price too low — create bot in pulled mode, will repost when bid recovers
                 _start_pulled = True
@@ -10499,6 +10502,7 @@ def _handle_phantom(bot_id, bot, actions):
                             bot['_hedge_fired'] = False
                             bot['_trade_recorded'] = False
                             bot['_all_dog_order_ids'] = []
+                            bot['_flip_pending'] = True
                             bot['status'] = 'waiting_repeat'
                             bot['waiting_repeat_since'] = time.time()
                             bot_log('PHANTOM_DRIFT_FLIP', bot_id, {
@@ -12007,8 +12011,10 @@ def _handle_phantom(bot_id, bot, actions):
             bot['raw_hedge_ms'] = None
             bot['hedge_latency_ms'] = None
             bot['_sellback_attempts'] = 0
+            _was_flip = bot.get('_flip_pending', False)
             bot['status'] = 'dog_anchor_posted'
             bot['posted_at'] = now
+            bot.pop('_flip_pending', None)
 
             if dog_side == 'yes':
                 bot['yes_order_id'] = bot['dog_order_id']
@@ -12017,7 +12023,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_order_id'] = bot['dog_order_id']
                 bot['no_price'] = actual_price
 
-            print(f'🔄 PHANTOM REPOST: {bot_id} dog re-anchored @{actual_price}¢ (smart price from orderbook)')
+            print(f'{"🔄 PHANTOM FLIP REPOST" if _was_flip else "🔄 PHANTOM REPOST"}: {bot_id} dog re-anchored @{actual_price}¢ (smart price from orderbook)')
             _audit('PHANTOM_REANCHOR', bot_id, {'ticker': ticker, 'new_dog_price': actual_price, 'dog_order_id': bot['dog_order_id']})
             _audit_position_check(bot_id, ticker, dog_side, 'after_reanchor')
             save_state()

@@ -6006,7 +6006,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : '🔄 REPEATING',
+        'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isAwaitingSettlement ? '⏳ SETTLED' : _isSmartStopped ? '⏹ SMART STOP' : '✅ COMPLETE',
         'stopped': _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
         'awaiting_settlement': '⏳ SETTLED',
@@ -6014,7 +6014,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : '#aa66ff',
+        'fav_hedge_posted': '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
         'completed': _isAwaitingSettlement ? '#818cf8' : _isSmartStopped ? '#00e5ff' : '#00ff88',
         'stopped': _isSmartStopped ? '#00e5ff' : '#ff4444',
         'awaiting_settlement': '#818cf8',
@@ -8353,7 +8353,7 @@ async function loadBots() {
                 no_filled:        '✓ NO FILLED',
                 amending_no:      '🔧 AMENDING NO',
                 amending_yes:     '🔧 AMENDING YES',
-                waiting_repeat:       '🔄 REPEATING',
+                waiting_repeat:       bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
                 flipping:             '⚡ EXITING',
                 drift_cancelled:      '🚫 DRIFT GUARD',
                 awaiting_settlement:  '⏳ AWAITING SETTLEMENT',

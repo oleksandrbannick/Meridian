@@ -528,6 +528,9 @@ function parseESPNGame(event, sport) {
         // Tennis: set-by-set scores (e.g. "7-5 6-4 3-2")
         homeSetScores: home.setScores || '',
         awaySetScores: away.setScores || '',
+        // API Tennis extras: game score + serving indicator
+        gameScoreDisplay: status.displayClock || '',
+        serving: event._serving || '',
     };
 }
 
@@ -1942,7 +1945,7 @@ function buildScoreboard(gameScore) {
     if (!gameScore) return null;
     const { state, awayAbbr, homeAbbr, awayName, homeName, awayScore, homeScore,
             awayLogo, homeLogo, clock, period, periodLabel, startTime, statusDetail,
-            sport, homeSetScores, awaySetScores } = gameScore;
+            sport, homeSetScores, awaySetScores, gameScoreDisplay, serving } = gameScore;
 
     const wrap = document.createElement('div');
     const isTennis = sport === 'Tennis';
@@ -2006,20 +2009,26 @@ function buildScoreboard(gameScore) {
     wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:12px 20px;margin-bottom:12px;position:relative;';
 
     if (isTennis) {
-        // Tennis live scoreboard: player names + set scores + current set indicator
+        // Tennis live scoreboard: player names + set scores + game score + serving
         const awayLabel = awayName || awayAbbr;
         const homeLabel = homeName || homeAbbr;
         const awaySets = awaySetScores || awayScore;
         const homeSets = homeSetScores || homeScore;
+        // Serving indicator: green dot next to the player who's serving
+        const awayServe = serving === 'First Player' ? '<span style="color:#00ff88;font-size:8px;margin-right:3px;">●</span>' : '';
+        const homeServe = serving === 'Second Player' ? '<span style="color:#00ff88;font-size:8px;margin-left:3px;">●</span>' : '';
+        // Game score display (e.g. "30-40")
+        const gameScr = gameScoreDisplay && gameScoreDisplay !== '-' ? gameScoreDisplay : '';
+        const statusInfo = gameScr ? `${periodLabel || 'Live'} <span style="color:#fbbf24;margin-left:4px;">${gameScr}</span>` : (periodLabel || 'Live');
         wrap.innerHTML = `
             <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
-            <span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:14px;font-weight:700;">${awayLabel}</span>
+            ${awayServe}<span style="color:${awayLeading ? '#00ff88' : '#fff'};font-size:14px;font-weight:700;">${awayLabel}</span>
             <span style="color:${awayLeading ? '#00ff88' : '#60a5fa'};font-size:13px;font-weight:600;margin:0 2px;">${awaySets}</span>
             <span style="color:#4a5568;font-size:14px;margin:0 2px;">–</span>
             <span style="color:${homeLeading ? '#00ff88' : '#60a5fa'};font-size:13px;font-weight:600;margin:0 2px;">${homeSets}</span>
-            <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:14px;font-weight:700;">${homeLabel}</span>
+            <span style="color:${homeLeading ? '#00ff88' : '#fff'};font-size:14px;font-weight:700;">${homeLabel}</span>${homeServe}
             <span style="color:#2a3447;margin:0 6px;">│</span>
-            <span style="color:#00ff88;font-size:12px;font-weight:600;">${periodLabel || 'Live'}</span>`;
+            <span style="color:#00ff88;font-size:12px;font-weight:600;">${statusInfo}</span>`;
     } else {
         wrap.innerHTML = `
             <span style="color:#ff3333;font-size:8px;font-weight:800;letter-spacing:1px;position:absolute;top:6px;left:12px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span>
@@ -2106,7 +2115,7 @@ function displayEventRow(eventData, container) {
         badgeWrap.appendChild(dateBadge);
     }
     
-    // Tennis round badge + estimated start time
+    // Tennis round badge
     if (sport === 'Tennis' && eventData.markets.length > 0) {
         const roundMatch = (eventData.markets[0].title || '').match(/(Round\s+Of\s+\d+|Quarterfinal|Semifinal|Final)/i);
         if (roundMatch) {
@@ -2115,31 +2124,12 @@ function displayEventRow(eventData, container) {
             roundBadge.textContent = roundMatch[1].replace('Round Of ', 'R');
             badgeWrap.appendChild(roundBadge);
         }
-        // Show estimated start time from expected_expiration - 2.5h
-        const expStr = eventData.markets[0].expected_expiration_time;
-        if (expStr) {
-            const expTime = new Date(expStr);
-            const estStart = new Date(expTime.getTime() - (2.5 * 60 * 60 * 1000));
-            const nowMs = Date.now();
-            const timeBadge = document.createElement('span');
-            if (nowMs < estStart.getTime()) {
-                // Match hasn't started — show estimated start time
-                const hrs = estStart.getHours();
-                const mins = estStart.getMinutes();
-                const ampm = hrs >= 12 ? 'PM' : 'AM';
-                const h12 = hrs % 12 || 12;
-                const timeStr = `${h12}:${String(mins).padStart(2,'0')} ${ampm}`;
-                timeBadge.style.cssText = 'background:#1a1a2e;color:#8892a6;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:600;';
-                timeBadge.textContent = `⏰ ~${timeStr}`;
-                timeBadge.title = 'Estimated start time (from Kalshi expiration)';
-            } else {
-                // Match has likely started — show LIVE if no ESPN score
-                if (!liveScore && kalshiLive) {
-                    timeBadge.style.cssText = 'background:#ff333322;color:#ff4444;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;';
-                    timeBadge.innerHTML = '<span style="animation:pulse 1.5s infinite;">●</span> LIVE';
-                }
-            }
-            if (timeBadge.textContent || timeBadge.innerHTML) badgeWrap.appendChild(timeBadge);
+        // Show LIVE badge when Kalshi market is live but no ESPN score available
+        if (!liveScore && kalshiLive) {
+            const liveBadge = document.createElement('span');
+            liveBadge.style.cssText = 'background:#ff333322;color:#ff4444;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;';
+            liveBadge.innerHTML = '<span style="animation:pulse 1.5s infinite;">●</span> LIVE';
+            badgeWrap.appendChild(liveBadge);
         }
     }
     // Signal badge removed — ghost recommendation icons replace signal labels

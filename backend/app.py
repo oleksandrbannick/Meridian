@@ -1717,12 +1717,179 @@ def get_milestones():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+# ─── API Tennis integration (replaces ESPN for tennis) ──────────────────────
+_API_TENNIS_KEY = 'a12d0895ba334cfa37cc5e131a8f94c78f0cd5d2d3785a28f36fe2e3c564747f'
+_api_tennis_cache = {'data': None, 'ts': 0}
+_API_TENNIS_TTL = 20  # seconds
+
+def _fetch_api_tennis_scoreboard(tour_filter):
+    """Fetch today's tennis matches from API Tennis and format as ESPN-like events.
+    tour_filter: 'atp' or 'wta' — filters event_type_type accordingly."""
+    import datetime as _dt
+    now = time.time()
+
+    # Cache: single fetch for both ATP+WTA, filter client-side
+    if _api_tennis_cache['data'] and (now - _api_tennis_cache['ts']) < _API_TENNIS_TTL:
+        all_matches = _api_tennis_cache['data']
+    else:
+        today = _dt.date.today().isoformat()
+        try:
+            # get_fixtures returns all matches (scheduled + live + finished)
+            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={today}&date_stop={today}&APIkey={_API_TENNIS_KEY}'
+            resp = requests.get(url, timeout=8)
+            resp.raise_for_status()
+            result = resp.json()
+            all_matches = result.get('result', [])
+            if isinstance(all_matches, list):
+                _api_tennis_cache['data'] = all_matches
+                _api_tennis_cache['ts'] = now
+            else:
+                all_matches = []
+        except Exception as e:
+            print(f'⚠️ API Tennis fetch failed: {e}')
+            all_matches = []
+
+    # Filter by tour: ATP Singles/Doubles or WTA Singles/Doubles
+    tour_upper = tour_filter.upper()
+    filtered = [m for m in all_matches
+                if tour_upper in (m.get('event_type_type') or '').upper()
+                and 'DOUBLES' not in (m.get('event_type_type') or '').upper()]
+
+    # Transform into ESPN-like event format for parseESPNGame()
+    events = []
+    for m in filtered:
+        p1 = m.get('event_first_player', '')
+        p2 = m.get('event_second_player', '')
+        p1_abbr = _tennis_player_code(p1)
+        p2_abbr = _tennis_player_code(p2)
+
+        # Determine match state
+        is_live = m.get('event_live') == '1'
+        status_str = m.get('event_status', '') or ''
+        result_str = m.get('event_final_result', '') or '-'
+        winner = m.get('event_winner', '')
+
+        if is_live:
+            state = 'in'
+        elif winner or ('Finished' in status_str) or (result_str != '-' and result_str != '0 - 0' and not is_live):
+            # Check if scores indicate a completed match
+            scores = m.get('scores', [])
+            has_scores = any(int(s.get('score_first', 0)) > 0 or int(s.get('score_second', 0)) > 0 for s in scores) if scores else False
+            if has_scores and not is_live:
+                state = 'post'
+            else:
+                state = 'pre'
+        else:
+            state = 'pre'
+
+        # Parse set scores
+        scores = m.get('scores', [])
+        p1_sets_won = 0
+        p2_sets_won = 0
+        p1_set_parts = []
+        p2_set_parts = []
+        current_set = len(scores) or 1
+        for s in scores:
+            s1 = int(s.get('score_first', 0))
+            s2 = int(s.get('score_second', 0))
+            p1_set_parts.append(f'{s1}-{s2}')
+            p2_set_parts.append(f'{s2}-{s1}')
+            # A set is won at 6+ games with 2+ lead, or 7 (tiebreak)
+            if (s1 >= 6 or s2 >= 6) and abs(s1 - s2) >= 2:
+                if s1 > s2: p1_sets_won += 1
+                else: p2_sets_won += 1
+            elif s1 == 7 or s2 == 7:
+                if s1 > s2: p1_sets_won += 1
+                else: p2_sets_won += 1
+
+        p1_set_str = ' '.join(p1_set_parts)
+        p2_set_str = ' '.join(p2_set_parts)
+
+        # Game score (current game points like "30-40")
+        game_result = m.get('event_game_result', '') or ''
+        game_score_display = game_result if game_result != '-' else ''
+
+        # Period label
+        if state == 'in':
+            period_label = status_str if status_str else f'Set {current_set}'
+        elif state == 'post':
+            period_label = 'Final'
+        else:
+            period_label = ''
+
+        # Build start time from event_time (UTC) for pregame
+        event_time = m.get('event_time', '')
+        start_time_iso = ''
+        if event_time and m.get('event_date'):
+            start_time_iso = f"{m['event_date']}T{event_time}:00Z"
+
+        # Tournament + round for display
+        tournament = m.get('tournament_name', '')
+        round_str = m.get('tournament_round', '') or ''
+
+        # Status object matching ESPN format
+        status_obj = {
+            'type': {
+                'state': state,
+                'shortDetail': period_label,
+            },
+            'period': current_set,
+            'displayClock': game_score_display,
+        }
+
+        # Serving indicator: store as custom field
+        serving = m.get('event_serve', '') or ''
+
+        events.append({
+            'id': str(m.get('event_key', '')),
+            'date': start_time_iso,
+            'name': f'{p1} vs {p2} ({tournament})',
+            'shortName': f'{p1} vs {p2}',
+            'status': status_obj,
+            'competitions': [{
+                'competitors': [
+                    {
+                        'homeAway': 'away',
+                        'winner': winner == 'First Player',
+                        'score': str(p1_sets_won),
+                        'team': {
+                            'abbreviation': p1_abbr,
+                            'shortDisplayName': p1.split()[-1] if p1 else '',
+                            'displayName': p1,
+                            'logo': '',
+                        },
+                        'linescores': [{'value': int(s.get('score_first', 0))} for s in scores],
+                        'setScores': p1_set_str,
+                    },
+                    {
+                        'homeAway': 'home',
+                        'winner': winner == 'Second Player',
+                        'score': str(p2_sets_won),
+                        'team': {
+                            'abbreviation': p2_abbr,
+                            'shortDisplayName': p2.split()[-1] if p2 else '',
+                            'displayName': p2,
+                            'logo': '',
+                        },
+                        'linescores': [{'value': int(s.get('score_second', 0))} for s in scores],
+                        'setScores': p2_set_str,
+                    },
+                ],
+            }],
+            # Custom fields for enhanced display
+            '_serving': serving,
+            '_game_score': game_score_display,
+            '_tournament': tournament,
+            '_round': round_str,
+        })
+
+    return {'events': events}
+
+
 @app.route('/api/scoreboard/<sport>', methods=['GET'])
 def get_scoreboard(sport):
-    """Proxy ESPN public scoreboard API to avoid CORS issues.
-    For tennis (atp/wta), flattens the groupings→competitions structure
-    into a flat events list that looks like team sports, so the frontend
-    parseESPNGame() works with minimal changes."""
+    """Proxy ESPN/API Tennis scoreboard to avoid CORS issues.
+    Tennis uses API Tennis for better coverage; all other sports use ESPN."""
     sport_map = {
         'nba': 'basketball/nba',
         'nfl': 'football/nfl',
@@ -1742,6 +1909,11 @@ def get_scoreboard(sport):
         return jsonify({'error': f'Unknown sport: {sport}'}), 400
 
     try:
+        # Tennis: use API Tennis for live scores (much better coverage than ESPN)
+        if sport.lower() in ('atp', 'wta') and _API_TENNIS_KEY:
+            data = _fetch_api_tennis_scoreboard(sport.lower())
+            return jsonify(data)
+
         url = f'https://site.api.espn.com/apis/site/v2/sports/{sport_path}/scoreboard'
         # NCAAB/NCAAW: groups=50 includes NIT/CBI/CIT games (default only shows conference tournaments)
         params = {}
@@ -1750,10 +1922,6 @@ def get_scoreboard(sport):
         resp = requests.get(url, params=params, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-
-        # Tennis: flatten groupings → competitions into events
-        if sport.lower() in ('atp', 'wta'):
-            data = _flatten_tennis_scoreboard(data)
 
         return jsonify(data)
     except Exception as e:

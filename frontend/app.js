@@ -11752,7 +11752,7 @@ async function loadTradeHistoryList() {
             const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
             const isAnchorSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
             const isApexSellback = t.result === 'apex_sellback';
-            const isCeilingExit = t.result === 'hard_ceiling_sellback';
+            const isCeilingExit = t.result === 'hard_ceiling_sellback' || t.result === 'ceiling_exit';
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
@@ -12926,7 +12926,7 @@ function filterPhantomLog() {
                             <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${t.sell_back_price > 0 ? t.sell_back_price + '¢' : 'Failed'}</span>
                             <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()} back</span>
                         </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${isCeilingExit ? 'Bought ' + dogPrice + '¢ → Sold ' + (t.sell_back_price||'?') + '¢' : (net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢')}${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${isCeilingExit ? 'Bought ' + dogPrice + '¢ → Sold ' + (t.sell_back_price||'?') + '¢ · x' + qty : (net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢')}${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
                         : `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${favCol};font-weight:800;font-size:16px;">${favPrice}¢</span>
                             <span style="color:#5a6484;font-size:10px;">${favSide.toUpperCase()}</span>

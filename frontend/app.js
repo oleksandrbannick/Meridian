@@ -6468,11 +6468,20 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>
         </div>` : ''}
 
-        ${realizedPnl !== 0 || roundTrips > 0 ? `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;">
+        ${(() => {
+            if (realizedPnl === 0 && roundTrips === 0) return '';
+            const rtPnlSum = (bot._rt_log || []).reduce((s, rt) => s + (rt.pnl || 0), 0);
+            const exitPnl = realizedPnl - rtPnlSum;
+            const showBreakdown = exitPnl !== 0 && (bot._rt_log || []).length > 0;
+            return `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;flex-wrap:wrap;">
             <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}¢</strong></span>
             ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unrealized: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}¢</strong></span>` : ''}
             <span style="color:#8892a6;">Round Trips: <strong style="color:#fff;">${roundTrips}</strong></span>
-        </div>` : ''}
+            ${showBreakdown ? `<span style="color:#555;">|</span>
+            <span style="color:#8892a6;">RTs: <strong style="color:${rtPnlSum >= 0 ? '#00ff88' : '#ff4444'};">${rtPnlSum >= 0 ? '+' : ''}${rtPnlSum}¢</strong></span>
+            <span style="color:#8892a6;">Exits: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong></span>` : ''}
+        </div>`;
+        })()}
 
         ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #1e2740;border-radius:6px;padding:6px;margin-bottom:8px;">
             <div style="color:#00d4ff;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Round Trip History</div>
@@ -11605,10 +11614,12 @@ async function loadTradeHistoryList() {
         let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback'].includes(t.result));
 
         // Group ladder_arb trades by bot_id + run cycle into summary entries
+        // Apex MM trades (fill_source starts with 'apex_mm') render individually, not grouped
         const grouped = [];
         const larbGroups = {};
         for (const t of trades) {
-            if ((t.bot_category === 'ladder_arb' || t.fill_source === 'ladder_arb') && t.bot_id) {
+            const isApexMm = (t.fill_source || '').startsWith('apex_mm');
+            if (!isApexMm && (t.bot_category === 'ladder_arb' || t.fill_source === 'ladder_arb') && t.bot_id) {
                 // Group by bot_id + repeat_cycle (or detect run boundaries)
                 const cycle = t.repeat_cycle || 1;
                 const groupKey = `${t.bot_id}__run${cycle}`;
@@ -11784,6 +11795,99 @@ async function loadTradeHistoryList() {
                     <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #1e274033;">
                         <span style="color:#3a4560;font-size:9px;font-family:monospace;">${t.bot_id.slice(-12)}</span>
                         <button onclick="navigator.clipboard.writeText('${t.bot_id}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
+                    </div>
+                </div>`;
+            }
+
+            // ── Apex MM Individual Trade Card ──
+            const isApexMmTrade = (t.fill_source || '').startsWith('apex_mm');
+            if (isApexMmTrade) {
+                const pnl = t.net_pnl != null ? t.net_pnl : ((t.profit_cents || 0) - (t.loss_cents || 0));
+                const pnlCol = pnl > 0 ? '#00ff88' : pnl < 0 ? '#ff4444' : '#ffaa00';
+                const teamName = formatBotDisplayName(t.ticker || '', t.spread_line || '');
+                const mmDt = new Date(t.timestamp * 1000);
+                const mmDate = mmDt.toLocaleDateString([], {month:'short', day:'numeric'});
+                const mmTime = mmDt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                const qty = t.quantity || 1;
+                const feeTxt = t.fee_cents ? `Fees: ${t.fee_cents}¢` : '';
+                const botIdShort = (t.bot_id || '').slice(-12);
+
+                let icon, badge, badgeCol, bodyHtml;
+
+                if (t.result === 'mm_round_trip') {
+                    // Round trip: YES + NO = arb
+                    const yp = t.yes_price || 0;
+                    const np = t.no_price || 0;
+                    const comb = t.combined_price || (yp + np);
+                    const width = t.rung_width || (100 - comb);
+                    icon = pnl >= 0 ? '💰' : '⛔';
+                    badge = 'ROUND TRIP';
+                    badgeCol = pnl >= 0 ? '#00ff88' : '#ff4444';
+                    bodyHtml = `<span style="color:#00ff88;">YES <strong>${yp}¢</strong></span>
+                        <span style="color:#555;">+</span>
+                        <span style="color:#ff4444;">NO <strong>${np}¢</strong></span>
+                        <span style="color:#555;">=</span>
+                        <span style="color:${comb <= 98 ? '#00ff88' : comb <= 100 ? '#ffaa00' : '#ff4444'};"><strong>${comb}¢</strong></span>
+                        <span style="color:#555;">(${width}¢ width)</span>
+                        <span style="color:#8892a6;">×${qty}</span>`;
+                } else if (t.result === 'mm_sellback') {
+                    // Sellback: sold held side at loss (or profit)
+                    const sellPrice = t.sell_price || t[`${t.sell_side || t.held_side || 'no'}_price`] || 0;
+                    const avgCost = t.held_avg || t.avg_cost || 0;
+                    const heldSide = (t.held_side || t.sell_side || 'no').toUpperCase();
+                    icon = pnl >= 0 ? '📤' : '🚪';
+                    badge = pnl >= 0 ? 'EXIT PROFIT' : 'EXIT LOSS';
+                    badgeCol = pnl >= 0 ? '#00ff88' : '#ff4444';
+                    bodyHtml = `<span style="color:#ff8800;">SOLD ${qty}× <strong>${heldSide}</strong> @<strong>${sellPrice}¢</strong></span>
+                        <span style="color:#555;">(cost <strong>${avgCost}¢</strong>)</span>
+                        <span style="color:${pnlCol};font-weight:700;">→ ${pnl >= 0 ? '+' : ''}${pnl}¢</span>`;
+                } else if (t.result === 'mm_arb_complete') {
+                    // Arb complete exit: bought opposite to close
+                    const heldSide = (t.held_side || 'yes').toUpperCase();
+                    const heldAvg = t.held_avg || 0;
+                    const exitSide = (t.exit_side || (heldSide === 'YES' ? 'no' : 'yes')).toUpperCase();
+                    const exitPrice = t.exit_price || 0;
+                    const comb = t.combined_price || (heldAvg + exitPrice);
+                    icon = pnl >= 0 ? '📤' : '🚪';
+                    badge = pnl >= 0 ? 'EXIT PROFIT' : 'EXIT LOSS';
+                    badgeCol = pnl >= 0 ? '#00ff88' : '#ff4444';
+                    bodyHtml = `<span style="color:#ff8800;">BOUGHT ${qty}× <strong>${exitSide}</strong> @<strong>${exitPrice}¢</strong></span>
+                        <span style="color:#555;">(held ${heldSide} @<strong>${heldAvg}¢</strong>)</span>
+                        <span style="color:#555;">= ${comb}¢</span>
+                        <span style="color:${pnlCol};font-weight:700;">→ ${pnl >= 0 ? '+' : ''}${pnl}¢</span>`;
+                } else {
+                    // Settlement or unknown — fallback
+                    icon = '🏁';
+                    badge = t.result || 'SETTLED';
+                    badgeCol = pnlCol;
+                    bodyHtml = `<span style="color:#8892a6;">×${qty} contracts → <strong style="color:${pnlCol};">${pnl >= 0 ? '+' : ''}${pnl}¢</strong></span>`;
+                }
+
+                return `
+                <div style="background:#0f1419;border:1px solid ${pnl >= 0 ? '#00ff8822' : '#ff444422'};border-left:3px solid ${pnlCol};border-radius:8px;padding:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span style="font-size:14px;">${icon}</span>
+                            <span style="color:#fff;font-weight:700;font-size:13px;">${teamName}</span>
+                            <span style="background:#ff880022;color:#ff8800;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">APEX MM</span>
+                            <span style="background:${badgeCol}22;color:${badgeCol};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;">${badge}</span>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="color:${pnlCol};font-weight:800;font-size:16px;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
+                            <div style="color:${pnlCol};font-size:10px;">$${(pnl/100).toFixed(2)}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;font-size:11px;margin-bottom:4px;flex-wrap:wrap;align-items:center;">
+                        ${bodyHtml}
+                    </div>
+                    <div style="display:flex;gap:12px;font-size:10px;flex-wrap:wrap;">
+                        ${feeTxt ? `<span style="color:#555;">${feeTxt}</span>` : ''}
+                        <span style="color:#555;">Done: ${mmTime} · ${mmDate}</span>
+                        ${t.exit_via ? `<span style="color:#555;">via: ${t.exit_via}</span>` : ''}
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #1e274033;">
+                        <span style="color:#3a4560;font-size:9px;font-family:monospace;">${botIdShort}</span>
+                        <button onclick="navigator.clipboard.writeText('${t.bot_id || ''}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
                     </div>
                 </div>`;
             }

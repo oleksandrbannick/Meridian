@@ -7333,8 +7333,12 @@ def _apex_mm_exit_tick(bot_id, bot):
                     # Buy-opposite: arb completion (YES + NO = 100c payout)
                     held_side = sell_info.get('held_side', 'yes' if side == 'no' else 'no')
                     held_avg = bot.get(f'avg_{held_side}_cost', 0)
-                    pnl_per = 100 - held_avg - actual_price
-                    pnl = pnl_per * target
+                    gross_pnl_per = 100 - held_avg - actual_price
+                    gross_pnl = gross_pnl_per * target
+                    fee_held = _kalshi_side_fee_cents(held_avg, target)
+                    fee_exit = _kalshi_side_fee_cents(actual_price, target)
+                    total_fee = fee_held + fee_exit
+                    pnl = gross_pnl - total_fee
                     bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
                     # Clear HELD side inventory (the side we were long)
                     bot[f'net_{held_side}'] = 0
@@ -7345,17 +7349,27 @@ def _apex_mm_exit_tick(bot_id, bot):
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
                         'result': 'mm_arb_complete', 'exit_via': bot.get('_exit_reason', 'exit'),
-                        f'{held_side}_price': held_avg, f'{side}_price': actual_price,
-                        'combined_price': held_avg + actual_price, 'quantity': target,
+                        'is_exit': True, 'exit_type': 'arb_complete',
+                        'yes_price': held_avg if held_side == 'yes' else actual_price,
+                        'no_price': held_avg if held_side == 'no' else actual_price,
+                        'combined_price': held_avg + actual_price,
+                        'held_side': held_side, 'held_avg': held_avg,
+                        'exit_side': side, 'exit_price': actual_price,
+                        'quantity': target, 'fee_cents': total_fee,
                         'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                         'timestamp': now, 'fill_source': 'apex_mm_exit',
                     })
-                    print(f'✅ APEX MM ARB EXIT: {bot_id} bought {side.upper()} {target}x @{actual_price}c + held {held_side.upper()} avg@{held_avg}c → pnl={pnl}c')
+                    print(f'✅ APEX MM ARB EXIT: {bot_id} bought {side.upper()} {target}x @{actual_price}c + held {held_side.upper()} avg@{held_avg}c → pnl={pnl}c (fee={total_fee}c)')
                 else:
                     # Sell held side (original path)
+                    opposite_side = 'no' if side == 'yes' else 'yes'
                     avg_cost = bot.get(f'avg_{side}_cost', 0)
-                    pnl_per = actual_price - avg_cost
-                    pnl = pnl_per * target
+                    gross_pnl_per = actual_price - avg_cost
+                    gross_pnl = gross_pnl_per * target
+                    fee_entry = _kalshi_side_fee_cents(avg_cost, target)
+                    fee_sell = _kalshi_side_fee_cents(actual_price, target)
+                    total_fee = fee_entry + fee_sell
+                    pnl = gross_pnl - total_fee
                     bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
                     bot[f'net_{side}'] = 0
                     bot[f'avg_{side}_cost'] = 0
@@ -7365,11 +7379,16 @@ def _apex_mm_exit_tick(bot_id, bot):
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
                         'result': 'mm_sellback', 'exit_via': bot.get('_exit_reason', 'exit'),
-                        f'{side}_price': actual_price, 'avg_cost': avg_cost, 'quantity': target,
+                        'is_exit': True, 'exit_type': 'sellback',
+                        'yes_price': actual_price if side == 'yes' else avg_cost,
+                        'no_price': actual_price if side == 'no' else avg_cost,
+                        'held_side': side, 'held_avg': avg_cost,
+                        'sell_price': actual_price, 'sell_side': side,
+                        'quantity': target, 'fee_cents': total_fee,
                         'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                         'timestamp': now, 'fill_source': 'apex_mm_exit',
                     })
-                    print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c)')
+                    print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c, fee={total_fee}c)')
                 all_sold = True  # will recheck
             elif now - sell_info.get('posted_at', now) > 5:
                 if _action == 'buy':
@@ -7578,7 +7597,6 @@ def create_ladder_arb_bot():
         levels = int(data.get('levels', 7))
         spacing = int(data.get('spacing', 1))
         qty_per_level = int(data.get('qty_per_level', 10))
-        inventory_limit = int(data.get('inventory_limit', 50))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
         smart_mode = int(data.get('smart_mode', 0))
         auto_scale = bool(data.get('auto_scale', True))
@@ -7664,7 +7682,9 @@ def create_ladder_arb_bot():
 
         # Calculate midpoint and generate levels with auto-scale qty
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
-        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, scale=auto_scale, inv_limit=inventory_limit)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, scale=auto_scale, inv_limit=0)
+        # Auto-compute inventory limit from ladder total (max contracts per side)
+        inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
 
         if not yes_levels and not no_levels:
             return jsonify({'error': f'No valid price levels (midpoint={midpoint}, gap={start_gap}, levels={levels})'}), 400

@@ -786,7 +786,10 @@ function getLiveScoreForGame(gameId, sport) {
 
 // Get game data for ANY state (pre/in/post) for scoreboard display
 function getGameScore(gameId, sport) {
-    return _findGameInLookup(allGameData, gameId, sport);
+    // Tennis: strict mode to prevent single-player code collisions
+    // (e.g. PAC matching Artnak-Pacheco instead of Pavlovic-Pacheco)
+    const strict = sport === 'Tennis';
+    return _findGameInLookup(allGameData, gameId, sport, strict);
 }
 
 // ─── KALSHI-NATIVE LIVE DETECTION ─────────────────────────────────────────────

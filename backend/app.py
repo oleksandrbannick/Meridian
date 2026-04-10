@@ -3764,9 +3764,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
                 if close_qty > 0:
                     _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
-                    # Also deduct from this side (the exit buy)
-                    # Actually exit fills don't add to net — they close opposite
-                    print(f'💰 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x')
+                    bot['_exit_fill_qty'] = bot.get('_exit_fill_qty', 0) + close_qty
+                    print(f'💰 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x (exit {bot["_exit_fill_qty"]}/{bot.get("_exit_total_qty",0)})')
 
                 # Log fill
                 bot.setdefault('_fill_log', []).append({
@@ -6407,6 +6406,12 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                 return
 
         bot['_exit_price'] = exit_price
+        bot['_exit_total_qty'] = net_held
+        bot['_exit_fill_qty'] = 0
+        bot['_exit_side'] = exit_side
+        bot['_exit_held_side'] = held_side
+        bot['_exit_avg_cost'] = avg_held
+        bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - 4))  # original target before walk
         bot['_exit_posted_at'] = time.time()
         bot['_exit_walk_count'] = 0
         bot['_exit_walk_started'] = 0

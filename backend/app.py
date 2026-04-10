@@ -7415,11 +7415,14 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     })
 
     # Record trade
+    _combined = opp_avg + fill_price
     _record_trade({
         'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
         'result': 'mm_round_trip',
         f'{opposite}_price': opp_avg, f'{fill_side}_price': fill_price,
-        'combined_price': opp_avg + fill_price,
+        'combined_price': _combined,
+        'rung_width': 100 - _combined,
+        'snapped': _combined > (100 - bot.get('start_gap', 4)),
         'quantity': close_qty,
         'profit_cents': max(0, net_pnl), 'loss_cents': abs(min(0, net_pnl)),
         'net_pnl': net_pnl, 'fee_cents': total_fee,
@@ -10384,64 +10387,82 @@ def _handle_phantom(bot_id, bot, actions):
             bot.pop('_ceiling_exit_active', None)
             bot.pop('_ceiling_exit_hedge_fills', None)
             bot.pop('_ceiling_exit_sell_qty', None)
-            # Cancel dog sell if market reverted — SYNCHRONOUS to verify fills before reposting fav
+            # Cancel dog sell if market reverted — verify fills before reposting fav
             _ds_cancel_oid = bot.get('dog_sell_order_id')
-            _ds_had_fills = False
+            _ds_fills = 0
             if _ds_cancel_oid:
                 try:
                     api_rate_limiter.wait()
                     kalshi_client.cancel_order(_ds_cancel_oid)
                 except Exception:
                     pass  # may already be filled or cancelled
-                # Verify fills
+                # Wait for WS fill events to arrive, then verify via API
+                time.sleep(0.3)
                 _ds_fills = bot.get('dog_sell_fill_qty', 0)
                 try:
                     api_read_limiter.wait()
                     _ds_check = kalshi_client.get_order(_ds_cancel_oid)
                     _ds_ord = _ds_check.get('order', _ds_check) if isinstance(_ds_check, dict) else {}
-                    _ds_api_fills = _parse_fill_count(_ds_ord)
-                    _ds_fills = max(_ds_fills, _ds_api_fills)
+                    _ds_fills = max(_ds_fills, _parse_fill_count(_ds_ord))
                 except Exception:
                     pass
-                _ds_had_fills = _ds_fills > 0
+                # Final WS check after API round-trip
+                _ds_fills = max(_ds_fills, bot.get('dog_sell_fill_qty', 0))
                 bot['dog_sell_order_id'] = None
                 bot['dog_sell_price'] = None
                 bot['dog_sell_fill_qty'] = 0
-                if _ds_had_fills:
-                    # Dog sell filled during revert — can't undo, let ceiling exit completion handle it
+                if _ds_fills >= qty:
+                    # Fully sold — ceiling exit complete, stay in ceiling path
                     bot['dog_sell_fill_qty'] = _ds_fills
-                    bot['_over_ceiling_since'] = bot.get('_over_ceiling_since') or now  # restore ceiling state
+                    bot['_over_ceiling_since'] = bot.get('_over_ceiling_since') or now
                     bot['_ceiling_exit_active'] = True
-                    bot['dog_sell_order_id'] = _ds_cancel_oid  # restore so completion path finds it
-                    print(f'⚠ PHANTOM CEILING CLEAR RACE: {bot_id} dog sell had {_ds_fills} fills during revert — completing ceiling exit instead')
-                    bot_log('PHANTOM_CEILING_CLEAR_RACE', bot_id, {'fills': _ds_fills, 'ceiling_combined': _ceiling_combined}, level='WARN')
+                    bot['dog_sell_order_id'] = _ds_cancel_oid
+                    print(f'⚠ PHANTOM CEILING CLEAR RACE: {bot_id} dog sell FULLY filled ({_ds_fills}/{qty}) — completing ceiling exit')
+                    bot_log('PHANTOM_CEILING_CLEAR_RACE', bot_id, {'fills': _ds_fills, 'qty': qty, 'ceiling_combined': _ceiling_combined}, level='WARN')
+                elif _ds_fills > 0:
+                    # Partial fills — accept those as sold, repost fav for remaining qty only
+                    _remaining = qty - _ds_fills
+                    bot['_partial_hedge_qty'] = _remaining
+                    _ds_sell_price = bot.get('_ds_last_price', 0) or dog_price
+                    _ds_loss = (dog_price - _ds_sell_price) * _ds_fills if _ds_sell_price < dog_price else 0
+                    print(f'🔄 PHANTOM CEILING PARTIAL: {bot_id} dog sell had {_ds_fills}/{qty} fills — hedging remaining {_remaining} contracts')
+                    bot_log('PHANTOM_CEILING_PARTIAL_REVERT', bot_id, {
+                        'ds_fills': _ds_fills, 'remaining': _remaining, 'ceiling_combined': _ceiling_combined,
+                    })
                 else:
-                    print(f'🔄 PHANTOM CEILING CLEAR: {bot_id} combined={_ceiling_combined}¢ — dog sell cancelled')
+                    print(f'🔄 PHANTOM CEILING CLEAR: {bot_id} combined={_ceiling_combined}¢ — dog sell cancelled cleanly')
                     bot_log('PHANTOM_CEILING_CLEAR', bot_id, {'ceiling_combined': _ceiling_combined, 'reason': 'market_reverted'})
-            # Repost fav hedge if ceiling exit was active and dog sell had no fills
-            if _was_ceiling_exit and not _ds_had_fills and not bot.get('fav_order_id') and bot.get('fav_fill_qty', 0) < qty:
-                # Cross-market: use hedge ticker bid; same-market: use same ticker bid
+            # Repost fav hedge for remaining contracts (full qty if no sells, reduced if partial fills)
+            _hedge_qty = (qty - _ds_fills) if _ds_fills < qty else 0
+            if _was_ceiling_exit and _hedge_qty > 0 and not bot.get('fav_order_id') and bot.get('fav_fill_qty', 0) < _hedge_qty:
                 _is_cross = hedge_ticker and hedge_ticker != ticker
                 _repost_bid = bot.get(f'live_hedge_{fav_side}_bid', 0) if _is_cross else bot.get(f'live_{fav_side}_bid', 0)
                 if _repost_bid > 0:
-                    try:
-                        _rpk = {'yes_price': _repost_bid} if fav_side == 'yes' else {'no_price': _repost_bid}
-                        api_rate_limiter.wait()
-                        _rp_resp = kalshi_client.create_order(
-                            ticker=hedge_ticker, side=fav_side, action='buy',
-                            count=qty - bot.get('fav_fill_qty', 0), order_type='limit', **_rpk
-                        )
-                        _rp_oid = _rp_resp.get('order', {}).get('order_id', '')
-                        if _rp_oid:
-                            bot['fav_order_id'] = _rp_oid
-                            bot['fav_price'] = _repost_bid
-                            print(f'🔄 PHANTOM HEDGE REPOST: {bot_id} ceiling reverted — reposting {fav_side}@{_repost_bid}¢ on {hedge_ticker}')
-                            bot_log('PHANTOM_HEDGE_REPOST_CEILING_REVERT', bot_id, {
-                                'fav_side': fav_side, 'price': _repost_bid, 'ticker': hedge_ticker,
-                            })
-                    except Exception as _rpe:
-                        print(f'⚠ PHANTOM HEDGE REPOST FAILED: {bot_id}: {_rpe}')
-                        bot_log('PHANTOM_HEDGE_REPOST_FAILED', bot_id, {'error': str(_rpe)[:200]}, level='WARN')
+                    _fav_already = bot.get('fav_fill_qty', 0)
+                    _fav_need = _hedge_qty - _fav_already
+                    if _fav_need > 0:
+                        try:
+                            _rpk = {'yes_price': _repost_bid} if fav_side == 'yes' else {'no_price': _repost_bid}
+                            api_rate_limiter.wait()
+                            _rp_resp = kalshi_client.create_order(
+                                ticker=hedge_ticker, side=fav_side, action='buy',
+                                count=_fav_need, order_type='limit', **_rpk
+                            )
+                            _rp_oid = _rp_resp.get('order', {}).get('order_id', '')
+                            if _rp_oid:
+                                bot['fav_order_id'] = _rp_oid
+                                bot['fav_price'] = _repost_bid
+                                if _ds_fills > 0:
+                                    print(f'🔄 PHANTOM HEDGE REPOST (PARTIAL): {bot_id} ceiling reverted — reposting {fav_side}@{_repost_bid}¢ x{_fav_need} (was {qty}, sold {_ds_fills})')
+                                else:
+                                    print(f'🔄 PHANTOM HEDGE REPOST: {bot_id} ceiling reverted — reposting {fav_side}@{_repost_bid}¢ x{_fav_need}')
+                                bot_log('PHANTOM_HEDGE_REPOST_CEILING_REVERT', bot_id, {
+                                    'fav_side': fav_side, 'price': _repost_bid, 'ticker': hedge_ticker,
+                                    'count': _fav_need, 'ds_fills': _ds_fills,
+                                })
+                        except Exception as _rpe:
+                            print(f'⚠ PHANTOM HEDGE REPOST FAILED: {bot_id}: {_rpe}')
+                            bot_log('PHANTOM_HEDGE_REPOST_FAILED', bot_id, {'error': str(_rpe)[:200]}, level='WARN')
         else:
             # ── Cross-market at ceiling: cancel fav, sell current run's dog as maker ──
             _is_cross_de = hedge_ticker and hedge_ticker != ticker

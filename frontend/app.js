@@ -11762,8 +11762,8 @@ async function loadTradeHistoryList() {
                 const rungRows = rungsInfo.map(r => {
                     const rPnl = r.net_pnl != null ? r.net_pnl : ((r.profit_cents || 0) - (r.loss_cents || 0));
                     const rCol = rPnl > 0 ? '#00ff88' : rPnl < 0 ? '#ff4444' : '#555';
-                    const w = r.rung_width || r.arb_width || '?';
                     const rComb = r.combined_price || ((r.yes_price || 0) + (r.no_price || 0));
+                    const w = r.rung_width || r.arb_width || (rComb > 0 ? 100 - rComb : '?');
                     const wasSnapped = r.snapped ? '⚡' : '🎯';
                     return `<span style="color:${rCol};font-size:9px;">${wasSnapped}${w}¢ ${rComb}¢ → ${rPnl >= 0 ? '+' : ''}${rPnl}¢</span>`;
                 }).join(' · ');

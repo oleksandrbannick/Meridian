@@ -2550,14 +2550,9 @@ def load_state():
                 if len(_old_ids) > 1 or (_old_ids and _cur_oid and _old_ids != [_cur_oid]):
                     _bot['_all_dog_order_ids'] = [_cur_oid] if _cur_oid else []
                     _any_cleared = True
-                # Reset fill counts for dog_anchor_posted bots — monitor will
-                # re-detect real fills on first cycle via API verification
-                if _bot.get('status') == 'dog_anchor_posted' and _bot.get('dog_fill_qty', 0) > 0:
-                    _bot['dog_fill_qty'] = 0
-                    _bot['yes_fill_qty'] = 0
-                    _bot['no_fill_qty'] = 0
-                    _bot['dog_filled_at'] = None
-                    _any_cleared = True
+                # DON'T blindly reset fill counts — check Kalshi position instead
+                # Old code reset to 0 and hoped monitor would re-detect, but that
+                # wiped real fills from old order IDs that got cleared above.
                 # Apex MM: clear stale fill counts when flat (net=0)
                 if _bot.get('type') == 'apex_mm' and _bot.get('net_yes', 0) == 0 and _bot.get('net_no', 0) == 0:
                     for _sk in ('yes_orders', 'no_orders'):
@@ -2695,6 +2690,19 @@ class RateLimiter:
         self._count = 0
         self._window_start = time.time()
         self._lock = threading.Lock()
+        # Usage tracking
+        self._total_calls = 0
+        self._calls_last_min = 0
+        self._min_start = time.time()
+
+    def get_usage(self):
+        """Return calls/min and current burst count."""
+        with self._lock:
+            now = time.time()
+            if now - self._min_start >= 60:
+                self._calls_last_min = 0
+                self._min_start = now
+            return {'calls_per_min': self._calls_last_min, 'burst_used': self._count, 'burst_max': self.burst}
 
     def wait(self, priority=False):
         while True:
@@ -2705,11 +2713,19 @@ class RateLimiter:
                     # New window — reset counter
                     self._window_start = now
                     self._count = 1
+                    self._total_calls += 1
+                    if now - self._min_start >= 60:
+                        self._calls_last_min = 1
+                        self._min_start = now
+                    else:
+                        self._calls_last_min += 1
                     return
                 # Priority (hedge) calls can use the full burst including reserved tokens
                 effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
                 if self._count < effective_burst:
                     self._count += 1
+                    self._total_calls += 1
+                    self._calls_last_min += 1
                     return
                 # Burst exhausted — compute sleep, release lock FIRST
                 sleep_time = 1.0 - elapsed
@@ -2734,6 +2750,32 @@ class RateLimiter:
 
 api_rate_limiter = RateLimiter(burst=28)  # Kalshi advanced tier: 30 writes/s (keep 2 headroom)
 api_read_limiter = RateLimiter(burst=28)  # Kalshi advanced tier: 30 reads/s (keep 2 headroom)
+
+# ── 429 Rate Limit Tracking ──
+_rate_limit_hits = 0
+_rate_limit_window_start = time.time()
+_rate_limit_last_alert = 0
+_rate_limit_lock = threading.Lock()
+
+def track_rate_limit_hit():
+    """Call when a 429 is received. Sends notification when hitting threshold."""
+    global _rate_limit_hits, _rate_limit_window_start, _rate_limit_last_alert
+    with _rate_limit_lock:
+        now = time.time()
+        # Reset counter every 60s
+        if now - _rate_limit_window_start >= 60:
+            _rate_limit_hits = 0
+            _rate_limit_window_start = now
+        _rate_limit_hits += 1
+        # Alert every 10 hits, max once per 30s
+        if _rate_limit_hits % 10 == 0 and now - _rate_limit_last_alert >= 30:
+            _rate_limit_last_alert = now
+            msg = f'⚠ RATE LIMIT: {_rate_limit_hits} 429s in last 60s — too many bots or too fast'
+            print(msg)
+            try:
+                _push_notification('rate_limit', msg, {'hits': _rate_limit_hits, 'window_s': 60})
+            except Exception:
+                pass
 
 # ─── LocalOrderbook: real-time depth mirror from WS orderbook_delta ───────────
 from collections import deque as _deque
@@ -3348,12 +3390,36 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
             gap = dog_bid - dog_price
             # Retreat when bid is within 2¢ of our order (about to fill at bad price)
             if 0 <= gap <= 2:
-                threading.Thread(target=lambda oid=dog_order_id, bid=bot_id: (
-                    _safe_cancel(oid, f'ws_retreat_{bid}'),
-                ), daemon=True).start()
+                def _retreat_cancel(oid, bid, bot_ref=bot, bot_id_ref=bot_id):
+                    result = _safe_cancel(oid, f'ws_retreat_{bid}')
+                    # 404 = order gone. Could be filled! Check before assuming safe.
+                    if result == '404' or result is None:
+                        try:
+                            api_read_limiter.wait()
+                            _ord = kalshi_client.get_order(oid)
+                            _od = _ord.get('order', _ord) if isinstance(_ord, dict) else {}
+                            _fills = _parse_fill_count(_od)
+                            if _fills > 0:
+                                print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_fills} fills on 404!')
+                                bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
+                                    'order_id': oid, 'fills': _fills, 'dog_price': bot_ref.get('dog_price'),
+                                }, level='ERROR')
+                                _push_notification('retreat_fill', f'🚨 {bot_id_ref[:30]}: {_fills} fills found on retreated order!', {
+                                    'bot_id': bot_id_ref, 'fills': _fills,
+                                })
+                                # Recover: set fills so monitor can hedge
+                                bot_ref['dog_fill_qty'] = max(bot_ref.get('dog_fill_qty', 0), _fills)
+                                _ds = bot_ref.get('dog_side', 'no')
+                                bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
+                                bot_ref['status'] = 'dog_filled'
+                                bot_ref['dog_filled_at'] = time.time()
+                                bot_ref['_hedge_fired'] = False
+                                save_state()
+                        except Exception as _e:
+                            print(f'⚠ WS RETREAT FILL CHECK FAILED: {bot_id_ref}: {_e}')
+                threading.Thread(target=_retreat_cancel, args=(dog_order_id, bot_id), daemon=True).start()
                 bot['dog_order_id'] = None
                 bot['_last_retreat_at'] = time.time()
-                # Go to waiting_repeat to repost at new depth
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 1
                 print(f'⚡ WS RETREAT: {bot_id} bid={dog_bid}¢ gap={gap}¢ from dog@{dog_price}¢ — pulled instantly')
@@ -17834,6 +17900,9 @@ def get_latency():
                     break
     except Exception:
         pass
+    # Rate limit usage
+    write_usage = api_rate_limiter.get_usage()
+    read_usage = api_read_limiter.get_usage()
     return jsonify({
         'order_place':   _latency_stats('order_place'),
         'orderbook':     _latency_stats('orderbook'),
@@ -17844,6 +17913,12 @@ def get_latency():
         'api_ping':      _latency_stats('api_ping'),
         'live_ping_ms':  ping_ms,
         'raw_ping_ms':   raw_ping_ms,
+        'rate_limits': {
+            'write': write_usage,
+            'read': read_usage,
+            'hits_last_60s': _rate_limit_hits,
+            'limit_per_sec': 30,
+        },
     })
 
 

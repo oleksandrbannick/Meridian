@@ -10970,6 +10970,46 @@ async function loadLatency() {
                 </div>
             </div>`;
         }).join('');
+        // Rate limit section at bottom
+        const rl = data.rate_limits;
+        if (rl) {
+            const writePerMin = rl.write?.calls_per_min || 0;
+            const readPerMin = rl.read?.calls_per_min || 0;
+            const hits = rl.hits_last_60s || 0;
+            const maxPerSec = rl.limit_per_sec || 30;
+            const writePct = Math.min(100, Math.round(writePerMin / (maxPerSec * 60) * 100));
+            const readPct = Math.min(100, Math.round(readPerMin / (maxPerSec * 60) * 100));
+            const hitsCol = hits === 0 ? '#00ff88' : hits < 20 ? '#ffaa00' : '#ff4444';
+            const writCol = writePct > 80 ? '#ff4444' : writePct > 50 ? '#ffaa00' : '#00ff88';
+            const readCol = readPct > 80 ? '#ff4444' : readPct > 50 ? '#ffaa00' : '#00ff88';
+            stats.innerHTML += `
+                <div style="grid-column:1/-1;background:#0f1419;border:1px solid ${hits > 0 ? '#ff444433' : '#1e2740'};border-radius:8px;padding:12px;margin-top:4px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="color:#ff66cc;font-size:11px;font-weight:700;">API Rate Limits (${maxPerSec}/s per channel)</span>
+                        <span style="color:${hitsCol};font-size:12px;font-weight:800;">${hits > 0 ? hits + ' 429s/min' : 'No 429s'}</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div>
+                            <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                                <span style="color:#8892a6;font-size:9px;">Write (orders)</span>
+                                <span style="color:${writCol};font-size:10px;font-weight:700;">${writePerMin}/min</span>
+                            </div>
+                            <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                                <div style="width:${writePct}%;height:100%;background:${writCol};border-radius:2px;"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                                <span style="color:#8892a6;font-size:9px;">Read (markets)</span>
+                                <span style="color:${readCol};font-size:10px;font-weight:700;">${readPerMin}/min</span>
+                            </div>
+                            <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
+                                <div style="width:${readPct}%;height:100%;background:${readCol};border-radius:2px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        }
     } catch (e) {
         stats.innerHTML = `<p style="color:#ff4444;font-size:11px;">Failed: ${e.message}</p>`;
     }

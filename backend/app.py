@@ -3864,9 +3864,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     api_read_limiter.wait()
                     _late_resp = kalshi_client.get_order(order_id)
                     _late_ord = _late_resp.get('order', _late_resp) if isinstance(_late_resp, dict) else {}
-                    _late_price = _late_ord.get('yes_price', 0) if side == 'yes' else _late_ord.get('no_price', 0)
-                    if not _late_price:
-                        _late_price = _late_ord.get('price', 0)
+                    # Parse price: try _dollars (float str), then _fp, then int field
+                    _price_key = 'no_price' if side == 'no' else 'yes_price'
+                    _dollars = _late_ord.get(f'{_price_key}_dollars')
+                    if _dollars:
+                        _late_price = int(round(float(_dollars) * 100))
+                    else:
+                        _fp = _late_ord.get(f'{_price_key}_fp')
+                        if _fp:
+                            _late_price = int(float(_fp))
+                        else:
+                            _late_price = int(_late_ord.get(_price_key, 0) or 0)
                     _late_verified_fills = _parse_fill_count(_late_ord)
                     _late_status = _late_ord.get('status', '?')
                 except Exception:

@@ -6005,6 +6005,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_stop_reason === 'manual' ? 'stopped' : `${bot._smart_losses || bot.consecutive_losses || 0}L`})` : bot._smart_stop_pending ? `Stopping after this run · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
+                <button onclick="phantomModify('${botId}')" style="background:#ff66aa22;color:#ff66aa;border:1px solid #ff66aa44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>
                 ${bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                 ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 ${bot.smart_mode && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
@@ -8805,6 +8806,78 @@ async function scoutModifySave(botId) {
         if (data.ok) {
             showNotification(`Scout updated: SL=${sl > 0 ? sl + '¢' : 'none'}, TP=${tp > 0 ? tp + '¢' : 'none'}`);
             document.getElementById('scout-modify-modal')?.remove();
+        } else {
+            showNotification('Failed: ' + (data.error || 'unknown'));
+        }
+    } catch (e) {
+        showNotification('Error: ' + e.message);
+    }
+}
+
+async function phantomModify(botId) {
+    const bots = window._lastBotsData || {};
+    const bot = bots[botId];
+    if (!bot) return;
+    const curQty = bot.quantity || 1;
+    const curDepth = bot.anchor_depth || 5;
+    const status = bot.status || '';
+    const isMidHedge = status === 'fav_hedge_posted';
+    const statusNote = isMidHedge
+        ? '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">⚠ Mid-hedge — changes apply on next run</div>'
+        : status === 'waiting_repeat'
+        ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Waiting for next run — changes apply immediately</div>'
+        : '<div style="color:#00ff88;font-size:10px;margin-bottom:8px;">Will cancel & repost with new settings</div>';
+
+    const html = `
+        <div style="background:#0f1419;border:1px solid #ff66aa44;border-radius:12px;padding:20px;max-width:320px;">
+            <div style="color:#ff66aa;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Phantom</div>
+            <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '')} · ${(bot.dog_side || '?').toUpperCase()}</div>
+            ${statusNote}
+            <div style="margin-bottom:10px;">
+                <label style="color:#8892a6;font-size:10px;">Contracts per run</label>
+                <input id="phantom-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+            </div>
+            <div style="margin-bottom:14px;">
+                <label style="color:#8892a6;font-size:10px;">Depth floor (¢ below bid)</label>
+                <input id="phantom-edit-depth" type="number" value="${curDepth}" min="1" max="30" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+                <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:10px;margin-top:2px;">Dog posts at bid - ${curDepth}¢</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button onclick="phantomModifySave('${botId}')" style="flex:1;background:#ff66aa;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
+                <button onclick="document.getElementById('phantom-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
+            </div>
+        </div>`;
+
+    const existing = document.getElementById('phantom-modify-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'phantom-modify-modal';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000;';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    modal.innerHTML = html;
+    document.body.appendChild(modal);
+
+    document.getElementById('phantom-edit-depth')?.addEventListener('input', (e) => {
+        const v = parseInt(e.target.value) || 0;
+        document.getElementById('phantom-edit-depth-hint').textContent = 'Dog posts at bid - ' + v + '¢';
+    });
+}
+
+async function phantomModifySave(botId) {
+    const qty = parseInt(document.getElementById('phantom-edit-qty')?.value) || 1;
+    const depth = parseInt(document.getElementById('phantom-edit-depth')?.value) || 5;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/phantom/edit/${botId}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ quantity: qty, anchor_depth: depth })
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            const applied = data.applied_now ? 'Applied now' : 'Queued for next run';
+            showNotification(`Phantom updated: ${qty}x · depth ${depth}¢ — ${applied}`);
+            document.getElementById('phantom-modify-modal')?.remove();
         } else {
             showNotification('Failed: ' + (data.error || 'unknown'));
         }

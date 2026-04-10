@@ -17815,6 +17815,61 @@ def cancel_bot(bot_id):
         monitor_lock.release()
 
 
+@app.route('/api/bot/phantom/edit/<bot_id>', methods=['POST'])
+def phantom_edit(bot_id):
+    """Edit phantom bot settings (quantity, depth). Reposts if in dog_anchor_posted."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if bot.get('bot_category') != 'anchor_dog':
+        return jsonify({'error': 'Not a phantom bot'}), 400
+    payload = request.get_json(force=True) or {}
+    new_qty = payload.get('quantity')
+    new_depth = payload.get('anchor_depth')
+    if new_qty is None and new_depth is None:
+        return jsonify({'error': 'Nothing to change'}), 400
+    changes = {}
+    if new_qty is not None and new_qty != bot.get('quantity'):
+        changes['quantity'] = {'old': bot.get('quantity'), 'new': new_qty}
+        bot['quantity'] = int(new_qty)
+    if new_depth is not None and new_depth != bot.get('anchor_depth'):
+        changes['anchor_depth'] = {'old': bot.get('anchor_depth'), 'new': new_depth}
+        bot['anchor_depth'] = int(new_depth)
+        bot['target_width'] = int(new_depth)  # keep in sync
+    if not changes:
+        return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
+
+    status = bot.get('status', '')
+    applied_now = False
+
+    # If dog is posted and unfilled, cancel and let monitor repost with new settings
+    if status == 'dog_anchor_posted' and bot.get('dog_fill_qty', 0) == 0:
+        dog_oid = bot.get('dog_order_id')
+        if dog_oid:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(dog_oid)
+                bot['dog_order_id'] = None
+                applied_now = True
+                print(f'🔧 PHANTOM EDIT: {bot_id} cancelled dog order for repost with new settings')
+            except Exception as e:
+                print(f'⚠ PHANTOM EDIT: cancel failed for {bot_id}: {e}')
+        else:
+            applied_now = True  # no order to cancel, will pick up on next post
+
+    # waiting_repeat: next run will use new settings automatically
+    elif status == 'waiting_repeat':
+        applied_now = True
+
+    # fav_hedge_posted: mid-hedge, changes queue for next run
+    # (quantity can't change mid-fill without splitting the arb)
+
+    save_state()
+    bot_log('PHANTOM_EDIT', bot_id, {'changes': changes, 'applied_now': applied_now, 'status': status})
+    print(f'🔧 PHANTOM EDIT: {bot_id} — {changes} (applied_now={applied_now})')
+    return jsonify({'ok': True, 'applied_now': applied_now, 'changes': changes})
+
+
 @app.route('/api/bot/patch/<bot_id>', methods=['POST'])
 def patch_bot(bot_id):
     """Admin: patch arbitrary fields on a running bot. Used by Claude Code to fix state

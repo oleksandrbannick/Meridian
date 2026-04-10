@@ -6527,71 +6527,78 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
 
 
 def _apex_mm_walk_up(bot_id, bot):
-    """Walk the exit order toward breakeven if stuck. Called from monitor loop.
-    Only walks when: exit exists, patience expired, market is within range."""
+    """Linear decay walk: move exit order from target → max_loss over 5 minutes.
+    Symmetric risk: target = 100-width (profit), max_loss = 100+width (loss).
+    Snap-back: if market improves during walk, snap price back down."""
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
     if net_yes == 0 and net_no == 0:
-        return  # flat, nothing to walk
+        return
 
-    # Which exit?
     if net_yes > net_no:
         exit_side = 'no'
+        held_side = 'yes'
         avg_held = bot.get('avg_yes_cost', 0)
     else:
         exit_side = 'yes'
+        held_side = 'no'
         avg_held = bot.get('avg_no_cost', 0)
 
     exit_oid = bot.get(f'_{exit_side}_exit_oid')
     if not exit_oid:
-        return  # no exit order posted
+        return
 
     now = time.time()
-    exit_posted_at = bot.get('_exit_posted_at', now)
-    current_price = bot.get('_exit_price', 0)
-    breakeven_price = 100 - avg_held  # combined = 100, 0 profit
-    max_loss_price = 100 - avg_held + 3  # combined = 103, 3c loss max
-
-    # Patience: wait before walking (game-clock aware)
     ticker = bot.get('ticker', '')
-    _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 0
-    if _urgency >= 3:
-        patience_s = 15   # late game — walk fast
-        walk_interval = 3
-    elif _urgency >= 2:
-        patience_s = 30   # mid game
-        walk_interval = 5
-    else:
-        patience_s = 60   # early game — be patient
-        walk_interval = 10
+    current_price = bot.get('_exit_price', 0)
+    width = bot.get('start_gap', 4) * 2  # full width (start_gap is half)
+    target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width // 2))
+    max_loss_price = max(1, min(99, 100 - avg_held + width // 2))  # symmetric: risk = reward
+    walk_range = max(1, max_loss_price - target_price)
+    time_budget = 300  # 5 minutes
+    interval = time_budget / walk_range  # seconds per cent
 
+    exit_posted_at = bot.get('_exit_posted_at', now)
     age = now - exit_posted_at
-    if age < patience_s:
-        return  # still waiting at profit target
 
-    # Walk toward market bid — cap at breakeven, don't overshoot
+    # 5-minute hard stop: if still holding after full walk time, begin exit
+    if age > time_budget + 10:
+        _apex_mm_begin_exit(bot_id, bot, f'time_expired ({int(age)}s, walk done)')
+        return
+
+    # At or past max loss? Begin exit
+    if current_price >= max_loss_price:
+        _apex_mm_begin_exit(bot_id, bot, f'walk_maxed (combined={avg_held + current_price}c)')
+        return
+
+    # Snap-back: if market improved (exit side bid dropped), snap price down
     live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
-
-    # Walk interval check
-    walk_started = bot.get('_exit_walk_started', 0)
-    if walk_started == 0:
-        bot['_exit_walk_started'] = now
-        walk_started = now
-    if now - walk_started < walk_interval * bot.get('_exit_walk_count', 0):
-        return  # not time for next walk step yet
-
-    # Already at or past breakeven? Stop walking.
-    if current_price >= breakeven_price:
-        # At breakeven and still not filling — sellback territory
-        if current_price >= max_loss_price:
-            _apex_mm_begin_exit(bot_id, bot, 'walk_maxed')
-            return
-        # Continue to breakeven but no further for now
-        if current_price >= breakeven_price:
+    if live_exit_bid > 0 and live_exit_bid < current_price - 1:
+        # Market came back — snap to bid (better price)
+        snap_price = max(target_price, live_exit_bid)
+        if snap_price < current_price:
+            try:
+                net_held = abs(net_yes - net_no)
+                price_kwarg = {f'{exit_side}_price': snap_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                          count=net_held, action='buy', **price_kwarg)
+                bot['_exit_price'] = snap_price
+                print(f'📊 APEX MM SNAP-BACK: {bot_id} {current_price}→{snap_price}c (bid improved)')
+                bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid})
+            except Exception:
+                pass
             return
 
-    # Walk 1c
-    new_price = min(current_price + 1, max_loss_price)
+    # Linear decay: calculate where we should be based on time elapsed
+    expected_steps = min(walk_range, int(age / interval)) if interval > 0 else walk_range
+    expected_price = min(max_loss_price, target_price + expected_steps)
+
+    if expected_price <= current_price:
+        return  # not time for next step yet
+
+    # Walk to expected price
+    new_price = min(expected_price, max_loss_price)
     try:
         price_kwarg = {f'{exit_side}_price': new_price}
         net_held = abs(net_yes - net_no)
@@ -6599,12 +6606,15 @@ def _apex_mm_walk_up(bot_id, bot):
         kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                   count=net_held, action='buy', **price_kwarg)
         bot['_exit_price'] = new_price
-        bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + 1
+        bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (new_price - current_price)
         combined = avg_held + new_price
-        print(f'📊 APEX MM WALK: {bot_id} {exit_side.upper()} {current_price}→{new_price}c (combined={combined}c, walk #{bot["_exit_walk_count"]})')
+        pnl_at_price = 100 - combined
+        phase = 'profit' if pnl_at_price > 0 else ('breakeven' if pnl_at_price == 0 else f'loss {abs(pnl_at_price)}c')
+        print(f'📊 APEX MM WALK: {bot_id} {exit_side.upper()} {current_price}→{new_price}c (combined={combined}c, {phase}, {int(age)}s/{time_budget}s)')
         bot_log('APEX_MM_WALK', bot_id, {
             'exit_side': exit_side, 'old_price': current_price, 'new_price': new_price,
-            'combined': combined, 'walk_count': bot['_exit_walk_count'],
+            'combined': combined, 'pnl_at_price': pnl_at_price, 'age_s': int(age),
+            'interval': round(interval, 1), 'range': walk_range,
         })
     except Exception as e:
         if 'filled' in str(e).lower():
@@ -6730,32 +6740,53 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
         })
         print(f'✅ APEX MM COMPLETE: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
     else:
-        # Holding inventory — need to sell back
+        # Holding inventory — pick cheapest maker exit path
         bot['status'] = 'mm_exiting'
         bot['_exit_reason'] = reason
         bot['_exit_started_at'] = time.time()
         bot['_exit_sell_oids'] = {}
 
         ticker = bot['ticker']
-        # Post maker sell orders for held inventory (at ask = 100 - opposite_bid, maker not taker)
         for side, net_qty, avg_cost in [('yes', net_yes, bot.get('avg_yes_cost', 0)), ('no', net_no, bot.get('avg_no_cost', 0))]:
             if net_qty <= 0:
                 continue
             opposite = 'no' if side == 'yes' else 'yes'
             opp_bid = bot.get(f'live_{opposite}_bid', 0)
-            live_ask = (100 - opp_bid) if opp_bid > 0 else 0
-            live_bid = bot.get(f'live_{side}_bid', 0)
-            # Post at ask (maker). Fall back to bid+1 if no ask data.
-            sell_price = max(1, live_ask) if live_ask > 0 else max(1, live_bid + 1) if live_bid > 0 else max(1, avg_cost)
-            try:
-                resp, actual_price = create_order_maker(ticker, side, 'sell', net_qty, sell_price)
-                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
-                if oid:
-                    bot['_exit_sell_oids'][side] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time()}
-                    bot.setdefault('_all_placed_order_ids', []).append(oid)
-                    print(f'🚪 APEX MM EXIT: {bot_id} selling {side.upper()} {net_qty}x @{actual_price}c')
-            except Exception as e:
-                print(f'⚠ APEX MM exit sell {side}: {e}')
+            opp_ask = bot.get(f'live_{opposite}_ask', 0)
+            held_bid = bot.get(f'live_{side}_bid', 0)
+            held_ask = bot.get(f'live_{side}_ask', 0)
+
+            # Option A: sell held side at ask (maker) — cost = avg_cost - sell_price
+            sell_at_ask = held_ask if held_ask > 0 else (held_bid + 1 if held_bid > 0 else avg_cost)
+            cost_sell = avg_cost - sell_at_ask  # negative = profit, positive = loss
+
+            # Option B: buy opposite at bid (maker, completes arb) — cost = avg_cost + opp_bid - 100
+            cost_buy_opp = (avg_cost + opp_bid - 100) if opp_bid > 0 else 999
+
+            # Pick cheaper path
+            if cost_buy_opp < cost_sell and opp_bid > 0:
+                # Buy opposite side at bid (completes arb)
+                buy_price = opp_bid
+                try:
+                    resp, actual_price = create_order_maker(ticker, opposite, 'buy', net_qty, buy_price)
+                    oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                    if oid:
+                        bot['_exit_sell_oids'][opposite] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'buy', 'held_side': side}
+                        bot.setdefault('_all_placed_order_ids', []).append(oid)
+                        print(f'🚪 APEX MM EXIT: {bot_id} buying {opposite.upper()} {net_qty}x @{actual_price}c (arb complete, cheaper by {cost_sell - cost_buy_opp:.0f}c)')
+                except Exception as e:
+                    print(f'⚠ APEX MM exit buy {opposite}: {e}')
+            else:
+                # Sell held side at ask (maker)
+                try:
+                    resp, actual_price = create_order_maker(ticker, side, 'sell', net_qty, sell_at_ask)
+                    oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                    if oid:
+                        bot['_exit_sell_oids'][side] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'sell'}
+                        bot.setdefault('_all_placed_order_ids', []).append(oid)
+                        print(f'🚪 APEX MM EXIT: {bot_id} selling {side.upper()} {net_qty}x @{actual_price}c')
+                except Exception as e:
+                    print(f'⚠ APEX MM exit sell {side}: {e}')
 
         bot_log('APEX_MM_EXIT_START', bot_id, {
             'reason': reason, 'net_yes': net_yes, 'net_no': net_no,
@@ -11650,21 +11681,36 @@ def _handle_apex(bot_id, bot, actions):
     if status != 'market_making_active':
         return
 
-    # 0. Drift guard — pull if market too one-sided (price > 75c either side)
-    _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-    if _drift_max >= 75:
-        bot['_drift_pulled'] = True
-        _apex_mm_pull_all(bot_id, bot, f'drift {_drift_max}c (market decided)')
-        return
-
-    # 0b. Late game exit: if holding inventory in final period, sell back
-    _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 0
-    if _urgency >= 3:
-        net_yes = bot.get('net_yes', 0)
-        net_no = bot.get('net_no', 0)
-        if net_yes > 0 or net_no > 0:
-            _apex_mm_begin_exit(bot_id, bot, f'late_game (urgency={_urgency})')
+    # 0. Drift stop-loss: symmetric (risk = width)
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if net_yes > 0 or net_no > 0:
+        _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
+        _exit_side = 'no' if net_yes > net_no else 'yes'
+        _held_side = 'yes' if net_yes > net_no else 'no'
+        # Cheapest exit: buy opposite at ask OR sell held at ask (100 - held_ask)
+        _exit_ask = bot.get(f'live_{_exit_side}_ask', 0)
+        _held_ask = bot.get(f'live_{_held_side}_ask', 0)
+        _buy_opp_combined = _held_avg + _exit_ask if _exit_ask > 0 else 999
+        _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
+        _best_combined = min(_buy_opp_combined, _sell_held_combined)
+        _width = bot.get('start_gap', 4) * 2
+        _stop = 100 + _width  # symmetric: risk = reward
+        # Instant stop: market jumped past stop
+        if _best_combined > _stop and _best_combined < 999:
+            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width})')
             return
+        # 5-minute hard stop: capital stuck too long
+        _exit_age = now - bot.get('_exit_posted_at', now)
+        if _exit_age > 310 and bot.get('_exit_posted_at', 0) > 0:
+            _apex_mm_begin_exit(bot_id, bot, f'time_stop ({int(_exit_age)}s holding)')
+            return
+
+    # 0b. Late game: begin exit
+    _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 0
+    if _urgency >= 3 and (net_yes > 0 or net_no > 0):
+        _apex_mm_begin_exit(bot_id, bot, f'late_game (urgency={_urgency})')
+        return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)
     should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH)

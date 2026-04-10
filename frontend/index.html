@@ -1144,13 +1144,22 @@
                         </div>
                     </div>
 
-                    <!-- Smart Mode -->
-                    <div style="margin-bottom:16px;padding:10px 14px;background:#00d4ff06;border:1px solid #00d4ff18;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
-                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                            <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00d4ff;width:16px;height:16px;">
-                            <span style="color:#00d4ff;font-size:12px;font-weight:700;">Smart Mode</span>
-                        </label>
-                        <span style="color:#3a4560;font-size:10px;">Auto-stop after 2 losing round trips</span>
+                    <!-- Options row -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+                        <div style="padding:10px 14px;background:#00d4ff06;border:1px solid #00d4ff18;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" id="mm-auto-scale" checked style="accent-color:#00d4ff;width:16px;height:16px;" onchange="updateMMPreview()">
+                                <span style="color:#00d4ff;font-size:11px;font-weight:700;">Auto-Scale</span>
+                            </label>
+                            <span style="color:#3a4560;font-size:9px;">Deeper = more qty</span>
+                        </div>
+                        <div style="padding:10px 14px;background:#00d4ff06;border:1px solid #00d4ff18;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00d4ff;width:16px;height:16px;">
+                                <span style="color:#00d4ff;font-size:11px;font-weight:700;">Smart Mode</span>
+                            </label>
+                            <span style="color:#3a4560;font-size:9px;">Stop after 2 losses</span>
+                        </div>
                     </div>
 
                     <!-- Hidden fields -->
@@ -3173,7 +3182,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260410105000"></script>
+    <script src="app.js?v=20260410110500"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

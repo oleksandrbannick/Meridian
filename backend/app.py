@@ -6298,7 +6298,7 @@ def _apex_mm_repost_ladder(bot_id, bot):
         bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'skew_pending': True})
         print(f'📊 APEX MM REPOST: {bot_id} mid={midpoint} (skew pending, holding inventory)')
     else:
-        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, inv_limit=bot.get('inventory_limit', 0))
+        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
         if not yes_levels and not no_levels:
             return
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -6578,7 +6578,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     # Clear side pauses so fresh ladder replaces ALL orders (resets fill_qty)
     bot['_yes_side_paused'] = False
     bot['_no_side_paused'] = False
-    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -6874,6 +6874,7 @@ def create_ladder_arb_bot():
         inventory_limit = int(data.get('inventory_limit', 50))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
         smart_mode = int(data.get('smart_mode', 0))
+        auto_scale = bool(data.get('auto_scale', True))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -6956,7 +6957,7 @@ def create_ladder_arb_bot():
 
         # Calculate midpoint and generate levels with auto-scale qty
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
-        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=inventory_limit)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, scale=auto_scale, inv_limit=inventory_limit)
 
         if not yes_levels and not no_levels:
             return jsonify({'error': f'No valid price levels (midpoint={midpoint}, gap={start_gap}, levels={levels})'}), 400
@@ -6984,6 +6985,7 @@ def create_ladder_arb_bot():
             'spacing': spacing,
             'qty_per_level': qty_per_level,
             'base_qty': qty_per_level,
+            'auto_scale': auto_scale,
             'inventory_limit': inventory_limit,
             'loss_limit_cents': loss_limit_cents,
             'smart_mode': smart_mode,
@@ -16884,6 +16886,28 @@ def cancel_bot(bot_id):
         return jsonify(result)
     finally:
         monitor_lock.release()
+
+
+@app.route('/api/bot/patch/<bot_id>', methods=['POST'])
+def patch_bot(bot_id):
+    """Admin: patch arbitrary fields on a running bot. Used by Claude Code to fix state
+    without editing data.json (which gets overwritten by save_state)."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    payload = request.get_json(force=True) or {}
+    changes = {}
+    for key, value in payload.items():
+        if key in ('bot_id', 'ticker', 'type', 'bot_category'):
+            continue  # don't allow changing identity fields
+        old_val = bot.get(key)
+        bot[key] = value
+        changes[key] = {'old': old_val, 'new': value}
+    if changes:
+        save_state()
+        bot_log('ADMIN_PATCH', bot_id, changes)
+        print(f'🔧 ADMIN PATCH: {bot_id[:40]} — {list(changes.keys())}')
+    return jsonify({'ok': True, 'changes': changes})
 
 
 @app.route('/api/bot/cancel-bulk', methods=['POST'])

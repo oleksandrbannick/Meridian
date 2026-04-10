@@ -5561,13 +5561,14 @@ function updateMMPreview() {
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
     const baseQty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 5;
+    const autoScale = document.getElementById('mm-auto-scale')?.checked ?? true;
     const noAnchor = 100 - mid;
     const yesLevels = [], noLevels = [];
     for (let i = 0; i < levels; i++) {
         const offset = gap + (i * spacing);
         const yp = mid - offset;
         const np = noAnchor - offset;
-        const scale = levels > 1 ? 1.0 + (i * 1.0 / (levels - 1)) : 1.0;
+        const scale = (autoScale && levels > 1) ? 1.0 + (i * 1.0 / (levels - 1)) : 1.0;
         const lq = Math.max(1, Math.round(baseQty * scale));
         if (yp >= 1) yesLevels.push({p: yp, q: lq});
         if (np >= 1) noLevels.push({p: np, q: lq});
@@ -5605,6 +5606,7 @@ async function deployMarketMaker() {
     const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
     const invLimit = levels * qtyPerLevel * 2;  // auto: total scaled ladder qty (generous cap)
     const smartChecked = document.getElementById('mm-smart-mode')?.checked;
+    const autoScale = document.getElementById('mm-auto-scale')?.checked ?? true;
     const smartLimit = smartChecked ? 2 : 0;
     const width = _mmSelectedWidth;
 
@@ -5624,6 +5626,7 @@ async function deployMarketMaker() {
                 ticker, start_gap: startGap, levels, spacing,
                 qty_per_level: qtyPerLevel,
                 inventory_limit: invLimit,
+                auto_scale: autoScale,
                 loss_limit_cents: 0,
                 smart_mode: smartLimit,
             }),
@@ -6464,10 +6467,41 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // Determine which side is exit vs entry for column labels
     const yesIsExit = skewActive && skewDirection === 'exit_yes';
     const noIsExit = skewActive && skewDirection === 'exit_no';
-    const yesLabel = yesIsExit ? 'YES BIDS — EXIT' : noIsExit ? 'YES BIDS — ENTRY' : 'YES BIDS';
-    const noLabel = noIsExit ? 'NO BIDS — EXIT' : yesIsExit ? 'NO BIDS — ENTRY' : 'NO BIDS';
+    const yesLabel = yesIsExit ? 'YES — HEDGE EXIT' : noIsExit ? 'YES — ENTRY' : 'YES BIDS';
+    const noLabel = noIsExit ? 'NO — HEDGE EXIT' : yesIsExit ? 'NO — ENTRY' : 'NO BIDS';
     const yesBorderCol = yesIsExit ? '#00ff8833' : noIsExit ? '#00d4ff22' : '#00d4ff22';
     const noBorderCol = noIsExit ? '#ff444433' : yesIsExit ? '#00d4ff22' : '#00d4ff22';
+
+    // When a side is the exit, replace its ladder with the consolidated exit order display
+    const exitPrice = bot._exit_price || 0;
+    const exitFillQty = bot._exit_fill_qty || 0;
+    const exitTotalQty = bot._exit_total_qty || Math.abs(netYes - netNo);
+    if (yesIsExit && exitPrice > 0) {
+        const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
+        yesLadder = `<div style="padding:6px 8px;background:#00ff8815;border:1px solid #00ff8833;border-radius:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:#00ff88;font-weight:800;font-size:13px;">${exitPrice}¢</span>
+                <span style="color:#00ff88;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+            </div>
+            <div style="height:4px;background:#0f1520;border-radius:2px;overflow:hidden;">
+                <div style="width:${fp}%;height:100%;background:#00ff88;border-radius:2px;transition:width .3s;"></div>
+            </div>
+            <div style="color:#556;font-size:9px;margin-top:3px;">Consolidated hedge · ${bot._exit_walk_count > 0 ? 'walking ' + bot._exit_walk_count + ' steps' : 'at target'}</div>
+        </div>`;
+    }
+    if (noIsExit && exitPrice > 0) {
+        const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
+        noLadder = `<div style="padding:6px 8px;background:#ff444415;border:1px solid #ff444433;border-radius:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:#ff4444;font-weight:800;font-size:13px;">${exitPrice}¢</span>
+                <span style="color:#ff4444;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+            </div>
+            <div style="height:4px;background:#0f1520;border-radius:2px;overflow:hidden;">
+                <div style="width:${fp}%;height:100%;background:#ff4444;border-radius:2px;transition:width .3s;"></div>
+            </div>
+            <div style="color:#556;font-size:9px;margin-top:3px;">Consolidated hedge · ${bot._exit_walk_count > 0 ? 'walking ' + bot._exit_walk_count + ' steps' : 'at target'}</div>
+        </div>`;
+    }
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${accentCol}33;border-left:3px solid ${accentCol};border-radius:12px;padding:14px;margin-bottom:10px;`;

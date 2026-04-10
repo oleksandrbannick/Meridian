@@ -6529,82 +6529,26 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         ${pullInfo}
         ${exitInfo}
-        ${skewBanner}
-        ${invHtml}
 
-        ${(() => {
-            // Exit/hedge order display
-            const exitSide = bot._exit_side || (netYes > netNo ? 'no' : netNo > netYes ? 'yes' : null);
-            const exitOid = exitSide ? bot[`_${exitSide}_exit_oid`] : null;
-            const exitPrice = bot._exit_price || 0;
-            const walkCount = bot._exit_walk_count || 0;
-            const netHeld = Math.abs(netYes - netNo);
-            const heldSide = bot._exit_held_side ? bot._exit_held_side.toUpperCase() : (netYes > netNo ? 'YES' : 'NO');
-            const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
-            const exitTotalQty = bot._exit_total_qty || netHeld;
-            const exitFillQty = bot._exit_fill_qty || 0;
-            const targetPrice = bot._exit_target_price || exitPrice;
-            const combined = heldAvg + exitPrice;
-            const estProfit = 100 - combined;
-            const breakeven = 100 - heldAvg;
-            if (!exitSide || (netHeld === 0 && exitFillQty === 0)) return '';
-            const exitCol = exitSide === 'yes' ? '#00ff88' : '#ff4444';
-            const exitLabel = exitSide.toUpperCase();
+        ${(netYes > 0 || netNo > 0) ? (() => {
+            const longSide = netYes > netNo ? 'YES' : 'NO';
+            const heldQty = Math.abs(netYes - netNo);
+            const heldAvg = netYes > netNo ? avgYesCost : avgNoCost;
+            const ep = bot._exit_price || 0;
+            const combined = heldAvg + ep;
             const combCol = combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : combined <= 100 ? '#ff8800' : '#ff4444';
-            const fillPct = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
-            const isWalking = walkCount > 0;
-            const walkPct = (targetPrice > 0 && breakeven > targetPrice) ? Math.min(100, Math.round((exitPrice - targetPrice) / (breakeven - targetPrice) * 100)) : 0;
-            return `<div style="padding:10px 12px;background:#060a14;border:1px solid ${exitCol}33;border-left:3px solid ${exitCol};border-radius:8px;margin-bottom:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="color:${exitCol};font-size:10px;font-weight:800;letter-spacing:.05em;">HEDGE — ${exitLabel} EXIT</span>
-                        ${exitOid ? `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">LIVE</span>` : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">PENDING</span>`}
-                        ${isWalking ? `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALKING</span>` : ''}
-                    </div>
-                    <span style="color:${combCol};font-size:12px;font-weight:800;">${estProfit >= 0 ? '+' : ''}${estProfit}¢/ea</span>
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
-                    <div style="text-align:center;">
-                        <div style="color:#556;font-size:8px;text-transform:uppercase;letter-spacing:.05em;">Entry</div>
-                        <div style="color:#fff;font-weight:800;font-size:16px;">${heldAvg}¢</div>
-                        <div style="color:#556;font-size:9px;">${heldSide} x${netHeld > 0 ? netHeld : exitTotalQty}</div>
-                    </div>
-                    <div style="text-align:center;">
-                        <div style="color:#556;font-size:8px;text-transform:uppercase;letter-spacing:.05em;">Exit</div>
-                        <div style="color:${exitCol};font-weight:800;font-size:16px;">${exitPrice}¢</div>
-                        <div style="color:#556;font-size:9px;">${exitLabel} x${netHeld > 0 ? netHeld : exitTotalQty}</div>
-                    </div>
-                    <div style="text-align:center;">
-                        <div style="color:#556;font-size:8px;text-transform:uppercase;letter-spacing:.05em;">Combined</div>
-                        <div style="color:${combCol};font-weight:800;font-size:16px;">${combined}¢</div>
-                        <div style="color:#556;font-size:9px;">BE: ${breakeven}¢</div>
-                    </div>
-                </div>
-                <div style="margin-bottom:4px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-                        <span style="color:#556;font-size:9px;">Exit Fill Progress</span>
-                        <span style="color:${exitFillQty > 0 ? exitCol : '#556'};font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
-                    </div>
-                    <div style="height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                        <div style="width:${fillPct}%;height:100%;background:${exitCol};border-radius:3px;transition:width .3s;"></div>
-                    </div>
-                </div>
-                ${isWalking ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-                        <span style="color:#ffaa00;font-size:9px;font-weight:600;">Walk Progress — ${walkCount} step${walkCount !== 1 ? 's' : ''}</span>
-                        <span style="color:#556;font-size:9px;">${targetPrice}¢ → ${breakeven}¢</span>
-                    </div>
-                    <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:${walkPct}%;height:100%;background:linear-gradient(90deg,#00ff88,#ffaa00);border-radius:2px;"></div>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;margin-top:2px;">
-                        <span style="color:#00ff88;font-size:8px;">Target ${targetPrice}¢</span>
-                        <span style="color:#ffaa00;font-size:8px;font-weight:700;">Now ${exitPrice}¢</span>
-                        <span style="color:#ff4444;font-size:8px;">BE ${breakeven}¢</span>
-                    </div>
-                </div>` : ''}
+            const profit = 100 - combined;
+            const exitPostedAt = bot._exit_posted_at || 0;
+            const skewSec = exitPostedAt > 0 ? Math.floor(Date.now() / 1000 - exitPostedAt) : 0;
+            const timeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m ${skewSec%60}s` : `${skewSec}s`;
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#00d4ff08;border:1px solid #00d4ff22;border-radius:6px;margin-bottom:8px;font-size:11px;">
+                <span style="color:#00d4ff;font-weight:700;">HOLDING ${longSide} ${heldQty}x @ ${heldAvg}¢</span>
+                <span style="display:flex;gap:8px;align-items:center;">
+                    ${ep > 0 ? `<span style="color:${combCol};font-weight:700;">${heldAvg}+${ep}=${combined}¢ (${profit >= 0 ? '+' : ''}${profit}¢)</span>` : ''}
+                    ${skewSec > 0 ? `<span style="color:#556;">${timeStr}</span>` : ''}
+                </span>
             </div>`;
-        })()}
+        })() : ''}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
             <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">

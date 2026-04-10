@@ -5696,8 +5696,8 @@ _PHANTOM_DEATH_ZONE = {
     'KXNFL':    {'period': 4, 'secs': 120, 'name': 'NFL Q4 <2:00'},
     'KXNHL':    {'period': 3, 'secs': 180, 'name': 'NHL P3 <3:00'},
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
-    # Tennis: NO death zone — no clock, matches can swing back, and existing guards
-    # (drift pull, price floor at 2¢) already handle all scenarios.
+    # Tennis: NO death zone — matches can swing back from 2c, price floor pull
+    # handles sub-2c, and settlement handles cleanup. No clock = no death zone.
 }
 
 
@@ -9313,6 +9313,31 @@ def _handle_phantom(bot_id, bot, actions):
         save_state()
         return
 
+    # ── Death zone transition for stopped bots — remove restart capability ──
+    if status in ('completed', 'stopped') and not bot.get('_death_zone_stopped') and not bot.get('_market_settled_at'):
+        _dz_check, _dz_reason_check = _is_phantom_death_zone(ticker, bot)
+        if _dz_check:
+            bot['_death_zone_stopped'] = True
+            bot['_death_zone_reason'] = _dz_reason_check
+            print(f'🛑 DEATH ZONE TRANSITION: {bot_id} — {_dz_reason_check} (was {status})')
+            save_state()
+
+    # ── Settlement check for stopped/completed bots — mark for purge timer ──
+    if status in ('completed', 'stopped') and not bot.get('_market_settled_at') and now - bot.get('_last_settle_check_global', 0) > 60:
+        bot['_last_settle_check_global'] = now
+        try:
+            api_read_limiter.wait()
+            _mkt = kalshi_client.get_market(ticker)
+            if isinstance(_mkt, dict) and _mkt.get('status') in ('settled', 'finalized'):
+                bot['_market_settled_at'] = now
+                bot['_smart_stopped'] = True
+                bot['_smart_stop_reason'] = 'final'
+                print(f'🏁 SETTLED: {bot_id} market settled → 5 min purge timer started')
+                save_state()
+        except Exception:
+            pass
+        return
+
     # ── Settlement cleanup: cancel unfilled orders if market settled ──
     if status in ('dog_anchor_posted', 'waiting_repeat') and now - bot.get('_last_settle_check_global', 0) > 60:
         bot['_last_settle_check_global'] = now
@@ -9328,9 +9353,9 @@ def _handle_phantom(bot_id, bot, actions):
                     except Exception:
                         pass
                 _phantom_set_final_status(bot, bot_id)
-                # Always tag as settled so frontend shows "MARKET SETTLED" (not generic "COMPLETE")
                 bot['_smart_stopped'] = True
                 bot['_smart_stop_reason'] = 'final'
+                bot['_market_settled_at'] = now
                 bot_log('PHANTOM_SETTLED_CLEANUP', bot_id, {'prev_status': status, 'mkt_status': _mkt.get('status')})
                 print(f'🧹 SETTLED CLEANUP: {bot_id} market {_mkt.get("status")} → {bot["status"]}')
                 save_state()
@@ -11951,16 +11976,16 @@ def _run_monitor():
         if _cross_fixed > 0:
             save_state()
 
-        # ── Purge stale completed/stopped bots from active_bots ──
-        # Keep them for 5min so the frontend sees the final state, then remove.
-        # awaiting_settlement bots are never purged (they hold positions until Kalshi settles).
+        # ── Purge settled bots from active_bots ──
+        # Bots stay until market settles. Only purge 5 min after _market_settled_at timestamp.
+        # Cancelled bots (user hit X) purge after 5 min regardless.
         _purge_cutoff = time.time() - 300  # 5 min
         _purge_ids = [bid for bid, b in active_bots.items()
-                      if b.get('status') in ('completed', 'stopped', 'cancelled')
-                      and (b.get('completed_at') or b.get('stopped_at') or b.get('cancelled_at') or 0) < _purge_cutoff
-                      and not (b.get('hedge_ticker') and b.get('hedge_ticker') != b.get('ticker')
-                              and (b.get('_cross_settled_qty', 0) > 0 or b.get('_cross_settled_qty_dog', 0) > 0)
-                              and not b.get('_positions_cleared'))  # keep cross-market WITH positions, but allow purge if settled
+                      if (b.get('status') == 'cancelled'
+                          and (b.get('cancelled_at') or 0) < _purge_cutoff)
+                      or (b.get('status') in ('completed', 'stopped')
+                          and b.get('_market_settled_at', 0) > 0
+                          and b['_market_settled_at'] < _purge_cutoff)
                       ]
         if _purge_ids:
             for _pid in _purge_ids:

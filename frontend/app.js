@@ -5705,174 +5705,15 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const isLadder = bot.bot_category === 'anchor_ladder';
     const rungs = bot.rungs || [];
 
-    // ── COMPLETED/STOPPED SUMMARY CARD (early return) ──
-    if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement' || (bot._smart_stopped && (bot._run_history || []).length > 0)) {
-        // Skip completion card for bots that are mid-repeat (transient completed state)
-        const _midRepeat = status === 'completed' && bot._just_completed && (
-            (bot.smart_mode && !bot._smart_stopped) ||
-            (bot.repeat_count > 0 && (bot.repeats_done || 0) <= bot.repeat_count)
-        );
-        if (!_midRepeat) {
-        const _ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
-        const _runs = Math.max(1, bot.repeats_done || 0);
-        const _isCross = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
-        const _qtyPer = bot.rungs ? bot.rungs.reduce((s, r) => s + (r.qty || 1), 0) : (bot.quantity || 1);
-        const _crossQty = bot._cross_settled_qty ?? 0;
-        let _crossQtyDog = bot._cross_settled_qty_dog ?? _crossQty;
-        let _crossQtyFav = bot._cross_settled_qty_fav ?? _crossQty;
-        const _isAwaiting = status === 'awaiting_settlement' || (_isCross && (_crossQtyDog > 0 || _crossQtyFav > 0));
-        // Subtract smart exit sold qty from the correct side
-        if (bot._smart_exit_sold && bot._smart_exit_sold.qty > 0) {
-            if (bot._smart_exit_sold.ticker === bot.ticker) _crossQtyDog = Math.max(0, _crossQtyDog - bot._smart_exit_sold.qty);
-            else _crossQtyFav = Math.max(0, _crossQtyFav - bot._smart_exit_sold.qty);
-        }
-        const _isSmart = bot._smart_stopped;
-        const _isDZ = bot._death_zone_stopped;
-        const _isSettled = _isSmart && bot._smart_stop_reason === 'final';
-        const _col = _isAwaiting ? '#818cf8' : _isDZ ? '#ff4444' : _isSettled ? '#ffaa00' : _isSmart ? '#00e5ff' : '#00ff88';
-        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isDZ ? '🛑 END OF GAME STOP' : _isSettled ? '🏁 MARKET SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
-        // Completion reason
-        let _stopReason = '';
-        if (_isDZ) _stopReason = bot._death_zone_reason || 'game ending';
-        else if (bot._stop_reason) _stopReason = bot._stop_reason;
-        else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
-        else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
-        else if (bot._smart_stop_reason === 'manual') _stopReason = 'manually stopped';
-        else if (bot._smart_stop_reason === 'coinflip') _stopReason = 'coinflip territory';
-        else if (bot._smart_stop_reason === 'bottom') _stopReason = 'hit bottom';
-        else if (status === 'stopped') _stopReason = 'stopped';
-        const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
-        const dogSide = bot.dog_side || 'no';
-        const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
-        let liveScoreHtml = '';
-        if (gameScores) {
-            const parts = (bot.ticker || '').split('-');
-            const gk = parts.length >= 2 ? parts[1] : parts[0];
-            const gs = gameScores[gk] || null;
-            if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
-        }
-        const _trigger = bot._smart_exit_trigger;
-        const _triggerActive = _trigger && _trigger.price > 0 && !bot._smart_exit_sold;
-        const item = document.createElement('div');
-        item.style.cssText = `background:#0f1419;border:1px solid ${_col}33;border-left:3px solid ${_col};border-radius:12px;padding:14px;margin-bottom:10px;`;
-        item.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;">PHANTOM</span>
-                    <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
-                    <span style="background:${_col}22;color:${_col};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${_label}</span>
-                    ${_stopReason ? `<span style="color:#8892a6;font-size:9px;font-style:italic;">${_stopReason}</span>` : ''}
-                    ${liveScoreHtml}
-                    ${_isCross ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">CROSS</span>' : ''}
-                    ${bot.smart_mode ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${_runs} runs</span>` : _runs > 1 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_runs} runs</span>` : ''}
-                    ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : ''); })()}
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                    ${bot.smart_mode ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                    ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
-                    ${_isCross && _isAwaiting && !bot._smart_exit_sold ? `<button onclick="smartExitMenu('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
-                    <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
-                </div>
-            </div>
-            <div style="background:#060a14;border:1px solid ${_col}33;border-radius:8px;padding:14px;">
-                ${_isCross ? `
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
-                    <div style="padding:8px;background:${_col}11;border-radius:6px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                            <span style="color:#ffaa00;font-size:9px;font-weight:700;">DOG · ${dogSide.toUpperCase()}</span>
-                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQtyDog}x</span>
-                        </div>
-                        <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
-                            <div style="background:#ffaa00;height:100%;width:100%;border-radius:3px;"></div>
-                        </div>
-                        <div style="color:#555;font-size:9px;margin-top:3px;">${(bot.ticker || '').split('-').pop()} · filled</div>
-                    </div>
-                    <div style="padding:8px;background:${_col}11;border-radius:6px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                            <span style="color:#00aaff;font-size:9px;font-weight:700;">FAV · ${favSide.toUpperCase()}</span>
-                            <span style="color:#fff;font-size:14px;font-weight:800;">${_crossQtyFav}x</span>
-                        </div>
-                        <div style="background:#1a2540;border-radius:3px;height:6px;overflow:hidden;">
-                            <div style="background:#00aaff;height:100%;width:100%;border-radius:3px;"></div>
-                        </div>
-                        <div style="color:#555;font-size:9px;margin-top:3px;">${(bot.hedge_ticker || '').split('-').pop()} · filled</div>
-                    </div>
-                </div>` : ''}
-                ${(bot._run_history || []).length > 0 ? `
-                <div style="margin-bottom:8px;">
-                    ${(bot._run_history || []).map((r, i) => {
-                        const _dp = r.dog_price || '?';
-                        const _fp = r.fav_price || '?';
-                        const _comb = (typeof _dp === 'number' && typeof _fp === 'number') ? _dp + _fp : 0;
-                        const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
-                        const _depCap = _comb > 0 ? 100 - _comb : 0;
-                        const _depFloor = r.anchor_depth || bot.anchor_depth || 0;
-                        const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
-                        // Depth badge: show depth floor used for this run
-                        let _depBadge = '';
-                        if (_depFloor > 0 && _comb > 0) {
-                            const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
-                            _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;
-                        }
-                        // Depth floor badge: show the floor setting for this run
-                        const _floorBadge = _depFloor > 0 ? `<span style="color:#ff66aa;font-size:8px;font-weight:700;background:#ff66aa18;padding:0 3px;border-radius:2px;margin-left:2px;">F${_depFloor}</span>` : '';
-                        return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
-                            <span style="color:#00e5ff;font-weight:700;font-size:10px;">#${r.run || i + 1}</span>
-                            <span style="display:flex;align-items:center;gap:3px;">
-                                <span style="color:#ffaa00;font-weight:700;">${_dp}¢</span>
-                                <span style="color:#3a4560;">+</span>
-                                <span style="color:#00aaff;font-weight:700;">${_fp}¢</span>
-                                ${_comb > 0 ? `<span style="color:#3a4560;">=</span><span style="color:${_combCol};font-weight:700;">${_comb}¢</span>` : ''}
-                                ${r.taker ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>` : ''}
-                                ${_depBadge}
-                                ${_floorBadge}
-                                ${_hedgeMs != null ? `<span style="color:${_hedgeMs < 1 ? '#00ffcc' : _hedgeMs < 5 ? '#00ff88' : '#ffaa00'};font-size:8px;font-weight:700;margin-left:2px;">⚡${_hedgeMs < 1 ? _hedgeMs.toFixed(1) : Math.round(_hedgeMs)}ms</span>` : ''}
-                            </span>
-                            <span style="color:#00e5ff;font-weight:700;">x${r.qty || 1}</span>
-                            <span style="color:${r.pnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:800;text-align:right;">${r.pnl >= 0 ? '+' : ''}${r.pnl}¢</span>
-                        </div>`;
-                    }).join('')}
-                </div>` : _runs > 1 ? `
-                <div style="text-align:center;padding:4px;margin-bottom:8px;color:#556;font-size:10px;">${_runs} runs completed · ${_crossQty} contracts per side</div>` : ''}
-                <div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;">
-                    <span>Runs: <strong style="color:#fff;">${_runs}</strong></span>
-                    ${(_crossQtyDog > 0 || _crossQtyFav > 0) ? `<span>Holding: <strong style="color:#fff;">${_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x'}</strong></span>` : ''}
-                    <span>P&L: <strong style="color:${_ltPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:13px;">${_ltPnl >= 0 ? '+' : ''}${_ltPnl}¢</strong></span>
-                    ${bot.anchor_depth ? `<span>Depth: <strong style="color:#ff66aa;">${bot.anchor_depth}¢</strong></span>` : ''}
-                    ${bot.smart_mode ? `<span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>` : ''}
-                </div>
-                ${(bot.live_yes_bid != null || bot.live_no_bid != null) ? `
-                <div style="display:grid;grid-template-columns:${_isCross ? '1fr 1fr' : '1fr'};gap:8px;margin-top:8px;font-size:10px;">
-                    <div style="background:#060a14;border:1px solid #00ff8822;border-radius:6px;padding:6px 8px;text-align:center;">
-                        <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.ticker || '').split('-').pop()} · YES/NO</div>
-                        <span style="color:#00ff88;font-weight:700;">${bot.live_yes_bid ?? '?'}¢</span>
-                        <span style="color:#555;"> / </span>
-                        <span style="color:#ff4444;font-weight:700;">${bot.live_no_bid ?? '?'}¢</span>
-                    </div>
-                    ${_isCross ? `<div style="background:#060a14;border:1px solid #f7816622;border-radius:6px;padding:6px 8px;text-align:center;">
-                        <div style="color:#555;font-size:8px;margin-bottom:2px;">${(bot.hedge_ticker || '').split('-').pop()} · YES/NO</div>
-                        <span style="color:#00ff88;font-weight:700;">${bot.live_hedge_yes_bid ?? '?'}¢</span>
-                        <span style="color:#555;"> / </span>
-                        <span style="color:#ff4444;font-weight:700;">${bot.live_hedge_no_bid ?? '?'}¢</span>
-                    </div>` : ''}
-                </div>` : ''}
-                ${_triggerActive ? `<div style="text-align:center;margin-top:8px;padding:8px 12px;background:#64ffda22;border:2px solid #64ffda66;border-radius:8px;font-size:12px;color:#64ffda;font-weight:700;">
-                    <div style="margin-bottom:4px;">SMART EXIT ARMED</div>
-                    <div style="font-size:10px;font-weight:400;color:#8892a6;">Sell <strong style="color:#ff4444;">${(_trigger.ticker || bot.ticker || '').split('-').pop()}</strong> when bid drops to <strong style="color:#ffaa00;">${_trigger.price}¢</strong></div>
-                    <div style="font-size:9px;font-weight:400;color:#555;margin-top:2px;">Hold <strong style="color:#00ff88;">${(_trigger.winner_ticker || bot.hedge_ticker || '').split('-').pop()}</strong> for settlement</div>
-                    <button onclick="event.stopPropagation();setSmartExitTrigger('${botId}', 0)" style="margin-top:6px;background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:4px;padding:2px 10px;font-size:9px;cursor:pointer;">Cancel Trigger</button>
-                </div>` : ''}
-                ${bot._smart_exit_sold ? `<div style="text-align:center;margin-top:8px;padding:8px 12px;background:#00ff8822;border:2px solid #00ff8866;border-radius:8px;font-size:12px;color:#00ff88;font-weight:700;">
-                    <div style="margin-bottom:4px;">SMART EXIT COMPLETE</div>
-                    <div style="font-size:10px;font-weight:400;color:#8892a6;">Sold <strong style="color:#ff4444;">${(bot._smart_exit_sold.ticker || '').split('-').pop()}</strong> @ ${bot._smart_exit_sold.price || '?'}¢ · holding <strong style="color:#00ff88;">${(bot._smart_exit_sold.winner_ticker || '').split('-').pop()}</strong> for settlement</div>
-                </div>` : ''}
-                ${bot._smart_stop_pending ? `<div style="text-align:center;margin-top:6px;padding:3px 8px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;font-size:10px;color:#ff8800;">Stopping after current cycle</div>` : ''}
-            </div>
-            <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
-        `;
-        container.appendChild(item);
-        return;
-    }}
+    // Mid-repeat guard: skip completed rendering for bots transitioning between cycles
+    const _midRepeat = status === 'completed' && bot._just_completed && (
+        (bot.smart_mode && !bot._smart_stopped) ||
+        (bot.repeat_count > 0 && (bot.repeats_done || 0) <= bot.repeat_count)
+    );
+    if (_midRepeat) {
+        // Treat as waiting_repeat for display purposes
+        bot._display_status = 'waiting_repeat';
+    }
     const dogSide = bot.dog_side || 'no';
     const favSide = bot.fav_side || (dogSide === 'yes' ? 'no' : 'yes');
     const qty = bot.quantity || 1;
@@ -5884,7 +5725,19 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _isSmartStopped = bot._smart_stopped;
     const _isDeathZone = bot._death_zone_stopped;
     const _isAwaitingSettlement = status === 'awaiting_settlement' || (status === 'completed' && bot.cross_market && !bot._positions_cleared);
-    const _isCompletedSummary = (status === 'completed' || status === 'stopped') || _isAwaitingSettlement;
+    const _isCompletedSummary = (status === 'completed' || status === 'stopped') || _isAwaitingSettlement || _isSmartStopped;
+    // Stop reason for header display
+    let _stopReason = '';
+    if (_isCompletedSummary) {
+        if (_isDeathZone) _stopReason = bot._death_zone_reason || 'game ending';
+        else if (bot._stop_reason) _stopReason = bot._stop_reason;
+        else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
+        else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
+        else if (bot._smart_stop_reason === 'manual') _stopReason = 'manually stopped';
+        else if (bot._smart_stop_reason === 'coinflip') _stopReason = 'coinflip territory';
+        else if (bot._smart_stop_reason === 'bottom') _stopReason = 'hit bottom';
+        else if (status === 'stopped') _stopReason = 'stopped';
+    }
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
@@ -6023,18 +5876,22 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">PHANTOM</span>
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
+                ${_stopReason ? `<span style="color:#8892a6;font-size:9px;font-style:italic;">${_stopReason}</span>` : ''}
                 ${liveScoreHtml}
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
-                ${dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
-                ${dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
-                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_stop_reason === 'manual' ? 'stopped' : `${bot._smart_losses || bot.consecutive_losses || 0}L`})` : bot._smart_stop_pending ? `Stopping after this run · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
+                ${!_isCompletedSummary && dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
+                ${!_isCompletedSummary && dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
+                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `Smart · ${bot.repeats_done || 0} runs` : bot._smart_stop_pending ? `Stopping · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
+                ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return _isCompletedSummary ? ((_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : '')) : ''; })()}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-                ${!dogFilled ? `<button onclick="phantomModify('${botId}')" style="background:#ff66aa22;color:#ff66aa;border:1px solid #ff66aa44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${!bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
-                ${bot.smart_mode && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+                ${!_isCompletedSummary && !dogFilled ? `<button onclick="phantomModify('${botId}')" style="background:#ff66aa22;color:#ff66aa;border:1px solid #ff66aa44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!_isCompletedSummary && bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${_isCompletedSummary && !_isDeathZone && !_isAwaitingSettlement && bot.smart_mode ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${_isCompletedSummary && !_isDeathZone && !_isAwaitingSettlement && !bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                ${!_isCompletedSummary && !bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                ${_isCompletedSummary && isCrossMarket && _isAwaitingSettlement && !bot._smart_exit_sold ? `<button onclick="smartExitMenu('${botId}')" style="background:#64ffda22;color:#64ffda;border:1px solid #64ffda44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Smart Exit</button>` : ''}
+                ${!_isAwaitingSettlement ? `<button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>` : ''}
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -6126,7 +5983,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             }
             return '';
         })()}
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${(() => {
                 const _rd = bot._rec_depth;
                 if (_rd == null) return '';
@@ -6156,7 +6013,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             })() : ''}
             <span style="color:#00e5ff;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
-            ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
+            ${!_isCompletedSummary && bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L</span>` : !_isCompletedSummary && bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
+            ${_isCompletedSummary && bot.smart_mode ? `<span style="color:#8892a6;">Streak: <strong style="color:${(bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88'};">${bot.consecutive_losses || 0}L</strong></span>` : ''}
             ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const lat = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
@@ -6259,12 +6117,14 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 }).join('');
                 html += '</div>';
             }
-            if ((status === 'awaiting_settlement' || status === 'completed' || status === 'stopped') && _isCross && _crossQtyDog > 0) {
+            if (_rh.length > 0 && (bot._smart_stopped || status === 'completed' || status === 'stopped' || status === 'awaiting_settlement')) {
+                const _ltPnlDisp = bot.lifetime_pnl ?? _ltPnl;
                 html += '<div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">'
-                    + '<span>Runs: <strong style="color:#fff;">' + _runs + '</strong></span>'
-                    + '<span>Holding: <strong style="color:#fff;">' + (_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x') + '</strong></span>'
-                    + '<span>P&L: <strong style="color:' + (_ltPnl >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnl >= 0 ? '+' : '') + _ltPnl + '¢</strong></span>'
-                    + (bot.smart_mode ? '<span>Smart: <strong style="color:#00e5ff;">' + (bot._smart_wins || 0) + 'W / ' + (bot._smart_losses || 0) + 'L</strong></span>' : '')
+                    + '<span>Runs: <strong style="color:#fff;">' + (bot.repeats_done || _rh.length) + '</strong></span>'
+                    + (_isCross && (_crossQtyDog > 0 || _crossQtyFav > 0) ? '<span>Holding: <strong style="color:#fff;">' + (_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x') + '</strong></span>' : '')
+                    + '<span>P&L: <strong style="color:' + (_ltPnlDisp >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnlDisp >= 0 ? '+' : '') + _ltPnlDisp + '¢</strong></span>'
+                    + (bot.anchor_depth ? '<span>Depth: <strong style="color:#ff66aa;">' + bot.anchor_depth + '¢</strong></span>' : '')
+                    + (bot.smart_mode ? '<span>Streak: <strong style="color:' + ((bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88') + ';">' + (bot.consecutive_losses || 0) + 'L</strong></span>' : '')
                     + '</div>';
             }
             return html;

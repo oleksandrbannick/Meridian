@@ -3858,9 +3858,20 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
             if order_id in (bot.get('_all_placed_order_ids') or []):
                 # Late fill from a previous cycle — determine side from the fill itself
                 matched_side = side  # WS tells us which side
-                matched_price = 0  # price unknown, will use fill data
+                # WS doesn't carry price — look up the actual fill price from Kalshi
+                _late_price = 0
+                try:
+                    api_read_limiter.wait()
+                    _late_resp = kalshi_client.get_order(order_id)
+                    _late_ord = _late_resp.get('order', _late_resp) if isinstance(_late_resp, dict) else {}
+                    _late_price = _late_ord.get('yes_price', 0) if side == 'yes' else _late_ord.get('no_price', 0)
+                    if not _late_price:
+                        _late_price = _late_ord.get('price', 0)
+                except Exception:
+                    pass
+                matched_price = _late_price
                 _is_late_fill = True
-                print(f'🚨 APEX MM LATE FILL: {bot_id} {side.upper()} +{count} on old order {order_id[:12]} — recovering')
+                print(f'🚨 APEX MM LATE FILL: {bot_id} {side.upper()} +{count} @{_late_price}c on old order {order_id[:12]} — recovering')
                 bot_log('APEX_MM_LATE_FILL', bot_id, {
                     'order_id': order_id, 'side': side, 'count': count,
                     'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),

@@ -1346,8 +1346,7 @@ def _extract_order_id(resp, context=''):
 
 def _safe_cancel(order_id, context=''):
     """Cancel an order with one retry on failure.
-    Returns: True if cancelled, 'filled' if order was already filled (404), False on other failure.
-    On 404: checks if the order had fills — this is critical to prevent orphans."""
+    Returns: True if cancelled, ('filled', count) if order had fills on 404, '404' if gone with 0 fills, False on other failure."""
     for attempt in range(2):
         try:
             api_rate_limiter.wait()
@@ -1357,19 +1356,20 @@ def _safe_cancel(order_id, context=''):
             err_str = str(e)
             if '404' in err_str:
                 # Order gone — check if it FILLED before disappearing
+                _fills = 0
                 try:
                     api_read_limiter.wait()
                     _resp = kalshi_client.get_order(order_id)
                     _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
                     _fills = _parse_fill_count(_ord)
-                    if _fills > 0:
-                        print(f'🚨 {context}: cancel 404 but order had {_fills} fills!')
-                        bot_log('SAFE_CANCEL_404_FILLS', context, {
-                            'order_id': order_id, 'fills': _fills,
-                        }, level='ERROR')
-                        return 'filled'
                 except Exception:
                     pass
+                if _fills > 0:
+                    print(f'🚨 {context}: cancel 404 but order had {_fills} fills!')
+                    bot_log('SAFE_CANCEL_404_FILLS', context, {
+                        'order_id': order_id, 'fills': _fills,
+                    }, level='ERROR')
+                    return ('filled', _fills)
                 return '404'
             if attempt == 0:
                 print(f'⚠ {context}: cancel failed (attempt 1), retrying: {e}')
@@ -3432,7 +3432,13 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                                 bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
                                 bot_ref['status'] = 'dog_filled'
                                 bot_ref['dog_filled_at'] = time.time()
-                                bot_ref['_hedge_fired'] = False
+                                bot_ref['_hedge_fired'] = True
+                                _qty = bot_ref.get('quantity', 1)
+                                if _fills < _qty:
+                                    bot_ref['_original_qty'] = _qty
+                                    bot_ref['_partial_hedge_qty'] = _fills
+                                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
+                                print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_fills}x fills — hedge fired')
                                 save_state()
                         except Exception as _e:
                             print(f'⚠ WS RETREAT FILL CHECK FAILED: {bot_id_ref}: {_e}')
@@ -9065,17 +9071,33 @@ def _handle_phantom(bot_id, bot, actions):
                         if _opp_bid > 0 and _opp_bid < current_dog_bid:
                             print(f'🔄 PHANTOM DRIFT FLIP: {bot_id} {dog_side}@{current_dog_bid}¢→fav, {_opp}@{_opp_bid}¢→dog')
                             _cancel_result = _safe_cancel(dog_order_id, f'phantom drift flip {bot_id}')
-                            _any_filled = _cancel_result == 'filled'
+                            _total_fills = 0
+                            if isinstance(_cancel_result, tuple) and _cancel_result[0] == 'filled':
+                                _total_fills += _cancel_result[1]
                             for _old_oid in bot.get('_all_dog_order_ids', []):
                                 if _old_oid and _old_oid != dog_order_id:
                                     _old_result = _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
-                                    if _old_result == 'filled':
-                                        _any_filled = True
-                            if _any_filled:
-                                # Orders filled during drift flip — DON'T flip, handle the fill
-                                print(f'🚨 PHANTOM DRIFT FLIP ABORTED: {bot_id} orders had fills — handling fill instead')
-                                bot_log('PHANTOM_DRIFT_FLIP_ABORTED', bot_id, {'reason': 'fills_on_cancel'}, level='WARN')
-                                # The WS handler or next monitor cycle will detect the fills
+                                    if isinstance(_old_result, tuple) and _old_result[0] == 'filled':
+                                        _total_fills += _old_result[1]
+                            if _total_fills > 0:
+                                # Orders FILLED — abort flip, fire hedge IMMEDIATELY
+                                _hedge_qty = min(_total_fills, qty)
+                                print(f'🚨 PHANTOM DRIFT FLIP → HEDGE: {bot_id} {_total_fills} fills found — firing hedge for {_hedge_qty}')
+                                bot_log('PHANTOM_DRIFT_FLIP_FILLS', bot_id, {
+                                    'fills': _total_fills, 'hedge_qty': _hedge_qty,
+                                }, level='WARN')
+                                bot['dog_fill_qty'] = _hedge_qty
+                                if dog_side == 'yes':
+                                    bot['yes_fill_qty'] = _hedge_qty
+                                else:
+                                    bot['no_fill_qty'] = _hedge_qty
+                                bot['status'] = 'dog_filled'
+                                bot['dog_filled_at'] = time.time()
+                                bot['_hedge_fired'] = True
+                                if _hedge_qty < qty:
+                                    bot['_original_qty'] = qty
+                                    bot['_partial_hedge_qty'] = _hedge_qty
+                                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
                                 save_state()
                                 return
                             bot['dog_side'] = _opp

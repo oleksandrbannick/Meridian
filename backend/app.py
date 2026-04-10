@@ -3285,11 +3285,12 @@ class KalshiWSManager:
                     _ws_realtime_flip_check(ticker, yes_bid_rt, no_bid_rt)
                 except Exception as flip_err:
                     print(f'⚠ WS real-time flip check error: {flip_err}')
-                # ── Real-time phantom price follow: snap up OR drop down instantly ──
+                # ── Real-time phantom price follow: snap up, drop down, ceiling sell ──
                 # Run in background thread — MUST NOT block WS handler (kills hedge latency)
                 try:
                     threading.Thread(target=_ws_phantom_instant_drop, args=(ticker, yb, nb, ya, na), daemon=True).start()
                     threading.Thread(target=_ws_phantom_instant_snap_up, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    threading.Thread(target=_ws_phantom_ceiling_sell_follow, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
                 # ── Real-time phantom retreat: pull dog if bid approaches order ──
@@ -3546,6 +3547,41 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         finally:
             _phantom_drop_lock.release()
         return  # one drop per tick max
+
+
+def _ws_phantom_ceiling_sell_follow(ticker, yes_bid, no_bid, yes_ask, no_ask):
+    """Instant ceiling sell walk: if dog sell is active, follow the ask on every WS tick.
+    Called from WS price handler — runs in background thread."""
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_dog':
+            continue
+        if not bot.get('_ceiling_exit_active'):
+            continue
+        if bot.get('ticker') != ticker:
+            continue
+
+        dog_sell_oid = bot.get('dog_sell_order_id')
+        if not dog_sell_oid:
+            continue
+
+        dog_side = bot.get('dog_side', '')
+        cur_sell_price = bot.get('dog_sell_price', 0)
+        dog_ask = (yes_ask if dog_side == 'yes' else no_ask)
+        if dog_ask <= 0 or dog_ask == cur_sell_price:
+            continue
+
+        qty = bot.get('_ceiling_exit_sell_qty', bot.get('quantity', 1))
+        try:
+            _new_pk = {f'{dog_side}_price': dog_ask}
+            api_rate_limiter.wait()
+            kalshi_client.amend_order(dog_sell_oid, ticker=ticker, side=dog_side,
+                                      count=qty, action='sell', **_new_pk)
+            bot['dog_sell_price'] = dog_ask
+            print(f'⚡ WS CEILING SELL: {bot_id} {cur_sell_price}→{dog_ask}¢')
+        except Exception as e:
+            if '404' in str(e):
+                bot['dog_sell_order_id'] = None
+        return  # one per tick
 
 
 def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):

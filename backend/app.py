@@ -6124,8 +6124,7 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=Tru
         yp = midpoint - offset
         np = no_anchor - offset
         # Auto-scale: level 0 = base_qty, deeper levels get more
-        # Only scale when base_qty > 1 — scaling 1-contract levels creates excess inventory
-        if scale and levels > 1 and base_qty > 1:
+        if scale and levels > 1:
             scale_factor = 1.0 + (i * 1.0 / (levels - 1))  # 1.0x at closest, 2.0x at deepest
         else:
             scale_factor = 1.0

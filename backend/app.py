@@ -7353,14 +7353,33 @@ def _apex_mm_exit_tick(bot_id, bot):
     yes_done = not bot.get('_exit_sell_oids', {}).get('yes', {}).get('oid')
     no_done = not bot.get('_exit_sell_oids', {}).get('no', {}).get('oid')
     if yes_done and no_done and bot.get('net_yes', 0) <= 0 and bot.get('net_no', 0) <= 0:
-        bot['status'] = 'completed'
-        bot['completed_at'] = now
-        bot_log('APEX_MM_COMPLETE', bot_id, {
-            'reason': bot.get('_exit_reason', 'exit'),
-            'realized_pnl': bot.get('realized_pnl_cents', 0),
-            'round_trips': bot.get('round_trips_completed', 0),
-        })
-        print(f'✅ APEX MM DONE: {bot_id} all exits filled, pnl={bot.get("realized_pnl_cents", 0)}c')
+        # Count this exit as a loss for smart mode tracking
+        bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+        # Smart mode: restart if we haven't hit the loss limit
+        _smart_limit = bot.get('smart_mode', 0)
+        if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit:
+            print(f'🔄 APEX MM RESTART: {bot_id} exit complete but smart {bot["consecutive_losses"]}/{_smart_limit} — cycling')
+            bot_log('APEX_MM_SMART_RESTART', bot_id, {
+                'reason': bot.get('_exit_reason', 'exit'),
+                'consecutive_losses': bot['consecutive_losses'],
+                'smart_limit': _smart_limit,
+                'realized_pnl': bot.get('realized_pnl_cents', 0),
+            })
+            bot['status'] = 'market_making_active'
+            bot['_exit_reason'] = None
+            bot['_exit_started_at'] = None
+            bot['_exit_sell_oids'] = {}
+            _apex_mm_cycle_reset(bot_id, bot)
+        else:
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot_log('APEX_MM_COMPLETE', bot_id, {
+                'reason': bot.get('_exit_reason', 'exit'),
+                'realized_pnl': bot.get('realized_pnl_cents', 0),
+                'round_trips': bot.get('round_trips_completed', 0),
+                'consecutive_losses': bot.get('consecutive_losses', 0),
+            })
+            print(f'✅ APEX MM DONE: {bot_id} all exits filled, pnl={bot.get("realized_pnl_cents", 0)}c')
     save_state()
 
 

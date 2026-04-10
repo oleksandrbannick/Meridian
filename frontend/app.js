@@ -6297,11 +6297,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const status = bot.status || 'market_making_active';
     const isCompleted = status === 'completed' || status === 'stopped';
 
+    const _exitReason = bot._exit_reason || '';
+    const _isDriftStop = _exitReason.includes('drift_stop');
+    const _isTimeStop = _exitReason.includes('time_stop');
+    const _isSmartStop = _exitReason.includes('smart_stop');
     const statusMap = {
         'market_making_active': ['ACTIVE', '#00d4ff'],
         'mm_depth_pulled': ['PULLED — WAITING', '#ffaa00'],
         'mm_exiting': ['EXITING', '#ff8800'],
-        'completed': ['DONE', '#00ff88'],
+        'completed': [_isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : 'DONE',
+                      _isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88'],
         'stopped': ['STOPPED', '#ff4444'],
     };
     const [statusLabel, accentCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
@@ -6521,8 +6526,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>` : ''}
         </div>`;
     };
-    if (yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88');
-    if (noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444');
+    if (!isCompleted && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88');
+    if (!isCompleted && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444');
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${accentCol}33;border-left:3px solid ${accentCol};border-radius:12px;padding:14px;margin-bottom:10px;`;
@@ -6545,8 +6550,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>
         </div>
 
-        ${pullInfo}
-        ${exitInfo}
+        ${!isCompleted ? pullInfo : ''}
+        ${!isCompleted ? exitInfo : ''}
+        ${isCompleted && _exitReason ? `<div style="padding:6px 10px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ff8800;font-weight:600;">Exit: ${_exitReason}</div>` : ''}
 
         ${(netYes > 0 || netNo > 0) ? (() => {
             const longSide = netYes > netNo ? 'YES' : 'NO';
@@ -6568,7 +6574,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>`;
         })() : ''}
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
             <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                     <span style="color:${yesIsExit ? '#00ff88' : '#00d4ff'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
@@ -6583,7 +6589,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
                 <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">No orders</span>'}</div>
             </div>
-        </div>
+        </div>` : ''}
 
         ${realizedPnl !== 0 || roundTrips > 0 ? `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;">
             <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}¢</strong></span>

@@ -8952,6 +8952,23 @@ def _handle_phantom(bot_id, bot, actions):
                         print(f'⏸ PHANTOM DEAD MARKET: {bot_id} bid={current_dog_bid}¢ (need ≥{_min_viable_bid}¢) — pulled, waiting for recovery')
                         bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'min_viable': _min_viable_bid})
                         bot['_price_floor_pulled'] = True
+                        bot['_price_floor_since'] = now
+                    # Game-over exit: if pulled for 5+ min OR game is over, complete the bot
+                    _pulled_age = now - bot.get('_price_floor_since', now)
+                    _game_over = _is_game_over_cached(ticker)
+                    _fav_bid = bot.get(f'live_{"yes" if dog_side == "no" else "no"}_bid', 0)
+                    if _game_over or _pulled_age > 300 or _fav_bid >= 95:
+                        _exit_reason = 'game_over' if _game_over else ('fav_95+' if _fav_bid >= 95 else 'pulled_5min')
+                        print(f'🏁 PHANTOM EXIT DECIDED: {bot_id} {_exit_reason} dog_bid={current_dog_bid}¢ fav_bid={_fav_bid}¢ pulled={int(_pulled_age)}s')
+                        bot_log('PHANTOM_EXIT_DECIDED', bot_id, {
+                            'reason': _exit_reason, 'dog_bid': current_dog_bid,
+                            'fav_bid': _fav_bid, 'pulled_age_s': int(_pulled_age),
+                        })
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        bot['_price_floor_pulled'] = False
+                        save_state()
+                        return
                     save_state()
                     return
 

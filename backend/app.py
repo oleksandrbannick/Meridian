@@ -9251,12 +9251,26 @@ def _handle_phantom(bot_id, bot, actions):
 
         dog_order_id = bot.get('dog_order_id')
         if not dog_order_id and bot.get('_price_floor_pulled'):
-            # Price floor pulled — check if bid recovered enough to repost
+            # Price floor pulled — check settlement first, then recovery
+            if now - bot.get('_last_settle_check_pf', 0) > 30:
+                bot['_last_settle_check_pf'] = now
+                try:
+                    api_read_limiter.wait()
+                    _pf_mkt = kalshi_client.get_market(ticker)
+                    if isinstance(_pf_mkt, dict) and _pf_mkt.get('status') in ('settled', 'finalized'):
+                        _phantom_set_final_status(bot, bot_id)
+                        bot['_smart_stopped'] = True
+                        bot['_smart_stop_reason'] = 'final'
+                        print(f'🧹 PRICE FLOOR SETTLED: {bot_id} market settled while pulled → {bot["status"]}')
+                        save_state()
+                        return
+                except Exception:
+                    pass
+            # Check if bid recovered enough to repost
             _pf_ws_bid = bot.get(f'live_{dog_side}_bid', 0)
             _pf_depth = bot.get('anchor_depth', 5)
             _pf_new_price = max(1, _pf_ws_bid - _pf_depth) if _pf_ws_bid > 0 else 0
             if _pf_new_price >= 2:
-                # Bid recovered — repost via waiting_repeat (handles the full repost flow)
                 print(f'✅ PHANTOM PRICE RECOVERY: {bot_id} bid={_pf_ws_bid}¢ → can post @{_pf_new_price}¢ (was pulled)')
                 bot_log('PHANTOM_PRICE_FLOOR_RECOVERY', bot_id, {
                     'dog_bid': _pf_ws_bid, 'new_price': _pf_new_price, 'depth': _pf_depth,
@@ -9267,7 +9281,6 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['waiting_repeat_since'] = now
                 bot['_bid_at_post'] = _pf_ws_bid
                 save_state()
-            # else: still below floor, keep waiting (settlement check in price floor block handles game over)
             return
         if not dog_order_id:
             # Lost order ID — check old order IDs for cancel-race fills before giving up

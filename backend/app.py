@@ -17459,8 +17459,13 @@ def _sweep_orphaned_orders():
     known_ids = set()
     for bot in active_bots.values():
         for key in ('yes_order_id', 'no_order_id', 'dog_order_id', 'fav_order_id',
-                    'order_id', 'order_a_id', 'order_b_id', 'hedge_order_id'):
+                    'order_id', 'order_a_id', 'order_b_id', 'hedge_order_id',
+                    'dog_sell_order_id', '_exit_order_id'):
             oid = bot.get(key)
+            if oid:
+                known_ids.add(oid)
+        # Apex MM: order group IDs + all placed IDs
+        for oid in bot.get('_all_order_group_ids', []):
             if oid:
                 known_ids.add(oid)
         # Ladder rungs (including per-rung hedge orders from Apex 2.0)

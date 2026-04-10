@@ -6410,10 +6410,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         invHtml += '</div>';
     }
 
-    // Pull reason
+    // Pull reason — show for full pull AND entry-only pull
     let pullInfo = '';
     if (status === 'mm_depth_pulled' && bot._last_pull_reason) {
-        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">Pulled: ${bot._last_pull_reason} · waiting for depth recovery</div>`;
+        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">PULLED: ${bot._last_pull_reason} · waiting for depth recovery</div>`;
+    } else if (status === 'market_making_active' && bot._last_pull_reason && bot._last_pull_reason.includes('entry only')) {
+        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">ENTRY PULLED: ${bot._last_pull_reason} · exit side still live</div>`;
     }
 
     // Exit reason

@@ -6469,11 +6469,8 @@ def _apex_mm_walk_up(bot_id, bot):
     if age < patience_s:
         return  # still waiting at profit target
 
-    # Speed limit: only walk if exit price is within 2c of actual market bid
+    # Walk toward market bid — cap at breakeven, don't overshoot
     live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
-    if live_exit_bid > 0 and current_price < live_exit_bid - 2:
-        # Market is more than 2c above our exit — don't chase, wait for bounce
-        return
 
     # Walk interval check
     walk_started = bot.get('_exit_walk_started', 0)
@@ -6549,6 +6546,9 @@ def _apex_mm_cycle_reset(bot_id, bot):
             return
 
     base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+    # Clear side pauses so fresh ladder replaces ALL orders (resets fill_qty)
+    bot['_yes_side_paused'] = False
+    bot['_no_side_paused'] = False
     yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
@@ -6558,6 +6558,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     bot['_exit_walk_count'] = 0
     bot['_exit_walk_started'] = 0
     bot['_exit_posted_at'] = 0
+    bot['_last_pull_reason'] = ''
     save_state()
     bot_log('APEX_MM_CYCLE_RESET', bot_id, {'midpoint': midpoint})
     print(f'📊 APEX MM CYCLE RESET: {bot_id} flat → fresh ladder @ mid={midpoint}')
@@ -6565,7 +6566,16 @@ def _apex_mm_cycle_reset(bot_id, bot):
 
 def _apex_mm_begin_exit(bot_id, bot, reason):
     """Cancel all unfilled orders and begin exit sequence."""
-    # Cancel all live orders
+    # Cancel exit OIDs first (amend-system exit orders)
+    for side in ('yes', 'no'):
+        oid = bot.get(f'_{side}_exit_oid')
+        if oid:
+            try:
+                _cancel_with_retry(oid)
+            except Exception:
+                pass
+            bot[f'_{side}_exit_oid'] = None
+    # Cancel all ladder orders
     for side_key in ('yes_orders', 'no_orders'):
         for price, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')

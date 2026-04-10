@@ -6670,54 +6670,9 @@ def _apex_mm_walk_up(bot_id, bot):
 
 
 def _apex_mm_cycle_reset(bot_id, bot):
-    """Reset for new cycle when net returns to flat. Cancel entry ladder, fresh reprice."""
+    """Reset for new cycle when net returns to flat. Cancel entry ladder, fresh reprice.
+    CRITICAL: cancel each order synchronously and check for fills before clearing tracking."""
     ticker = bot.get('ticker', '')
-
-    # POSITION VERIFICATION: confirm Kalshi agrees we're flat before resetting
-    try:
-        api_read_limiter.wait()
-        _pos_resp = kalshi_client.get_positions(ticker=ticker)
-        _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
-        _kalshi_pos = 0
-        if isinstance(_positions, list):
-            for _p in _positions:
-                _kalshi_pos += abs(int(float(_p.get('position_fp', _p.get('position', 0)))))
-        elif isinstance(_positions, dict):
-            _kalshi_pos = abs(int(float(_positions.get('position_fp', _positions.get('position', 0)))))
-        if _kalshi_pos > 0:
-            # ORPHAN DETECTED: bot thinks flat but Kalshi still has contracts
-            print(f'🚨 APEX MM ORPHAN AT RESET: {bot_id} bot net=0 but Kalshi position={_kalshi_pos} on {ticker} — NOT resetting')
-            bot_log('APEX_MM_ORPHAN_AT_RESET', bot_id, {
-                'kalshi_position': _kalshi_pos, 'ticker': ticker,
-                'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
-            }, level='ERROR')
-            _push_notification('orphan_detected', f'🚨 Apex MM {bot_id[:30]}: {_kalshi_pos} orphaned contracts on {ticker}', {
-                'bot_id': bot_id, 'ticker': ticker, 'qty': _kalshi_pos,
-            })
-            # Recover: determine side from Kalshi position SIGN, not last fill
-            # Positive = YES (bought YES), Negative = NO (bought NO)
-            _raw_pos = 0
-            if isinstance(_positions, list):
-                for _p in _positions:
-                    _raw_pos = int(float(_p.get('position_fp', _p.get('position', 0))))
-                    if _raw_pos != 0:
-                        break
-            elif isinstance(_positions, dict):
-                _raw_pos = int(float(_positions.get('position_fp', _positions.get('position', 0))))
-            _orphan_side = 'yes' if _raw_pos > 0 else 'no'
-            _orphan_qty = abs(_raw_pos)
-            bot[f'net_{_orphan_side}'] = _orphan_qty
-            # Use fill log avg if available, otherwise estimate from exposure
-            _fl_prices = [f['price'] for f in (bot.get('_fill_log') or []) if f.get('side') == _orphan_side and not f.get('is_exit')]
-            _orphan_avg = round(sum(_fl_prices) / len(_fl_prices)) if _fl_prices else 50
-            bot[f'avg_{_orphan_side}_cost'] = _orphan_avg
-            bot[f'total_{_orphan_side}_cost'] = _orphan_avg * _orphan_qty
-            print(f'🔧 ORPHAN RECOVERY: {bot_id} Kalshi has {_orphan_qty}x {_orphan_side.upper()} (raw={_raw_pos}) avg={_orphan_avg}c')
-            save_state()
-            return  # don't reset — let the exit system sell them
-    except Exception as _pe:
-        print(f'⚠ APEX MM POSITION CHECK FAILED: {bot_id}: {_pe}')
-        bot_log('APEX_MM_POSITION_CHECK_FAILED', bot_id, {'error': str(_pe)[:200]}, level='WARN')
 
     # Clear exit OIDs
     for side in ('yes', 'no'):
@@ -6729,13 +6684,44 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 pass
         bot[f'_{side}_exit_oid'] = None
 
-    # Cancel remaining entry orders
+    # Cancel remaining entry orders — check each for fills before clearing
+    _late_fills = 0
     for side_key in ('yes_orders', 'no_orders'):
+        _side = 'yes' if side_key == 'yes_orders' else 'no'
         for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
-            if oid:
-                _cancel_with_retry(oid)
-                level['oid'] = None
+            if not oid:
+                continue
+            _cr = _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
+            if isinstance(_cr, tuple) and _cr[0] == 'filled':
+                _fills = _cr[1]
+                _price = int(price_str)
+                _late_fills += _fills
+                bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _fills
+                bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _fills)
+                _net = bot[f'net_{_side}']
+                bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_fills}x @{_price}c during cancel (net_{_side}={_net})')
+                bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
+                    'side': _side, 'fills': _fills, 'price': _price, 'net': _net,
+                }, level='WARN')
+            level['oid'] = None
+
+    # If late fills found, we're NOT flat — don't reset, let exit system handle
+    if _late_fills > 0:
+        print(f'🚨 CYCLE RESET ABORTED: {bot_id} {_late_fills} late fills during cancel — not flat')
+        bot['_skew_active'] = True
+        net_y = bot.get('net_yes', 0)
+        net_n = bot.get('net_no', 0)
+        if net_y > net_n:
+            bot['_skew_direction'] = 'exit_no'
+        elif net_n > net_y:
+            bot['_skew_direction'] = 'exit_yes'
+        # Trigger exit amend for the late fills
+        _fill_side = 'yes' if bot.get('net_yes', 0) > bot.get('net_no', 0) else 'no'
+        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+        save_state()
+        return
 
     # Fresh symmetric ladder
     midpoint = _apex_mm_midpoint(ticker)

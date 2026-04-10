@@ -6802,14 +6802,19 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 continue
             _cr = _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
             if isinstance(_cr, tuple) and _cr[0] == 'filled':
-                _fills = _cr[1]
-                _price = int(price_str)
-                _late_fills += _fills
-                bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _fills
-                bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _fills)
-                _net = bot[f'net_{_side}']
-                bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
-                print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_fills}x @{_price}c during cancel (net_{_side}={_net})')
+                _kalshi_fills = _cr[1]
+                _ws_already = level.get('fill_qty', 0)  # WS handler already counted these
+                _new_fills = max(0, _kalshi_fills - _ws_already)  # only add the difference
+                if _new_fills > 0:
+                    _price = int(price_str)
+                    _late_fills += _new_fills
+                    bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
+                    bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
+                    _net = bot[f'net_{_side}']
+                    bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                    print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already} net_{_side}={_net})')
+                elif _kalshi_fills > 0:
+                    print(f'✅ CYCLE RESET: {bot_id} {_side.upper()} order had {_kalshi_fills} fills — already counted by WS (fill_qty={_ws_already})')
                 bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
                     'side': _side, 'fills': _fills, 'price': _price, 'net': _net,
                 }, level='WARN')
@@ -6894,13 +6899,16 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
                 continue
             _cr = _safe_cancel(oid, f'apex_mm_begin_exit_{bot_id}')
             if isinstance(_cr, tuple) and _cr[0] == 'filled':
-                _fills = _cr[1]
-                _price = int(price_str)
-                bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _fills
-                bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _fills)
-                _net = bot[f'net_{_side}']
-                bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
-                print(f'🚨 APEX MM BEGIN EXIT LATE FILL: {bot_id} {_side.upper()} +{_fills}x @{_price}c')
+                _kalshi_fills = _cr[1]
+                _ws_already = level.get('fill_qty', 0)
+                _new_fills = max(0, _kalshi_fills - _ws_already)
+                if _new_fills > 0:
+                    _price = int(price_str)
+                    bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
+                    bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
+                    _net = bot[f'net_{_side}']
+                    bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                    print(f'🚨 APEX MM BEGIN EXIT LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c (kalshi={_kalshi_fills} ws_had={_ws_already})')
             level['oid'] = None
 
     # Re-read inventory AFTER cancels — WS handler may have updated during cancel

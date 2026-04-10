@@ -3576,10 +3576,10 @@ def _ws_phantom_ceiling_trigger(ticker, yes_bid, no_bid, yes_ask=0, no_ask=0):
             continue
 
         combined = dog_price + fav_bid
-        if combined < 100:
-            continue
+        if combined <= 100:
+            continue  # 100 = breakeven, not a loss — let fav sit and fill
 
-        # Ceiling crossed — fire exit immediately
+        # Ceiling crossed (>100) — fire exit immediately
         # Set flags so monitor's ceiling code picks it up on next cycle
         if not bot.get('_over_ceiling_since'):
             bot['_over_ceiling_since'] = time.time()
@@ -10584,8 +10584,8 @@ def _handle_phantom(bot_id, bot, actions):
                                 bot['dog_sell_price'] = _dog_ask_now
                             except Exception:
                                 pass
-                    elif not bot.get('dog_sell_order_id'):
-                        # Retry posting if sell was never posted
+                    elif not bot.get('dog_sell_order_id') and bot.get('dog_sell_fill_qty', 0) < bot.get('_ceiling_exit_sell_qty', qty):
+                        # Retry posting if sell was never posted AND not already fully filled
                         _cross_dog_ask = bot.get(f'live_{dog_side}_ask', 0)
                         if _cross_dog_ask > 0:
                             try:
@@ -10648,7 +10648,10 @@ def _handle_phantom(bot_id, bot, actions):
 
                 # ── Retry posting dog sell if it was never posted or got cleared ──
                 _ce_sell_qty = bot.get('_ceiling_exit_sell_qty', qty)  # actual sell qty (may be < qty if hedge had partial fills)
-                if not _dog_sell_oid:
+                # Guard: if sell already fully filled, do NOT retry — prevents infinite sell loop
+                if bot.get('dog_sell_fill_qty', 0) >= _ce_sell_qty:
+                    pass  # fall through to fill check below
+                elif not _dog_sell_oid:
                     _dog_ask_retry = bot.get(f'live_{dog_side}_ask', 0)
                     if _dog_ask_retry > 0:
                         try:

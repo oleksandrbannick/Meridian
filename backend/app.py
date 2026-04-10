@@ -1070,9 +1070,7 @@ def diagnose_bots_endpoint():
             positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
             bot_tickers = set()
             for b in active_bots.values():
-                _bst = b.get('status', '')
-                # Include ALL non-dead bots — completed bots may still have settling positions
-                if _bst not in ('cancelled',):
+                if b.get('status') not in ('completed', 'stopped', 'cancelled'):
                     bot_tickers.add(b.get('ticker', ''))
                     # Phantom: hedge ticker may differ from main ticker
                     if b.get('hedge_ticker'):
@@ -6553,6 +6551,40 @@ def _apex_mm_cycle_reset(bot_id, bot):
     """Reset for new cycle when net returns to flat. Cancel entry ladder, fresh reprice."""
     ticker = bot.get('ticker', '')
 
+    # POSITION VERIFICATION: confirm Kalshi agrees we're flat before resetting
+    try:
+        api_read_limiter.wait()
+        _pos_resp = kalshi_client.get_positions(ticker=ticker)
+        _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+        _kalshi_pos = 0
+        if isinstance(_positions, list):
+            for _p in _positions:
+                _kalshi_pos += abs(int(float(_p.get('position_fp', _p.get('position', 0)))))
+        elif isinstance(_positions, dict):
+            _kalshi_pos = abs(int(float(_positions.get('position_fp', _positions.get('position', 0)))))
+        if _kalshi_pos > 0:
+            # ORPHAN DETECTED: bot thinks flat but Kalshi still has contracts
+            print(f'🚨 APEX MM ORPHAN AT RESET: {bot_id} bot net=0 but Kalshi position={_kalshi_pos} on {ticker} — NOT resetting')
+            bot_log('APEX_MM_ORPHAN_AT_RESET', bot_id, {
+                'kalshi_position': _kalshi_pos, 'ticker': ticker,
+                'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
+            }, level='ERROR')
+            _push_notification('orphan_detected', f'🚨 Apex MM {bot_id[:30]}: {_kalshi_pos} orphaned contracts on {ticker}', {
+                'bot_id': bot_id, 'ticker': ticker, 'qty': _kalshi_pos,
+            })
+            # Try to recover: set net inventory to match Kalshi so exit system handles it
+            # Determine which side by checking which had more recent fills
+            _last_fill = (bot.get('_fill_log') or [{}])[-1] if bot.get('_fill_log') else {}
+            _orphan_side = _last_fill.get('side', 'yes')
+            bot[f'net_{_orphan_side}'] = _kalshi_pos
+            bot[f'avg_{_orphan_side}_cost'] = bot.get(f'avg_{_orphan_side}_cost', 50)
+            bot[f'total_{_orphan_side}_cost'] = bot[f'avg_{_orphan_side}_cost'] * _kalshi_pos
+            save_state()
+            return  # don't reset — let the exit system sell them
+    except Exception as _pe:
+        print(f'⚠ APEX MM POSITION CHECK FAILED: {bot_id}: {_pe}')
+        bot_log('APEX_MM_POSITION_CHECK_FAILED', bot_id, {'error': str(_pe)[:200]}, level='WARN')
+
     # Clear exit OIDs
     for side in ('yes', 'no'):
         oid = bot.get(f'_{side}_exit_oid')
@@ -9899,9 +9931,9 @@ def _handle_phantom(bot_id, bot, actions):
                     bot.pop('_ceiling_exit_active', None)
                     # Let the normal fav-fill completion path handle it next cycle
                 else:
-                    # Step 2: Sell dog at ask — only the remainder after any hedge fills
+                    # Step 2: Sell ONLY the unhedged remainder (hedge fills = completed arb, don't sell those)
                     _sell_qty = qty - _ce_hedge_fills
-                    bot['_ceiling_exit_sell_qty'] = _sell_qty  # track actual sell qty
+                    bot['_ceiling_exit_sell_qty'] = _sell_qty
                     _dog_ask_sell = bot.get(f'live_{dog_side}_ask', 0)
                     if _dog_ask_sell > 0 and not bot.get('dog_sell_order_id') and _sell_qty > 0:
                         try:
@@ -11702,7 +11734,14 @@ def _cancel_hedge_verified(bot, bot_id):
     except Exception as e:
         print(f'⚠ HEDGE VERIFY FAILED: {bot_id} order={fav_oid[:12]} — {e}')
         bot_log('HEDGE_VERIFY_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
-    # If cancel 404'd and we detected 0 fills, Kalshi may have stale data — check actual position
+    # ALWAYS cross-check with WS fills — REST can return stale data, WS may have seen fills
+    # that arrived between cancel and get_order
+    _ws_fills_check = bot.get('fav_fill_qty', 0)
+    if _ws_fills_check > filled_qty:
+        print(f'⚠ HEDGE CANCEL WS > REST: {bot_id} REST={filled_qty} WS={_ws_fills_check} — using WS')
+        bot_log('HEDGE_CANCEL_WS_OVERRIDE', bot_id, {'rest_fills': filled_qty, 'ws_fills': _ws_fills_check}, level='WARN')
+        filled_qty = _ws_fills_check
+    # If cancel 404'd and still 0, check actual Kalshi position as last resort
     if _cancel_failed and filled_qty == 0:
         _ws_fills = bot.get('fav_fill_qty', 0)
         _pos_fills = 0

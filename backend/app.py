@@ -6809,6 +6809,16 @@ def _apex_mm_cycle_reset(bot_id, bot):
         save_state()
         return
 
+    # Final flat check — WS may have delivered late fills during cancel
+    _post_cancel_yes = bot.get('net_yes', 0)
+    _post_cancel_no = bot.get('net_no', 0)
+    if _post_cancel_yes > 0 or _post_cancel_no > 0:
+        print(f'🚨 CYCLE RESET ABORTED (post-cancel): {bot_id} net_yes={_post_cancel_yes} net_no={_post_cancel_no} — not flat')
+        _fill_side = 'yes' if _post_cancel_yes > _post_cancel_no else 'no'
+        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+        save_state()
+        return
+
     # Fresh symmetric ladder
     midpoint = _apex_mm_midpoint(ticker)
     if midpoint is None:
@@ -6840,23 +6850,38 @@ def _apex_mm_cycle_reset(bot_id, bot):
 
 def _apex_mm_begin_exit(bot_id, bot, reason):
     """Cancel all unfilled orders and begin exit sequence."""
-    # Cancel exit OIDs first (amend-system exit orders)
+    # Cancel exit OIDs first — CHECK FOR FILLS (cancel-race: exit may have filled)
     for side in ('yes', 'no'):
         oid = bot.get(f'_{side}_exit_oid')
         if oid:
-            try:
-                _cancel_with_retry(oid)
-            except Exception:
-                pass
+            _cr = _safe_cancel(oid, f'apex_mm_exit_cancel_{bot_id}')
+            if isinstance(_cr, tuple) and _cr[0] == 'filled':
+                # Exit order filled during cancel — round trip already recorded by WS handler
+                # Just clear the OID, inventory was already updated
+                print(f'⚠ APEX MM EXIT CANCEL RACE: {bot_id} {side} exit had {_cr[1]} fills during cancel')
+                bot_log('APEX_MM_EXIT_CANCEL_RACE', bot_id, {
+                    'side': side, 'fills': _cr[1], 'order_id': oid[:12],
+                }, level='WARN')
             bot[f'_{side}_exit_oid'] = None
-    # Cancel all ladder orders
+    # Cancel all ladder orders — check each for fills
     for side_key in ('yes_orders', 'no_orders'):
-        for price, level in list(bot.get(side_key, {}).items()):
+        _side = 'yes' if side_key == 'yes_orders' else 'no'
+        for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
-            if oid:
-                _cancel_with_retry(oid)
-                level['oid'] = None
+            if not oid:
+                continue
+            _cr = _safe_cancel(oid, f'apex_mm_begin_exit_{bot_id}')
+            if isinstance(_cr, tuple) and _cr[0] == 'filled':
+                _fills = _cr[1]
+                _price = int(price_str)
+                bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _fills
+                bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _fills)
+                _net = bot[f'net_{_side}']
+                bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                print(f'🚨 APEX MM BEGIN EXIT LATE FILL: {bot_id} {_side.upper()} +{_fills}x @{_price}c')
+            level['oid'] = None
 
+    # Re-read inventory AFTER cancels — WS handler may have updated during cancel
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
 

@@ -3741,6 +3741,8 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
 
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
 ws_fill_lock = threading.RLock()
+# ─── Apex MM Amend Exit Lock: prevent concurrent threads from creating duplicate exit orders ───
+_apex_mm_amend_exit_lock = threading.Lock()
 # ─── Late Anchor Amend Lock: serialize late anchor amend API calls ────────────
 # ─── Phantom Hedge Worker: pre-spawned thread for instant hedge placement ─────
 # Eliminates ~8ms thread spawn overhead. WS handler pushes jobs, worker executes
@@ -6757,81 +6759,90 @@ def _apex_mm_check_loss_limit(bot_id, bot):
 
 def _apex_mm_amend_exit(bot_id, bot, fill_side):
     """Amend or create the single exit order after an entry fill.
-    Called from WS fill handler. Uses amend to keep order ID stable — no orphans."""
-    net_yes = bot.get('net_yes', 0)
-    net_no = bot.get('net_no', 0)
-    ticker = bot.get('ticker', '')
-
-    # Determine which side we're long and what the exit side is
-    if net_yes > net_no:
-        held_side = 'yes'
-        exit_side = 'no'
-        avg_held = bot.get('avg_yes_cost', 0)
-        net_held = net_yes - net_no
-    elif net_no > net_yes:
-        held_side = 'no'
-        exit_side = 'yes'
-        avg_held = bot.get('avg_no_cost', 0)
-        net_held = net_no - net_yes
-    else:
-        return  # flat, no exit needed
-
-    # Calculate exit price: breakeven with profit target (half width)
-    width = bot.get('start_gap', 4) * 2
-    exit_price = max(1, min(98, 100 - avg_held - width // 2))
-    # Cap at live bid — don't post above what's available
-    _live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
-    if _live_exit_bid > 0:
-        exit_price = min(exit_price, _live_exit_bid)
-    exit_price = max(1, exit_price)
-    exit_oid = bot.get(f'_{exit_side}_exit_oid')
-    price_kwarg = {f'{exit_side}_price': exit_price}
+    Called from WS fill handler. Uses amend to keep order ID stable — no orphans.
+    Lock prevents concurrent threads from creating duplicate exit orders."""
+    if not _apex_mm_amend_exit_lock.acquire(blocking=False):
+        # Another thread is already creating/amending the exit order.
+        # It will use the latest net values (already updated by WS handler), so skip.
+        return
 
     try:
-        if exit_oid:
-            # Amend existing exit order — same ID, new price + count
-            api_rate_limiter.wait(priority=True)
-            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                      count=net_held, action='buy', **price_kwarg)
-            print(f'📊 APEX MM AMEND EXIT: {bot_id} {exit_side.upper()} @{exit_price}c x{net_held} (avg_{held_side}={avg_held}c)')
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        ticker = bot.get('ticker', '')
+
+        # Determine which side we're long and what the exit side is
+        if net_yes > net_no:
+            held_side = 'yes'
+            exit_side = 'no'
+            avg_held = bot.get('avg_yes_cost', 0)
+            net_held = net_yes - net_no
+        elif net_no > net_yes:
+            held_side = 'no'
+            exit_side = 'yes'
+            avg_held = bot.get('avg_no_cost', 0)
+            net_held = net_no - net_yes
         else:
-            # First fill — create exit order
-            resp, actual_price = create_order_maker(ticker, exit_side, 'buy', net_held, exit_price)
-            oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
-            if oid:
-                bot[f'_{exit_side}_exit_oid'] = oid
-                bot.setdefault('_all_placed_order_ids', []).append(oid)
-                print(f'📊 APEX MM EXIT CREATED: {bot_id} {exit_side.upper()} @{actual_price}c x{net_held} (oid={oid[:12]})')
+            return  # flat, no exit needed
+
+        # Calculate exit price: breakeven with profit target (half width)
+        width = bot.get('start_gap', 4) * 2
+        exit_price = max(1, min(98, 100 - avg_held - width // 2))
+        # Cap at live bid — don't post above what's available
+        _live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
+        if _live_exit_bid > 0:
+            exit_price = min(exit_price, _live_exit_bid)
+        exit_price = max(1, exit_price)
+        exit_oid = bot.get(f'_{exit_side}_exit_oid')
+        price_kwarg = {f'{exit_side}_price': exit_price}
+
+        try:
+            if exit_oid:
+                # Amend existing exit order — same ID, new price + count
+                api_rate_limiter.wait(priority=True)
+                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                          count=net_held, action='buy', **price_kwarg)
+                print(f'📊 APEX MM AMEND EXIT: {bot_id} {exit_side.upper()} @{exit_price}c x{net_held} (avg_{held_side}={avg_held}c)')
             else:
-                print(f'⚠ APEX MM EXIT CREATE FAILED: {bot_id} no order_id in response')
-                return
+                # First fill — create exit order
+                resp, actual_price = create_order_maker(ticker, exit_side, 'buy', net_held, exit_price)
+                oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                if oid:
+                    bot[f'_{exit_side}_exit_oid'] = oid
+                    bot.setdefault('_all_placed_order_ids', []).append(oid)
+                    print(f'📊 APEX MM EXIT CREATED: {bot_id} {exit_side.upper()} @{actual_price}c x{net_held} (oid={oid[:12]})')
+                else:
+                    print(f'⚠ APEX MM EXIT CREATE FAILED: {bot_id} no order_id in response')
+                    return
 
-        bot['_exit_price'] = exit_price
-        bot['_exit_total_qty'] = net_held
-        bot['_exit_side'] = exit_side
-        bot['_exit_held_side'] = held_side
-        bot['_exit_avg_cost'] = avg_held
-        bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - 4))  # original target before walk
-        # Only set posted_at on FIRST exit creation — amends shouldn't restart patience timer
-        if not exit_oid:
-            bot['_exit_fill_qty'] = 0
-            bot['_exit_posted_at'] = time.time()
-            bot['_exit_walk_count'] = 0
-            bot['_exit_walk_started'] = 0
-        bot['_skew_active'] = True
-        bot['_skew_direction'] = f'exit_{exit_side}'
-    except Exception as e:
-        err_str = str(e)
-        if 'filled' in err_str.lower() or 'complete' in err_str.lower():
-            # Exit order already filled during amend — WS handler will catch it
-            print(f'⚡ APEX MM EXIT FILLED DURING AMEND: {bot_id} — WS handler will process')
-        else:
-            print(f'⚠ APEX MM AMEND EXIT ERROR: {bot_id} {e}')
+            bot['_exit_price'] = exit_price
+            bot['_exit_total_qty'] = net_held
+            bot['_exit_side'] = exit_side
+            bot['_exit_held_side'] = held_side
+            bot['_exit_avg_cost'] = avg_held
+            bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - 4))  # original target before walk
+            # Only set posted_at on FIRST exit creation — amends shouldn't restart patience timer
+            if not exit_oid:
+                bot['_exit_fill_qty'] = 0
+                bot['_exit_posted_at'] = time.time()
+                bot['_exit_walk_count'] = 0
+                bot['_exit_walk_started'] = 0
+            bot['_skew_active'] = True
+            bot['_skew_direction'] = f'exit_{exit_side}'
+        except Exception as e:
+            err_str = str(e)
+            if 'filled' in err_str.lower() or 'complete' in err_str.lower():
+                # Exit order already filled during amend — WS handler will catch it
+                print(f'⚡ APEX MM EXIT FILLED DURING AMEND: {bot_id} — WS handler will process')
+            else:
+                print(f'⚠ APEX MM AMEND EXIT ERROR: {bot_id} {e}')
 
-    bot_log('APEX_MM_AMEND_EXIT', bot_id, {
-        'exit_side': exit_side, 'exit_price': exit_price, 'net_held': net_held,
-        'avg_held': avg_held, 'had_oid': bool(exit_oid),
-    })
+        bot_log('APEX_MM_AMEND_EXIT', bot_id, {
+            'exit_side': exit_side, 'exit_price': exit_price, 'net_held': net_held,
+            'avg_held': avg_held, 'had_oid': bool(exit_oid),
+        })
+    finally:
+        _apex_mm_amend_exit_lock.release()
 
 
 def _apex_mm_walk_up(bot_id, bot):
@@ -6967,11 +6978,12 @@ def _apex_mm_cycle_reset(bot_id, bot):
                     _net = bot[f'net_{_side}']
                     bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
                     print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already} net_{_side}={_net})')
+                    bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
+                        'side': _side, 'fills': _kalshi_fills, 'new_fills': _new_fills,
+                        'price': _price, 'net': _net, 'ws_already': _ws_already,
+                    }, level='WARN')
                 elif _kalshi_fills > 0:
                     print(f'✅ CYCLE RESET: {bot_id} {_side.upper()} order had {_kalshi_fills} fills — already counted by WS (fill_qty={_ws_already})')
-                bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
-                    'side': _side, 'fills': _fills, 'price': _price, 'net': _net,
-                }, level='WARN')
             level['oid'] = None
 
     # If late fills found, we're NOT flat — don't reset, let exit system handle
@@ -7174,7 +7186,7 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
 
 
 def _apex_mm_exit_tick(bot_id, bot):
-    """Monitor exit sell orders. Follow bid down every 5s."""
+    """Monitor exit orders. Handles both sell-held (action=sell) and buy-opposite (action=buy)."""
     now = time.time()
     ticker = bot['ticker']
     all_sold = True
@@ -7195,6 +7207,9 @@ def _apex_mm_exit_tick(bot_id, bot):
 
         if not api_read_limiter.try_wait():
             continue
+
+        _action = sell_info.get('action', 'sell')
+
         try:
             resp = kalshi_client.get_order(oid)
             order = resp.get('order', resp) if isinstance(resp, dict) else {}
@@ -7202,51 +7217,101 @@ def _apex_mm_exit_tick(bot_id, bot):
             target = sell_info.get('qty', 0)
 
             if filled >= target:
-                # Fully sold — use our posted price (reliable), fallback to Kalshi response
+                # Fully filled — parse actual fill price
                 actual_price = sell_info.get('price', 0) or int(order.get('yes_price', 0) or order.get('no_price', 0))
-                # Try to get real fill price from Kalshi if available
                 _kalshi_price = int(order.get('yes_price', 0) or order.get('no_price', 0))
                 if _kalshi_price > 0:
                     actual_price = _kalshi_price
-                avg_cost = bot.get(f'avg_{side}_cost', 0)
-                # Selling back: loss = cost - sell_price (positive if sold below cost)
-                pnl_per = actual_price - avg_cost  # negative if sold below cost
-                pnl = pnl_per * target
-                bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
-                bot[f'net_{side}'] = 0
-                bot[f'avg_{side}_cost'] = 0
-                bot[f'total_{side}_cost'] = 0
-                sell_info['oid'] = None
-                sell_info['filled'] = True
-                # Record sellback trade
-                _record_trade({
-                    'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
-                    'result': 'mm_sellback', 'exit_via': bot.get('_exit_reason', 'exit'),
-                    f'{side}_price': actual_price, 'avg_cost': avg_cost, 'quantity': target,
-                    'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
-                    'timestamp': now, 'fill_source': 'apex_mm_exit',
-                })
-                print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c)')
+
+                if _action == 'buy':
+                    # Buy-opposite: arb completion (YES + NO = 100c payout)
+                    held_side = sell_info.get('held_side', 'yes' if side == 'no' else 'no')
+                    held_avg = bot.get(f'avg_{held_side}_cost', 0)
+                    pnl_per = 100 - held_avg - actual_price
+                    pnl = pnl_per * target
+                    bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
+                    # Clear HELD side inventory (the side we were long)
+                    bot[f'net_{held_side}'] = 0
+                    bot[f'avg_{held_side}_cost'] = 0
+                    bot[f'total_{held_side}_cost'] = 0
+                    sell_info['oid'] = None
+                    sell_info['filled'] = True
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                        'result': 'mm_arb_complete', 'exit_via': bot.get('_exit_reason', 'exit'),
+                        f'{held_side}_price': held_avg, f'{side}_price': actual_price,
+                        'combined_price': held_avg + actual_price, 'quantity': target,
+                        'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
+                        'timestamp': now, 'fill_source': 'apex_mm_exit',
+                    })
+                    print(f'✅ APEX MM ARB EXIT: {bot_id} bought {side.upper()} {target}x @{actual_price}c + held {held_side.upper()} avg@{held_avg}c → pnl={pnl}c')
+                else:
+                    # Sell held side (original path)
+                    avg_cost = bot.get(f'avg_{side}_cost', 0)
+                    pnl_per = actual_price - avg_cost
+                    pnl = pnl_per * target
+                    bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
+                    bot[f'net_{side}'] = 0
+                    bot[f'avg_{side}_cost'] = 0
+                    bot[f'total_{side}_cost'] = 0
+                    sell_info['oid'] = None
+                    sell_info['filled'] = True
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                        'result': 'mm_sellback', 'exit_via': bot.get('_exit_reason', 'exit'),
+                        f'{side}_price': actual_price, 'avg_cost': avg_cost, 'quantity': target,
+                        'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
+                        'timestamp': now, 'fill_source': 'apex_mm_exit',
+                    })
+                    print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c)')
                 all_sold = True  # will recheck
             elif now - sell_info.get('posted_at', now) > 5:
-                # Follow ask down (maker sell = post at ask, not bid)
-                opposite = 'no' if side == 'yes' else 'yes'
-                opp_bid = bot.get(f'live_{opposite}_bid', 0)
-                live_ask = (100 - opp_bid) if opp_bid > 0 else 0
-                if live_ask > 0 and live_ask != sell_info.get('price', 0):
-                    try:
-                        _cancel_with_retry(oid)
-                        remaining = target - filled
-                        resp2, new_price = create_order_maker(ticker, side, 'sell', remaining, live_ask)
-                        new_oid = resp2.get('order', {}).get('order_id', '') if isinstance(resp2, dict) else ''
-                        if new_oid:
-                            sell_info['oid'] = new_oid
-                            sell_info['price'] = new_price
-                            sell_info['posted_at'] = now
-                            sell_info['qty'] = remaining
-                            bot.setdefault('_all_placed_order_ids', []).append(new_oid)
-                    except Exception as e:
-                        print(f'⚠ APEX MM exit follow bid {side}: {e}')
+                if _action == 'buy':
+                    # Buy-opposite: follow bid DOWN (buy cheaper)
+                    live_bid = bot.get(f'live_{side}_bid', 0)
+                    if live_bid > 0 and live_bid != sell_info.get('price', 0):
+                        try:
+                            _cr = _cancel_with_retry(oid)
+                            sell_info['oid'] = None  # clear immediately — old order is gone
+                            if _cr == 'filled':
+                                print(f'⚡ APEX MM EXIT FILLED DURING REPOST: {bot_id} {side.upper()} — will pick up next tick')
+                                continue
+                            remaining = target - filled
+                            if remaining > 0:
+                                resp2, new_price = create_order_maker(ticker, side, 'buy', remaining, live_bid)
+                                new_oid = resp2.get('order', {}).get('order_id', '') if isinstance(resp2, dict) else ''
+                                if new_oid:
+                                    sell_info['oid'] = new_oid
+                                    sell_info['price'] = new_price
+                                    sell_info['posted_at'] = now
+                                    sell_info['qty'] = remaining
+                                    bot.setdefault('_all_placed_order_ids', []).append(new_oid)
+                        except Exception as e:
+                            print(f'⚠ APEX MM exit follow bid (buy) {side}: {e}')
+                else:
+                    # Sell held: follow ask DOWN (sell at best maker price)
+                    opposite = 'no' if side == 'yes' else 'yes'
+                    opp_bid = bot.get(f'live_{opposite}_bid', 0)
+                    live_ask = (100 - opp_bid) if opp_bid > 0 else 0
+                    if live_ask > 0 and live_ask != sell_info.get('price', 0):
+                        try:
+                            _cr = _cancel_with_retry(oid)
+                            sell_info['oid'] = None  # clear immediately — old order is gone
+                            if _cr == 'filled':
+                                print(f'⚡ APEX MM EXIT FILLED DURING REPOST: {bot_id} {side.upper()} — will pick up next tick')
+                                continue
+                            remaining = target - filled
+                            if remaining > 0:
+                                resp2, new_price = create_order_maker(ticker, side, 'sell', remaining, live_ask)
+                                new_oid = resp2.get('order', {}).get('order_id', '') if isinstance(resp2, dict) else ''
+                                if new_oid:
+                                    sell_info['oid'] = new_oid
+                                    sell_info['price'] = new_price
+                                    sell_info['posted_at'] = now
+                                    sell_info['qty'] = remaining
+                                    bot.setdefault('_all_placed_order_ids', []).append(new_oid)
+                        except Exception as e:
+                            print(f'⚠ APEX MM exit follow ask (sell) {side}: {e}')
         except Exception as e:
             print(f'⚠ APEX MM exit check {side}: {e}')
 

@@ -7207,6 +7207,49 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
 
+    # Net offsetting positions first: if holding both YES and NO, they cancel out
+    # (YES + NO on same market = guaranteed 100c payout per pair)
+    _netted = min(net_yes, net_no)
+    if _netted > 0:
+        _avg_yes = bot.get('avg_yes_cost', 0)
+        _avg_no = bot.get('avg_no_cost', 0)
+        _net_pnl_per = 100 - _avg_yes - _avg_no
+        _net_pnl = _net_pnl_per * _netted
+        _fee = _kalshi_side_fee_cents(_avg_yes, _netted) + _kalshi_side_fee_cents(_avg_no, _netted)
+        _net_pnl_after_fee = _net_pnl - _fee
+        bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + _net_pnl_after_fee
+        bot['round_trips_completed'] = bot.get('round_trips_completed', 0) + _netted
+        # Record the netted arb
+        _record_trade({
+            'bot_id': bot_id, 'ticker': bot.get('ticker', ''), 'bot_category': 'ladder_arb',
+            'result': 'mm_round_trip', 'yes_price': _avg_yes, 'no_price': _avg_no,
+            'combined_price': _avg_yes + _avg_no, 'rung_width': 100 - _avg_yes - _avg_no,
+            'quantity': _netted, 'profit_cents': max(0, _net_pnl_after_fee),
+            'loss_cents': abs(min(0, _net_pnl_after_fee)), 'net_pnl': _net_pnl_after_fee,
+            'fee_cents': _fee, 'timestamp': time.time(), 'fill_source': 'apex_mm',
+            'round_trip_num': bot.get('round_trips_completed', 0),
+        })
+        # Deduct netted qty from both sides
+        net_yes -= _netted
+        net_no -= _netted
+        bot['net_yes'] = net_yes
+        bot['net_no'] = net_no
+        # Clear cost basis for netted portion
+        if net_yes == 0:
+            bot['avg_yes_cost'] = 0
+            bot['total_yes_cost'] = 0
+        else:
+            bot['total_yes_cost'] = _avg_yes * net_yes
+        if net_no == 0:
+            bot['avg_no_cost'] = 0
+            bot['total_no_cost'] = 0
+        else:
+            bot['total_no_cost'] = _avg_no * net_no
+        print(f'📊 APEX MM NET: {bot_id} netted {_netted}x YES+NO → pnl={_net_pnl_after_fee}c (remaining: Y={net_yes} N={net_no})')
+        bot_log('APEX_MM_NET_OFFSET', bot_id, {
+            'netted': _netted, 'pnl': _net_pnl_after_fee, 'remaining_yes': net_yes, 'remaining_no': net_no,
+        })
+
     if net_yes == 0 and net_no == 0:
         # Flat — done
         bot['status'] = 'completed'
@@ -7217,7 +7260,7 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
         })
         print(f'✅ APEX MM COMPLETE: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
     else:
-        # Holding inventory — pick cheapest maker exit path
+        # Only one side has leftover — sell it
         bot['status'] = 'mm_exiting'
         bot['_exit_reason'] = reason
         bot['_exit_started_at'] = time.time()
@@ -7229,20 +7272,17 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
                 continue
             opposite = 'no' if side == 'yes' else 'yes'
             opp_bid = bot.get(f'live_{opposite}_bid', 0)
-            opp_ask = bot.get(f'live_{opposite}_ask', 0)
             held_bid = bot.get(f'live_{side}_bid', 0)
             held_ask = bot.get(f'live_{side}_ask', 0)
 
-            # Option A: sell held side at ask (maker) — cost = avg_cost - sell_price
+            # Option A: sell held side at ask (maker)
             sell_at_ask = held_ask if held_ask > 0 else (held_bid + 1 if held_bid > 0 else avg_cost)
-            cost_sell = avg_cost - sell_at_ask  # negative = profit, positive = loss
+            cost_sell = avg_cost - sell_at_ask
 
-            # Option B: buy opposite at bid (maker, completes arb) — cost = avg_cost + opp_bid - 100
+            # Option B: buy opposite at bid (completes arb)
             cost_buy_opp = (avg_cost + opp_bid - 100) if opp_bid > 0 else 999
 
-            # Pick cheaper path
             if cost_buy_opp < cost_sell and opp_bid > 0:
-                # Buy opposite side at bid (completes arb)
                 buy_price = opp_bid
                 try:
                     resp, actual_price = create_order_maker(ticker, opposite, 'buy', net_qty, buy_price)
@@ -7250,11 +7290,10 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
                     if oid:
                         bot['_exit_sell_oids'][opposite] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'buy', 'held_side': side}
                         bot.setdefault('_all_placed_order_ids', []).append(oid)
-                        print(f'🚪 APEX MM EXIT: {bot_id} buying {opposite.upper()} {net_qty}x @{actual_price}c (arb complete, cheaper by {cost_sell - cost_buy_opp:.0f}c)')
+                        print(f'🚪 APEX MM EXIT: {bot_id} buying {opposite.upper()} {net_qty}x @{actual_price}c (arb complete)')
                 except Exception as e:
                     print(f'⚠ APEX MM exit buy {opposite}: {e}')
             else:
-                # Sell held side at ask (maker)
                 try:
                     resp, actual_price = create_order_maker(ticker, side, 'sell', net_qty, sell_at_ask)
                     oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''

@@ -6111,9 +6111,10 @@ def _apex_mm_midpoint(ticker):
     return round((yes_bid + (100 - no_bid)) / 2)
 
 
-def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=True):
+def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=True, inv_limit=0):
     """Generate YES and NO bid prices + quantities for the ladder.
     Auto-scale: deeper levels get more contracts (pulls weighted avg down).
+    If inv_limit > 0, total qty per side is capped at that limit.
     Returns (yes_levels: list[(price, qty)], no_levels: list[(price, qty)]) sorted descending by price."""
     yes_levels = []
     no_levels = []
@@ -6123,7 +6124,8 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=Tru
         yp = midpoint - offset
         np = no_anchor - offset
         # Auto-scale: level 0 = base_qty, deeper levels get more
-        if scale and levels > 1:
+        # Only scale when base_qty > 1 — scaling 1-contract levels creates excess inventory
+        if scale and levels > 1 and base_qty > 1:
             scale_factor = 1.0 + (i * 1.0 / (levels - 1))  # 1.0x at closest, 2.0x at deepest
         else:
             scale_factor = 1.0
@@ -6132,6 +6134,22 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=Tru
             yes_levels.append((int(yp), level_qty))
         if np >= 1:
             no_levels.append((int(np), level_qty))
+    # Cap total qty per side at inventory limit
+    if inv_limit > 0:
+        for side_levels in (yes_levels, no_levels):
+            total = sum(q for _, q in side_levels)
+            if total > inv_limit:
+                # Trim from deepest levels first
+                excess = total - inv_limit
+                for j in range(len(side_levels) - 1, -1, -1):
+                    p, q = side_levels[j]
+                    cut = min(q, excess)
+                    side_levels[j] = (p, q - cut)
+                    excess -= cut
+                    if excess <= 0:
+                        break
+                # Remove zero-qty levels
+                side_levels[:] = [(p, q) for p, q in side_levels if q > 0]
     return yes_levels, no_levels
 
 
@@ -6274,7 +6292,7 @@ def _apex_mm_repost_ladder(bot_id, bot):
         bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'skew_pending': True})
         print(f'📊 APEX MM REPOST: {bot_id} mid={midpoint} (skew pending, holding inventory)')
     else:
-        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, inv_limit=bot.get('inventory_limit', 0))
         if not yes_levels and not no_levels:
             return
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -6554,7 +6572,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     # Clear side pauses so fresh ladder replaces ALL orders (resets fill_qty)
     bot['_yes_side_paused'] = False
     bot['_no_side_paused'] = False
-    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty)
+    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -6932,7 +6950,7 @@ def create_ladder_arb_bot():
 
         # Calculate midpoint and generate levels with auto-scale qty
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
-        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=inventory_limit)
 
         if not yes_levels and not no_levels:
             return jsonify({'error': f'No valid price levels (midpoint={midpoint}, gap={start_gap}, levels={levels})'}), 400

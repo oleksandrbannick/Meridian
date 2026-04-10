@@ -5512,13 +5512,10 @@ function selectMMWidth(w) {
     document.getElementById('mm-start-gap').value = Math.round(w / 2);
     document.querySelectorAll('.mm-width-btn').forEach(btn => {
         const bw = parseInt(btn.dataset.width);
-        if (bw === w) {
-            btn.style.borderColor = '#00d4ff66';
-            btn.style.color = '#00d4ff';
-        } else {
-            btn.style.borderColor = '#1e274066';
-            btn.style.color = '#fff';
-        }
+        const sel = bw === w;
+        btn.style.borderColor = sel ? '#00d4ff' : '#1e274066';
+        btn.style.color = sel ? '#00d4ff' : '#8892a6';
+        btn.style.background = sel ? '#00d4ff11' : '#0a0e1a';
     });
     updateMMPreview();
 }
@@ -5528,13 +5525,10 @@ function selectMMLevels(n) {
     document.getElementById('mm-levels').value = n;
     document.querySelectorAll('.mm-levels-btn').forEach(btn => {
         const bl = parseInt(btn.dataset.levels);
-        if (bl === n) {
-            btn.style.borderColor = '#00d4ff66';
-            btn.style.color = '#00d4ff';
-        } else {
-            btn.style.borderColor = '#1e274066';
-            btn.style.color = '#fff';
-        }
+        const sel = bl === n;
+        btn.style.borderColor = sel ? '#00d4ff' : '#1e274066';
+        btn.style.color = sel ? '#00d4ff' : '#8892a6';
+        btn.style.background = sel ? '#00d4ff11' : '#0a0e1a';
     });
     updateMMMaxDefault();
     updateMMPreview();

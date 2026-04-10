@@ -1184,11 +1184,12 @@ def diagnose_bots_endpoint():
                         bot_healthy = False
                 if status == 'fav_hedge_posted':
                     fav_age = now_d - (bot.get('fav_posted_at') or now_d)
-                    timeout = bot.get('hedge_timeout_s', 120)
-                    if fav_age > timeout + 30:  # 30s grace
-                        issues.append({'type': 'stuck_bot', 'bot_id': bot_id, 'status': 'fav_past_timeout',
-                                       'posted_s': round(fav_age), 'timeout': timeout,
-                                       'suggestion': f'Fav hedge posted {round(fav_age)}s ago (timeout={timeout}s) — should have sold back'})
+                    # No timeout/sellback — phantom snaps to bid until fill or settlement
+                    # Only flag if posted 30+ minutes (game likely over, check if live)
+                    if fav_age > 1800:
+                        issues.append({'type': 'long_wait', 'bot_id': bot_id, 'status': 'fav_long_wait',
+                                       'posted_s': round(fav_age),
+                                       'suggestion': f'Fav hedge posted {round(fav_age/60)}min ago — still snapping to bid, check if game is live'})
                         bot_healthy = False
 
             elif 'ladder_arb' in (category or '') or status.startswith('ladder_arb'):
@@ -3509,13 +3510,9 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_price <= fav_bid:
             continue
 
-        # Calculate drop target (same logic as monitor: bid or bid+1 in gap)
+        # Drop to bid — same as monitor snap, no bid+1 (phantom always posts at bid)
         fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
-        fav_spread = (fav_ask_now - fav_bid) if fav_ask_now > fav_bid else 1
-        if fav_spread >= 2 and fav_ask_now > fav_bid:
-            drop_target = min(fav_bid + 1, fav_ask_now - 1)
-        else:
-            drop_target = fav_bid
+        drop_target = fav_bid
 
         if drop_target <= 0 or drop_target >= fav_price:
             continue
@@ -3716,11 +3713,12 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 bot['no_price'] = snap_target
             bot['fav_last_walk_at'] = time.time()
             bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
-            combined = dog_price + snap_target
+            _snap_dog_price = bot.get('dog_price', 0)
+            combined = _snap_dog_price + snap_target
             print(f'⚡ WS PHANTOM SNAP UP: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
             bot_log('PHANTOM_WS_INSTANT_SNAP_UP', bot_id, {
                 'old_price': fav_price, 'new_price': snap_target,
-                'fav_bid': fav_bid, 'dog_price': dog_price,
+                'fav_bid': fav_bid, 'dog_price': _snap_dog_price,
                 'combined': combined,
             })
             save_state()
@@ -10168,7 +10166,6 @@ def _handle_phantom(bot_id, bot, actions):
             except Exception:
                 pass  # non-fatal, fall through to normal timeout
 
-        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at
 
@@ -11646,88 +11643,6 @@ def _phantom_set_final_status(bot, bot_id=''):
             bot['_smart_stopped'] = True
             bot['_smart_stop_reason'] = bot.get('_smart_stop_reason') or 'final'
         return 'completed'
-
-
-def _cancel_hedge_verified(bot, bot_id):
-    """Cancel the fav hedge order and VERIFY it's dead. Returns filled qty from the order.
-    If cancel fails or order already filled, logs prominently and returns the fill count."""
-    fav_oid = bot.get('fav_order_id')
-    if not fav_oid:
-        # Even with no order ID, check WS-tracked fills as fallback
-        _ws_fills = bot.get('fav_fill_qty', 0)
-        if _ws_fills > 0:
-            print(f'⚠ HEDGE CANCEL NO OID BUT WS FILLS: {bot_id} fav_fill_qty={_ws_fills}')
-            bot_log('HEDGE_CANCEL_NO_OID_BUT_WS_FILLS', bot_id, {
-                'ws_fav_fill_qty': _ws_fills,
-            }, level='WARN')
-            return _ws_fills
-        return 0
-    filled_qty = 0
-    _cancel_failed = False
-    # Attempt cancel
-    try:
-        api_rate_limiter.wait()
-        kalshi_client.cancel_order(fav_oid)
-    except Exception as e:
-        _cancel_failed = True
-        print(f'⚠ HEDGE CANCEL FAILED: {bot_id} order={fav_oid[:12]} — {e}')
-        bot_log('HEDGE_CANCEL_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
-    # Verify: check order status to confirm cancel and catch fills
-    try:
-        api_read_limiter.wait()
-        resp = kalshi_client.get_order(fav_oid)
-        ord_data = resp.get('order', resp) if isinstance(resp, dict) else {}
-        filled_qty = _parse_fill_count(ord_data)
-        status = ord_data.get('status', '?')
-        if filled_qty > 0:
-            print(f'⚠ HEDGE HAD FILLS BEFORE CANCEL: {bot_id} order={fav_oid[:12]} filled={filled_qty} status={status}')
-            bot_log('HEDGE_CANCEL_HAD_FILLS', bot_id, {
-                'order_id': fav_oid, 'filled_qty': filled_qty, 'status': status,
-            }, level='WARN')
-        if status not in ('cancelled', 'canceled'):
-            try:
-                api_rate_limiter.wait()
-                kalshi_client.cancel_order(fav_oid)
-            except Exception:
-                pass
-    except Exception as e:
-        print(f'⚠ HEDGE VERIFY FAILED: {bot_id} order={fav_oid[:12]} — {e}')
-        bot_log('HEDGE_VERIFY_FAILED', bot_id, {'order_id': fav_oid, 'error': str(e)[:200]}, level='ERROR')
-    # ALWAYS cross-check with WS fills — REST can return stale data, WS may have seen fills
-    # that arrived between cancel and get_order
-    _ws_fills_check = bot.get('fav_fill_qty', 0)
-    if _ws_fills_check > filled_qty:
-        print(f'⚠ HEDGE CANCEL WS > REST: {bot_id} REST={filled_qty} WS={_ws_fills_check} — using WS')
-        bot_log('HEDGE_CANCEL_WS_OVERRIDE', bot_id, {'rest_fills': filled_qty, 'ws_fills': _ws_fills_check}, level='WARN')
-        filled_qty = _ws_fills_check
-    # If cancel 404'd and still 0, check actual Kalshi position as last resort
-    if _cancel_failed and filled_qty == 0:
-        _ws_fills = bot.get('fav_fill_qty', 0)
-        _pos_fills = 0
-        try:
-            _hedge_ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
-            api_read_limiter.wait()
-            _pos_resp = kalshi_client.get_positions(ticker=_hedge_ticker)
-            _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
-            if isinstance(_positions, list):
-                for _p in _positions:
-                    _pos_fills = max(_pos_fills, abs(_p.get('position', 0)))
-            elif isinstance(_positions, dict):
-                _pos_fills = abs(_positions.get('position', 0))
-        except Exception as _pe:
-            print(f'⚠ HEDGE POSITION CHECK FAILED: {bot_id}: {_pe}')
-        filled_qty = max(_ws_fills, _pos_fills)
-        if filled_qty > 0:
-            print(f'⚠ HEDGE CANCEL 404 RECOVERY: {bot_id} order reported 0 fills but Kalshi position={_pos_fills} ws={_ws_fills} → using {filled_qty}')
-            bot_log('HEDGE_CANCEL_404_POSITION_RECOVERY', bot_id, {
-                'ws_fills': _ws_fills, 'pos_fills': _pos_fills, 'used': filled_qty,
-            }, level='WARN')
-    bot['fav_order_id'] = None
-    # Also clear side-specific order IDs — recovery code at fav_hedge_posted entry
-    # will otherwise resurrect the cancelled order ID and cause orphans
-    bot['yes_order_id'] = None
-    bot['no_order_id'] = None
-    return filled_qty
 
 
 def _run_monitor():

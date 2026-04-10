@@ -6163,10 +6163,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                          + (repostCt > 0 ? ` <span style="color:#888;font-size:9px;">(×${repostCt})</span>` : '');
                 }
                 if (status === 'fav_hedge_posted') {
-                    const hedgeTimeout = bot.hedge_timeout_s || 120;
-                    const favPostedAt = bot.fav_posted_at || bot.dog_filled_at || 0;
-                    const waitSec = favPostedAt > 0 ? Date.now()/1000 - favPostedAt : 0;
-                    const secsLeft = Math.max(0, hedgeTimeout - waitSec);
                     const combined = avgDogPrice + favPrice;
                     const atBid = favPrice >= favBid && favBid > 0;
                     const statusIcon = atBid ? '🎯' : '⚡';
@@ -6179,7 +6175,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                             <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong></span>
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444'};">${combined}¢</strong>${_bidGap > 0 ? ` <span style="color:#ff4444;">(bid ${favBid}¢, +${_bidGap}¢ away)</span>` : ''}${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
+                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : combined <= 100 ? '#ff8800' : '#ff4444'};">${combined}¢</strong>${_bidGap > 0 ? ` <span style="color:#ff4444;">(bid ${favBid}¢, +${_bidGap}¢ away)</span>` : ''}${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
                         </div>
                     </div><div style="display:none;">`;
                 }

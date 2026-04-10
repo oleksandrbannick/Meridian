@@ -6954,7 +6954,8 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
-                <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
+                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Modify</button>` : ''}
+                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;font-size:11px;color:#8892a6;">
@@ -8732,6 +8733,83 @@ async function setSmartExitTrigger(botId, price) {
         loadBots();
     } catch (e) {
         showNotification('Failed: ' + e.message, 'error');
+    }
+}
+
+async function scoutModify(botId) {
+    const bots = window._lastBotsData || {};
+    const bot = bots[botId];
+    if (!bot) return;
+    const curSL = bot.stop_loss_cents || 0;
+    const curTP = bot.take_profit_cents || 0;
+    const entry = bot.entry_price || 0;
+
+    const html = `
+        <div style="background:#0f1419;border:1px solid #6366f144;border-radius:12px;padding:20px;max-width:320px;">
+            <div style="color:#818cf8;font-weight:700;font-size:13px;margin-bottom:12px;">Modify Scout</div>
+            <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">Entry: ${entry}¢ · ${bot.side?.toUpperCase()} × ${bot.quantity}</div>
+            <div style="margin-bottom:10px;">
+                <label style="color:#8892a6;font-size:10px;">Stop Loss (¢ below entry, 0=none)</label>
+                <input id="scout-sl" type="number" value="${curSL}" min="0" max="99" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+                <div style="color:#ff6666;font-size:10px;margin-top:2px;">${curSL > 0 ? 'Triggers at ' + (entry - curSL) + '¢' : 'No stop loss'}</div>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label style="color:#8892a6;font-size:10px;">Take Profit (¢ above entry, 0=none)</label>
+                <input id="scout-tp" type="number" value="${curTP}" min="0" max="99" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+                <div style="color:#00ff88;font-size:10px;margin-top:2px;">${curTP > 0 ? 'Triggers at ' + (entry + curTP) + '¢' : 'No take profit'}</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button onclick="scoutModifySave('${botId}')" style="flex:1;background:#6366f1;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
+                <button onclick="document.getElementById('scout-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
+            </div>
+        </div>`;
+
+    // Remove existing modal if any
+    const existing = document.getElementById('scout-modify-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'scout-modify-modal';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000;';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    modal.innerHTML = html;
+    document.body.appendChild(modal);
+
+    // Update trigger labels on input change
+    const slInput = document.getElementById('scout-sl');
+    const tpInput = document.getElementById('scout-tp');
+    slInput?.addEventListener('input', () => {
+        const v = parseInt(slInput.value) || 0;
+        slInput.parentElement.querySelector('div').textContent = v > 0 ? 'Triggers at ' + (entry - v) + '¢' : 'No stop loss';
+    });
+    tpInput?.addEventListener('input', () => {
+        const v = parseInt(tpInput.value) || 0;
+        tpInput.parentElement.querySelector('div').textContent = v > 0 ? 'Triggers at ' + (entry + v) + '¢' : 'No take profit';
+    });
+}
+
+async function scoutModifySave(botId) {
+    const sl = parseInt(document.getElementById('scout-sl')?.value) || 0;
+    const tp = parseInt(document.getElementById('scout-tp')?.value) || 0;
+    try {
+        const resp = await fetch(`${API_BASE}/bot/patch/${botId}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                stop_loss_cents: sl,
+                take_profit_cents: tp,
+                has_sl_tp: sl > 0 || tp > 0,
+            })
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            showNotification(`Scout updated: SL=${sl > 0 ? sl + '¢' : 'none'}, TP=${tp > 0 ? tp + '¢' : 'none'}`);
+            document.getElementById('scout-modify-modal')?.remove();
+        } else {
+            showNotification('Failed: ' + (data.error || 'unknown'));
+        }
+    } catch (e) {
+        showNotification('Error: ' + e.message);
     }
 }
 

@@ -17194,13 +17194,44 @@ def cancel_bot(bot_id):
                 watch_side = bot.get('side', 'yes')
                 if bot.get('order_filled', False):
                     watch_qty = bot.get('fill_qty', bot.get('quantity', 1))
-                    sold, sell_info = execute_sell(ticker, watch_side, watch_qty, reason=f'cancel_watch_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'{watch_side.upper()} {watch_qty}x')
-                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
-                        sell_prices[watch_side] = sp
+                    # Check if position still exists on Kalshi (user may have sold manually)
+                    _watch_pos = 0
+                    try:
+                        api_read_limiter.wait()
+                        _wp_resp = kalshi_client.get_positions(ticker=ticker)
+                        _wp_positions = _wp_resp.get('market_positions', [])
+                        for _wp in _wp_positions:
+                            if _wp.get('ticker') == ticker:
+                                _watch_pos = _parse_position_qty(_wp)
+                    except Exception:
+                        pass
+                    _has_position = (watch_side == 'yes' and _watch_pos > 0) or (watch_side == 'no' and _watch_pos < 0)
+                    if _has_position:
+                        _actual_qty = abs(_watch_pos)
+                        # Post maker sell at ask instead of taker
+                        try:
+                            _watch_ask = 0
+                            api_read_limiter.wait()
+                            _watch_ob = kalshi_client.get_market_orderbook(ticker)
+                            _watch_ask = _best_ask(_watch_ob, watch_side)
+                            if _watch_ask > 0:
+                                _sell_pk = {f'{watch_side}_price': _watch_ask}
+                                api_rate_limiter.wait()
+                                _sell_resp = kalshi_client.create_order(
+                                    ticker=ticker, side=watch_side, action='sell',
+                                    count=_actual_qty, order_type='limit', **_sell_pk
+                                )
+                                _sell_oid = _sell_resp.get('order', {}).get('order_id', '')
+                                sold_positions.append(f'{watch_side.upper()} {_actual_qty}x @{_watch_ask}¢ (maker)')
+                                sell_prices[watch_side] = _watch_ask
+                                print(f'📤 SCOUT EXIT: {bot_id} sell {watch_side} {_actual_qty}x @{_watch_ask}¢ (maker)')
+                            else:
+                                warnings.append(f'No ask available for {watch_side.upper()} — check Kalshi positions')
+                        except Exception as _we:
+                            warnings.append(f'FAILED to post maker sell: {_we}')
                     else:
-                        warnings.append(f'FAILED to sell {watch_side.upper()} {watch_qty}x — position may still be open on Kalshi!')
+                        sold_positions.append(f'{watch_side.upper()} — already sold (no Kalshi position)')
+                        print(f'✅ SCOUT CANCEL: {bot_id} no position on Kalshi — already sold')
                 elif bot.get('order_id'):
                     try:
                         api_rate_limiter.wait()

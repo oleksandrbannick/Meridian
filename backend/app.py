@@ -3285,12 +3285,15 @@ class KalshiWSManager:
                     _ws_realtime_flip_check(ticker, yes_bid_rt, no_bid_rt)
                 except Exception as flip_err:
                     print(f'⚠ WS real-time flip check error: {flip_err}')
-                # ── Real-time phantom price follow: snap up, drop down, ceiling sell ──
-                # Run in background thread — MUST NOT block WS handler (kills hedge latency)
+                # ── Real-time phantom: ALL speed-critical operations on WS ──
+                # Background threads — MUST NOT block WS handler (kills hedge latency)
                 try:
                     threading.Thread(target=_ws_phantom_instant_drop, args=(ticker, yb, nb, ya, na), daemon=True).start()
                     threading.Thread(target=_ws_phantom_instant_snap_up, args=(ticker, yb, nb, ya, na), daemon=True).start()
                     threading.Thread(target=_ws_phantom_ceiling_sell_follow, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    threading.Thread(target=_ws_phantom_ceiling_trigger, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    threading.Thread(target=_ws_phantom_price_floor, args=(ticker, yb, nb), daemon=True).start()
+                    threading.Thread(target=_ws_phantom_drift_guard, args=(ticker, yb, nb), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
                 # ── Real-time phantom retreat: pull dog if bid approaches order ──
@@ -3547,6 +3550,173 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         finally:
             _phantom_drop_lock.release()
         return  # one drop per tick max
+
+
+def _ws_phantom_ceiling_trigger(ticker, yes_bid, no_bid, yes_ask=0, no_ask=0):
+    """Instant ceiling exit trigger: if combined >= 100, fire ceiling exit immediately.
+    Runs on WS price tick — catches fast moves before 2s monitor cycle."""
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_dog':
+            continue
+        if bot.get('status') != 'fav_hedge_posted':
+            continue
+        if bot.get('_ceiling_exit_active') or bot.get('_death_zone_stopped'):
+            continue
+        hedge_ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
+        if hedge_ticker != ticker and bot.get('ticker') != ticker:
+            continue
+
+        fav_side = bot.get('fav_side', '')
+        dog_price = bot.get('dog_price', 0)
+        if not fav_side or dog_price <= 0:
+            continue
+
+        fav_bid = (yes_bid if fav_side == 'yes' else no_bid) if hedge_ticker == ticker else 0
+        if fav_bid <= 0:
+            continue
+
+        combined = dog_price + fav_bid
+        if combined < 100:
+            continue
+
+        # Ceiling crossed — fire exit immediately
+        # Set flags so monitor's ceiling code picks it up on next cycle
+        if not bot.get('_over_ceiling_since'):
+            bot['_over_ceiling_since'] = time.time()
+            bot['_ceiling_exit_active'] = True
+            qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
+
+            # Cancel fav hedge
+            _ce_fills = _cancel_hedge_verified(bot, bot_id)
+            bot['_ceiling_exit_hedge_fills'] = _ce_fills
+            if _ce_fills >= qty:
+                print(f'⚡ WS CEILING: {bot_id} fav filled during cancel ({_ce_fills}/{qty}) — arb complete')
+                bot['_over_ceiling_since'] = None
+                bot.pop('_ceiling_exit_active', None)
+                bot[f'{fav_side}_fill_qty'] = _ce_fills
+                bot['fav_fill_qty'] = _ce_fills
+                save_state()
+                return
+
+            # Post dog sell at ask
+            dog_side = bot.get('dog_side', '')
+            _sell_qty = qty - _ce_fills
+            bot['_ceiling_exit_sell_qty'] = _sell_qty
+            dog_ask = (yes_ask if dog_side == 'yes' else no_ask) if bot.get('ticker') == ticker else 0
+            if not dog_ask:
+                # Can't get ask from this WS tick (might be hedge ticker), let monitor handle sell post
+                print(f'⚡ WS CEILING TRIGGERED: {bot_id} combined={combined}¢ — fav cancelled, monitor will post sell')
+            elif _sell_qty > 0:
+                try:
+                    _sell_pk = {f'{dog_side}_price': dog_ask}
+                    api_rate_limiter.wait()
+                    _sell_resp = kalshi_client.create_order(
+                        ticker=bot['ticker'], side=dog_side, action='sell',
+                        count=_sell_qty, order_type='limit', **_sell_pk
+                    )
+                    _sell_oid = _sell_resp.get('order', {}).get('order_id', '')
+                    if _sell_oid:
+                        bot['dog_sell_order_id'] = _sell_oid
+                        bot['dog_sell_price'] = dog_ask
+                        bot['dog_sell_fill_qty'] = 0
+                        print(f'⚡ WS CEILING EXIT: {bot_id} combined={combined}¢ — fav cancelled, sell@{dog_ask}¢ x{_sell_qty}')
+                except Exception as _ce:
+                    print(f'⚠ WS CEILING SELL FAILED: {bot_id}: {_ce}')
+
+            bot_log('PHANTOM_WS_CEILING_EXIT', bot_id, {
+                'combined': combined, 'dog_price': dog_price, 'fav_bid': fav_bid,
+                'hedge_fills': _ce_fills, 'sell_qty': _sell_qty,
+            })
+            save_state()
+            return  # one per tick
+
+
+def _ws_phantom_price_floor(ticker, yes_bid, no_bid):
+    """Instant price floor: pull dog order if bid drops below 2¢."""
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_dog':
+            continue
+        if bot.get('status') != 'dog_anchor_posted':
+            continue
+        if bot.get('ticker') != ticker:
+            continue
+        if bot.get('_price_floor_pulled'):
+            continue
+
+        dog_side = bot.get('dog_side', '')
+        dog_bid = (yes_bid if dog_side == 'yes' else no_bid)
+        if dog_bid <= 0 or dog_bid >= 2:
+            continue
+
+        dog_oid = bot.get('dog_order_id')
+        if not dog_oid:
+            continue
+
+        _safe_cancel(dog_oid, f'ws_price_floor_{bot_id}')
+        bot['dog_order_id'] = None
+        bot['_price_floor_pulled'] = True
+        bot['_price_floor_at'] = time.time()
+        print(f'⚡ WS PRICE FLOOR: {bot_id} bid={dog_bid}¢ < 2¢ — pulled instantly')
+        bot_log('PHANTOM_WS_PRICE_FLOOR', bot_id, {
+            'dog_bid': dog_bid, 'dog_side': dog_side,
+        })
+        save_state()
+        return
+
+
+def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
+    """Instant drift guard: cancel dog if bid crosses 50¢ (sides flipped)."""
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_dog':
+            continue
+        if bot.get('status') != 'dog_anchor_posted':
+            continue
+        if bot.get('ticker') != ticker:
+            continue
+
+        dog_side = bot.get('dog_side', '')
+        dog_bid = (yes_bid if dog_side == 'yes' else no_bid)
+        if dog_bid <= 50:
+            continue
+
+        dog_oid = bot.get('dog_order_id')
+        if not dog_oid:
+            continue
+
+        # Same-market: flip sides instead of killing
+        _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+        if not _is_cross:
+            _opp = 'yes' if dog_side == 'no' else 'no'
+            _opp_bid = (yes_bid if _opp == 'yes' else no_bid)
+            if _opp_bid > 0 and _opp_bid < dog_bid:
+                _safe_cancel(dog_oid, f'ws_drift_flip_{bot_id}')
+                bot['dog_side'] = _opp
+                bot['fav_side'] = dog_side
+                bot['dog_order_id'] = None
+                bot['dog_fill_qty'] = 0
+                bot['fav_fill_qty'] = 0
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
+                bot['_all_dog_order_ids'] = []
+                bot['_flip_pending'] = True
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = time.time()
+                print(f'⚡ WS DRIFT FLIP: {bot_id} {dog_side}@{dog_bid}¢→fav, {_opp}@{_opp_bid}¢→dog')
+                bot_log('PHANTOM_WS_DRIFT_FLIP', bot_id, {
+                    'old_dog': dog_side, 'dog_bid': dog_bid,
+                    'new_dog': _opp, 'opp_bid': _opp_bid,
+                })
+                save_state()
+                return
+        # Cross-market or can't flip — just cancel
+        _safe_cancel(dog_oid, f'ws_drift_cancel_{bot_id}')
+        bot['dog_order_id'] = None
+        bot['status'] = 'completed'
+        bot['completed_at'] = time.time()
+        print(f'⚡ WS DRIFT GUARD: {bot_id} bid={dog_bid}¢ > 50¢ — cancelled')
+        bot_log('PHANTOM_WS_DRIFT_GUARD', bot_id, {'dog_bid': dog_bid})
+        save_state()
+        return
 
 
 def _ws_phantom_ceiling_sell_follow(ticker, yes_bid, no_bid, yes_ask, no_ask):

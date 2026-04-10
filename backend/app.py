@@ -1422,6 +1422,75 @@ def get_live_orderbook(ticker):
         })
 
 
+@app.route('/api/depth-rec/<ticker>', methods=['GET'])
+def get_depth_rec(ticker):
+    """Compute phantom depth floor recommendation from live LocalOrderbook.
+    Zero API calls — uses WS book mirror. Returns rec + factors."""
+    dog_side = request.args.get('dog', 'yes')
+    fav_side = 'no' if dog_side == 'yes' else 'yes'
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return jsonify({'error': 'No live orderbook', 'ticker': ticker}), 404
+    age_s = time.time() - lob.last_update_ts
+    if age_s > 30:
+        return jsonify({'error': 'Orderbook stale', 'age_s': round(age_s)}), 404
+    dog_analysis = lob.get_book_analysis(dog_side)
+    fav_analysis = lob.get_book_analysis(fav_side)
+    # Sport detection
+    tu = ticker.upper()
+    sport = ''
+    if 'KXNBA' in tu: sport = 'NBA'
+    elif 'KXNHL' in tu: sport = 'NHL'
+    elif 'KXMLB' in tu: sport = 'MLB'
+    elif 'KXATP' in tu or 'KXWTA' in tu: sport = 'Tennis'
+    elif 'KXMLS' in tu: sport = 'MLS'
+    elif 'KXEPL' in tu: sport = 'EPL'
+    elif 'KXUCL' in tu: sport = 'UCL'
+    elif 'KXNCAA' in tu or 'KXMARMAD' in tu: sport = 'NCAAB'
+    sport_mins = {'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4}
+    rd = sport_mins.get(sport, 4)
+    reasons = []
+    if sport: reasons.append(f'{sport.lower()}: min {rd}c')
+    fpl = fav_analysis['perLevel']
+    if fpl >= 50: rd = max(rd, 4); reasons.append(f'fav {fpl}/lvl thick')
+    elif fpl >= 30: rd = max(rd, 5); reasons.append(f'fav {fpl}/lvl solid')
+    elif fpl >= 15: rd = max(rd, 5); reasons.append(f'fav {fpl}/lvl decent')
+    elif fpl >= 8: rd = max(rd, 6); reasons.append(f'fav {fpl}/lvl moderate')
+    elif fpl >= 4: rd = max(rd, 7); reasons.append(f'fav {fpl}/lvl light')
+    elif fpl > 0: rd = max(rd, 8); reasons.append(f'fav {fpl}/lvl thin')
+    dd = dog_analysis['totalDepth']
+    dg = dog_analysis['gaps']
+    if dd < 5000:
+        if dg >= 4: rd = max(rd, 8); reasons.append(f'{dg} dog gaps')
+        elif dg >= 3: rd = max(rd, 7); reasons.append(f'{dg} dog gaps')
+        elif dg >= 2: rd = max(rd, 6); reasons.append(f'{dg} dog gaps')
+        elif dg >= 1 and rd <= 4: rd = max(rd, 5); reasons.append(f'{dg} dog gap')
+    fg = fav_analysis['gaps']
+    if fg >= 4: rd = max(rd, 8); reasons.append(f'{fg} fav gaps')
+    elif fg >= 3: rd = max(rd, 7); reasons.append(f'{fg} fav gaps')
+    elif fg >= 2: rd = max(rd, 6); reasons.append(f'{fg} fav gaps')
+    elif fg >= 1 and rd <= 4: rd = max(rd, 5); reasons.append(f'{fg} fav gap')
+    fc = fav_analysis['concentration']
+    if fc > 0.8: rd = max(rd, 6); reasons.append(f'fav {round(fc*100)}% wall')
+    elif fc > 0.65 and rd <= 4: rd = max(rd, 5); reasons.append(f'fav {round(fc*100)}% conc')
+    rd = min(rd, 12)
+    return jsonify({
+        'rec_depth': rd,
+        'sport': sport,
+        'reasons': reasons,
+        'fav_per_level': fpl,
+        'dog_gaps': dg,
+        'fav_gaps': fg,
+        'fav_concentration': fc,
+        'dog_depth': dd,
+        'fav_depth': fav_analysis['totalDepth'],
+        'dog_bid': lob.get_best_bid(dog_side),
+        'fav_bid': lob.get_best_bid(fav_side),
+        'max_safe_qty': min(50, max(1, fav_analysis['top1Qty'] // 3)) if fav_analysis['top1Qty'] > 0 else 1,
+        'age_ms': round(age_s * 1000),
+    })
+
+
 @app.route('/api/prices/batch', methods=['POST'])
 def get_batch_prices():
     """Batch-fetch best bid/ask prices for multiple tickers using orderbook + WS cache.

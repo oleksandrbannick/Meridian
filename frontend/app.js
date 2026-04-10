@@ -4183,121 +4183,121 @@ function updateAnchorPreview() {
     if (depthDisplay) depthDisplay.textContent = `${anchorDepth}¢`;
     const shaveInfo = document.getElementById('anchor-shave-info');
     if (shaveInfo) {
-        // Depth recommendation from orderbook cache
+        // Depth recommendation — try cache first, auto-fetch from backend if missing
         let depthRec = '';
         const _obTicker = currentArbMarket?.ticker;
         const _obCache = _obTicker ? (window._obDepthCache || {})[_obTicker] : null;
-        if (_obCache && _obCache.dogDepth > 0) {
-            const dd = _obCache.dogDepth;
-            const fd = _obCache.favDepth;
+        if (!_obCache && _obTicker && !window._depthRecFetching?.[_obTicker]) {
+            // Auto-fetch depth rec from backend (uses live LocalOrderbook, zero API calls)
+            window._depthRecFetching = window._depthRecFetching || {};
+            window._depthRecFetching[_obTicker] = true;
+            const _dogSide = _anchorIsBrokenSpread ? 'no' : (document.querySelector('.dog-side-pill.active')?.dataset?.side || 'yes');
+            fetch(`${API_BASE}/depth-rec/${_obTicker}?dog=${_dogSide}&_=${Date.now()}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    if (data && data.rec_depth) {
+                        window._obDepthCache = window._obDepthCache || {};
+                        window._obDepthCache[_obTicker] = {
+                            dogDepth: data.dog_depth, favDepth: data.fav_depth,
+                            dogBid: data.dog_bid, favBid: data.fav_bid,
+                            favPerLevel: data.fav_per_level, dogPerLevel: 0,
+                            dogGaps: data.dog_gaps, favGaps: data.fav_gaps,
+                            favConc: data.fav_concentration, maxSafeQty: data.max_safe_qty,
+                            favTop3: 0, dogWall: {},
+                            hedgeRoom: 0, catchScore: 0,
+                            _backendRec: data.rec_depth, _reasons: data.reasons,
+                            ts: Date.now()
+                        };
+                        updateAnchorPreview();  // re-render with data
+                    }
+                })
+                .catch(() => {})
+                .finally(() => { delete window._depthRecFetching[_obTicker]; });
+        }
+        if (_obCache && (_obCache._backendRec || _obCache.dogDepth > 0)) {
+            const dd = _obCache.dogDepth || 0;
+            const fd = _obCache.favDepth || 0;
             const dogBid = _obCache.dogBid || 0;
             const favBid = _obCache.favBid || 0;
-            const fpl = _obCache.favPerLevel || 0;  // contracts per level on fav side
+            const fpl = _obCache.favPerLevel || 0;
             const fGaps = _obCache.favGaps || 0;
             const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
-            // Sport-specific minimums — recalibrated from 237 phantom trades (Apr 9-10 2026, WITH WS fav-follow + retreat):
-            // 7c+ is most profitable per fill but won't catch on packed books (NBA/MLB).
-            // Tennis@5c: viable with thick fav. NBA: 5c realistic early, 6-7c late game.
-            // NHL: needs 7c+ (81% adverse rate). MLB: volatile, 6c minimum.
-            const _recSport = detectSport(_obTicker);
-            const _sportMinDepth = { 'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4 }[_recSport] || 4;
-            // Liquidity-based depth: fav contracts/level determines how fast hedge fills.
-            // Thin book = wider depth needed (slow fill, price can move against you).
-            // Thick book = tighter depth safe (hedge fills instantly, WS retreat protects).
-            let recDepth = _sportMinDepth;
-            let reasons = [];
-            if (_sportMinDepth > 4) reasons.push(`${_recSport.toLowerCase()}: min ${_sportMinDepth}¢`);
-            const dogWall = _obCache.dogWall || {};
             const favConc = _obCache.favConc || 0;
-            // Primary: fav contracts/level (liquidity = fill probability)
-            // Data (Apr 9-10, WS+retreat): thick fav allows tighter depth (hedge catches fast).
-            // Thin fav = wider depth needed (hedge lags, price moves against you).
-            let _fplDepth = 5;
-            if (fpl >= 50) { _fplDepth = 4; reasons.push(`fav ${fpl}/lvl thick`); }
-            else if (fpl >= 30) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl solid`); }
-            else if (fpl >= 15) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl decent`); }
-            else if (fpl >= 8) { _fplDepth = 6; reasons.push(`fav ${fpl}/lvl moderate`); }
-            else if (fpl >= 4) { _fplDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
-            else { _fplDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
-            recDepth = Math.max(recDepth, _fplDepth);
-            // Dog wall check: need enough contracts protecting you at the chosen depth
-            // If the wall at recDepth is too thin (<30 contracts), widen until wall is adequate
-            // Skip on packed books (5k+ dog depth) — thousands at every level, gaps are noise
-            const minWall = 30;  // need at least 30 contracts between you and the bid
-            if (dd < 5000) {
-                while (recDepth < 10 && (dogWall[recDepth] || 0) < minWall) {
-                    recDepth++;
-                }
-            }
-            if ((dogWall[recDepth] || 0) < minWall) {
-                reasons.push(`dog wall thin (${dogWall[recDepth]||0})`);
+            let recDepth, reasons;
+            if (_obCache._backendRec) {
+                // Backend computed rec (from live LocalOrderbook — no order book modal needed)
+                recDepth = _obCache._backendRec;
+                reasons = _obCache._reasons || [];
             } else {
-                reasons.push(`wall: ${dogWall[recDepth]||0}`);
-            }
-            // Dog gaps — on THIN books, gaps mean sweeps skip levels (anchor exposed).
-            // On PACKED books (10k+), gaps are noise — thousands of contracts surround each gap.
-            if (dd < 5000) {
-                if (dGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${dGaps} dog gaps`); }
-                else if (dGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${dGaps} dog gaps`); }
-                else if (dGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${dGaps} dog gaps`); }
-                else if (dGaps >= 1 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`${dGaps} dog gap — too tight for 4¢`); }
-            } else if (dGaps >= 3) {
-                reasons.push(`${dGaps} dog gaps (packed — minor)`);
-            }
-            // Fav gaps = hedge may miss levels, need wider depth for safety
-            if (fGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${fGaps} fav gaps`); }
-            else if (fGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${fGaps} fav gaps`); }
-            else if (fGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${fGaps} fav gaps`); }
-            else if (fGaps >= 1 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`${fGaps} fav gap — too tight for 4¢`); }
-            // Fav concentration: if 80%+ is one wall level, it's fragile — bump minimum depth
-            if (favConc > 0.8) { recDepth = Math.max(recDepth, 6); reasons.push(`fav ${Math.round(favConc*100)}% wall`); }
-            else if (favConc > 0.65 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`fav ${Math.round(favConc*100)}% concentrated`); }
-            // ── Sweep impact check ──
-            // The sweep that reaches your depth must eat through dogWall[recDepth] contracts.
-            // If that sweep dwarfs the fav top-3, the fill event is too large — fav side
-            // may degrade (MM pulls, price impact). Pull depth shallower BUT never below
-            // the safety floor set by liquidity/gaps above — only reduce within safe range.
-            const favTop3 = _obCache.favTop3 || 0;
-            const _safeFloor = recDepth;  // lock in the safety floor before sweep adjusts down
-            if (favTop3 > 0) {
-                while (recDepth > _safeFloor && (dogWall[recDepth] || 0) > favTop3 * 2) {
-                    recDepth--;
+                // Full frontend computation (from order book modal cache with dogWall data)
+                const _recSport = detectSport(_obTicker);
+                const _sportMinDepth = { 'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4 }[_recSport] || 4;
+                recDepth = _sportMinDepth;
+                reasons = [];
+                if (_sportMinDepth > 4) reasons.push(`${_recSport.toLowerCase()}: min ${_sportMinDepth}¢`);
+                const dogWall = _obCache.dogWall || {};
+                let _fplDepth = 5;
+                if (fpl >= 50) { _fplDepth = 4; reasons.push(`fav ${fpl}/lvl thick`); }
+                else if (fpl >= 30) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl solid`); }
+                else if (fpl >= 15) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl decent`); }
+                else if (fpl >= 8) { _fplDepth = 6; reasons.push(`fav ${fpl}/lvl moderate`); }
+                else if (fpl >= 4) { _fplDepth = 7; reasons.push(`fav ${fpl}/lvl light`); }
+                else { _fplDepth = 8; reasons.push(`fav ${fpl}/lvl thin`); }
+                recDepth = Math.max(recDepth, _fplDepth);
+                const minWall = 30;
+                if (dd < 5000 && Object.keys(dogWall).length > 0) {
+                    while (recDepth < 10 && (dogWall[recDepth] || 0) < minWall) { recDepth++; }
                 }
-                const sweepAtRec = dogWall[Math.min(recDepth, 12)] || 0;
-                const sweepRatio = favTop3 / Math.max(1, sweepAtRec);
-                if (sweepRatio >= 3) { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k < fav — safe`); }
-                else if (sweepRatio >= 1) { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k ≈ fav`); }
-                else { reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k > fav ${Math.round(favTop3/1000)}k`); }
+                if (Object.keys(dogWall).length > 0) {
+                    reasons.push((dogWall[recDepth] || 0) < minWall ? `dog wall thin (${dogWall[recDepth]||0})` : `wall: ${dogWall[recDepth]||0}`);
+                }
+                if (dd < 5000) {
+                    if (dGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${dGaps} dog gaps`); }
+                    else if (dGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${dGaps} dog gaps`); }
+                    else if (dGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${dGaps} dog gaps`); }
+                    else if (dGaps >= 1 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`${dGaps} dog gap`); }
+                } else if (dGaps >= 3) { reasons.push(`${dGaps} dog gaps (packed)`); }
+                if (fGaps >= 4) { recDepth = Math.max(recDepth, 8); reasons.push(`${fGaps} fav gaps`); }
+                else if (fGaps >= 3) { recDepth = Math.max(recDepth, 7); reasons.push(`${fGaps} fav gaps`); }
+                else if (fGaps >= 2) { recDepth = Math.max(recDepth, 6); reasons.push(`${fGaps} fav gaps`); }
+                else if (fGaps >= 1 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`${fGaps} fav gap`); }
+                if (favConc > 0.8) { recDepth = Math.max(recDepth, 6); reasons.push(`fav ${Math.round(favConc*100)}% wall`); }
+                else if (favConc > 0.65 && recDepth <= 4) { recDepth = Math.max(recDepth, 5); reasons.push(`fav ${Math.round(favConc*100)}% conc`); }
+                const favTop3 = _obCache.favTop3 || 0;
+                const _safeFloor = recDepth;
+                if (favTop3 > 0 && Object.keys(dogWall).length > 0) {
+                    while (recDepth > _safeFloor && (dogWall[recDepth] || 0) > favTop3 * 2) { recDepth--; }
+                    const sweepAtRec = dogWall[Math.min(recDepth, 12)] || 0;
+                    const sweepRatio = favTop3 / Math.max(1, sweepAtRec);
+                    if (sweepRatio >= 3) reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k < fav`);
+                    else if (sweepRatio >= 1) reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k ≈ fav`);
+                    else reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k > fav ${Math.round(favTop3/1000)}k`);
+                }
+                if (dd < 100) reasons.push('thin dog — fast fill');
+                const _userQty = parseInt(document.getElementById('scan-anchor-qty')?.value) || 1;
+                if (_userQty > maxQty && maxQty > 0) {
+                    const _qtyBump = _userQty > maxQty * 3 ? 2 : 1;
+                    recDepth = Math.max(recDepth, recDepth + _qtyBump);
+                    reasons.push(`qty ${_userQty} > safe ${maxQty}`);
+                }
+                recDepth = Math.max(recDepth, 4);
+                recDepth = Math.min(recDepth, 12);
             }
-            // Thin dog bonus: easy fill, can go shallower (but never below sport min)
-            if (dd < 100) { reasons.push('thin dog — fast fill'); }
-            // Qty check: if user's qty exceeds fav liquidity, need wider depth for safety
-            const _userQty = parseInt(document.getElementById('scan-anchor-qty')?.value) || 1;
-            if (_userQty > maxQty && maxQty > 0) {
-                const _qtyBump = _userQty > maxQty * 3 ? 2 : 1;
-                recDepth = Math.max(recDepth, recDepth + _qtyBump);
-                reasons.push(`qty ${_userQty} > safe ${maxQty}`);
-            }
-            // Hard floor: 4¢ recommendation minimum (preset buttons start at 4c)
-            recDepth = Math.max(recDepth, 4);
-            // Hard cap recDepth to wall data range
-            recDepth = Math.min(recDepth, 12);
             const recNote = reasons.join(' · ');
-            // Depth match: green = good, red = too shallow (risky), yellow = too deep (low fill prob)
             const recCol = anchorDepth >= recDepth && anchorDepth <= recDepth + 3 ? '#00ff88'
                 : anchorDepth < recDepth ? '#ff4444' : '#ffaa00';
             const depthWarnTxt = anchorDepth < recDepth ? ` <span style="color:#ff4444;font-weight:700;">⚠ too shallow!</span>`
                 : anchorDepth > recDepth + 3 ? ` <span style="color:#ffaa00;font-weight:700;">deep — lower fill prob</span>` : '';
-            const thinWarn = fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
+            const thinWarn = fpl > 0 && fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
             const concNote = favConc > 0.6 ? ` · <span style="color:#ff8800;">${Math.round(favConc*100)}% in 1 wall</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:#ff66aa;font-weight:700;">📊 Rec: ${recDepth}¢+</span> ` +
                 `<span style="color:#8892a6;">${recNote}</span>${thinWarn}${depthWarnTxt}` +
-                `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
-                `dog ${dd.toLocaleString()} (${_obCache.dogPerLevel||0}/lvl) @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
-                `</div>` +
-                `<div style="margin-top:2px;color:#ffaa00;font-size:9px;font-weight:600;">Max safe qty: ${maxQty} <span style="color:#555;font-weight:400;">(fav top 3 bids: ${_obCache.favTop3||0})</span></div>` +
+                (dd > 0 ? `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
+                `dog ${dd.toLocaleString()} @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
+                `</div>` : '') +
+                `<div style="margin-top:2px;color:#ffaa00;font-size:9px;font-weight:600;">Max safe qty: ${maxQty}</div>` +
                 `</div>`;
         }
         shaveInfo.innerHTML = `<span style="color:#ff66aa;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;

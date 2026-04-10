@@ -9481,6 +9481,9 @@ def _handle_phantom(bot_id, bot, actions):
                 qty = _partial_qty
                 bot['quantity'] = _partial_qty
                 print(f'✅ PHANTOM PARTIAL RECOVERY: {bot_id} fav already filled {_cached_fav_fill}/{_partial_qty} — completing with partial qty')
+            elif bot.get('_ceiling_exit_active'):
+                # Ceiling exit cancelled fav intentionally — skip fav polling, fall through to ceiling exit handler
+                pass
             else:
                 bot_log('PHANTOM_NO_FAV_ORDER', bot_id, {'status': status, 'partial_qty': _partial_qty, 'fav_fill': _cached_fav_fill}, level='WARN')
                 return

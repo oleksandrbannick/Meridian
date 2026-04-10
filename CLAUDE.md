@@ -58,32 +58,18 @@ Every monitor cycle (~2s):
 - Uses `amend_order` not cancel+repost
 - Maker exit > taker sellback: staying at bid gives best chance of fill
 
-## Ceiling System (as of 2026-04-09)
-- **SNAP_CEILING_CENTS = 96**: combined <= 96c -> snap to bid for profit
-- **WALK_CEILING = 100**: combined cost cap (breakeven), dual exit trigger
-- **96-100 range**: slow walk territory, not profitable but not at breakeven yet
-- **At 100 combined**: dual exit triggers (same-market) or sequential exit (cross-market)
-
-## Dual Exit (Same-Market, at 100c combined)
-- Posts dog sell at ask (maker), walks with ask
-- Fav stays at 100-dog (breakeven cap)
-- If combined drops below 100 -> cancel dog sell, fav resumes normal walk
-- **ANY partial fill on either side -> instantly cancel the other side**
-- Dog sell retries every cycle if missing while at ceiling
-- First fill commits to that exit path — no splits
-
-## Cross-Market Exit (Sequential, NO race)
-- Cancel fav hedge FIRST
-- Then sell current run's dog as maker
-- Accumulated positions from prior runs held for settlement
-- `_cross_ceiling_fired` flag resets on repeat
-- No simultaneous orders = no race condition = no orphans
+## No Ceiling, No Sellback (as of 2026-04-11)
+- **Ceiling exit / dual exit / dog sell system REMOVED** (~1400 lines deleted)
+- Fav hedge snaps to bid always, **NO ceiling cap** — even if combined > 100c
+- Combined < 100c = win, >= 100c = loss. Smart mode tracks this.
+- `HARD_CEILING_CENTS = 98` still exists for PRE-LAUNCH validation only (rejects bad setups)
+- **Only sell path:** user manually cancels bot (X) while holding positions -> `execute_maker_sell`
 
 ## TWO EXITS ONLY — NO sellback, NO timeout
-1. **Fav fills** at <= 100c combined -> arb complete
-2. **Dog sell fills** as maker -> dual exit clean exit (or cross-market sequential)
-- Settlement detection (game over) is the only other exit
-- If someone asks "what if it never fills" -> dual exit dog sell IS the safety net
+1. **Fav fills** at any combined price -> arb complete (win or loss)
+2. **Settlement** -> dog position settles automatically
+- Death zone just sets a flag — fav stays posted, keeps snapping to bid
+- If someone asks "what if it never fills" -> it settles, or user cancels
 
 ## Price Floor System
 - Dog price < 2c -> pull order, wait for recovery (NOT kill bot)
@@ -177,10 +163,10 @@ Tracks anchor fill sides — if 2+ on same side within 5s, snaps all pending run
 |---|---|---|
 | Sides | Dog only -> hedge after fill | Both sides upfront |
 | Speed | Maximum (precalc, <5ms) | Fast but has time-decay |
-| Ceiling | 100c walk ceiling | 98c hard ceiling on posting |
-| Exit | Dual exit (maker) or fav fill | Two-step: target -> snap -> sellback |
+| Ceiling | None — snaps to bid uncapped | 98c hard ceiling on posting |
+| Exit | Fav fill at any price | Two-step: target -> snap -> sellback |
 | Walk | Snap to bid, no cap | Two-step with cap during pending_profit |
-| Stop-loss | Dual exit IS the stop-loss | Combined > threshold -> sellback |
+| Stop-loss | None — loss tracked by smart mode | Combined > threshold -> sellback |
 | Cancel+replace | Uses amend_order | cancel+replace (no amend) |
 
 ---
@@ -286,11 +272,10 @@ Always push to GitHub BEFORE restarting. Verify single process: `pgrep -af "pyth
 3. Apex walk/snap (20s intervals, market-adaptive) — patient but responsive
 4. Meridian entry (pregame placement, hours to fill) — speed irrelevant
 
-## The 96/100 Ceiling System
-- **100c WALK_CEILING** = breakeven. Fav never walks past this. Dual exit trigger.
-- **96c SNAP_CEILING** = profit threshold. Snap to bid when combined <= 96c.
-- **96-100c range**: slow walk, not profitable but not at breakeven either.
-- **No fees in the math**: 98c breakeven is the real number, snap at 96 guarantees real profit after fees.
+## Ceiling System — REMOVED (2026-04-11)
+- No more WALK_CEILING, SNAP_CEILING, dual exit, dog sell
+- Fav snaps to bid uncapped. Combined > 100c = loss, < 100c = win
+- Only `HARD_CEILING_CENTS = 98` remains for pre-launch validation
 
 ---
 

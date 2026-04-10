@@ -1345,13 +1345,32 @@ def _extract_order_id(resp, context=''):
 
 
 def _safe_cancel(order_id, context=''):
-    """Cancel an order with one retry on failure. Returns True if cancelled."""
+    """Cancel an order with one retry on failure.
+    Returns: True if cancelled, 'filled' if order was already filled (404), False on other failure.
+    On 404: checks if the order had fills — this is critical to prevent orphans."""
     for attempt in range(2):
         try:
             api_rate_limiter.wait()
             kalshi_client.cancel_order(order_id)
             return True
         except Exception as e:
+            err_str = str(e)
+            if '404' in err_str:
+                # Order gone — check if it FILLED before disappearing
+                try:
+                    api_read_limiter.wait()
+                    _resp = kalshi_client.get_order(order_id)
+                    _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
+                    _fills = _parse_fill_count(_ord)
+                    if _fills > 0:
+                        print(f'🚨 {context}: cancel 404 but order had {_fills} fills!')
+                        bot_log('SAFE_CANCEL_404_FILLS', context, {
+                            'order_id': order_id, 'fills': _fills,
+                        }, level='ERROR')
+                        return 'filled'
+                except Exception:
+                    pass
+                return '404'
             if attempt == 0:
                 print(f'⚠ {context}: cancel failed (attempt 1), retrying: {e}')
                 time.sleep(0.5)
@@ -9045,10 +9064,20 @@ def _handle_phantom(bot_id, bot, actions):
                         _opp_bid = _best_bid(ob, _opp)
                         if _opp_bid > 0 and _opp_bid < current_dog_bid:
                             print(f'🔄 PHANTOM DRIFT FLIP: {bot_id} {dog_side}@{current_dog_bid}¢→fav, {_opp}@{_opp_bid}¢→dog')
-                            _safe_cancel(dog_order_id, f'phantom drift flip {bot_id}')
+                            _cancel_result = _safe_cancel(dog_order_id, f'phantom drift flip {bot_id}')
+                            _any_filled = _cancel_result == 'filled'
                             for _old_oid in bot.get('_all_dog_order_ids', []):
                                 if _old_oid and _old_oid != dog_order_id:
-                                    _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
+                                    _old_result = _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
+                                    if _old_result == 'filled':
+                                        _any_filled = True
+                            if _any_filled:
+                                # Orders filled during drift flip — DON'T flip, handle the fill
+                                print(f'🚨 PHANTOM DRIFT FLIP ABORTED: {bot_id} orders had fills — handling fill instead')
+                                bot_log('PHANTOM_DRIFT_FLIP_ABORTED', bot_id, {'reason': 'fills_on_cancel'}, level='WARN')
+                                # The WS handler or next monitor cycle will detect the fills
+                                save_state()
+                                return
                             bot['dog_side'] = _opp
                             bot['fav_side'] = dog_side
                             bot['dog_order_id'] = None

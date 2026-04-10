@@ -1543,9 +1543,10 @@ def close_position():
     if not ticker or count <= 0 or side not in ('yes', 'no'):
         return jsonify({'error': 'Required: ticker, side (yes|no), count (>0)'}), 400
     try:
-        sold, sell_info = execute_sell(ticker, side, count, reason='emergency_close')
+        _ec_oid, _ec_price = execute_maker_sell(ticker, side, count, reason='emergency_close')
+        sold = bool(_ec_oid)
         if sold:
-            price = sell_info.get('actual_fill_price') or sell_info.get('sell_price', 0)
+            price = _ec_price
             # ── P&L TRACKING: emergency close is always a loss ──
             loss_cents = price * count  # we're dumping the position at market
             session_pnl['gross_loss_cents'] += loss_cents
@@ -8560,6 +8561,43 @@ def verify_position_cleared(ticker, side, count):
         return False, -1
 
 
+def execute_maker_sell(ticker, side, count, reason='maker_exit'):
+    """Post a maker sell at ask price. Returns (order_id, ask_price) or (None, 0).
+    MAKER ONLY — never crosses the spread. If no ask available, returns None."""
+    try:
+        api_read_limiter.wait()
+        ob = kalshi_client.get_market_orderbook(ticker)
+        ask = _best_ask(ob, side)
+        if ask <= 0:
+            # Try WS cache
+            ws_p = ws_manager.get_price(ticker) if ws_manager else None
+            if ws_p:
+                ask = ws_p.get(f'{side}_ask', 0)
+                if ask <= 0:
+                    opp = 'no' if side == 'yes' else 'yes'
+                    opp_bid = ws_p.get(f'{opp}_bid', 0)
+                    ask = (100 - opp_bid) if opp_bid > 0 else 0
+        if ask <= 0:
+            print(f'⚠ execute_maker_sell({reason}): no ask for {side} on {ticker} — skipping')
+            return None, 0
+        _sell_pk = {f'{side}_price': ask}
+        api_rate_limiter.wait()
+        resp = kalshi_client.create_order(
+            ticker=ticker, side=side, action='sell',
+            count=count, order_type='limit', **_sell_pk
+        )
+        oid = resp.get('order', {}).get('order_id', '')
+        if oid:
+            print(f'📤 MAKER SELL ({reason}): {side} {count}x {ticker} @{ask}¢')
+            return oid, ask
+        else:
+            print(f'⚠ execute_maker_sell({reason}): no order_id in response')
+            return None, 0
+    except Exception as e:
+        print(f'❌ execute_maker_sell({reason}): {e}')
+        return None, 0
+
+
 def execute_sell(ticker, side, count, reason='stop_loss'):
     """
     Reliably sell contracts at the current bid price.
@@ -13260,9 +13298,10 @@ def _run_monitor():
                         _exit_qty = _b.get('_cross_settled_qty_dog' if _loser_is_dog else '_cross_settled_qty_fav', _b.get('_cross_settled_qty', 0))
                         if _exit_qty > 0:
                             try:
-                                _sold, _sell_info = execute_sell(_loser_ticker, _loser_side, _exit_qty,
+                                _se_oid, _se_mk_price = execute_maker_sell(_loser_ticker, _loser_side, _exit_qty,
                                                                 reason=f'auto_smart_exit_{_bid}')
-                                _sell_price = (_sell_info or {}).get('actual_fill_price', 0) or (_sell_info or {}).get('avg_price', 0) or (_sell_info or {}).get('sell_price', 0)
+                                _sell_price = _se_mk_price
+                                _sold = bool(_se_oid)
                                 if not _sold:
                                     print(f'⚠ Auto smart exit: sell failed for {_bid[:40]} — not marking as sold')
                                     continue
@@ -13273,7 +13312,7 @@ def _run_monitor():
                                 }
                                 # Record in P&L
                                 _se_revenue = _sell_price * _exit_qty
-                                _se_fee = _kalshi_taker_side_fee_cents(_sell_price, _exit_qty)
+                                _se_fee = _kalshi_side_fee_cents(_sell_price, _exit_qty)
                                 _se_net = _se_revenue - _se_fee
                                 session_pnl['gross_profit_cents'] = session_pnl.get('gross_profit_cents', 0) + _se_net
                                 _record_trade({
@@ -14282,9 +14321,10 @@ def _run_monitor():
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate watch SL for {bot_id} — already {bot["status"]}')
                             continue
-                        sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
+                        _sl_oid, _sl_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
+                        sold = bool(_sl_oid)
                         if sold:
-                            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', cur_bid)
+                            actual_sell = _sl_price or cur_bid
                             loss = (entry - actual_sell) * qty
                             bot['status'] = 'stopped'
                             bot['stopped_at'] = now
@@ -14318,9 +14358,10 @@ def _run_monitor():
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate watch TP for {bot_id} — already {bot["status"]}')
                             continue
-                        sold, sell_info = execute_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
+                        _tp_oid, _tp_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
+                        sold = bool(_tp_oid)
                         if sold:
-                            actual_sell = sell_info.get('actual_fill_price') or sell_info.get('sell_price', cur_bid)
+                            actual_sell = _tp_price or cur_bid
                             profit = (actual_sell - entry) * qty
                             bot['status'] = 'completed'
                             bot['completed_at'] = now
@@ -15109,18 +15150,17 @@ def _run_monitor():
                                 except Exception:
                                     pass
 
-                    # Market-sell the dead leg
-                    sold, sell_info = execute_sell(check_ticker, 'no', qty,
+                    # Maker-sell the dead leg
+                    _rb_oid, _rb_price = execute_maker_sell(check_ticker, 'no', qty,
                                                    reason=f'rebalancer_{event_type.lower()}_{bot_id}')
-                    if not sold:
+                    if not _rb_oid:
                         bot_log('REBALANCER_SELL_FAILED', bot_id, {
-                            'leg': check_leg, 'bid': live_bid, 'error': str(sell_info),
+                            'leg': check_leg, 'bid': live_bid,
                         })
                         print(f'⚠ REBALANCER SELL FAILED: {bot_id} leg={check_leg.upper()} — retrying next cycle')
-                        return False  # Don't change status, retry next cycle
+                        return False
 
-                    sell_price = (sell_info or {}).get('actual_fill_price') or \
-                                 (sell_info or {}).get('sell_price', 0)
+                    sell_price = _rb_price
 
                     if status == 'one_filled':
                         buy_fee = _kalshi_side_fee_cents(fill_price, qty)
@@ -15527,11 +15567,11 @@ def _run_monitor():
                                         bot_log('ORDER_CANCELLED', bot_id, {'order_id': bot[unfilled_order_key], 'reason': 'middle_sl'})
                                     except Exception as ce:
                                         bot_log('ERROR', bot_id, {'step': 'cancel_unfilled', 'error': str(ce)}, level='WARN')
-                                # Market-sell the filled leg
-                                sold_sl, sell_info_sl = execute_sell(filled_ticker, 'no', qty_m, reason=f'middle_sl_{bot_id}')
-                                sell_price_sl = (sell_info_sl or {}).get('actual_fill_price') or (sell_info_sl or {}).get('sell_price', 0)
+                                # Maker-sell the filled leg
+                                _msl_oid, _msl_price = execute_maker_sell(filled_ticker, 'no', qty_m, reason=f'middle_sl_{bot_id}')
+                                sell_price_sl = _msl_price
                                 sl_buy_fee = _kalshi_side_fee_cents(fill_price, qty_m)
-                                sl_sell_fee = _kalshi_taker_side_fee_cents(sell_price_sl, qty_m) if sell_price_sl else 0
+                                sl_sell_fee = _kalshi_side_fee_cents(sell_price_sl, qty_m) if sell_price_sl else 0
                                 sl_fees = sl_buy_fee + sl_sell_fee
                                 loss_cents = (fill_price - (sell_price_sl or fill_price)) * qty_m + sl_fees
                                 bot['status'] = 'stopped'
@@ -17044,11 +17084,12 @@ def smart_exit(bot_id):
         'qty': _loser_qty, 'qty_dog': cross_qty_dog, 'qty_fav': cross_qty_fav,
     }
 
-    # Sell the losing leg at market
+    # Sell the losing leg as maker
     try:
-        _sold, _sell_info = execute_sell(loser_ticker, loser_side, _loser_qty,
+        _se_oid, _se_price = execute_maker_sell(loser_ticker, loser_side, _loser_qty,
                                          reason=f'smart_exit_{bot_id}')
-        sell_price = (_sell_info.get('actual_fill_price') or _sell_info.get('sell_price', 0)) if isinstance(_sell_info, dict) else 0
+        _sold = bool(_se_oid)
+        sell_price = _se_price
         sell_revenue = sell_price * _loser_qty
         result['sold'] = True
         result['sell_price'] = sell_price
@@ -17194,11 +17235,10 @@ def cancel_bot(bot_id):
                     if bot.get(f'leg_{leg}_filled'):
                         leg_ticker = bot.get(ticker_key, '')
                         if leg_ticker:
-                            sold, sell_info = execute_sell(leg_ticker, 'no', mid_qty, reason=f'cancel_middle_{leg}_{bot_id}')
-                            if sold:
-                                sold_positions.append(f'LEG_{leg.upper()}_NO {mid_qty}x')
-                                sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
-                                sell_prices[f'leg_{leg}'] = sp
+                            _m_oid, _m_price = execute_maker_sell(leg_ticker, 'no', mid_qty, reason=f'cancel_middle_{leg}_{bot_id}')
+                            if _m_oid:
+                                sold_positions.append(f'LEG_{leg.upper()}_NO {mid_qty}x @{_m_price}¢ (maker)')
+                                sell_prices[f'leg_{leg}'] = _m_price
                             else:
                                 warnings.append(f'FAILED to sell LEG_{leg.upper()} NO {mid_qty}x — position may still be open on Kalshi!')
 
@@ -17311,33 +17351,30 @@ def cancel_bot(bot_id):
                     bot['dog_sell_order_id'] = None
                 # Cross-market: sell positions on BOTH tickers
                 if _is_cross_cancel and dog_fill > 0:
-                    sold, sell_info = execute_sell(ticker, dog_side, dog_fill,
+                    _cd_oid, _cd_price = execute_maker_sell(ticker, dog_side, dog_fill,
                                                    reason=f'cancel_anchor_dog_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'{dog_side.upper()} {dog_fill}x (dog on {ticker.split("-")[-1]})')
-                        sp = (sell_info or {}).get('actual_fill_price', 0)
-                        sell_prices[dog_side] = sp
+                    if _cd_oid:
+                        sold_positions.append(f'{dog_side.upper()} {dog_fill}x @{_cd_price}¢ (maker)')
+                        sell_prices[dog_side] = _cd_price
                     else:
-                        warnings.append(f'FAILED to sell {dog_side.upper()} {dog_fill}x on {ticker} — position may still be open!')
+                        warnings.append(f'FAILED to post maker sell {dog_side.upper()} {dog_fill}x on {ticker}')
                 if _is_cross_cancel and fav_fill_cross > 0:
-                    sold, sell_info = execute_sell(_hedge_ticker, fav_side, fav_fill_cross,
+                    _cf_oid, _cf_price = execute_maker_sell(_hedge_ticker, fav_side, fav_fill_cross,
                                                    reason=f'cancel_anchor_fav_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'{fav_side.upper()} {fav_fill_cross}x (fav on {_hedge_ticker.split("-")[-1]})')
-                        sp = (sell_info or {}).get('actual_fill_price', 0)
-                        sell_prices[fav_side] = sp
+                    if _cf_oid:
+                        sold_positions.append(f'{fav_side.upper()} {fav_fill_cross}x @{_cf_price}¢ (maker)')
+                        sell_prices[fav_side] = _cf_price
                     else:
-                        warnings.append(f'FAILED to sell {fav_side.upper()} {fav_fill_cross}x on {_hedge_ticker} — position may still be open!')
+                        warnings.append(f'FAILED to post maker sell {fav_side.upper()} {fav_fill_cross}x on {_hedge_ticker}')
                 # Same-market: sell back filled dog leg if fav isn't filled
                 elif not _is_cross_cancel and dog_fill > 0 and fav_fill < qty:
-                    sold, sell_info = execute_sell(ticker, dog_side, dog_fill,
+                    _cs_oid, _cs_price = execute_maker_sell(ticker, dog_side, dog_fill,
                                                    reason=f'cancel_anchor_dog_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'{dog_side.upper()} {dog_fill}x (dog)')
-                        sp = (sell_info or {}).get('actual_fill_price', 0)
-                        sell_prices[dog_side] = sp
+                    if _cs_oid:
+                        sold_positions.append(f'{dog_side.upper()} {dog_fill}x @{_cs_price}¢ (maker)')
+                        sell_prices[dog_side] = _cs_price
                     else:
-                        warnings.append(f'FAILED to sell {dog_side.upper()} {dog_fill}x — position may still be open!')
+                        warnings.append(f'FAILED to post maker sell {dog_side.upper()} {dog_fill}x')
                 # If both legs filled, it's a completed arb (auto-netted)
                 elif not _is_cross_cancel and dog_fill >= qty and fav_fill >= qty:
                     already_cleared_sides.add('yes')
@@ -17401,11 +17438,11 @@ def cancel_bot(bot_id):
                 for side in ('yes', 'no'):
                     net_held = bot.get(f'net_{side}', 0)
                     if net_held > 0 and side not in already_cleared_sides:
-                        sold, sell_info = execute_sell(ticker, side, net_held,
+                        _mm_oid, _mm_price = execute_maker_sell(ticker, side, net_held,
                                                        reason=f'cancel_mm_{side}_{bot_id}')
-                        if sold:
-                            sold_positions.append(f'{side.upper()} {net_held}x')
-                            sp = (sell_info or {}).get('actual_fill_price', 0)
+                        if _mm_oid:
+                            sold_positions.append(f'{side.upper()} {net_held}x @{_mm_price}¢ (maker)')
+                            sp = _mm_price
                             sell_prices[side] = sp
                             if (sell_info or {}).get('order_id') == 'already_cleared':
                                 already_cleared_sides.add(side)
@@ -17432,15 +17469,12 @@ def cancel_bot(bot_id):
                         sell_prices['no'] = no_fill
                     else:
                         # Amend failed — fall back to selling YES position
-                        sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_yes_{bot_id}')
-                        if sold:
-                            sold_positions.append(f'YES {yes_filled}x')
-                            sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
-                            sell_prices['yes'] = sp
-                            if (sell_info or {}).get('order_id') == 'already_cleared':
-                                already_cleared_sides.add('yes')
+                        _cy_oid, _cy_price = execute_maker_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_yes_{bot_id}')
+                        if _cy_oid:
+                            sold_positions.append(f'YES {yes_filled}x @{_cy_price}¢ (maker)')
+                            sell_prices['yes'] = _cy_price
                         else:
-                            warnings.append(f'FAILED to exit YES {yes_filled}x — position may still be open on Kalshi!')
+                            warnings.append(f'FAILED to post maker sell YES {yes_filled}x')
                         # Also cancel the pending NO order
                         if no_order_id:
                             try:
@@ -17468,15 +17502,12 @@ def cancel_bot(bot_id):
                         sell_prices['no'] = bot.get('no_price', 0)
                     else:
                         # Amend failed — fall back to selling NO position
-                        sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'cancel_sell_no_{bot_id}')
-                        if sold:
-                            sold_positions.append(f'NO {no_filled}x')
-                            sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
-                            sell_prices['no'] = sp
-                            if (sell_info or {}).get('order_id') == 'already_cleared':
-                                already_cleared_sides.add('no')
+                        _cn_oid, _cn_price = execute_maker_sell(ticker, 'no', no_filled, reason=f'cancel_sell_no_{bot_id}')
+                        if _cn_oid:
+                            sold_positions.append(f'NO {no_filled}x @{_cn_price}¢ (maker)')
+                            sell_prices['no'] = _cn_price
                         else:
-                            warnings.append(f'FAILED to exit NO {no_filled}x — position may still be open on Kalshi!')
+                            warnings.append(f'FAILED to post maker sell NO {no_filled}x')
                         # Also cancel the pending YES order
                         if yes_order_id:
                             try:
@@ -17511,15 +17542,12 @@ def cancel_bot(bot_id):
                         except Exception as e:
                             print(f'⚠ cancel_bot({bot_id}): cancel partial NO order failed: {e}')
                     # Sell the partial position
-                    sold, sell_info = execute_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_partial_yes_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'YES {yes_filled}x (partial)')
-                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
-                        sell_prices['yes'] = sp
-                        if (sell_info or {}).get('order_id') == 'already_cleared':
-                            already_cleared_sides.add('yes')
+                    _py_oid, _py_price = execute_maker_sell(ticker, 'yes', yes_filled, reason=f'cancel_sell_partial_yes_{bot_id}')
+                    if _py_oid:
+                        sold_positions.append(f'YES {yes_filled}x @{_py_price}¢ (maker)')
+                        sell_prices['yes'] = _py_price
                     else:
-                        warnings.append(f'FAILED to sell YES {yes_filled}x (partial) — position may still be open on Kalshi!')
+                        warnings.append(f'FAILED to post maker sell YES {yes_filled}x (partial)')
 
                 # ── Scenario: NO partial fill ──
                 elif no_filled > 0:
@@ -17538,15 +17566,12 @@ def cancel_bot(bot_id):
                             cancelled.append('NO order')
                         except Exception as e:
                             print(f'⚠ cancel_bot({bot_id}): cancel partial NO order failed: {e}')
-                    sold, sell_info = execute_sell(ticker, 'no', no_filled, reason=f'cancel_sell_partial_no_{bot_id}')
-                    if sold:
-                        sold_positions.append(f'NO {no_filled}x (partial)')
-                        sp = (sell_info or {}).get('actual_fill_price') or (sell_info or {}).get('sell_price', 0)
-                        sell_prices['no'] = sp
-                        if (sell_info or {}).get('order_id') == 'already_cleared':
-                            already_cleared_sides.add('no')
+                    _pn_oid, _pn_price = execute_maker_sell(ticker, 'no', no_filled, reason=f'cancel_sell_partial_no_{bot_id}')
+                    if _pn_oid:
+                        sold_positions.append(f'NO {no_filled}x @{_pn_price}¢ (maker)')
+                        sell_prices['no'] = _pn_price
                     else:
-                        warnings.append(f'FAILED to sell NO {no_filled}x (partial) — position may still be open on Kalshi!')
+                        warnings.append(f'FAILED to post maker sell NO {no_filled}x (partial)')
 
                 # ── Scenario: nothing filled → cancel both orders cleanly ──
                 else:
@@ -18580,8 +18605,9 @@ def emergency_sell():
         count = int(data.get('count', 0))
         if not ticker or not side or count <= 0:
             return jsonify({'success': False, 'error': 'Missing ticker, side, or count'}), 400
-        success, info = execute_sell(ticker, side, count, reason='emergency_orphan_sell')
-        sell_price = (info or {}).get('actual_fill_price') or (info or {}).get('sell_price', 0)
+        _eo_oid, _eo_price = execute_maker_sell(ticker, side, count, reason='emergency_orphan_sell')
+        success = bool(_eo_oid)
+        sell_price = _eo_price
         if success:
             # Cancel any resting orders on this ticker not tracked by active bots
             # (orphan hedge orders from completion that would create naked positions)

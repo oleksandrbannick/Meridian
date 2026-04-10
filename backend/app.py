@@ -3856,10 +3856,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         _is_late_fill = False
         if not matched_side:
             if order_id in (bot.get('_all_placed_order_ids') or []):
-                # Late fill from a previous cycle — determine side from the fill itself
-                matched_side = side  # WS tells us which side
-                # WS doesn't carry price — look up the actual fill price from Kalshi
+                # Late fill from old cycle — VERIFY with Kalshi before trusting WS
                 _late_price = 0
+                _late_verified_fills = 0
+                _late_status = '?'
                 try:
                     api_read_limiter.wait()
                     _late_resp = kalshi_client.get_order(order_id)
@@ -3867,13 +3867,27 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     _late_price = _late_ord.get('yes_price', 0) if side == 'yes' else _late_ord.get('no_price', 0)
                     if not _late_price:
                         _late_price = _late_ord.get('price', 0)
+                    _late_verified_fills = _parse_fill_count(_late_ord)
+                    _late_status = _late_ord.get('status', '?')
                 except Exception:
                     pass
+                # Ghost fill check: if Kalshi says 0 fills, this is a stale WS event — IGNORE
+                if _late_verified_fills <= 0:
+                    print(f'👻 APEX MM GHOST FILL BLOCKED: {bot_id} {side.upper()} +{count} on old order {order_id[:12]} — Kalshi says {_late_verified_fills} fills (status={_late_status})')
+                    bot_log('APEX_MM_GHOST_FILL_BLOCKED', bot_id, {
+                        'order_id': order_id, 'side': side, 'ws_count': count,
+                        'kalshi_fills': _late_verified_fills, 'kalshi_status': _late_status,
+                    }, level='WARN')
+                    continue  # skip this fill entirely
+                matched_side = side
                 matched_price = _late_price
+                # Use verified fill count, not WS count (WS can double-deliver)
+                count = _late_verified_fills
                 _is_late_fill = True
-                print(f'🚨 APEX MM LATE FILL: {bot_id} {side.upper()} +{count} @{_late_price}c on old order {order_id[:12]} — recovering')
+                print(f'🚨 APEX MM LATE FILL (verified): {bot_id} {side.upper()} +{count} @{_late_price}c on order {order_id[:12]} (status={_late_status})')
                 bot_log('APEX_MM_LATE_FILL', bot_id, {
-                    'order_id': order_id, 'side': side, 'count': count,
+                    'order_id': order_id, 'side': side, 'verified_count': count,
+                    'price': _late_price, 'kalshi_status': _late_status,
                     'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
                 }, level='WARN')
 

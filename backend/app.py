@@ -10683,28 +10683,10 @@ def _handle_phantom(bot_id, bot, actions):
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
         # Defensive: cancel old dog order and track it before placing new one
+        # Note: in waiting_repeat, the old order is from the COMPLETED run — fills are already hedged
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
-            _cr = _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
-            if isinstance(_cr, tuple) and _cr[0] == 'filled':
-                # Old order FILLED — abort repost, fire hedge immediately
-                _fill_count = min(_cr[1], qty)
-                print(f'🚨 PHANTOM REPEAT FILL: {bot_id} old order had {_fill_count} fills — hedging instead of reposting')
-                bot_log('PHANTOM_REPEAT_CLEANUP_FILLS', bot_id, {'fills': _fill_count, 'order_id': old_dog_oid}, level='WARN')
-                bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _fill_count)
-                if dog_side == 'yes':
-                    bot['yes_fill_qty'] = bot['dog_fill_qty']
-                else:
-                    bot['no_fill_qty'] = bot['dog_fill_qty']
-                bot['status'] = 'dog_filled'
-                bot['dog_filled_at'] = time.time()
-                bot['_hedge_fired'] = True
-                if _fill_count < qty:
-                    bot['_original_qty'] = qty
-                    bot['_partial_hedge_qty'] = _fill_count
-                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                save_state()
-                return
+            _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
             all_dog_ids = bot.get('_all_dog_order_ids', [])
             all_dog_ids.append(old_dog_oid)
             bot['_all_dog_order_ids'] = all_dog_ids

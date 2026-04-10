@@ -12370,13 +12370,6 @@ def _handle_apex(bot_id, bot, actions):
             # Below 75 — recover
             bot['_drift_pulled'] = False
             print(f'📊 APEX MM DRIFT CLEAR: {bot_id} max_bid={_drift_max}c — allowing recovery')
-        # Late game exit: if holding inventory in late game, sell back
-        _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 'normal'
-        net_yes = bot.get('net_yes', 0)
-        net_no = bot.get('net_no', 0)
-        if _urgency in ('late', 'critical') and (net_yes > 0 or net_no > 0):
-            _apex_mm_begin_exit(bot_id, bot, f'late_game (urgency={_urgency})')
-            return
         if _apex_depth_recovered(ticker, bot):
             _apex_mm_repost_ladder(bot_id, bot)
         return
@@ -12414,12 +12407,6 @@ def _handle_apex(bot_id, bot, actions):
         if _exit_age > 310 and bot.get('_exit_posted_at', 0) > 0:
             _apex_mm_begin_exit(bot_id, bot, f'time_stop ({int(_exit_age)}s holding)')
             return
-
-    # 0b. Late game: begin exit
-    _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 'normal'
-    if _urgency in ('late', 'critical') and (net_yes > 0 or net_no > 0):
-        _apex_mm_begin_exit(bot_id, bot, f'late_game (urgency={_urgency})')
-        return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)
     should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH)

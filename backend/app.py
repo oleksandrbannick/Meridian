@@ -5393,6 +5393,82 @@ _LATE_GAME_RULES = {
     'KXWTA':    {'final': 3, 'block_period': 3, 'block_secs': None, 'block_ot': False, 'name': 'WTA Set 3', 'tennis': True},
 }
 
+# ── Phantom Death Zone ──────────────────────────────────────────────
+# Sport-specific kill-switch for Phantom. When the game enters the death zone,
+# phantom stops taking new positions and exits any open trades as maker.
+# Liquidity vanishes in the final minutes — prices gap through you.
+_PHANTOM_DEATH_ZONE = {
+    # period: which period triggers death zone
+    # secs: seconds remaining in that period (None = entire period)
+    # For tennis: no clock, uses dog_bid threshold instead
+    'KXNBA':    {'period': 4, 'secs': 180, 'name': 'NBA Q4 <3:00'},
+    'KXNCAAMB': {'period': 2, 'secs': 180, 'name': 'NCAAB 2H <3:00'},
+    'KXNCAAWB': {'period': 4, 'secs': 180, 'name': 'NCAAWB Q4 <3:00'},
+    'KXNFL':    {'period': 4, 'secs': 120, 'name': 'NFL Q4 <2:00'},
+    'KXNHL':    {'period': 3, 'secs': 180, 'name': 'NHL P3 <3:00'},
+    'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
+    # Tennis: price-based — when dog bid < 5¢, match is decided
+    'KXATP':    {'tennis': True, 'dog_bid_floor': 5, 'name': 'ATP match decided'},
+    'KXWTA':    {'tennis': True, 'dog_bid_floor': 5, 'name': 'WTA match decided'},
+}
+
+
+def _is_phantom_death_zone(ticker, bot=None):
+    """Check if the game is in the death zone for Phantom.
+    Returns (True, reason_str) or (False, '').
+    Clock sports: uses ESPN period + time remaining.
+    Tennis: uses dog bid price (no reliable clock)."""
+    series = ticker.split('-')[0].upper() if ticker else ''
+    rule = None
+    rule_key = ''
+    for prefix, r in _PHANTOM_DEATH_ZONE.items():
+        if series.startswith(prefix) and len(prefix) > len(rule_key):
+            rule = r
+            rule_key = prefix
+    if not rule:
+        return False, ''
+
+    # Tennis: price-based death zone
+    if rule.get('tennis'):
+        if bot:
+            dog_side = bot.get('dog_side', 'yes')
+            dog_bid = bot.get(f'live_{dog_side}_bid', 0)
+            floor = rule.get('dog_bid_floor', 5)
+            if dog_bid > 0 and dog_bid <= floor:
+                return True, f'{rule["name"]}: dog bid {dog_bid}¢ ≤ {floor}¢'
+        return False, ''
+
+    # Clock sports: check ESPN game state
+    score_info = _get_game_score_for_ticker(ticker)
+    if not score_info or score_info.get('status') != 'in':
+        return False, ''
+
+    period = score_info.get('period', 0)
+    dz_period = rule['period']
+    dz_secs = rule.get('secs')
+
+    # Past the death zone period (overtime) — still in death zone
+    if period > dz_period:
+        return True, f'{rule["name"]}: OT (period {period})'
+
+    if period < dz_period:
+        return False, ''
+
+    # In the death zone period — check clock if applicable
+    if dz_secs is None:
+        # No clock threshold (MLB) — entire period is death zone
+        return True, f'{rule["name"]}: period {period}'
+
+    clock = score_info.get('clock', '')
+    secs = _parse_clock_seconds(clock)
+    if secs is not None and secs <= dz_secs:
+        mins = secs // 60
+        sec_rem = secs % 60
+        return True, f'{rule["name"]}: {mins}:{sec_rem:02d} remaining'
+
+    return False, ''
+
+
 def _is_late_game(ticker):
     """Returns (blocked, reason_str). True if game is in the last-60-seconds no-deploy window."""
     series = ticker.split('-')[0].upper() if ticker else ''
@@ -8795,6 +8871,28 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: dog_anchor_posted — waiting for dog to fill ────────
     if status == 'dog_anchor_posted':
+        # Death zone check: game ending, cancel dog and stop
+        _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
+        if _dz:
+            dog_order_id = bot.get('dog_order_id')
+            if dog_order_id:
+                _safe_cancel(dog_order_id, f'death_zone_{bot_id}')
+            bot['dog_order_id'] = None
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot['_death_zone_stopped'] = True
+            bot['_death_zone_reason'] = _dz_reason
+            print(f'🛑 END OF GAME STOP: {bot_id} — {_dz_reason} (dog cancelled)')
+            bot_log('PHANTOM_DEATH_ZONE_STOP', bot_id, {
+                'reason': _dz_reason, 'state': 'dog_anchor_posted',
+                'dog_order_id': (dog_order_id or '')[:12],
+            })
+            _push_notification('death_zone_stop', f'🛑 {bot_id}: END OF GAME STOP — {_dz_reason}', {
+                'bot_id': bot_id, 'ticker': ticker, 'reason': _dz_reason,
+            })
+            save_state()
+            return
+
         dog_order_id = bot.get('dog_order_id')
         if not dog_order_id and bot.get('_price_floor_pulled'):
             # Price floor pulled — check if bid recovered enough to repost
@@ -9460,6 +9558,55 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: fav_hedge_posted — fav posted, waiting for fill ────
     if status == 'fav_hedge_posted':
+        # Death zone check: game ending, trigger immediate ceiling exit
+        if not bot.get('_ceiling_exit_active') and not bot.get('_death_zone_stopped'):
+            _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
+            if _dz:
+                bot['_death_zone_stopped'] = True
+                bot['_death_zone_reason'] = _dz_reason
+                print(f'🛑 END OF GAME STOP: {bot_id} — {_dz_reason} (triggering ceiling exit)')
+                bot_log('PHANTOM_DEATH_ZONE_STOP', bot_id, {
+                    'reason': _dz_reason, 'state': 'fav_hedge_posted',
+                    'dog_price': bot.get('dog_price'), 'fav_price': bot.get('fav_price'),
+                })
+                _push_notification('death_zone_stop', f'🛑 {bot_id}: END OF GAME STOP — {_dz_reason}', {
+                    'bot_id': bot_id, 'ticker': ticker, 'reason': _dz_reason,
+                })
+                # Trigger ceiling exit: cancel fav, sell dog as maker
+                _dz_hedge_fills = _cancel_hedge_verified(bot, bot_id)
+                if _dz_hedge_fills >= qty:
+                    # Fav filled during cancel — arb complete, lucky
+                    print(f'⚡ DEATH ZONE EXIT: {bot_id} fav filled during cancel ({_dz_hedge_fills}/{qty}) — arb complete')
+                    bot[f'{fav_side}_fill_qty'] = _dz_hedge_fills
+                    bot['fav_fill_qty'] = _dz_hedge_fills
+                    # Let normal completion path handle it next cycle
+                else:
+                    # Post dog sell at ask as maker
+                    bot['_ceiling_exit_active'] = True
+                    bot['_over_ceiling_since'] = now
+                    _dz_sell_qty = qty - _dz_hedge_fills
+                    bot['_ceiling_exit_hedge_fills'] = _dz_hedge_fills
+                    bot['_ceiling_exit_sell_qty'] = _dz_sell_qty
+                    _dz_dog_ask = bot.get(f'live_{dog_side}_ask', 0)
+                    if _dz_dog_ask > 0 and _dz_sell_qty > 0:
+                        try:
+                            _sell_pk = {'yes_price': _dz_dog_ask} if dog_side == 'yes' else {'no_price': _dz_dog_ask}
+                            api_rate_limiter.wait()
+                            _sell_resp = kalshi_client.create_order(
+                                ticker=ticker, side=dog_side, action='sell',
+                                count=_dz_sell_qty, order_type='limit', **_sell_pk
+                            )
+                            _sell_oid = _sell_resp.get('order', {}).get('order_id', '')
+                            if _sell_oid:
+                                bot['dog_sell_order_id'] = _sell_oid
+                                bot['dog_sell_price'] = _dz_dog_ask
+                                bot['dog_sell_fill_qty'] = 0
+                                print(f'📤 DEATH ZONE SELL: {bot_id} sell@{_dz_dog_ask}¢ x{_dz_sell_qty}')
+                        except Exception as _dze:
+                            print(f'⚠ DEATH ZONE SELL FAILED: {bot_id}: {_dze}')
+                save_state()
+                # Fall through — ceiling exit handler below will manage the dog sell
+
         fav_order_id = bot.get('fav_order_id')
         # Recover fav_order_id from side-specific field if missing
         # But NOT if ceiling exit is active — fav was cancelled intentionally
@@ -10025,14 +10172,18 @@ def _handle_phantom(bot_id, bot, actions):
                                 'yes_price': dog_price if dog_side == 'yes' else _dog_sell_price,
                                 'no_price': dog_price if dog_side == 'no' else _dog_sell_price,
                                 'quantity': _cr_sell_qty, 'profit_cents': max(0, _net_pnl), 'loss_cents': max(0, -_net_pnl),
-                                'fee_cents': _buy_fee + _sell_fee, 'result': 'ceiling_exit',
-                                'exit_via': 'cross_ceiling_dog_sold', 'dog_side': dog_side,
+                                'fee_cents': _buy_fee + _sell_fee,
+                                'result': 'death_zone_exit' if bot.get('_death_zone_stopped') else 'ceiling_exit',
+                                'exit_via': 'death_zone_dog_sold' if bot.get('_death_zone_stopped') else 'cross_ceiling_dog_sold',
+                                'dog_side': dog_side,
                                 'dog_price': dog_price, 'sell_back_price': _dog_sell_price,
                                 'timestamp': now, 'placed_at': bot.get('created_at', now),
                                 'bot_category': 'anchor_dog', 'cross_market': True,
                                 'hedge_ticker': hedge_ticker,
                                 'ceiling_exit_split': True if _cr_arb_qty > 0 else False,
                                 'split_type': 'sellback',
+                                'death_zone': bool(bot.get('_death_zone_stopped')),
+                                'death_zone_reason': bot.get('_death_zone_reason', ''),
                             }, bot)
                             _net_pnl = _total_pnl  # use total for repeat logic
                             print(f'✅ PHANTOM CROSS EXIT: {bot_id} sold {_cr_sell_qty}x@{_dog_sell_price}¢ total={_net_pnl}¢' +
@@ -10048,8 +10199,12 @@ def _handle_phantom(bot_id, bot, actions):
                             # Repeat
                             _cr_repeats = bot.get('repeats_done', 0) + 1
                             bot['repeats_done'] = _cr_repeats
-                            _cr_smart_repeat, _cr_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='ceiling_exit')
-                            _cr_will = _cr_smart_repeat if _cr_smart_repeat is not None else (True if bot.get('smart_mode') else _cr_repeats <= bot.get('repeat_count', 0))
+                            if bot.get('_death_zone_stopped'):
+                                _cr_will = False
+                                _cr_reason = 'death_zone'
+                            else:
+                                _cr_smart_repeat, _cr_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='ceiling_exit')
+                                _cr_will = _cr_smart_repeat if _cr_smart_repeat is not None else (True if bot.get('smart_mode') else _cr_repeats <= bot.get('repeat_count', 0))
                             if _cr_will:
                                 bot['status'] = 'waiting_repeat'
                                 bot['waiting_repeat_since'] = now + 3
@@ -10255,8 +10410,9 @@ def _handle_phantom(bot_id, bot, actions):
                         'quantity': _ce_sb_qty,
                         'profit_cents': max(0, _sb_net), 'loss_cents': max(0, -_sb_net),
                         'fee_cents': _sb_buy_fee + _sb_sell_fee,
-                        'result': 'ceiling_exit',
-                        'exit_via': 'ceiling_exit_dog_sold', 'dog_side': dog_side, 'fav_side': fav_side,
+                        'result': 'death_zone_exit' if bot.get('_death_zone_stopped') else 'ceiling_exit',
+                        'exit_via': 'death_zone_dog_sold' if bot.get('_death_zone_stopped') else 'ceiling_exit_dog_sold',
+                        'dog_side': dog_side, 'fav_side': fav_side,
                         'dog_price': dog_price, 'sell_back_price': _dog_sell_price,
                         'timestamp': now, 'placed_at': bot.get('created_at', now),
                         'bot_category': 'anchor_dog',
@@ -10264,6 +10420,8 @@ def _handle_phantom(bot_id, bot, actions):
                         'hedge_ticker': hedge_ticker,
                         'ceiling_exit_split': True if _ce_arb_qty > 0 else False,
                         'split_type': 'sellback',
+                        'death_zone': bool(bot.get('_death_zone_stopped')),
+                        'death_zone_reason': bot.get('_death_zone_reason', ''),
                     }, bot)
                     _net_pnl = _total_pnl
                     print(f'✅ PHANTOM CEILING EXIT: {bot_id} sold {_ce_sb_qty}x@{_dog_sell_price}¢ (bought@{dog_price}¢) sb_net={_sb_net}¢ total={_net_pnl}¢' +
@@ -10289,8 +10447,13 @@ def _handle_phantom(bot_id, bot, actions):
                     _de_repeats_done = bot.get('repeats_done', 0) + 1
                     bot['repeats_done'] = _de_repeats_done
                     _de_repeat_total = bot.get('repeat_count', 0)
-                    _de_smart_repeat, _de_smart_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='ceiling_exit')
-                    _de_will_repeat = _de_smart_repeat if _de_smart_repeat is not None else (True if bot.get('smart_mode') else _de_repeats_done <= _de_repeat_total)
+                    # Death zone = NEVER repeat — game is ending
+                    if bot.get('_death_zone_stopped'):
+                        _de_will_repeat = False
+                        _de_smart_reason = 'death_zone'
+                    else:
+                        _de_smart_repeat, _de_smart_reason = _smart_mode_should_repeat(bot, _net_pnl, exit_type='ceiling_exit')
+                        _de_will_repeat = _de_smart_repeat if _de_smart_repeat is not None else (True if bot.get('smart_mode') else _de_repeats_done <= _de_repeat_total)
                     if _de_will_repeat:
                         bot['status'] = 'waiting_repeat'
                         bot['waiting_repeat_since'] = now + 3
@@ -10541,6 +10704,28 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['completed_at'] = now
                 bot['_smart_stopped'] = True
                 print(f'⏹ SMART STOP → COMPLETED: {bot_id}')
+            save_state()
+            return
+
+        # Death zone check: game is ending, don't re-anchor
+        _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
+        if _dz:
+            _is_cross_dz = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if _is_cross_dz and bot.get('_cross_settled_qty', 0) > 0:
+                bot['status'] = 'awaiting_settlement'
+                bot['awaiting_since'] = now
+            else:
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+            bot['_death_zone_stopped'] = True
+            bot['_death_zone_reason'] = _dz_reason
+            print(f'🛑 END OF GAME STOP: {bot_id} — {_dz_reason} (not re-anchoring)')
+            bot_log('PHANTOM_DEATH_ZONE_STOP', bot_id, {
+                'reason': _dz_reason, 'state': 'waiting_repeat',
+            })
+            _push_notification('death_zone_stop', f'🛑 {bot_id}: END OF GAME STOP — {_dz_reason}', {
+                'bot_id': bot_id, 'ticker': ticker, 'reason': _dz_reason,
+            })
             save_state()
             return
 
@@ -17715,6 +17900,7 @@ PNL_LOSS_RESULTS = (
     'hard_ceiling_sellback',  # arb dead, sold filled leg back
     'anchor_sellback',  # anchor-dog: sold dog back when fav hedge failed
     'ceiling_exit',  # phantom: sold dog at ceiling (fav cancelled first, sequential exit)
+    'death_zone_exit',  # phantom: end of game stop — sold dog before market gaps
     'anchor_dual_exit',  # phantom: legacy dual exit (pre-redesign, kept for old trades)
     'race_orphan_cleared',  # phantom: legacy orphan recovery (pre-redesign, kept for old trades)
     'ladder_sellback',  # ladder: sold dog rungs back when fav hedge failed/timed out

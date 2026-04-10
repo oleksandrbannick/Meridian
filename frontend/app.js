@@ -11752,7 +11752,7 @@ async function loadTradeHistoryList() {
             const isSL = t.result?.includes('stop_loss') || t.result?.includes('flip_');
             const isAnchorSellback = t.result === 'anchor_sellback' || t.result === 'ladder_sellback';
             const isApexSellback = t.result === 'apex_sellback';
-            const isCeilingExit = t.result === 'hard_ceiling_sellback' || t.result === 'ceiling_exit';
+            const isCeilingExit = t.result === 'hard_ceiling_sellback' || t.result === 'ceiling_exit' || t.result === 'death_zone_exit';
             const isSettledWin = t.result === 'settled_win_yes' || t.result === 'settled_win_no';
             const isSettledLoss = t.result === 'settled_loss_yes' || t.result === 'settled_loss_no';
             const isManualExit = t.result?.startsWith('manual_exit');
@@ -11859,15 +11859,18 @@ async function loadTradeHistoryList() {
                     parts.push(`<span style="color:#8892a6;">Sold back @ <strong style="color:#ffaa00">${sellAt}¢</strong></span>`);
                     parts.push(`<span style="color:${diffCol};font-weight:700;">${diff >= 0 ? '+' : ''}${diff}¢/contract</span>`);
                     if (phase) parts.push(`<span style="background:${phase === 'live' ? '#00ff8822' : '#8892a622'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>`);
-                } else if (t.exit_via && (t.exit_via.startsWith('dual_exit') || t.exit_via.startsWith('ceiling_exit') || t.exit_via === 'cross_ceiling_dog_sold') && t.dog_price && t.sell_back_price) {
-                    // Ceiling exit: show buy → sell, not fake arb
+                } else if (t.exit_via && (t.exit_via.startsWith('dual_exit') || t.exit_via.startsWith('ceiling_exit') || t.exit_via.startsWith('death_zone') || t.exit_via === 'cross_ceiling_dog_sold') && t.dog_price && t.sell_back_price) {
+                    // Ceiling exit / death zone: show buy → sell, not fake arb
+                    const _isDZ = t.death_zone || t.result === 'death_zone_exit' || (t.exit_via || '').startsWith('death_zone');
                     const _deSide = (t.dog_side || 'yes').toUpperCase();
                     const _deCol = t.dog_side === 'yes' ? '#00ff88' : '#ff4444';
                     const _deDiff = t.sell_back_price - t.dog_price;
                     parts.push(`<span style="color:#8892a6;">Bought <strong style="color:${_deCol}">${_deSide}</strong> @ <strong style="color:#fff">${t.dog_price}¢</strong> × ${t.quantity || 1}</span>`);
                     parts.push(`<span style="color:#8892a6;">Sold @ <strong style="color:#ff8800">${t.sell_back_price}¢</strong></span>`);
                     parts.push(`<span style="color:${_deDiff >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${_deDiff >= 0 ? '+' : ''}${_deDiff}¢/ea</span>`);
-                    parts.push(`<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">CEILING EXIT</span>`);
+                    parts.push(_isDZ
+                        ? `<span style="background:#ff000022;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">END OF GAME STOP</span>`
+                        : `<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">CEILING EXIT</span>`);
                 } else if (isManualExit && t.sell_price != null) {
                     // Manual exit: show what was sold
                     const _meSide = (t.dog_side || 'yes').toUpperCase();

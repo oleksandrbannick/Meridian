@@ -5706,7 +5706,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const rungs = bot.rungs || [];
 
     // ── COMPLETED/STOPPED SUMMARY CARD (early return) ──
-    if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement') {
+    if (status === 'completed' || status === 'stopped' || status === 'awaiting_settlement' || (bot._smart_stopped && (bot._run_history || []).length > 0)) {
         // Skip completion card for bots that are mid-repeat (transient completed state)
         const _midRepeat = status === 'completed' && bot._just_completed && (
             (bot.smart_mode && !bot._smart_stopped) ||
@@ -6126,37 +6126,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             }
             return '';
         })()}
-        ${bot._smart_stopped && (bot._run_history || []).length > 0 ? `
-        <div style="margin-top:8px;padding:8px;background:#060a14;border:1px solid #00e5ff33;border-radius:6px;">
-            ${(bot._run_history || []).map((r, i) => {
-                const _dp = r.dog_price || '?', _fp = r.fav_price || '?';
-                const _comb = (typeof _dp === 'number' && typeof _fp === 'number') ? _dp + _fp : 0;
-                const _combCol = _comb <= 96 ? '#00ff88' : _comb <= 98 ? '#ffaa00' : '#ff4444';
-                const _depCap = _comb > 0 ? 100 - _comb : 0;
-                const _depFloor = r.anchor_depth || bot.anchor_depth || 0;
-                const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : null;
-                const _floorBadge = _depFloor > 0 ? '<span style="color:#ff66aa;font-size:8px;font-weight:700;background:#ff66aa18;padding:0 3px;border-radius:2px;">F' + _depFloor + '</span>' : '';
-                return '<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:3px 4px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
-                    + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
-                    + '<span style="display:flex;align-items:center;gap:3px;">'
-                    + '<span style="color:#ffaa00;font-weight:700;">' + _dp + '¢</span>'
-                    + '<span style="color:#3a4560;">+</span>'
-                    + '<span style="color:#00aaff;font-weight:700;">' + _fp + '¢</span>'
-                    + (_comb > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol + ';font-weight:700;">' + _comb + '¢</span>' : '')
-                    + ' ' + _floorBadge
-                    + (_hedgeMs != null ? '<span style="color:' + (_hedgeMs < 1 ? '#00ffcc' : _hedgeMs < 5 ? '#00ff88' : '#ffaa00') + ';font-size:8px;font-weight:700;margin-left:2px;">⚡' + (_hedgeMs < 1 ? _hedgeMs.toFixed(1) : Math.round(_hedgeMs)) + 'ms</span>' : '')
-                    + '</span>'
-                    + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
-                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
-                    + '</div>';
-            }).join('')}
-            <div style="display:flex;gap:16px;font-size:10px;color:#8892a6;justify-content:center;margin-top:4px;padding-top:4px;border-top:1px solid #1e2740;">
-                <span>Runs: <strong style="color:#fff;">${bot.repeats_done || 0}</strong></span>
-                <span>P&L: <strong style="color:${(bot.lifetime_pnl || 0) >= 0 ? '#00ff88' : '#ff4444'};">${(bot.lifetime_pnl || 0) >= 0 ? '+' : ''}${bot.lifetime_pnl || 0}¢</strong></span>
-                ${bot.anchor_depth ? `<span>Depth: <strong style="color:#ff66aa;">${bot.anchor_depth}¢</strong></span>` : ''}
-                <span>Smart: <strong style="color:#00e5ff;">${bot._smart_wins || 0}W / ${bot._smart_losses || 0}L</strong></span>
-            </div>
-        </div>` : ''}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
             <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${(() => {
                 const _rd = bot._rec_depth;

@@ -3285,10 +3285,11 @@ class KalshiWSManager:
                     _ws_realtime_flip_check(ticker, yes_bid_rt, no_bid_rt)
                 except Exception as flip_err:
                     print(f'⚠ WS real-time flip check error: {flip_err}')
-                # ── Real-time phantom drop: if hedge is above bid, drop instantly ──
+                # ── Real-time phantom price follow: snap up OR drop down instantly ──
                 # Run in background thread — MUST NOT block WS handler (kills hedge latency)
                 try:
                     threading.Thread(target=_ws_phantom_instant_drop, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    threading.Thread(target=_ws_phantom_instant_snap_up, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
                 # ── Real-time phantom retreat: pull dog if bid approaches order ──
@@ -3545,6 +3546,90 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         finally:
             _phantom_drop_lock.release()
         return  # one drop per tick max
+
+
+def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
+    """Instant snap UP: if fav bid rose above posted price, amend up immediately.
+    Catches fast market moves (tennis breaks, game events) before the 2s monitor cycle.
+    Called on every WS price tick — runs in background thread."""
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_dog':
+            continue
+        if bot.get('status') != 'fav_hedge_posted':
+            continue
+        if bot.get('_ceiling_exit_active'):
+            continue  # ceiling exit in progress, don't snap
+
+        hedge_ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
+        if hedge_ticker != ticker and bot.get('ticker') != ticker:
+            continue
+
+        fav_side = bot.get('fav_side', '')
+        fav_price = bot.get('fav_price') or 0
+        if fav_price <= 0 or not fav_side:
+            continue
+
+        fav_bid = (yes_bid if fav_side == 'yes' else no_bid) if hedge_ticker == ticker else 0
+        if fav_bid <= 0:
+            continue
+
+        # Only snap if bid is ABOVE posted price (we're behind the market)
+        if fav_bid <= fav_price:
+            continue
+
+        # Cap at ceiling (100 - dog = breakeven)
+        dog_price = bot.get('dog_price') or bot.get('avg_fill_price') or 0
+        if dog_price <= 0:
+            continue
+        max_fav = 100 - dog_price  # WALK_CEILING
+        snap_target = min(fav_bid, max_fav)
+
+        if snap_target <= fav_price:
+            continue  # already at or above ceiling
+
+        # Acquire lock — prevents race with monitor walk and instant drop
+        if not _phantom_drop_lock.acquire(blocking=False):
+            return
+
+        try:
+            fav_oid = bot.get('fav_order_id')
+            if not fav_oid:
+                continue
+            qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+            amend_kwargs = {f'{fav_side}_price': snap_target}
+            api_rate_limiter.wait()
+            _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
+                                        count=qty, **amend_kwargs)
+            _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_order.get('order_id', '')
+            if _new_oid and _new_oid != fav_oid:
+                bot['fav_order_id'] = _new_oid
+                bot.setdefault('_all_hedge_order_ids', []).append(fav_oid)
+                if fav_side == 'yes':
+                    bot['yes_order_id'] = _new_oid
+                else:
+                    bot['no_order_id'] = _new_oid
+            bot['fav_price'] = snap_target
+            if fav_side == 'yes':
+                bot['yes_price'] = snap_target
+            else:
+                bot['no_price'] = snap_target
+            bot['fav_last_walk_at'] = time.time()
+            bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
+            combined = dog_price + snap_target
+            print(f'⚡ WS PHANTOM SNAP UP: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
+            bot_log('PHANTOM_WS_INSTANT_SNAP_UP', bot_id, {
+                'old_price': fav_price, 'new_price': snap_target,
+                'fav_bid': fav_bid, 'dog_price': dog_price,
+                'combined': combined, 'ceiling': max_fav,
+            })
+            save_state()
+        except Exception as e:
+            if '404' not in str(e):
+                print(f'⚠ WS PHANTOM SNAP UP FAIL: {bot_id}: {e}')
+        finally:
+            _phantom_drop_lock.release()
+        return  # one snap per tick max
 
 
 def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty, floor=None):

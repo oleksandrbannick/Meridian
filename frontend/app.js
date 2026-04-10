@@ -5773,14 +5773,14 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         const _isSellback = r.result === 'sellback';
                         const _isDualExit = r.result === 'dual_exit' || r.result === 'ceiling_exit';
                         const _hedgeMs = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
-                        // Depth badge: Wins: green depth, Dual exit: blue "DE", Sellback: red "SB"
+                        // Depth badge: Wins: green depth, Ceiling exit: blue "CE", Sellback: red "SB"
                         let _depBadge = '';
                         if (_depFloor > 0 && _comb > 0) {
                             if (_isSellback) {
                                 const _overBy = _comb > 100 ? -((_comb - 100)) : _depCap;
                                 _depBadge = `<span style="color:#ff4444;font-size:8px;font-weight:700;background:#ff444418;padding:0 3px;border-radius:2px;margin-left:2px;">SB ${_overBy}¢</span>`;
                             } else if (_isDualExit) {
-                                _depBadge = `<span style="color:#00aaff;font-size:8px;font-weight:700;background:#00aaff18;padding:0 3px;border-radius:2px;margin-left:2px;">DE ${_depCap}¢</span>`;
+                                _depBadge = `<span style="color:#00aaff;font-size:8px;font-weight:700;background:#00aaff18;padding:0 3px;border-radius:2px;margin-left:2px;">CE ${_depCap}¢</span>`;
                             } else {
                                 const _dcCol = _depCap >= _depFloor ? '#00ff88' : _depCap >= _depFloor - 2 ? '#ffaa00' : '#ff4444';
                                 _depBadge = `<span style="color:${_dcCol};font-size:8px;font-weight:700;background:${_dcCol}18;padding:0 3px;border-radius:2px;margin-left:2px;">${_depCap}¢</span>`;

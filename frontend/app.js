@@ -5603,7 +5603,7 @@ async function deployMarketMaker() {
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
     const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
-    const invLimit = parseInt(document.getElementById('mm-inventory-limit')?.value) || (levels * qtyPerLevel);
+    const invLimit = levels * qtyPerLevel * 2;  // auto: total scaled ladder qty (generous cap)
     const smartChecked = document.getElementById('mm-smart-mode')?.checked;
     const smartLimit = smartChecked ? 2 : 0;
     const width = _mmSelectedWidth;

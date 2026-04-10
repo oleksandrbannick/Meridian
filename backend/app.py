@@ -2555,6 +2555,13 @@ def load_state():
                     _bot['no_fill_qty'] = 0
                     _bot['dog_filled_at'] = None
                     _any_cleared = True
+                # Apex MM: clear stale fill counts when flat (net=0)
+                if _bot.get('type') == 'apex_mm' and _bot.get('net_yes', 0) == 0 and _bot.get('net_no', 0) == 0:
+                    for _sk in ('yes_orders', 'no_orders'):
+                        for _prc, _lv in _bot.get(_sk, {}).items():
+                            if _lv.get('fill_qty', 0) > 0:
+                                _lv['fill_qty'] = 0
+                                _any_cleared = True
                 if _any_cleared:
                     _transient_cleared += 1
                     print(f'🔧 STARTUP FIX: {_bid[:40]} cleared stuck thread flags + stale order IDs')

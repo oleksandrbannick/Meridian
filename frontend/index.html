@@ -1094,83 +1094,78 @@
 
                 <!-- ═══════ APEX MARKET MAKER SECTION ═══════ -->
                 <div id="arb-section" style="display:none;">
-                    <!-- Strategy description with pixel ghost -->
-                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:10px 12px;background:#060a14;border:1px solid #00d4ff33;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.6;display:flex;align-items:center;gap:10px;">
+                    <!-- Strategy header -->
+                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:12px 14px;background:linear-gradient(135deg,#00d4ff08 0%,#060a14 100%);border:1px solid #00d4ff22;border-left:3px solid #00d4ff;border-radius:8px;font-size:11px;color:#6a7488;line-height:1.6;display:flex;align-items:center;gap:12px;">
                         <canvas id="apex-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
-                        <div><strong style="color:#00d4ff;">Apex Market Maker</strong> — Posts weighted ladder on both sides. As fills accumulate, <span style="color:#00d4ff;">inventory skew</span> pushes the exit side aggressive and pulls entry back. OBI gating protects against hostile books. Auto-exits at end of game.</div>
+                        <div><strong style="color:#00d4ff;font-size:12px;">Apex Market Maker</strong><br>Weighted ladder on both sides. Inventory skew pushes exit aggressive. OBI gating protects against hostile flow.</div>
                     </div>
 
-                    <!-- Risk warning area -->
                     <div id="bot-risk-warnings"></div>
 
-                    <!-- Min Width selector -->
-                    <div style="margin-bottom:14px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                            <span style="color:#00d4ff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Min Width</span>
-                            <span style="color:#556;font-size:9px;">Combined cost = 100 - width</span>
+                    <!-- Min Width -->
+                    <div style="margin-bottom:16px;">
+                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                            <span style="color:#00d4ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;">Min Width</span>
+                            <span style="color:#334;font-size:1px;">|</span>
+                            <span style="color:#3a4560;font-size:9px;">Profit target per round trip</span>
                         </div>
-                        <div style="display:grid;grid-template-columns:repeat(7, 1fr);gap:5px;" id="mm-width-grid">
-                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="padding:10px 2px;background:#0a0e1a;border:2px solid #00d4ff66;border-radius:8px;color:#00d4ff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">4¢</button>
-                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">5¢</button>
-                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">6¢</button>
-                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">7¢</button>
-                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">8¢</button>
-                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">10¢</button>
-                            <button onclick="selectMMWidth(12)" class="mm-width-btn" data-width="12" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">12¢</button>
-                        </div>
-                    </div>
-
-                    <!-- Levels selector -->
-                    <div style="margin-bottom:14px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                            <span style="color:#00d4ff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">Levels</span>
-                            <span style="color:#556;font-size:9px;">Price rungs per side (1¢ apart)</span>
-                        </div>
-                        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:5px;" id="mm-levels-grid">
-                            <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">3</button>
-                            <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">5</button>
-                            <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="padding:10px 2px;background:#0a0e1a;border:2px solid #00d4ff66;border-radius:8px;color:#00d4ff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">7</button>
-                            <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#fff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">10</button>
+                        <div style="display:grid;grid-template-columns:repeat(7, 1fr);gap:4px;" id="mm-width-grid">
+                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="padding:10px 2px;background:#00d4ff11;border:2px solid #00d4ff55;border-radius:8px;color:#00d4ff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">4¢</button>
+                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">5¢</button>
+                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">6¢</button>
+                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">7¢</button>
+                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">8¢</button>
+                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">10¢</button>
+                            <button onclick="selectMMWidth(12)" class="mm-width-btn" data-width="12" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">12¢</button>
                         </div>
                     </div>
 
-                    <!-- Qty + Max Exposure -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                    <!-- Levels + Base Qty side by side -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
                         <div>
-                            <label style="display:block;color:#00d4ff;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Base Qty</label>
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                                <span style="color:#00d4ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;">Rungs</span>
+                                <span style="color:#3a4560;font-size:9px;">per side</span>
+                            </div>
+                            <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:4px;" id="mm-levels-grid">
+                                <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">3</button>
+                                <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">5</button>
+                                <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="padding:10px 2px;background:#00d4ff11;border:2px solid #00d4ff55;border-radius:8px;color:#00d4ff;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">7</button>
+                                <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="padding:10px 2px;background:#0a0e1a;border:2px solid #1e274066;border-radius:8px;color:#8892a6;cursor:pointer;text-align:center;font-weight:800;font-size:15px;transition:all .15s;">10</button>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                                <span style="color:#00d4ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;">Base Qty</span>
+                                <span style="color:#3a4560;font-size:9px;">scales deeper</span>
+                            </div>
                             <input type="number" id="mm-qty-per-level" min="1" max="100" value="5" oninput="updateMMPreview(); updateMMMaxDefault();"
-                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #00d4ff33;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div style="color:#556;font-size:9px;margin-top:2px;">Closest level (deeper levels scale up)</div>
-                        </div>
-                        <div>
-                            <label style="display:block;color:#00d4ff;font-size:10px;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;">Max One-Side</label>
-                            <input type="number" id="mm-inventory-limit" min="1" max="500" value="70" oninput=""
-                                   style="width:100%;padding:8px 10px;background:#0a0e1a;border:1px solid #00d4ff33;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                            <div id="mm-max-hint" style="color:#556;font-size:9px;margin-top:2px;">Max contracts held per side</div>
+                                   style="width:100%;padding:10px;background:#0a0e1a;border:2px solid #00d4ff33;border-radius:8px;color:#00d4ff;font-size:18px;font-weight:800;text-align:center;outline:none;transition:border-color .15s;" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='#00d4ff33'">
                         </div>
                     </div>
 
                     <!-- Smart Mode -->
-                    <div style="margin-bottom:14px;padding:8px 12px;background:#00e5ff08;border:1px solid #00e5ff22;border-radius:6px;display:flex;align-items:center;gap:8px;">
-                        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-                            <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00e5ff;">
-                            <span style="color:#00e5ff;font-size:11px;font-weight:700;">Smart Mode</span>
+                    <div style="margin-bottom:16px;padding:10px 14px;background:#00d4ff06;border:1px solid #00d4ff18;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00d4ff;width:16px;height:16px;">
+                            <span style="color:#00d4ff;font-size:12px;font-weight:700;">Smart Mode</span>
                         </label>
-                        <span style="color:#556;font-size:9px;">Stop after 2 consecutive losing round trips</span>
+                        <span style="color:#3a4560;font-size:10px;">Auto-stop after 2 losing round trips</span>
                     </div>
 
-                    <!-- Hidden fields with defaults -->
+                    <!-- Hidden fields -->
                     <input type="hidden" id="mm-start-gap" value="2">
                     <input type="hidden" id="mm-levels" value="7">
                     <input type="hidden" id="mm-spacing" value="1">
+                    <input type="hidden" id="mm-inventory-limit" value="0">
 
                     <!-- Ladder Preview -->
-                    <div id="mm-ladder-preview" style="margin-bottom:16px;padding:10px 12px;background:#0a0e1a;border:1px solid #00d4ff22;border-radius:8px;font-size:11px;"></div>
+                    <div id="mm-ladder-preview" style="margin-bottom:16px;padding:12px 14px;background:#0a0e1a;border:1px solid #00d4ff15;border-radius:10px;font-size:11px;"></div>
 
-                    <!-- Action buttons -->
-                    <div style="display:flex;gap:10px;">
-                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:14px;background:linear-gradient(135deg,#00d4ff 0%,#0099cc 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">Deploy Market Maker</button>
-                        <button onclick="closeModal()" style="padding:14px 20px;background:#1e2740;color:#8892a6;border:1px solid #2a3550;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+                    <!-- Deploy -->
+                    <div style="display:flex;gap:8px;">
+                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:14px;background:linear-gradient(135deg,#00d4ff 0%,#0088bb 100%);color:#000;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.03em;transition:opacity .15s;" onmousedown="this.style.opacity='0.85'" onmouseup="this.style.opacity='1'">Deploy Market Maker</button>
+                        <button onclick="closeModal()" style="padding:14px 18px;background:#0f1419;color:#556;border:1px solid #1e2740;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
 
@@ -3178,7 +3173,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260410103000"></script>
+    <script src="app.js?v=20260410105000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

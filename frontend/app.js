@@ -6473,32 +6473,52 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const exitPrice = bot._exit_price || 0;
     const exitFillQty = bot._exit_fill_qty || 0;
     const exitTotalQty = bot._exit_total_qty || Math.abs(netYes - netNo);
-    if (yesIsExit && exitPrice > 0) {
+    const _buildExitPanel = (col) => {
         const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
-        yesLadder = `<div style="padding:6px 8px;background:#00ff8815;border:1px solid #00ff8833;border-radius:6px;">
+        const targetPrice = bot._exit_target_price || exitPrice;
+        const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
+        const breakeven = 100 - heldAvg;
+        const walkCount = bot._exit_walk_count || 0;
+        const postedAt = bot._exit_posted_at || 0;
+        const ageSec = postedAt > 0 ? Math.floor(Date.now() / 1000 - postedAt) : 0;
+        const walkPct = (breakeven > targetPrice) ? Math.min(100, Math.round((exitPrice - targetPrice) / (breakeven - targetPrice) * 100)) : 0;
+        // Walk status text
+        let walkStatus = '';
+        if (walkCount > 0) {
+            walkStatus = `<span style="color:#ffaa00;font-weight:700;">WALKING +${walkCount}¢</span>`;
+        } else if (ageSec > 0 && ageSec < 60) {
+            walkStatus = `<span style="color:#556;">patience ${60 - ageSec}s</span>`;
+        } else if (ageSec >= 60) {
+            walkStatus = `<span style="color:#ffaa00;">ready to walk</span>`;
+        } else {
+            walkStatus = `<span style="color:#556;">at target</span>`;
+        }
+        return `<div style="padding:8px;background:${col}10;border:1px solid ${col}33;border-radius:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="color:${col};font-weight:800;font-size:18px;">${exitPrice}¢</span>
+                <span style="color:${col};font-size:11px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+            </div>
+            <div style="height:5px;background:#0f1520;border-radius:3px;overflow:hidden;margin-bottom:6px;">
+                <div style="width:${fp}%;height:100%;background:${col};border-radius:3px;transition:width .3s;"></div>
+            </div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#00ff88;font-weight:800;font-size:13px;">${exitPrice}¢</span>
-                <span style="color:#00ff88;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+                <span style="color:#556;font-size:9px;">Target: ${targetPrice}¢</span>
+                ${walkStatus}
             </div>
-            <div style="height:4px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                <div style="width:${fp}%;height:100%;background:#00ff88;border-radius:2px;transition:width .3s;"></div>
-            </div>
-            <div style="color:#556;font-size:9px;margin-top:3px;">Consolidated hedge · ${bot._exit_walk_count > 0 ? 'walking ' + bot._exit_walk_count + ' steps' : 'at target'}</div>
+            ${walkCount > 0 ? `<div style="margin-top:4px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                    <span style="color:#00ff88;font-size:8px;">${targetPrice}¢</span>
+                    <span style="color:#ffaa00;font-size:8px;font-weight:700;">${exitPrice}¢</span>
+                    <span style="color:#ff4444;font-size:8px;">BE ${breakeven}¢</span>
+                </div>
+                <div style="height:3px;background:#0f1520;border-radius:2px;overflow:hidden;">
+                    <div style="width:${walkPct}%;height:100%;background:linear-gradient(90deg,#00ff88,#ffaa00);border-radius:2px;"></div>
+                </div>
+            </div>` : ''}
         </div>`;
-    }
-    if (noIsExit && exitPrice > 0) {
-        const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
-        noLadder = `<div style="padding:6px 8px;background:#ff444415;border:1px solid #ff444433;border-radius:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#ff4444;font-weight:800;font-size:13px;">${exitPrice}¢</span>
-                <span style="color:#ff4444;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
-            </div>
-            <div style="height:4px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                <div style="width:${fp}%;height:100%;background:#ff4444;border-radius:2px;transition:width .3s;"></div>
-            </div>
-            <div style="color:#556;font-size:9px;margin-top:3px;">Consolidated hedge · ${bot._exit_walk_count > 0 ? 'walking ' + bot._exit_walk_count + ' steps' : 'at target'}</div>
-        </div>`;
-    }
+    };
+    if (yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88');
+    if (noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444');
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid ${accentCol}33;border-left:3px solid ${accentCol};border-radius:12px;padding:14px;margin-bottom:10px;`;

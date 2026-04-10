@@ -10934,25 +10934,45 @@ async function loadLatency() {
                     </div>
                 </div>`;
             }
-            // API Ping tile: side-by-side raw ping + API ping
-            if (c.key === 'api_ping' && rawPing != null) {
-                const rpCol = rawPing < 2 ? '#00ffcc' : rawPing < 10 ? '#00ff88' : '#ffaa00';
-                return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;">
-                    <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:8px;">${c.icon} ${c.label}</div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                        <div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;text-align:center;overflow:hidden;">
+            // API Ping + Rate Limits tile: side-by-side
+            if (c.key === 'api_ping') {
+                const rpCol = rawPing != null ? (rawPing < 2 ? '#00ffcc' : rawPing < 10 ? '#00ff88' : '#ffaa00') : '#555';
+                const rl = data.rate_limits || {};
+                const writePerMin = rl.write?.calls_per_min || 0;
+                const readPerMin = rl.read?.calls_per_min || 0;
+                const writePerSec = (writePerMin / 60).toFixed(1);
+                const readPerSec = (readPerMin / 60).toFixed(1);
+                const hits = rl.hits_last_60s || 0;
+                const maxPS = rl.limit_per_sec || 30;
+                const wPct = Math.min(100, Math.round(writePerSec / maxPS * 100));
+                const rPct = Math.min(100, Math.round(readPerSec / maxPS * 100));
+                const hCol = hits === 0 ? '#00ff88' : hits < 20 ? '#ffaa00' : '#ff4444';
+                const wCol = wPct > 80 ? '#ff4444' : wPct > 50 ? '#ffaa00' : '#00ff88';
+                const rCol = rPct > 80 ? '#ff4444' : rPct > 50 ? '#ffaa00' : '#00ff88';
+                return `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:12px;grid-column:span 2;">
+                    <div style="color:${c.color};font-size:11px;font-weight:700;margin-bottom:8px;">${c.icon} ${c.label} & Rate Limits</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
+                        <div style="background:#0a1520;border:1px solid #1a3050;border-radius:6px;padding:6px;text-align:center;">
                             <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Raw Ping</div>
-                            <div style="color:${rpCol};font-size:18px;font-weight:800;white-space:nowrap;">${rawPing}ms</div>
+                            <div style="color:${rpCol};font-size:18px;font-weight:800;">${rawPing != null ? rawPing + 'ms' : '—'}</div>
                         </div>
-                        <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:6px;text-align:center;overflow:hidden;">
+                        <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:6px;text-align:center;">
                             <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">API Call</div>
-                            <div style="color:${valCol};font-size:18px;font-weight:800;white-space:nowrap;">${mainVal}ms</div>
-                            <div style="display:flex;justify-content:space-between;font-size:8px;color:#667;margin-top:3px;">
-                                <span>min ${Math.round(s.min)}</span>
-                                <span>p95 ${Math.round(s.p95)}</span>
-                            </div>
+                            <div style="color:${valCol};font-size:18px;font-weight:800;">${mainVal}ms</div>
+                            <div style="color:#667;font-size:8px;margin-top:2px;">p95 ${s.count ? Math.round(s.p95) : '—'}</div>
+                        </div>
+                        <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:6px;text-align:center;">
+                            <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Write</div>
+                            <div style="color:${wCol};font-size:18px;font-weight:800;">${writePerSec}/s</div>
+                            <div style="height:3px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;"><div style="width:${wPct}%;height:100%;background:${wCol};border-radius:2px;"></div></div>
+                        </div>
+                        <div style="background:#0a1218;border:1px solid #1a2535;border-radius:6px;padding:6px;text-align:center;">
+                            <div style="color:#8892a6;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Read</div>
+                            <div style="color:${rCol};font-size:18px;font-weight:800;">${readPerSec}/s</div>
+                            <div style="height:3px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;"><div style="width:${rPct}%;height:100%;background:${rCol};border-radius:2px;"></div></div>
                         </div>
                     </div>
+                    ${hits > 0 ? `<div style="color:${hCol};font-size:10px;font-weight:700;text-align:center;margin-top:6px;">${hits} 429s/min</div>` : ''}
                 </div>`;
             }
             // Order Place + Orderbook tiles: same consistent style
@@ -10970,48 +10990,7 @@ async function loadLatency() {
                 </div>
             </div>`;
         }).join('');
-        // Rate limit section at bottom
-        const rl = data.rate_limits;
-        if (rl) {
-            const writePerMin = rl.write?.calls_per_min || 0;
-            const readPerMin = rl.read?.calls_per_min || 0;
-            const writePerSec = (writePerMin / 60).toFixed(1);
-            const readPerSec = (readPerMin / 60).toFixed(1);
-            const hits = rl.hits_last_60s || 0;
-            const maxPerSec = rl.limit_per_sec || 30;
-            const writePct = Math.min(100, Math.round(writePerSec / maxPerSec * 100));
-            const readPct = Math.min(100, Math.round(readPerSec / maxPerSec * 100));
-            const hitsCol = hits === 0 ? '#00ff88' : hits < 20 ? '#ffaa00' : '#ff4444';
-            const writCol = writePct > 80 ? '#ff4444' : writePct > 50 ? '#ffaa00' : '#00ff88';
-            const readCol = readPct > 80 ? '#ff4444' : readPct > 50 ? '#ffaa00' : '#00ff88';
-            stats.innerHTML += `
-                <div style="grid-column:1/-1;background:#0f1419;border:1px solid ${hits > 0 ? '#ff444433' : '#1e2740'};border-radius:8px;padding:12px;margin-top:4px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="color:#ff66cc;font-size:11px;font-weight:700;">API Rate Limits (${maxPerSec}/s per channel)</span>
-                        <span style="color:${hitsCol};font-size:12px;font-weight:800;">${hits > 0 ? hits + ' 429s/min' : 'No 429s'}</span>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                        <div>
-                            <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                                <span style="color:#8892a6;font-size:9px;">Write (orders)</span>
-                                <span style="color:${writCol};font-size:10px;font-weight:700;">${writePerSec}/s</span>
-                            </div>
-                            <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                                <div style="width:${writePct}%;height:100%;background:${writCol};border-radius:2px;"></div>
-                            </div>
-                        </div>
-                        <div>
-                            <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                                <span style="color:#8892a6;font-size:9px;">Read (markets)</span>
-                                <span style="color:${readCol};font-size:10px;font-weight:700;">${readPerSec}/s</span>
-                            </div>
-                            <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                                <div style="width:${readPct}%;height:100%;background:${readCol};border-radius:2px;"></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-        }
+        // Rate limits now shown inside the API Ping tile
     } catch (e) {
         stats.innerHTML = `<p style="color:#ff4444;font-size:11px;">Failed: ${e.message}</p>`;
     }

@@ -2975,6 +2975,32 @@ class LocalOrderbook:
         with self._lock:
             self._snapshot_depth()
 
+    def get_book_analysis(self, side, window=10):
+        """Analyze book structure for depth rec: gaps, per-level, concentration.
+        Returns dict with gaps, perLevel, top1Qty, totalDepth within window cents of best bid."""
+        with self._lock:
+            book = dict(self.yes if side == 'yes' else self.no)
+        if not book:
+            return {'gaps': 0, 'perLevel': 0, 'top1Qty': 0, 'totalDepth': 0, 'concentration': 0}
+        sorted_lvls = sorted(book.items(), key=lambda x: -x[0])  # best bid first
+        best_bid = sorted_lvls[0][0] if sorted_lvls else 0
+        # Only look within window cents of best bid
+        levels = [(p, q) for p, q in sorted_lvls if best_bid - p < window]
+        if not levels:
+            return {'gaps': 0, 'perLevel': 0, 'top1Qty': 0, 'totalDepth': 0, 'concentration': 0}
+        total = sum(q for _, q in levels)
+        top1 = levels[0][1]
+        # Count gaps (missing price levels between best and worst in window)
+        gaps = 0
+        for i in range(len(levels) - 1):
+            gap = levels[i][0] - levels[i + 1][0]
+            if gap > 1:
+                gaps += gap - 1
+        per_level = round(total / max(1, len(levels)))
+        conc = top1 / total if total > 0 else 0
+        return {'gaps': gaps, 'perLevel': per_level, 'top1Qty': round(top1),
+                'totalDepth': round(total), 'concentration': round(conc, 2)}
+
 
 # Registry of local orderbooks — {ticker: LocalOrderbook}
 _local_orderbooks = {}
@@ -14673,6 +14699,45 @@ def list_bots():
                 bot['_dog_depth_top3'] = round(_lob.get_total_depth(_dog_side, 3))
                 bot['_fav_depth_top3'] = round(_lob.get_total_depth(_fav_side, 3))
                 bot['_obi_age_ms'] = round((time.time() - _lob.last_update_ts) * 1000)
+                # Live depth floor recommendation from book structure
+                _ticker = bot.get('ticker', '')
+                _sport_mins = {'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4}
+                _sp = ''
+                _tu = _ticker.upper()
+                if 'KXNBA' in _tu: _sp = 'NBA'
+                elif 'KXNHL' in _tu: _sp = 'NHL'
+                elif 'KXMLB' in _tu: _sp = 'MLB'
+                elif 'KXATP' in _tu or 'KXWTA' in _tu: _sp = 'Tennis'
+                elif 'KXMLS' in _tu: _sp = 'MLS'
+                elif 'KXEPL' in _tu: _sp = 'EPL'
+                elif 'KXUCL' in _tu: _sp = 'UCL'
+                elif 'KXNCAA' in _tu or 'KXMARMAD' in _tu: _sp = 'NCAAB'
+                _rd = _sport_mins.get(_sp, 4)
+                _dog_analysis = _lob.get_book_analysis(_dog_side)
+                _fav_analysis = _lob.get_book_analysis(_fav_side)
+                _fpl = _fav_analysis['perLevel']
+                if _fpl >= 50: _rd = max(_rd, 4)
+                elif _fpl >= 30: _rd = max(_rd, 5)
+                elif _fpl >= 15: _rd = max(_rd, 5)
+                elif _fpl >= 8: _rd = max(_rd, 6)
+                elif _fpl >= 4: _rd = max(_rd, 7)
+                elif _fpl > 0: _rd = max(_rd, 8)
+                _dd = _dog_analysis['totalDepth']
+                _dg = _dog_analysis['gaps']
+                if _dd < 5000:
+                    if _dg >= 4: _rd = max(_rd, 8)
+                    elif _dg >= 3: _rd = max(_rd, 7)
+                    elif _dg >= 2: _rd = max(_rd, 6)
+                    elif _dg >= 1 and _rd <= 4: _rd = max(_rd, 5)
+                _fg = _fav_analysis['gaps']
+                if _fg >= 4: _rd = max(_rd, 8)
+                elif _fg >= 3: _rd = max(_rd, 7)
+                elif _fg >= 2: _rd = max(_rd, 6)
+                elif _fg >= 1 and _rd <= 4: _rd = max(_rd, 5)
+                _fc = _fav_analysis['concentration']
+                if _fc > 0.8: _rd = max(_rd, 6)
+                elif _fc > 0.65 and _rd <= 4: _rd = max(_rd, 5)
+                bot['_rec_depth'] = min(_rd, 12)
 
         # Apex MM — OBI + depth signals
         if bot.get('bot_category') == 'ladder_arb' and bot.get('type') == 'apex_mm' and bot.get('ticker'):

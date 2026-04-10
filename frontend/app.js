@@ -3349,7 +3349,33 @@ function displayOrderbookLadder(orderbook) {
     const _isBadSport = ['MLB'].includes(_scoreSport);
     const _isRiskySport = ['NBA', 'MLB'].includes(_scoreSport);
     const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
-    const _sportMinDepth = { 'Tennis': 5, 'NBA': 6, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_scoreSport] || 5;
+    const _sportMinDepth = { 'Tennis': 4, 'NBA': 5, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_scoreSport] || 5;
+    // ── Compute recDepth from book structure (same logic as bot creation card) ──
+    let _recDepth = _sportMinDepth;
+    // Fav liquidity: thick fav = tighter depth safe, thin fav = wider needed
+    if (_favPL >= 50) _recDepth = Math.max(_recDepth, 4);
+    else if (_favPL >= 30) _recDepth = Math.max(_recDepth, 5);
+    else if (_favPL >= 15) _recDepth = Math.max(_recDepth, 5);
+    else if (_favPL >= 8) _recDepth = Math.max(_recDepth, 6);
+    else if (_favPL >= 4) _recDepth = Math.max(_recDepth, 7);
+    else _recDepth = Math.max(_recDepth, 8);
+    // Dog gaps shrink effective depth — bump recommendation
+    if (dogDepth < 5000) {
+        if (dogAnalysis.gaps >= 4) _recDepth = Math.max(_recDepth, 8);
+        else if (dogAnalysis.gaps >= 3) _recDepth = Math.max(_recDepth, 7);
+        else if (dogAnalysis.gaps >= 2) _recDepth = Math.max(_recDepth, 6);
+        else if (dogAnalysis.gaps >= 1 && _recDepth <= 4) _recDepth = Math.max(_recDepth, 5);
+    }
+    // Fav gaps = hedge may miss levels
+    if (favAnalysis.gaps >= 4) _recDepth = Math.max(_recDepth, 8);
+    else if (favAnalysis.gaps >= 3) _recDepth = Math.max(_recDepth, 7);
+    else if (favAnalysis.gaps >= 2) _recDepth = Math.max(_recDepth, 6);
+    else if (favAnalysis.gaps >= 1 && _recDepth <= 4) _recDepth = Math.max(_recDepth, 5);
+    // Fav concentration: single wall = fragile
+    const _favConc2 = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
+    if (_favConc2 > 0.8) _recDepth = Math.max(_recDepth, 6);
+    else if (_favConc2 > 0.65 && _recDepth <= 4) _recDepth = Math.max(_recDepth, 5);
+    _recDepth = Math.min(_recDepth, 12);
     const _favIsThick = _favPL >= 20;
     const _favIsThin = _favPL < 5;
     const _favIsLight = _favPL >= 5 && _favPL < 10;
@@ -3383,10 +3409,10 @@ function displayOrderbookLadder(orderbook) {
             verdict = `Fav is solid but dog packed (${Math.round(dogDepth/1000)}k) — slow anchor fills`;
             verdictCol = '#ffaa00';
         } else if (_isGreatSport) {
-            verdict = `${_scoreSport} + decent book — should work at ${_sportMinDepth || 5}¢+ depth`;
+            verdict = `${_scoreSport} + decent book — should work at ${_recDepth}¢+ depth`;
             verdictCol = '#00ccff';
         } else {
-            verdict = `Good setup — ${_favPL}/lvl fav, use ${_sportMinDepth || 5}¢+ depth`;
+            verdict = `Good setup — ${_favPL}/lvl fav, use ${_recDepth}¢+ depth`;
             verdictCol = '#00ccff';
         }
     } else if (catchScore >= 35) {
@@ -3394,7 +3420,7 @@ function displayOrderbookLadder(orderbook) {
             verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
             verdictCol = '#ff4444';
         } else if (_isRiskySport && _dogIsPacked) {
-            verdict = `${_scoreSport} + packed dog — slow fills, use 6¢+ depth`;
+            verdict = `${_scoreSport} + packed dog — slow fills, use ${_recDepth}¢+ depth`;
             verdictCol = '#ff8800';
         } else if (_favGappy) {
             verdict = `${favAnalysis.gaps} fav gaps — hedge may skip levels, use wider depth`;
@@ -4170,13 +4196,12 @@ function updateAnchorPreview() {
             const fGaps = _obCache.favGaps || 0;
             const dGaps = _obCache.dogGaps || 0;
             const maxQty = _obCache.maxSafeQty || 1;
-            // Sport-specific minimums — recalibrated from 493 phantom trades (Apr 4-7 2026):
-            // Tennis@5c: 77% WR +$28.89. NBA@5c: 52% -7c, @6c: 60% +6.6c.
-            // MLB: bleeds at EVERY depth (51% WR@5c -$15.25). NHL@5c: 25%, @7c+: profitable.
-            // Depth 7 overall: 65.9% WR, +37c/trade (best risk/reward).
-            // Depth 4: 42.9% WR -55.6c/trade WITHOUT retreat. With WS retreat, needs clean book.
+            // Sport-specific minimums — recalibrated from 237 phantom trades (Apr 9-10 2026, WITH WS fav-follow + retreat):
+            // 7c+ is most profitable per fill but won't catch on packed books (NBA/MLB).
+            // Tennis@5c: viable with thick fav. NBA: 5c realistic early, 6-7c late game.
+            // NHL: needs 7c+ (81% adverse rate). MLB: volatile, 6c minimum.
             const _recSport = detectSport(_obTicker);
-            const _sportMinDepth = { 'Tennis': 4, 'NBA': 6, 'MLB': 7, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 6 }[_recSport] || 5;
+            const _sportMinDepth = { 'Tennis': 4, 'NBA': 5, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_recSport] || 5;
             // Liquidity-based depth: fav contracts/level determines how fast hedge fills.
             // Thin book = wider depth needed (slow fill, price can move against you).
             // Thick book = tighter depth safe (hedge fills instantly, WS retreat protects).
@@ -4186,8 +4211,8 @@ function updateAnchorPreview() {
             const dogWall = _obCache.dogWall || {};
             const favConc = _obCache.favConc || 0;
             // Primary: fav contracts/level (liquidity = fill probability)
-            // Data shows: thick fav (50+/lvl) + no gaps = 4¢ viable on tennis.
-            // Moderate fav (10-20/lvl) = 6¢ minimum. Light/thin = 7-8¢.
+            // Data (Apr 9-10, WS+retreat): thick fav allows tighter depth (hedge catches fast).
+            // Thin fav = wider depth needed (hedge lags, price moves against you).
             let _fplDepth = 5;
             if (fpl >= 50) { _fplDepth = 4; reasons.push(`fav ${fpl}/lvl thick`); }
             else if (fpl >= 30) { _fplDepth = 5; reasons.push(`fav ${fpl}/lvl solid`); }
@@ -4254,7 +4279,7 @@ function updateAnchorPreview() {
                 recDepth = Math.max(recDepth, recDepth + _qtyBump);
                 reasons.push(`qty ${_userQty} > safe ${maxQty}`);
             }
-            // Hard floor: 4¢ absolute minimum (WS retreat provides protection)
+            // Hard floor: 4¢ recommendation minimum (preset buttons start at 4c)
             recDepth = Math.max(recDepth, 4);
             // Hard cap recDepth to wall data range
             recDepth = Math.min(recDepth, 12);
@@ -8813,7 +8838,7 @@ async function phantomModify(botId) {
             </div>
             <div style="margin-bottom:14px;">
                 <label style="color:#8892a6;font-size:10px;">Depth floor (¢ below bid)</label>
-                <input id="phantom-edit-depth" type="number" value="${curDepth}" min="1" max="30" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+                <input id="phantom-edit-depth" type="number" value="${curDepth}" min="3" max="30" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
                 <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:10px;margin-top:2px;">Dog posts at bid - ${curDepth}¢</div>
             </div>
             <div style="display:flex;gap:8px;">
@@ -8840,7 +8865,7 @@ async function phantomModify(botId) {
 
 async function phantomModifySave(botId) {
     const qty = parseInt(document.getElementById('phantom-edit-qty')?.value) || 1;
-    const depth = parseInt(document.getElementById('phantom-edit-depth')?.value) || 5;
+    const depth = Math.max(3, parseInt(document.getElementById('phantom-edit-depth')?.value) || 5);
     try {
         const resp = await fetch(`${API_BASE}/bot/phantom/edit/${botId}`, {
             method: 'POST',

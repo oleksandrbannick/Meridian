@@ -16304,6 +16304,8 @@ def phantom_edit(bot_id):
     payload = request.get_json(force=True) or {}
     new_qty = payload.get('quantity')
     new_depth = payload.get('anchor_depth')
+    if new_depth is not None and int(new_depth) < 3:
+        return jsonify({'error': 'Depth floor minimum is 3¢'}), 400
     if new_qty is None and new_depth is None:
         return jsonify({'error': 'Nothing to change'}), 400
     changes = {}

@@ -16277,6 +16277,23 @@ def phantom_edit(bot_id):
     return jsonify({'ok': True, 'applied_now': applied_now, 'changes': changes})
 
 
+@app.route('/api/bot/middle/rebalancer/<bot_id>', methods=['POST'])
+def middle_rebalancer_toggle(bot_id):
+    """Toggle rebalancer on/off for a Meridian bot."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if bot.get('type') != 'middle':
+        return jsonify({'error': 'Not a Meridian bot'}), 400
+    current = bot.get('rebalancer_enabled', True)
+    bot['rebalancer_enabled'] = not current
+    save_state()
+    new_state = bot['rebalancer_enabled']
+    bot_log('REBALANCER_TOGGLE', bot_id, {'enabled': new_state})
+    print(f'🔧 REBALANCER TOGGLE: {bot_id} → {"ON" if new_state else "OFF"}')
+    return jsonify({'ok': True, 'rebalancer_enabled': new_state})
+
+
 @app.route('/api/bot/patch/<bot_id>', methods=['POST'])
 def patch_bot(bot_id):
     """Admin: patch arbitrary fields on a running bot. Used by Claude Code to fix state

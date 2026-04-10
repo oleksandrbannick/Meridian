@@ -6802,6 +6802,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
                 ${liveScoreHtml}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
+                ${(status === 'one_filled' || status === 'both_filled' || status === 'waiting') ? `<button onclick="toggleMiddleRebalancer('${botId}')" style="background:${rebalOn ? '#aa66ff22' : '#ff444422'};color:${rebalOn ? '#aa66ff' : '#ff4444'};border:1px solid ${rebalOn ? '#aa66ff44' : '#ff444444'};border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">${rebalOn ? 'Rebal ON' : 'Rebal OFF'}</button>` : ''}
                 <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
             </div>
         </div>
@@ -8864,6 +8865,21 @@ async function phantomModifySave(botId) {
             document.getElementById('phantom-modify-modal')?.remove();
         } else {
             showNotification('Failed: ' + (data.error || 'unknown'));
+        }
+    } catch (e) {
+        showNotification('Error: ' + e.message);
+    }
+}
+
+async function toggleMiddleRebalancer(botId) {
+    try {
+        const resp = await fetch(`${API_BASE}/bot/middle/rebalancer/${botId}`, { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+            showNotification(`Rebalancer ${data.rebalancer_enabled ? 'ON' : 'OFF'}`);
+            loadBots();
+        } else {
+            showNotification('Error: ' + (data.error || 'unknown'));
         }
     } catch (e) {
         showNotification('Error: ' + e.message);

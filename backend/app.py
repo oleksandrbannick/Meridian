@@ -9223,11 +9223,11 @@ def _handle_phantom(bot_id, bot, actions):
                             _total_fills = 0
                             if isinstance(_cancel_result, tuple) and _cancel_result[0] == 'filled':
                                 _total_fills += _cancel_result[1]
+                            # Cancel old orders but DO NOT count their fills — they're from prior
+                            # reposts in this cycle. Only current dog_order_id fills matter.
                             for _old_oid in bot.get('_all_dog_order_ids', []):
                                 if _old_oid and _old_oid != dog_order_id:
-                                    _old_result = _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
-                                    if isinstance(_old_result, tuple) and _old_result[0] == 'filled':
-                                        _total_fills += _old_result[1]
+                                    _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
                             if _total_fills > 0:
                                 # Orders FILLED — abort flip, fire hedge IMMEDIATELY
                                 _hedge_qty = min(_total_fills, qty)
@@ -9914,35 +9914,22 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 # Orphan guard: check Kalshi position before re-anchoring
-                # Skip for cross-market bots — their dog positions are legitimately held for settlement
+                # ALERT ONLY — do NOT auto-sell. Auto-selling was creating MORE orphans
+                # by selling legitimate arb positions from stale fill double-counts.
                 if not _is_cross:
                     _pos_qty = _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
                     if _pos_qty is not None and _pos_qty != 0:
-                        # Determine correct side from position sign (positive=YES, negative=NO)
                         _orphan_side = 'yes' if _pos_qty > 0 else 'no'
                         _orphan_count = abs(_pos_qty)
                         _orphan_type = 'dog' if _orphan_side == dog_side else 'fav'
-                        print(f'⚠ PHANTOM ORPHAN AT REPEAT: {bot_id} Kalshi shows {_orphan_count} {_orphan_side} ({_orphan_type}) on {ticker} — selling back before re-anchor')
-                        _audit('PHANTOM_ORPHAN_AT_REPEAT', bot_id, {
+                        print(f'⚠ PHANTOM POSITION AT REPEAT: {bot_id} Kalshi shows {_orphan_count} {_orphan_side} ({_orphan_type}) on {ticker} — ALERT ONLY (no auto-sell)')
+                        _push_notification('orphan_detected', f'⚠ Phantom {bot_id}: {_orphan_count} {_orphan_side} on {ticker} at repeat', {
+                            'bot_id': bot_id, 'ticker': ticker, 'side': _orphan_side, 'qty': _orphan_count,
+                        })
+                        _audit('PHANTOM_POSITION_AT_REPEAT', bot_id, {
                             'ticker': ticker, 'orphan_qty': _orphan_count, 'side': _orphan_side,
                             'orphan_type': _orphan_type,
                         })
-                        _sold, _sell_info = execute_sell(ticker, _orphan_side, _orphan_count,
-                                                         reason=f'phantom_orphan_repeat_{bot_id}')
-                        if _sold:
-                            _sell_oid = (_sell_info or {}).get('order_id', '?') if isinstance(_sell_info, dict) else '?'
-                            print(f'🔙 PHANTOM ORPHAN SOLD: {bot_id} sold {_orphan_count} {_orphan_side} ({_orphan_type}) → {_sell_oid}')
-                            _audit('PHANTOM_ORPHAN_SOLD', bot_id, {
-                                'ticker': ticker, 'qty': _orphan_count, 'side': _orphan_side,
-                                'orphan_type': _orphan_type, 'order_id': _sell_oid,
-                            })
-                        else:
-                            _sell_err_msg = str(_sell_info)[:200] if _sell_info else 'execute_sell_false'
-                            print(f'⚠ PHANTOM ORPHAN SELL FAILED: {bot_id} {_sell_err_msg}')
-                            _audit('PHANTOM_ORPHAN_SELL_FAIL', bot_id, {
-                                'ticker': ticker, 'qty': _orphan_count, 'side': _orphan_side,
-                                'orphan_type': _orphan_type, 'error': _sell_err_msg,
-                            })
             else:
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'
@@ -10943,14 +10930,14 @@ def _handle_phantom(bot_id, bot, actions):
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
-        # Defensive: cancel old dog order and track it before placing new one
-        # Note: in waiting_repeat, the old order is from the COMPLETED run — fills are already hedged
+        # Defensive: cancel old dog order before placing new one
+        # DO NOT add to _all_dog_order_ids — this order is from the COMPLETED run,
+        # its fills are already hedged. Adding it would let drift flip find stale fills
+        # and fire a duplicate hedge → orphans.
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
             _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
-            all_dog_ids = bot.get('_all_dog_order_ids', [])
-            all_dog_ids.append(old_dog_oid)
-            bot['_all_dog_order_ids'] = all_dog_ids
+            bot['dog_order_id'] = None
 
         try:
             dog_resp, actual_price = create_order_maker(

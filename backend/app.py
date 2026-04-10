@@ -9299,6 +9299,14 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: dog_filled — dog filled but fav post failed, retry ──
     if status == 'dog_filled':
+        # Guard: if ceiling exit is active, fav was cancelled intentionally — don't re-hedge
+        if bot.get('_ceiling_exit_active'):
+            print(f'⚠ PHANTOM DOG_FILLED DURING CEILING EXIT: {bot_id} — restoring fav_hedge_posted (ceiling exit handling)')
+            bot['status'] = 'fav_hedge_posted'
+            bot_log('PHANTOM_CEILING_EXIT_STATUS_RESTORE', bot_id, {
+                '_ceiling_exit_active': True, 'dog_sell_order_id': bot.get('dog_sell_order_id'),
+            }, level='WARN')
+            return
         bot_log('PHANTOM_DOG_FILLED_POLL', bot_id, {
             'dog_price': bot['dog_price'], 'dog_side': dog_side,
             'fav_side': fav_side, '_hedge_fired': bot.get('_hedge_fired'),
@@ -9454,7 +9462,8 @@ def _handle_phantom(bot_id, bot, actions):
     if status == 'fav_hedge_posted':
         fav_order_id = bot.get('fav_order_id')
         # Recover fav_order_id from side-specific field if missing
-        if not fav_order_id:
+        # But NOT if ceiling exit is active — fav was cancelled intentionally
+        if not fav_order_id and not bot.get('_ceiling_exit_active'):
             _fav_oid_recover = bot.get(f'{fav_side}_order_id')
             if _fav_oid_recover:
                 bot['fav_order_id'] = _fav_oid_recover
@@ -10485,16 +10494,29 @@ def _handle_phantom(bot_id, bot, actions):
                             print(f'   ⚠ PHANTOM FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{qty}')
                             bot[f'{fav_side}_fill_qty'] = _fav_fills
                         else:
-                            # Order gone with 0 fills — sell back the dog
-                            print(f'   🔙 PHANTOM FAV GONE (404 recovery): {bot_id} — triggering sellback')
-                            bot['fav_order_id'] = None
-                            bot['status'] = 'dog_filled'
+                            # Order gone with 0 fills
+                            if bot.get('_ceiling_exit_active'):
+                                # Ceiling exit already cancelled fav intentionally — do NOT re-hedge
+                                print(f'   ⏳ PHANTOM FAV GONE (ceiling active): {bot_id} — ceiling exit handling, no action')
+                                bot['fav_order_id'] = None
+                                bot['yes_order_id'] = None
+                                bot['no_order_id'] = None
+                            else:
+                                print(f'   🔙 PHANTOM FAV GONE (404 recovery): {bot_id} — triggering sellback')
+                                bot['fav_order_id'] = None
+                                bot['status'] = 'dog_filled'
                     except Exception as _check_err:
                         if '404' in str(_check_err):
-                            # Order completely gone from Kalshi — sell back
-                            print(f'   🔙 PHANTOM FAV GONE 404 (recovery): {bot_id} — triggering sellback')
-                            bot['fav_order_id'] = None
-                            bot['status'] = 'dog_filled'
+                            if bot.get('_ceiling_exit_active'):
+                                print(f'   ⏳ PHANTOM FAV GONE 404 (ceiling active): {bot_id} — ceiling exit handling, no action')
+                                bot['fav_order_id'] = None
+                                bot['yes_order_id'] = None
+                                bot['no_order_id'] = None
+                            else:
+                                # Order completely gone from Kalshi — sell back
+                                print(f'   🔙 PHANTOM FAV GONE 404 (recovery): {bot_id} — triggering sellback')
+                                bot['fav_order_id'] = None
+                                bot['status'] = 'dog_filled'
         return
 
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──
@@ -11989,6 +12011,10 @@ def _cancel_hedge_verified(bot, bot_id):
                 'ws_fills': _ws_fills, 'pos_fills': _pos_fills, 'used': filled_qty,
             }, level='WARN')
     bot['fav_order_id'] = None
+    # Also clear side-specific order IDs — recovery code at fav_hedge_posted entry
+    # will otherwise resurrect the cancelled order ID and cause orphans
+    bot['yes_order_id'] = None
+    bot['no_order_id'] = None
     return filled_qty
 
 

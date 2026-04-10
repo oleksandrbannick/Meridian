@@ -6431,14 +6431,16 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
 
         bot['_exit_price'] = exit_price
         bot['_exit_total_qty'] = net_held
-        bot['_exit_fill_qty'] = 0
         bot['_exit_side'] = exit_side
         bot['_exit_held_side'] = held_side
         bot['_exit_avg_cost'] = avg_held
         bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - 4))  # original target before walk
-        bot['_exit_posted_at'] = time.time()
-        bot['_exit_walk_count'] = 0
-        bot['_exit_walk_started'] = 0
+        # Only set posted_at on FIRST exit creation — amends shouldn't restart patience timer
+        if not exit_oid:
+            bot['_exit_fill_qty'] = 0
+            bot['_exit_posted_at'] = time.time()
+            bot['_exit_walk_count'] = 0
+            bot['_exit_walk_started'] = 0
         bot['_skew_active'] = True
         bot['_skew_direction'] = f'exit_{exit_side}'
     except Exception as e:
@@ -11491,6 +11493,17 @@ def _handle_apex(bot_id, bot, actions):
         if bot.get('_pull_count', 0) >= APEX_MM_MAX_PULL_CYCLES:
             _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')
             return
+        # Drift guard: don't recover if market is too decided
+        _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
+        if _drift_max >= 75:
+            if not bot.get('_drift_pulled'):
+                bot['_drift_pulled'] = True
+                bot['_last_pull_reason'] = f'drift {_drift_max}c (market decided)'
+                print(f'📊 APEX MM DRIFT HOLD: {bot_id} max_bid={_drift_max}c — staying pulled')
+            return
+        elif bot.get('_drift_pulled') and _drift_max < 65:
+            bot['_drift_pulled'] = False
+            print(f'📊 APEX MM DRIFT CLEAR: {bot_id} max_bid={_drift_max}c — allowing recovery')
         if _apex_depth_recovered(ticker, bot):
             _apex_mm_repost_ladder(bot_id, bot)
         return
@@ -11502,6 +11515,13 @@ def _handle_apex(bot_id, bot, actions):
 
     # ── STATUS: market_making_active — main logic ──
     if status != 'market_making_active':
+        return
+
+    # 0. Drift guard — pull if market too one-sided (price > 75c either side)
+    _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
+    if _drift_max >= 75:
+        bot['_drift_pulled'] = True
+        _apex_mm_pull_all(bot_id, bot, f'drift {_drift_max}c (market decided)')
         return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)

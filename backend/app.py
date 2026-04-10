@@ -6703,11 +6703,11 @@ def _apex_mm_walk_up(bot_id, bot):
         _apex_mm_begin_exit(bot_id, bot, f'walk_maxed (combined={avg_held + current_price}c)')
         return
 
-    # Snap-back: if market improved (exit side bid dropped), snap price down
+    # Snap-back: if bid dropped below our exit price, snap down to bid for fill
+    # Even below target is fine — still profitable (just less than ideal)
     live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
     if live_exit_bid > 0 and live_exit_bid < current_price - 1:
-        # Market came back — snap to bid (better price)
-        snap_price = max(target_price, live_exit_bid)
+        snap_price = max(1, live_exit_bid)  # follow bid, no target cap
         if snap_price < current_price:
             try:
                 net_held = abs(net_yes - net_no)

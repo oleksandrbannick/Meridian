@@ -6100,7 +6100,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? `<span style="color:${bot._fav_depth < 50 ? '#ff4444' : bot._fav_depth < 200 ? '#ffaa00' : '#00ff88'};font-size:9px;">fav:${bot._fav_depth}</span>` : ''}
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? (() => { const _fd = bot._fav_depth, _q = qty || 1; const _fc = _fd < _q * 1.5 ? '#ff4444' : _fd < _q * 4 ? '#ffaa00' : '#00ff88'; const _fl = _fd >= 1000 ? (_fd/1000).toFixed(1) + 'K' : _fd; return `<span style="color:${_fc};font-size:9px;">fav:${_fl}</span>`; })() : ''}
             ${(() => { const _yb = bot.live_yes_bid || 0, _nb = bot.live_no_bid || 0; const _room = (_yb && _nb) ? 100 - _yb - _nb : -1; return _room >= 0 ? `<span style="color:${_room >= 4 ? '#00ff88' : _room >= 2 ? '#ffaa00' : '#ff4444'};font-weight:${_room <= 1 ? 700 : 400};font-size:9px;">${_room <= 1 ? '⚠ ' : ''}Room:${_room}¢</span>` : ''; })()}
             ${bot._obi != null ? (() => {
                 const obi = bot._obi;
@@ -6123,16 +6123,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <span style="color:#00e5ff;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">${bot._smart_stopped ? `⏹ Smart ${bot.repeats_done || 0} runs (${bot._smart_losses || bot.consecutive_losses || 0}L)` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
-            <span style="color:#555;">Hedge: snap to fav bid</span>
             ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const lat = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostCt = bot.dog_repost_count || 0;
-                    const dogSide = bot.dog_side || 'no';
-                    const wsBid = bot[`live_${dogSide}_bid`] || 0;
-                    const bidAtPost = bot._bid_at_post || 0;
-                    const gap = wsBid > 0 && bidAtPost > 0 ? Math.abs(wsBid - bidAtPost) : 0;
-                    const gapThresh = bot._gap_threshold || 3;
                     const cond = bot._market_condition || 'calm';
                     const cooldown = bot._gap_cooldown || 15;
                     const lastRepost = bot._last_repost_at || 0;
@@ -6142,10 +6136,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     // Market condition colors
                     const condCol = cond === 'volatile' ? '#ff4444' : cond === 'normal' ? '#ffaa00' : '#00aaff';
                     const condLabel = cond === 'volatile' ? '🔴 VOLATILE' : cond === 'normal' ? '🟡 NORMAL' : '🔵 CALM';
-
-                    // Gap fill ratio for visual
-                    const gapPct = Math.min(100, Math.round((gap / gapThresh) * 100));
-                    const gapCol = gapPct >= 100 ? '#ff4444' : gapPct >= 60 ? '#ffaa00' : '#555';
 
                     // Cooldown or ready
                     const cdText = cdLeft > 0 && sinceRepost < cooldown ? `⏱ ${cdLeft}s` : '';
@@ -6157,7 +6147,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const minsLeft = Math.max(0, repostMin - sinceMin).toFixed(1);
 
                     return `<span style="color:${condCol};font-size:10px;font-weight:600;">${condLabel}</span> `
-                         + `<span style="color:${gapCol};">Gap: ${gap}¢/${gapThresh}¢</span> `
                          + (cdText ? `<span style="color:#aa66ff;">${cdText}</span> ` : '')
                          + `<span style="color:#555;font-size:9px;">${parseFloat(minsLeft) <= 0 ? '⏱ 3m✓' : `⏱ ${minsLeft}m`}</span>`
                          + (repostCt > 0 ? ` <span style="color:#888;font-size:9px;">(×${repostCt})</span>` : '');

@@ -7858,13 +7858,13 @@ def create_anchor_bot():
                 _fav_ob_init = kalshi_client.get_market_orderbook(hedge_ticker)
             else:
                 _fav_ob_init = ob
-            _fav_depth_init, _fav_bid_init = _bid_depth(_fav_ob_init, fav_side, window=3)
+            _fav_depth_init, _fav_bid_init = _bid_depth(_fav_ob_init, fav_side, window=0)
         except Exception:
             pass
         _fav_warning = ''
         _min_fav_init = max(3, int(quantity * 1.5))
         if 0 < _fav_depth_init < _min_fav_init:
-            _fav_warning = f'⚠ Fav {fav_side} depth thin ({_fav_depth_init} contracts in top 3¢, need ≥{_min_fav_init}) — hedge may not fill'
+            _fav_warning = f'⚠ Fav {fav_side} depth thin ({_fav_depth_init} contracts at bid, need ≥{_min_fav_init}) — hedge may not fill'
             print(f'⚠ PHANTOM FAV THIN: {_fav_warning}')
 
         # Place ONLY the dog order — maker, post_only (skip if starting pulled)
@@ -9653,7 +9653,7 @@ def _handle_phantom(bot_id, bot, actions):
                 else:
                     _fav_ob = ob  # same-market: fav side is in the same orderbook
                 if _fav_ob:
-                    _fav_depth, _fav_best = _bid_depth(_fav_ob, fav_side, window=3)
+                    _fav_depth, _fav_best = _bid_depth(_fav_ob, fav_side, window=0)
                     _min_fav = max(3, int(qty * 1.5))
                     bot['_fav_depth'] = _fav_depth  # track for UI
                     if _fav_depth < _min_fav:
@@ -10548,7 +10548,7 @@ def _handle_phantom(bot_id, bot, actions):
 
             # Fav liquidity guard: skip re-anchor if fav side is dry
             if _fav_ob:
-                _fav_depth_r, _fav_best_r = _bid_depth(_fav_ob, fav_side, window=3)
+                _fav_depth_r, _fav_best_r = _bid_depth(_fav_ob, fav_side, window=0)
                 _min_fav_r = max(3, int(qty * 1.5))
                 bot['_fav_depth'] = _fav_depth_r
                 if _fav_depth_r < _min_fav_r:

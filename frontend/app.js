@@ -3223,13 +3223,15 @@ function displayOrderbookLadder(orderbook) {
         let top3Qty = 0, top3Count = 0;
         let top1Qty = 0; // largest single level — detects concentrated walls
         // Wall analysis: contracts between bid and bid-N for each depth level
+        // Levels with <10 contracts are dust — a whale blows through them instantly
+        const MIN_REAL_QTY = 10;
         const wallByDepth = {};
         for (const o of orders) {
             const { price, qty } = parseOrderLevel(o);
             if (price < bestBid - DEPTH_WINDOW) continue;
             totalQty += qty;
             levels++;
-            filledCents.add(price);
+            if (qty >= MIN_REAL_QTY) filledCents.add(price);  // dust levels = effective gaps
             if (qty > top1Qty) top1Qty = qty;
             if (top3Count < 3) { top3Qty += qty; top3Count++; }
         }

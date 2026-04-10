@@ -3044,8 +3044,9 @@ class LocalOrderbook:
         with self._lock:
             self._snapshot_depth()
 
-    def get_book_analysis(self, side, window=10):
+    def get_book_analysis(self, side, window=10, min_qty=10):
         """Analyze book structure for depth rec: gaps, per-level, concentration.
+        Levels with qty < min_qty are treated as empty (a whale blows through them).
         Returns dict with gaps, perLevel, top1Qty, totalDepth within window cents of best bid."""
         with self._lock:
             book = dict(self.yes if side == 'yes' else self.no)
@@ -3054,12 +3055,16 @@ class LocalOrderbook:
         sorted_lvls = sorted(book.items(), key=lambda x: -x[0])  # best bid first
         best_bid = sorted_lvls[0][0] if sorted_lvls else 0
         # Only look within window cents of best bid
-        levels = [(p, q) for p, q in sorted_lvls if best_bid - p < window]
+        all_levels = [(p, q) for p, q in sorted_lvls if best_bid - p < window]
+        # Filter out dust levels — too thin to stop a sweep
+        levels = [(p, q) for p, q in all_levels if q >= min_qty]
         if not levels:
-            return {'gaps': 0, 'perLevel': 0, 'top1Qty': 0, 'totalDepth': 0, 'concentration': 0}
+            return {'gaps': 0, 'perLevel': 0, 'top1Qty': 0,
+                    'totalDepth': round(sum(q for _, q in all_levels)),
+                    'concentration': 0}
         total = sum(q for _, q in levels)
         top1 = levels[0][1]
-        # Count gaps (missing price levels between best and worst in window)
+        # Count gaps: missing levels AND dust levels between real levels
         gaps = 0
         for i in range(len(levels) - 1):
             gap = levels[i][0] - levels[i + 1][0]

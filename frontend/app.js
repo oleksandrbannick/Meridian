@@ -10658,14 +10658,16 @@ function updateMiddleArbPreset(width) {
         //   price_x      = bid_x - shave_each
         const targetSum  = 100 - w;
         const totalShave = (md.no_a_bid + md.no_b_bid) - targetSum;
-        const shaveEach  = totalShave / 2;
-        // Never recommend above market bid — cap each price to its bid (shave can't be negative per leg)
-        const pA = Math.max(1, Math.min(md.no_a_bid, Math.min(90, Math.round(md.no_a_bid - shaveEach))));
-        const pB = Math.max(1, Math.min(md.no_b_bid, Math.min(90, Math.round(md.no_b_bid - shaveEach))));
+        // Split shave: if odd, give the extra shave to the cheaper leg (easier to fill deeper)
+        const shaveA = Math.floor(totalShave / 2);
+        const shaveB = totalShave - shaveA;  // gets the extra 1 on odd splits
+        // Never recommend above market bid — cap each price to its bid
+        const pA = Math.max(1, Math.min(md.no_a_bid, Math.min(90, md.no_a_bid - shaveA)));
+        const pB = Math.max(1, Math.min(md.no_b_bid, Math.min(90, md.no_b_bid - shaveB)));
         if (elA) elA.value = pA;
         if (elB) elB.value = pB;
-        const shaveADisp = (md.no_a_bid - pA);
-        const shaveBDisp = (md.no_b_bid - pB);
+        const shaveADisp = md.no_a_bid - pA;
+        const shaveBDisp = md.no_b_bid - pB;
         const signA = shaveADisp >= 0 ? '-' : '+';
         const signB = shaveBDisp >= 0 ? '-' : '+';
         if (descEl) {

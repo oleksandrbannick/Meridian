@@ -15097,8 +15097,8 @@ def create_middle_bot():
             return jsonify({'error': 'Missing required fields: ticker_a, ticker_b'}), 400
         if not (1 <= target_price_a <= 99) or not (1 <= target_price_b <= 99):
             return jsonify({'error': f'Prices out of range (1-99): A={target_price_a} B={target_price_b}'}), 400
-        if target_price_a + target_price_b >= 100:
-            return jsonify({'error': f'Combined cost {target_price_a}+{target_price_b}={target_price_a+target_price_b}¢ >= 100¢ — guaranteed loss. Max combined is 98¢ for 2¢ arb.'}), 400
+        if target_price_a + target_price_b > 100:
+            return jsonify({'error': f'Combined cost {target_price_a}+{target_price_b}={target_price_a+target_price_b}¢ > 100¢ — guaranteed loss.'}), 400
         if qty < 1:
             return jsonify({'error': 'qty must be at least 1'}), 400
 

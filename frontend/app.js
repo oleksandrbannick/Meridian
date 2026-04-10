@@ -412,12 +412,19 @@ async function loadLiveScores() {
             const sport = g.sport || '';
             // ALL games for score display (pre, in, post)
             // Live games take priority — don't let a finished game overwrite a live one
+            // Collect all abbreviation codes (primary + extras for compound surnames)
+            const homeAbbrs = [g.homeAbbr, ...(g.homeExtraAbbrs || [])].filter(Boolean);
+            const awayAbbrs = [g.awayAbbr, ...(g.awayExtraAbbrs || [])].filter(Boolean);
+            const uniqueHome = [...new Set(homeAbbrs)];
+            const uniqueAway = [...new Set(awayAbbrs)];
             const keys = [];
-            if (g.homeAbbr) keys.push(`${sport}:${g.homeAbbr}`);
-            if (g.awayAbbr) keys.push(`${sport}:${g.awayAbbr}`);
-            if (g.homeAbbr && g.awayAbbr) {
-                keys.push(`${sport}:${g.homeAbbr}${g.awayAbbr}`);
-                keys.push(`${sport}:${g.awayAbbr}${g.homeAbbr}`);
+            for (const h of uniqueHome) keys.push(`${sport}:${h}`);
+            for (const a of uniqueAway) keys.push(`${sport}:${a}`);
+            for (const h of uniqueHome) {
+                for (const a of uniqueAway) {
+                    keys.push(`${sport}:${h}${a}`);
+                    keys.push(`${sport}:${a}${h}`);
+                }
             }
             for (const key of keys) {
                 const existing = allGameData[key];
@@ -427,11 +434,13 @@ async function loadLiveScores() {
             }
             // Live filter only uses in-progress games
             if (g.state === 'in') {
-                liveGames[`${sport}:${g.awayAbbr}`] = g;
-                liveGames[`${sport}:${g.homeAbbr}`] = g;
-                if (g.homeAbbr && g.awayAbbr) {
-                    liveGames[`${sport}:${g.homeAbbr}${g.awayAbbr}`] = g;
-                    liveGames[`${sport}:${g.awayAbbr}${g.homeAbbr}`] = g;
+                for (const a of uniqueAway) liveGames[`${sport}:${a}`] = g;
+                for (const h of uniqueHome) liveGames[`${sport}:${h}`] = g;
+                for (const h of uniqueHome) {
+                    for (const a of uniqueAway) {
+                        liveGames[`${sport}:${h}${a}`] = g;
+                        liveGames[`${sport}:${a}${h}`] = g;
+                    }
                 }
             }
         });
@@ -441,6 +450,13 @@ async function loadLiveScores() {
         games.forEach(g => {
             if (g.homeAbbr && g.homeName) window._abbrToName[g.homeAbbr] = g.homeName;
             if (g.awayAbbr && g.awayName) window._abbrToName[g.awayAbbr] = g.awayName;
+            // Register extra abbreviations for compound surname matching
+            for (const code of (g.homeExtraAbbrs || [])) {
+                if (code && g.homeName) window._abbrToName[code] = g.homeName;
+            }
+            for (const code of (g.awayExtraAbbrs || [])) {
+                if (code && g.awayName) window._abbrToName[code] = g.awayName;
+            }
         });
 
         // Pre-fetch box scores for live games (skip tennis — uses API Tennis, not ESPN)
@@ -525,6 +541,8 @@ function parseESPNGame(event, sport) {
         awayName: (away.team || {}).shortDisplayName || (away.team || {}).displayName || '',
         homeAbbr: (home.team || {}).abbreviation || '',
         awayAbbr: (away.team || {}).abbreviation || '',
+        homeExtraAbbrs: (home.team || {}).extraAbbrs || [],
+        awayExtraAbbrs: (away.team || {}).extraAbbrs || [],
         homeScore: home.score || '0',
         awayScore: away.score || '0',
         homeLogo: (home.team || {}).logo || '',

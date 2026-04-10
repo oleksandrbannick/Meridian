@@ -1802,6 +1802,8 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         p2 = m.get('event_second_player', '')
         p1_abbr = _tennis_player_code(p1)
         p2_abbr = _tennis_player_code(p2)
+        p1_all_codes = _tennis_player_all_codes(p1)
+        p2_all_codes = _tennis_player_all_codes(p2)
 
         # Determine match state
         is_live = m.get('event_live') == '1'
@@ -1903,6 +1905,7 @@ def _fetch_api_tennis_scoreboard(tour_filter):
                         'score': str(p1_sets_won),
                         'team': {
                             'abbreviation': p1_abbr,
+                            'extraAbbrs': p1_all_codes,
                             'shortDisplayName': p1.split()[-1] if p1 else '',
                             'displayName': p1,
                             'logo': '',
@@ -1916,6 +1919,7 @@ def _fetch_api_tennis_scoreboard(tour_filter):
                         'score': str(p2_sets_won),
                         'team': {
                             'abbreviation': p2_abbr,
+                            'extraAbbrs': p2_all_codes,
                             'shortDisplayName': p2.split()[-1] if p2 else '',
                             'displayName': p2,
                             'logo': '',
@@ -1984,6 +1988,20 @@ def _tennis_player_code(display_name: str) -> str:
         return ''
     last = display_name.strip().split()[-1]
     return last[:3].upper() if len(last) >= 3 else last.upper()
+
+
+def _tennis_player_all_codes(display_name: str) -> list:
+    """Generate 3-letter codes from ALL name parts (>=3 chars).
+    Kalshi may use any part of compound surnames like 'Boscardin Dias' → BOS or DIA."""
+    if not display_name:
+        return []
+    codes = []
+    for part in display_name.strip().split():
+        if len(part) >= 3:
+            code = part[:3].upper()
+            if code not in codes:
+                codes.append(code)
+    return codes
 
 
 def _flatten_tennis_scoreboard(data: dict) -> dict:

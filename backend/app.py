@@ -11620,10 +11620,23 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_drift_pulled'] = True
                 bot['_last_pull_reason'] = f'drift {_drift_max}c (market decided)'
                 print(f'📊 APEX MM DRIFT HOLD: {bot_id} max_bid={_drift_max}c — staying pulled')
+            # If holding inventory, begin exit — don't just sit here
+            net_yes = bot.get('net_yes', 0)
+            net_no = bot.get('net_no', 0)
+            if net_yes > 0 or net_no > 0:
+                _apex_mm_begin_exit(bot_id, bot, f'market_decided (drift {_drift_max}c)')
             return
-        elif bot.get('_drift_pulled') and _drift_max < 65:
+        elif bot.get('_drift_pulled'):
+            # Below 75 — recover
             bot['_drift_pulled'] = False
             print(f'📊 APEX MM DRIFT CLEAR: {bot_id} max_bid={_drift_max}c — allowing recovery')
+        # Late game exit: if holding inventory in late game, sell back
+        _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 0
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if _urgency >= 3 and (net_yes > 0 or net_no > 0):
+            _apex_mm_begin_exit(bot_id, bot, f'late_game (urgency={_urgency})')
+            return
         if _apex_depth_recovered(ticker, bot):
             _apex_mm_repost_ladder(bot_id, bot)
         return
@@ -11643,6 +11656,15 @@ def _handle_apex(bot_id, bot, actions):
         bot['_drift_pulled'] = True
         _apex_mm_pull_all(bot_id, bot, f'drift {_drift_max}c (market decided)')
         return
+
+    # 0b. Late game exit: if holding inventory in final period, sell back
+    _urgency = _get_game_urgency(ticker) if callable(_get_game_urgency) else 0
+    if _urgency >= 3:
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if net_yes > 0 or net_no > 0:
+            _apex_mm_begin_exit(bot_id, bot, f'late_game (urgency={_urgency})')
+            return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)
     should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH)

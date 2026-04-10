@@ -10975,10 +10975,12 @@ async function loadLatency() {
         if (rl) {
             const writePerMin = rl.write?.calls_per_min || 0;
             const readPerMin = rl.read?.calls_per_min || 0;
+            const writePerSec = (writePerMin / 60).toFixed(1);
+            const readPerSec = (readPerMin / 60).toFixed(1);
             const hits = rl.hits_last_60s || 0;
             const maxPerSec = rl.limit_per_sec || 30;
-            const writePct = Math.min(100, Math.round(writePerMin / (maxPerSec * 60) * 100));
-            const readPct = Math.min(100, Math.round(readPerMin / (maxPerSec * 60) * 100));
+            const writePct = Math.min(100, Math.round(writePerSec / maxPerSec * 100));
+            const readPct = Math.min(100, Math.round(readPerSec / maxPerSec * 100));
             const hitsCol = hits === 0 ? '#00ff88' : hits < 20 ? '#ffaa00' : '#ff4444';
             const writCol = writePct > 80 ? '#ff4444' : writePct > 50 ? '#ffaa00' : '#00ff88';
             const readCol = readPct > 80 ? '#ff4444' : readPct > 50 ? '#ffaa00' : '#00ff88';
@@ -10992,7 +10994,7 @@ async function loadLatency() {
                         <div>
                             <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
                                 <span style="color:#8892a6;font-size:9px;">Write (orders)</span>
-                                <span style="color:${writCol};font-size:10px;font-weight:700;">${writePerMin}/min</span>
+                                <span style="color:${writCol};font-size:10px;font-weight:700;">${writePerSec}/s</span>
                             </div>
                             <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                                 <div style="width:${writePct}%;height:100%;background:${writCol};border-radius:2px;"></div>
@@ -11001,7 +11003,7 @@ async function loadLatency() {
                         <div>
                             <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
                                 <span style="color:#8892a6;font-size:9px;">Read (markets)</span>
-                                <span style="color:${readCol};font-size:10px;font-weight:700;">${readPerMin}/min</span>
+                                <span style="color:${readCol};font-size:10px;font-weight:700;">${readPerSec}/s</span>
                             </div>
                             <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                                 <div style="width:${readPct}%;height:100%;background:${readCol};border-radius:2px;"></div>

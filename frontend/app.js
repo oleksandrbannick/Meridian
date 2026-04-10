@@ -445,17 +445,26 @@ async function loadLiveScores() {
             }
         });
 
-        // Build abbreviation → full name map for bot display (all sports)
+        // Build abbreviation → full name map for bot display (sport-keyed to avoid collisions)
+        // CLE = Cavaliers (NBA) vs Guardians (MLB) — must differentiate by sport
         window._abbrToName = window._abbrToName || {};
+        window._abbrToNameBySport = window._abbrToNameBySport || {};
         games.forEach(g => {
-            if (g.homeAbbr && g.homeName) window._abbrToName[g.homeAbbr] = g.homeName;
-            if (g.awayAbbr && g.awayName) window._abbrToName[g.awayAbbr] = g.awayName;
-            // Register extra abbreviations for compound surname matching
+            const sp = g.sport || '';
+            if (!window._abbrToNameBySport[sp]) window._abbrToNameBySport[sp] = {};
+            if (g.homeAbbr && g.homeName) {
+                window._abbrToName[g.homeAbbr] = g.homeName;
+                window._abbrToNameBySport[sp][g.homeAbbr] = g.homeName;
+            }
+            if (g.awayAbbr && g.awayName) {
+                window._abbrToName[g.awayAbbr] = g.awayName;
+                window._abbrToNameBySport[sp][g.awayAbbr] = g.awayName;
+            }
             for (const code of (g.homeExtraAbbrs || [])) {
-                if (code && g.homeName) window._abbrToName[code] = g.homeName;
+                if (code && g.homeName) { window._abbrToName[code] = g.homeName; window._abbrToNameBySport[sp][code] = g.homeName; }
             }
             for (const code of (g.awayExtraAbbrs || [])) {
-                if (code && g.awayName) window._abbrToName[code] = g.awayName;
+                if (code && g.awayName) { window._abbrToName[code] = g.awayName; window._abbrToNameBySport[sp][code] = g.awayName; }
             }
         });
 
@@ -2884,10 +2893,14 @@ function formatBotDisplayName(ticker, spreadLine) {
             t1 = cleaned.substring(0,2); t2 = cleaned.substring(2,5);
         }
         if (t1 && t2) {
-            // Resolve abbreviations to full names from score data
-            const names = window._abbrToName || {};
-            const n1 = names[t1] || _teamMap[t1] || t1;
-            const n2 = names[t2] || _teamMap[t2] || t2;
+            // Resolve abbreviations to full names — sport-specific to avoid CLE=Cavaliers vs CLE=Guardians
+            const _sport = detectSport(ticker);
+            const _sportMap = { 'NBA': 'Basketball', 'NHL': 'Hockey', 'MLB': 'Baseball', 'NFL': 'Football', 'NCAAB': 'Basketball', 'MLS': 'Soccer', 'EPL': 'Soccer', 'UCL': 'Soccer' };
+            const _espnSport = _sportMap[_sport] || '';
+            const sportNames = _espnSport ? (window._abbrToNameBySport || {})[_espnSport] || {} : {};
+            const fallbackNames = window._abbrToName || {};
+            const n1 = sportNames[t1] || fallbackNames[t1] || _teamMap[t1] || t1;
+            const n2 = sportNames[t2] || fallbackNames[t2] || _teamMap[t2] || t2;
             matchup = `${n1} vs ${n2}`;
         }
     }

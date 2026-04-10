@@ -6654,13 +6654,25 @@ def _apex_mm_cycle_reset(bot_id, bot):
             _push_notification('orphan_detected', f'🚨 Apex MM {bot_id[:30]}: {_kalshi_pos} orphaned contracts on {ticker}', {
                 'bot_id': bot_id, 'ticker': ticker, 'qty': _kalshi_pos,
             })
-            # Try to recover: set net inventory to match Kalshi so exit system handles it
-            # Determine which side by checking which had more recent fills
-            _last_fill = (bot.get('_fill_log') or [{}])[-1] if bot.get('_fill_log') else {}
-            _orphan_side = _last_fill.get('side', 'yes')
-            bot[f'net_{_orphan_side}'] = _kalshi_pos
-            bot[f'avg_{_orphan_side}_cost'] = bot.get(f'avg_{_orphan_side}_cost', 50)
-            bot[f'total_{_orphan_side}_cost'] = bot[f'avg_{_orphan_side}_cost'] * _kalshi_pos
+            # Recover: determine side from Kalshi position SIGN, not last fill
+            # Positive = YES (bought YES), Negative = NO (bought NO)
+            _raw_pos = 0
+            if isinstance(_positions, list):
+                for _p in _positions:
+                    _raw_pos = int(float(_p.get('position_fp', _p.get('position', 0))))
+                    if _raw_pos != 0:
+                        break
+            elif isinstance(_positions, dict):
+                _raw_pos = int(float(_positions.get('position_fp', _positions.get('position', 0))))
+            _orphan_side = 'yes' if _raw_pos > 0 else 'no'
+            _orphan_qty = abs(_raw_pos)
+            bot[f'net_{_orphan_side}'] = _orphan_qty
+            # Use fill log avg if available, otherwise estimate from exposure
+            _fl_prices = [f['price'] for f in (bot.get('_fill_log') or []) if f.get('side') == _orphan_side and not f.get('is_exit')]
+            _orphan_avg = round(sum(_fl_prices) / len(_fl_prices)) if _fl_prices else 50
+            bot[f'avg_{_orphan_side}_cost'] = _orphan_avg
+            bot[f'total_{_orphan_side}_cost'] = _orphan_avg * _orphan_qty
+            print(f'🔧 ORPHAN RECOVERY: {bot_id} Kalshi has {_orphan_qty}x {_orphan_side.upper()} (raw={_raw_pos}) avg={_orphan_avg}c')
             save_state()
             return  # don't reset — let the exit system sell them
     except Exception as _pe:

@@ -6300,7 +6300,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const isCompleted = status === 'completed' || status === 'stopped';
 
     const statusMap = {
-        'market_making_active': ['QUOTING', '#00d4ff'],
+        'market_making_active': ['ACTIVE', '#00d4ff'],
         'mm_depth_pulled': ['PULLED — WAITING', '#ffaa00'],
         'mm_exiting': ['EXITING', '#ff8800'],
         'completed': ['DONE', '#00ff88'],
@@ -6375,12 +6375,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const netHeld = Math.abs(netYes - netNo);
         const avgCost = netYes > netNo ? avgYesCost : avgNoCost;
         const breakeven = 100 - avgCost;
-        skewBanner = `<div style="padding:8px 10px;background:#00d4ff11;border:1px solid #00d4ff33;border-radius:6px;margin-bottom:8px;font-size:10px;">
+        const exitPostedAt = bot._exit_posted_at || 0;
+        const skewSec = exitPostedAt > 0 ? Math.floor(Date.now() / 1000 - exitPostedAt) : 0;
+        const skewTimeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m ${skewSec%60}s` : `${skewSec}s`;
+        skewBanner = `<div style="padding:8px 10px;background:#00d4ff11;border:1px solid #00d4ff33;border-left:3px solid #00d4ff;border-radius:6px;margin-bottom:8px;font-size:10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <span style="color:#00d4ff;font-weight:700;">SKEW ACTIVE — pushing ${exitSide} exit</span>
-                <span style="color:#8892a6;">exit gap: ${skewExitGap}¢ · entry gap: ${skewEntryGap}¢</span>
+                <span style="color:#00d4ff;font-weight:700;">HOLDING ${longSide} ${netHeld}x @ ${avgCost}¢</span>
+                <span style="color:#00d4ff;font-size:11px;font-weight:800;">${skewSec > 0 ? skewTimeStr : ''}</span>
             </div>
-            <div style="color:#8892a6;margin-top:3px;">Long ${longSide} ${netHeld}x @ avg ${avgCost}¢ · ${exitSide} breakeven: <strong style="color:#00ff88;">${breakeven}¢</strong></div>
+            <div style="color:#556;margin-top:3px;">Exit ${exitSide} · BE: <strong style="color:#ffaa00;">${breakeven}¢</strong> · exit gap: ${skewExitGap}¢ · entry gap: ${skewEntryGap}¢</div>
         </div>`;
     }
 
@@ -6603,6 +6606,23 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>`;
         })()}
 
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:${yesIsExit ? '#00ff88' : '#00d4ff'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
+                </div>
+                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#00ff88;">${liveYesBid || '?'}¢</strong> · ask <strong style="color:#00ff88;">${liveYesAsk || '?'}¢</strong></div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#334;">No orders</span>'}</div>
+            </div>
+            <div style="background:#060a14;border:1px solid ${noBorderCol};border-radius:8px;padding:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:${noIsExit ? '#ff4444' : '#00d4ff'};font-size:9px;font-weight:800;">${noLabel}${noPaused}</span>
+                </div>
+                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">No orders</span>'}</div>
+            </div>
+        </div>
+
         ${realizedPnl !== 0 || roundTrips > 0 ? `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;">
             <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}¢</strong></span>
             ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unrealized: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}¢</strong></span>` : ''}
@@ -6610,6 +6630,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>` : ''}
 
         ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #1e2740;border-radius:6px;padding:6px;margin-bottom:8px;">
+            <div style="color:#00d4ff;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Round Trip History</div>
             ${(bot._rt_log || []).map((rt, i) => {
                 const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
                 const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
@@ -6628,31 +6649,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             }).join('')}
         </div>` : ''}
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-            <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${yesIsExit ? '#00ff88' : '#00d4ff'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
-                </div>
-                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#00ff88;">${liveYesBid || '?'}¢</strong> · ask <strong style="color:#00ff88;">${liveYesAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#334;">No orders</span>'}</div>
-            </div>
-            <div style="background:#060a14;border:1px solid ${noBorderCol};border-radius:8px;padding:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${noIsExit ? '#ff4444' : '#00d4ff'};font-size:9px;font-weight:800;">${noLabel}${noPaused}</span>
-                </div>
-                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">No orders</span>'}</div>
-            </div>
-        </div>
-
         <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#00d4ff;font-weight:600;">Width: ${width}¢</span>
             <span style="color:#8892a6;">Mid: ${midpoint}¢</span>
-            <span style="color:#8892a6;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x</span>
-            <span style="color:#8892a6;">Levels: ${bot.levels || '?'}</span>
+            <span style="color:#8892a6;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x${bot.auto_scale !== false ? ' (scaled)' : ''}</span>
+            <span style="color:#8892a6;">Rungs: ${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room <= 2 ? 700 : 400};">${room <= 2 ? '⚠ ' : ''}Room: ${room}¢</span>` : ''}
             ${obiHtml}
-            ${pullCount > 0 ? `<span style="color:#ffaa00;">OBI Pulls: ${pullCount}</span>` : ''}
+            ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls: ${pullCount}</span>` : ''}
         </div>
     `;
     container.appendChild(item);

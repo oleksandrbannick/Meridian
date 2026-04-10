@@ -5692,12 +5692,14 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             else _crossQtyFav = Math.max(0, _crossQtyFav - bot._smart_exit_sold.qty);
         }
         const _isSmart = bot._smart_stopped;
+        const _isDZ = bot._death_zone_stopped;
         const _isSettled = _isSmart && bot._smart_stop_reason === 'final';
-        const _col = _isAwaiting ? '#818cf8' : _isSettled ? '#ffaa00' : _isSmart ? '#00e5ff' : '#00ff88';
-        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isSettled ? '🏁 MARKET SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
+        const _col = _isAwaiting ? '#818cf8' : _isDZ ? '#ff4444' : _isSettled ? '#ffaa00' : _isSmart ? '#00e5ff' : '#00ff88';
+        const _label = _isAwaiting ? '⏳ AWAITING SETTLEMENT' : _isDZ ? '🛑 END OF GAME STOP' : _isSettled ? '🏁 MARKET SETTLED' : _isSmart ? '⏹ SMART STOP' : '✅ COMPLETE';
         // Completion reason
         let _stopReason = '';
-        if (bot._stop_reason) _stopReason = bot._stop_reason;
+        if (_isDZ) _stopReason = bot._death_zone_reason || 'game ending';
+        else if (bot._stop_reason) _stopReason = bot._stop_reason;
         else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
         else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
         else if (bot._smart_stop_reason === 'manual') _stopReason = 'manually stopped';
@@ -5854,22 +5856,23 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const favCeiling = 100 - effectiveDogPrice - targetWidth;
 
     const _isSmartStopped = bot._smart_stopped;
+    const _isDeathZone = bot._death_zone_stopped;
     const _isAwaitingSettlement = status === 'awaiting_settlement' || (status === 'completed' && bot.cross_market && !bot._positions_cleared);
     const _isCompletedSummary = (status === 'completed' || status === 'stopped') || _isAwaitingSettlement;
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._ceiling_exit_active ? '📤 CEILING EXIT' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
-        'completed': _isAwaitingSettlement ? '⏳ SETTLED' : _isSmartStopped ? '⏹ SMART STOP' : '✅ COMPLETE',
-        'stopped': _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
+        'completed': _isAwaitingSettlement ? '⏳ SETTLED' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : '✅ COMPLETE',
+        'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
         'awaiting_settlement': '⏳ SETTLED',
     };
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
         'fav_hedge_posted': bot._ceiling_exit_active ? '#ff8800' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
-        'completed': _isAwaitingSettlement ? '#818cf8' : _isSmartStopped ? '#00e5ff' : '#00ff88',
-        'stopped': _isSmartStopped ? '#00e5ff' : '#ff4444',
+        'completed': _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
+        'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#ff4444',
         'awaiting_settlement': '#818cf8',
     };
     const borderCol = borderMap[status] || '#ffaa00';

@@ -3349,7 +3349,7 @@ function displayOrderbookLadder(orderbook) {
     const _isBadSport = ['MLB'].includes(_scoreSport);
     const _isRiskySport = ['NBA', 'MLB'].includes(_scoreSport);
     const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
-    const _sportMinDepth = { 'Tennis': 4, 'NBA': 5, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_scoreSport] || 5;
+    const _sportMinDepth = { 'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4 }[_scoreSport] || 4;
     // ── Compute recDepth from book structure (same logic as bot creation card) ──
     let _recDepth = _sportMinDepth;
     // Fav liquidity: thick fav = tighter depth safe, thin fav = wider needed
@@ -4201,7 +4201,7 @@ function updateAnchorPreview() {
             // Tennis@5c: viable with thick fav. NBA: 5c realistic early, 6-7c late game.
             // NHL: needs 7c+ (81% adverse rate). MLB: volatile, 6c minimum.
             const _recSport = detectSport(_obTicker);
-            const _sportMinDepth = { 'Tennis': 4, 'NBA': 5, 'MLB': 6, 'NHL': 7, 'MLS': 5, 'EPL': 5, 'UCL': 5, 'NCAAB': 5 }[_recSport] || 5;
+            const _sportMinDepth = { 'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4 }[_recSport] || 4;
             // Liquidity-based depth: fav contracts/level determines how fast hedge fills.
             // Thin book = wider depth needed (slow fill, price can move against you).
             // Thick book = tighter depth safe (hedge fills instantly, WS retreat protects).
@@ -6125,7 +6125,40 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;${_isCompletedSummary ? 'display:none;' : ''}">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${bot._fav_depth != null ? (() => { const _fd = bot._fav_depth, _q = qty || 1; const _fc = _fd < _q * 1.5 ? '#ff4444' : _fd < _q * 4 ? '#ffaa00' : '#00ff88'; const _fl = _fd >= 1000 ? (_fd/1000).toFixed(1) + 'K' : _fd; return `<span style="color:${_fc};font-size:9px;">fav:${_fl}</span>`; })() : ''}
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${(() => {
+                const _curD = bot.anchor_depth || targetWidth || 5;
+                const _tk = bot.ticker || bot.event_ticker || '';
+                const _obc = (window._obDepthCache || {})[_tk];
+                if (!_obc || (Date.now() - _obc.ts) > 300000) return '';
+                const _sp = detectSport(_tk);
+                const _spMin = { 'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4 }[_sp] || 4;
+                let _rd = _spMin;
+                const _fpl = _obc.favPerLevel || 0;
+                if (_fpl >= 50) _rd = Math.max(_rd, 4);
+                else if (_fpl >= 30) _rd = Math.max(_rd, 5);
+                else if (_fpl >= 15) _rd = Math.max(_rd, 5);
+                else if (_fpl >= 8) _rd = Math.max(_rd, 6);
+                else if (_fpl >= 4) _rd = Math.max(_rd, 7);
+                else if (_fpl > 0) _rd = Math.max(_rd, 8);
+                const _dg = _obc.dogGaps || 0, _fg = _obc.favGaps || 0, _dd = _obc.dogDepth || 0;
+                if (_dd < 5000) {
+                    if (_dg >= 4) _rd = Math.max(_rd, 8);
+                    else if (_dg >= 3) _rd = Math.max(_rd, 7);
+                    else if (_dg >= 2) _rd = Math.max(_rd, 6);
+                    else if (_dg >= 1 && _rd <= 4) _rd = Math.max(_rd, 5);
+                }
+                if (_fg >= 4) _rd = Math.max(_rd, 8);
+                else if (_fg >= 3) _rd = Math.max(_rd, 7);
+                else if (_fg >= 2) _rd = Math.max(_rd, 6);
+                else if (_fg >= 1 && _rd <= 4) _rd = Math.max(_rd, 5);
+                const _fc2 = _obc.favConc || 0;
+                if (_fc2 > 0.8) _rd = Math.max(_rd, 6);
+                else if (_fc2 > 0.65 && _rd <= 4) _rd = Math.max(_rd, 5);
+                _rd = Math.min(_rd, 12);
+                if (_rd === _curD) return `<span style="color:#555;font-size:9px;">rec:${_rd}¢ ✓</span>`;
+                if (_curD < _rd) return `<span style="color:#ff4444;font-size:9px;font-weight:700;">rec:${_rd}¢ ⚠</span>`;
+                return `<span style="color:#ffaa00;font-size:9px;">rec:${_rd}¢</span>`;
+            })()}${bot._fav_depth != null ? (() => { const _fd = bot._fav_depth, _q = qty || 1; const _fc = _fd < _q * 1.5 ? '#ff4444' : _fd < _q * 4 ? '#ffaa00' : '#00ff88'; const _fl = _fd >= 1000 ? (_fd/1000).toFixed(1) + 'K' : _fd; return `<span style="color:${_fc};font-size:9px;">fav:${_fl}</span>`; })() : ''}
             ${(() => { const _yb = bot.live_yes_bid || 0, _nb = bot.live_no_bid || 0; const _room = (_yb && _nb) ? 100 - _yb - _nb : -1; return _room >= 0 ? `<span style="color:${_room >= 4 ? '#00ff88' : _room >= 2 ? '#ffaa00' : '#ff4444'};font-weight:${_room <= 1 ? 700 : 400};font-size:9px;">${_room <= 1 ? '⚠ ' : ''}Room:${_room}¢</span>` : ''; })()}
             ${bot._obi != null ? (() => {
                 const obi = bot._obi;

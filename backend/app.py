@@ -3827,6 +3827,20 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     matched_side = _exit_side
                     break
 
+        # Fallback: check ALL ever-posted order IDs (catches late fills after cycle reset)
+        _is_late_fill = False
+        if not matched_side:
+            if order_id in (bot.get('_all_placed_order_ids') or []):
+                # Late fill from a previous cycle — determine side from the fill itself
+                matched_side = side  # WS tells us which side
+                matched_price = 0  # price unknown, will use fill data
+                _is_late_fill = True
+                print(f'🚨 APEX MM LATE FILL: {bot_id} {side.upper()} +{count} on old order {order_id[:12]} — recovering')
+                bot_log('APEX_MM_LATE_FILL', bot_id, {
+                    'order_id': order_id, 'side': side, 'count': count,
+                    'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
+                }, level='WARN')
+
         if not matched_side:
             continue
 
@@ -3874,10 +3888,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 sell_info['_ws_fill_qty'] = old_fill + count
                 print(f'🚪 WS APEX MM SELLBACK FILL: {bot_id} {matched_side.upper()} +{count}')
             else:
-                # Ladder fill — update inventory
-                orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
-                level = orders_dict.get(str(matched_price), {})
-                level['fill_qty'] = level.get('fill_qty', 0) + count
+                # Ladder fill (or late fill from old cycle) — update inventory
+                if not _is_late_fill:
+                    orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
+                    level = orders_dict.get(str(matched_price), {})
+                    level['fill_qty'] = level.get('fill_qty', 0) + count
 
                 # Add to inventory
                 bot[f'net_{matched_side}'] = bot.get(f'net_{matched_side}', 0) + count

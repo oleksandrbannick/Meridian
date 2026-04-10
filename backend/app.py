@@ -6398,8 +6398,10 @@ APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far
 # Pull unfilled orders when book conditions are hostile; re-post when they recover.
 APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-5 depth < this (contracts/dollars)
 APEX_DEPTH_PULL_OBI = 0.7       # Pull if |OBI| > this (market too one-sided)
+APEX_MM_PULL_OBI = 0.85         # MM: more tolerant — small per-level exposure + drift stop backstop
 APEX_DEPTH_RECOVER_MIN = 350    # Re-post when both sides > this (slight buffer above pull)
 APEX_DEPTH_RECOVER_OBI = 0.65   # Re-post when |OBI| < this (slight buffer below pull)
+APEX_MM_RECOVER_OBI = 0.80      # MM: looser recovery to match looser pull
 APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
 APEX_MAX_PULL_CYCLES = 8        # Phantom: stop re-posting after 8 pulls
 APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, keeps reposting
@@ -6424,9 +6426,11 @@ def _apex_obi_snapshot(ticker):
     }
 
 
-def _apex_should_pull(ticker, depth_levels=3):
+def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None):
     """Check if book conditions are hostile for Apex. Returns (should_pull, reason) tuple.
     Uses LocalOrderbook — zero API calls. depth_levels: how many levels to check (3 for phantom, 5 for MM)."""
+    if obi_threshold is None:
+        obi_threshold = APEX_DEPTH_PULL_OBI
     lob = _local_orderbooks.get(ticker)
     if not lob or lob.last_update_ts <= 0:
         return False, ''  # no data — don't pull blind
@@ -6448,14 +6452,16 @@ def _apex_should_pull(ticker, depth_levels=3):
         return True, f'thin_yes ({yes_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
     if no_depth < APEX_DEPTH_PULL_MIN:
         return True, f'thin_no ({no_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
-    if abs(obi) > APEX_DEPTH_PULL_OBI:
+    if abs(obi) > obi_threshold:
         return True, f'obi_extreme ({obi:+.2f})'
     return False, ''
 
 
-def _apex_depth_recovered(ticker, bot=None):
+def _apex_depth_recovered(ticker, bot=None, obi_threshold=None):
     """Check if book conditions have recovered enough to re-post. Returns bool.
     Falls back to bot's live bid data if LocalOrderbook is unavailable/stale."""
+    if obi_threshold is None:
+        obi_threshold = APEX_DEPTH_RECOVER_OBI
     lob = _local_orderbooks.get(ticker)
     if lob and lob.last_update_ts > 0 and (time.time() - lob.last_update_ts) < 10:
         yes_depth = lob.get_total_depth('yes', 3)
@@ -6463,7 +6469,7 @@ def _apex_depth_recovered(ticker, bot=None):
         obi = lob.get_weighted_obi()
         return (yes_depth >= APEX_DEPTH_RECOVER_MIN and
                 no_depth >= APEX_DEPTH_RECOVER_MIN and
-                abs(obi) <= APEX_DEPTH_RECOVER_OBI)
+                abs(obi) <= obi_threshold)
 
     # No fresh LOB — fallback: if both sides have bids, assume OK
     if bot:
@@ -11547,7 +11553,7 @@ def _handle_apex(bot_id, bot, actions):
             # Below 75 — recover
             bot['_drift_pulled'] = False
             print(f'📊 APEX MM DRIFT CLEAR: {bot_id} max_bid={_drift_max}c — allowing recovery')
-        if _apex_depth_recovered(ticker, bot):
+        if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI):
             _apex_mm_repost_ladder(bot_id, bot)
         return
 
@@ -11586,7 +11592,7 @@ def _handle_apex(bot_id, bot, actions):
             return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
     if should_pull:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)

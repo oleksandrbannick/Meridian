@@ -1070,8 +1070,13 @@ def diagnose_bots_endpoint():
             positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
             bot_tickers = set()
             for b in active_bots.values():
-                if b.get('status') not in ('completed', 'stopped', 'cancelled'):
+                _bst = b.get('status', '')
+                # Include ALL non-dead bots — completed bots may still have settling positions
+                if _bst not in ('cancelled',):
                     bot_tickers.add(b.get('ticker', ''))
+                    # Phantom: hedge ticker may differ from main ticker
+                    if b.get('hedge_ticker'):
+                        bot_tickers.add(b['hedge_ticker'])
                     # Meridian (middle) bots manage two tickers
                     if b.get('ticker_a'): bot_tickers.add(b['ticker_a'])
                     if b.get('ticker_b'): bot_tickers.add(b['ticker_b'])

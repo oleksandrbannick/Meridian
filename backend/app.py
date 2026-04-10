@@ -9913,23 +9913,11 @@ def _handle_phantom(bot_id, bot, actions):
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
-                # Orphan guard: check Kalshi position before re-anchoring
-                # ALERT ONLY — do NOT auto-sell. Auto-selling was creating MORE orphans
-                # by selling legitimate arb positions from stale fill double-counts.
-                if not _is_cross:
-                    _pos_qty = _audit_position_check(bot_id, ticker, dog_side, 'entering_repeat')
-                    if _pos_qty is not None and _pos_qty != 0:
-                        _orphan_side = 'yes' if _pos_qty > 0 else 'no'
-                        _orphan_count = abs(_pos_qty)
-                        _orphan_type = 'dog' if _orphan_side == dog_side else 'fav'
-                        print(f'⚠ PHANTOM POSITION AT REPEAT: {bot_id} Kalshi shows {_orphan_count} {_orphan_side} ({_orphan_type}) on {ticker} — ALERT ONLY (no auto-sell)')
-                        _push_notification('orphan_detected', f'⚠ Phantom {bot_id}: {_orphan_count} {_orphan_side} on {ticker} at repeat', {
-                            'bot_id': bot_id, 'ticker': ticker, 'side': _orphan_side, 'qty': _orphan_count,
-                        })
-                        _audit('PHANTOM_POSITION_AT_REPEAT', bot_id, {
-                            'ticker': ticker, 'orphan_qty': _orphan_count, 'side': _orphan_side,
-                            'orphan_type': _orphan_type,
-                        })
+                # Orphan guard REMOVED — was causing more problems than it solved:
+                # 1. Taker-selling legitimate arb positions (same-market YES+NO = net 0)
+                # 2. Creating orphans from its own sells
+                # 3. Masking root causes (stale fills, double counts)
+                # Root causes are now fixed. Orphans visible in Kalshi positions if they occur.
             else:
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'

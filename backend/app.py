@@ -9807,7 +9807,9 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: dog_anchor_posted — waiting for dog to fill ────────
     if status == 'dog_anchor_posted':
-        # Death zone check: game ending, cancel dog and stop
+        # Death zone check: game ending, cancel dog and stop (skip if already flagged)
+        if bot.get('_death_zone_stopped'):
+            return
         _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
         if _dz:
             dog_order_id = bot.get('dog_order_id')
@@ -11040,7 +11042,9 @@ def _handle_phantom(bot_id, bot, actions):
             save_state()
             return
 
-        # Death zone check: game is ending, don't re-anchor
+        # Death zone check: game is ending, don't re-anchor (skip if already flagged)
+        if bot.get('_death_zone_stopped'):
+            return
         _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
         if _dz:
             _is_cross_dz = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker

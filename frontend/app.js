@@ -3983,6 +3983,9 @@ function setCrossMarketSide(side) {
     });
 })();
 
+// Default to auto depth on page load
+window._phantomAutoDepth = true;
+
 function setAutoDepth() {
     window._phantomAutoDepth = true;
     const displayEl = document.getElementById('anchor-depth-display');

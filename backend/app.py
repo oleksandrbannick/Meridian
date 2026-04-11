@@ -9525,6 +9525,10 @@ def _handle_phantom(bot_id, bot, actions):
             bot['completed_at'] = now
             bot['_death_zone_stopped'] = True
             bot['_death_zone_reason'] = _dz_reason
+            # Cache last known score so card still shows it after ESPN stops
+            _dz_score = _get_game_score_for_ticker(ticker)
+            if _dz_score:
+                bot['_cached_score'] = _dz_score
             print(f'🛑 END OF GAME STOP: {bot_id} — {_dz_reason} (dog cancelled)')
             bot_log('PHANTOM_DEATH_ZONE_STOP', bot_id, {
                 'reason': _dz_reason, 'state': 'dog_anchor_posted',
@@ -11852,12 +11856,9 @@ def _handle_apex(bot_id, bot, actions):
         _best_combined = min(_buy_opp_combined, _sell_held_combined)
         _width = bot.get('start_gap', 4) * 2
         _stop = 100 + _width  # symmetric: risk = reward
-        # Drift stop: pull and wait — never kill while holding. Recovery checked each tick.
+        # Drift stop: begin exit to cut losses — combined price past stop threshold
         if _best_combined > _stop and _best_combined < 999:
-            if status == 'market_making_active':
-                _apex_mm_pull_all(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width})')
-                bot['_drift_pulled'] = True
-            # If already pulled, just keep waiting — recovery checked below in OBI/repost logic
+            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width})')
             return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)

@@ -5868,13 +5868,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         favAsk = favSide === 'yes' ? liveYesAsk : liveNoAsk;
     }
 
-    // Live game score
+    // Live game score — fall back to cached score when ESPN stops updating (death zone / game over)
     let liveScoreHtml = '';
-    if (gameScores) {
+    if (gameScores || bot._cached_score) {
         const ticker = bot.ticker || '';
         const parts = ticker.split('-');
         const gameKey = parts.length >= 2 ? parts[1] : parts[0];
-        const gs = gameScores[gameKey] || gameScores[ticker] || null;
+        const gs = (gameScores ? (gameScores[gameKey] || gameScores[ticker]) : null) || bot._cached_score || null;
         if (gs) {
             liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
         }
@@ -6466,7 +6466,6 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <div style="margin-top:4px;">
                 <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
                     <span style="color:#00ff88;font-size:8px;">${targetPrice}¢</span>
-                    ${walkCount > 0 ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">${exitPrice}¢</span>` : ''}
                     <span style="color:#ff4444;font-size:8px;">BE ${breakeven}¢</span>
                 </div>
                 <div style="position:relative;height:5px;background:#0f1520;border-radius:2px;overflow:hidden;">

@@ -2839,12 +2839,56 @@ function parseSportFromTicker(ticker) {
     return 'OTHER';
 }
 
-function formatBotDisplayName(ticker, spreadLine) {
+function formatBotDisplayName(ticker, spreadLine, marketTitle) {
     if (!ticker) return 'Unknown';
     const parts = ticker.split('-');
     if (parts.length < 2) return ticker;
 
     const prefix  = (parts[0] || '').toUpperCase();   // KXNBAGAME
+
+    // If we have the Kalshi market title, extract team names directly from it
+    // Titles look like: "Will the Detroit Pistons beat the Charlotte Hornets?"
+    // or "Collington vs. Hernandez: Winner?" or "Team A at Team B: Spread"
+    if (marketTitle) {
+        let kalshiMatchup = '';
+        const beatM = marketTitle.match(/Will (?:the )?(.+?) beat (?:the )?(.+?)(?:\?|$)/i);
+        const vsM = marketTitle.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s*[:?]|\s+Winner|\s+Moneyline|$)/i);
+        const atM = marketTitle.match(/^(.+?)\s+at\s+(.+?)(?:\s*[:?]|\s+Winner|\s+Moneyline|\s+Spread|\s+Total|$)/i);
+        if (beatM) kalshiMatchup = `${beatM[1].trim()} vs ${beatM[2].trim()}`;
+        else if (vsM) kalshiMatchup = `${vsM[1].trim()} vs ${vsM[2].trim()}`;
+        else if (atM) kalshiMatchup = `${atM[1].trim()} vs ${atM[2].trim()}`;
+        if (kalshiMatchup) {
+            // Extract the two team/player names from the matchup
+            const _kParts = kalshiMatchup.split(' vs ');
+            const _kTeam1 = (_kParts[0] || '').trim();
+            const _kTeam2 = (_kParts[1] || '').trim();
+
+            // Detect market type
+            let mType = 'Moneyline';
+            let propType = '';
+            if (prefix.includes('SPREAD')) mType = 'Spread';
+            else if (prefix.includes('TOTAL')) mType = 'Total';
+            else if (prefix.includes('PTS')) { mType = 'Player Prop'; propType = 'Pts'; }
+            else if (prefix.includes('REB')) { mType = 'Player Prop'; propType = 'Reb'; }
+            else if (prefix.includes('AST')) { mType = 'Player Prop'; propType = 'Ast'; }
+
+            // Side label from suffix — match against Kalshi title names, not hardcoded map
+            let sLabel = '';
+            const _suffix = parts.length >= 3 ? parts[parts.length - 1] : '';
+            if (mType === 'Spread' && spreadLine) {
+                sLabel = spreadLine;
+            } else if (mType === 'Moneyline' && _suffix) {
+                const _sUpper = _suffix.toUpperCase();
+                // Match suffix against team names: "DET" matches "Detroit Pistons"
+                const _match1 = _kTeam1.toUpperCase().startsWith(_sUpper) || _kTeam1.toUpperCase().includes(_sUpper);
+                const _match2 = _kTeam2.toUpperCase().startsWith(_sUpper) || _kTeam2.toUpperCase().includes(_sUpper);
+                if (_match1) sLabel = _kTeam1 + ' Win';
+                else if (_match2) sLabel = _kTeam2 + ' Win';
+                else sLabel = _suffix + ' Win';
+            }
+            return [kalshiMatchup, mType, sLabel].filter(Boolean).join(' · ') || ticker;
+        }
+    }
     const gameId  = parts[1] || '';                    // 26MAR02BOSMIL
     const suffix  = parts.length >= 3 ? parts[parts.length - 1] : '';
 
@@ -5789,7 +5833,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     };
     const borderCol = borderMap[status] || '#ffaa00';
     const statusLabel = statusMap[status] || status;
-    const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '');
+    const teamName = formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '');
     const isCrossMarket = bot.cross_market && bot.hedge_ticker && bot.hedge_ticker !== bot.ticker;
     const hedgeTeamCode = isCrossMarket ? (bot.hedge_ticker || '').split('-').pop() : '';
 
@@ -6233,7 +6277,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
     // Team name
     const teamName = typeof formatBotDisplayName === 'function'
-        ? formatBotDisplayName(bot.ticker || '', bot.spread_line || '')
+        ? formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')
         : (bot.ticker || '').split('-').pop();
 
     // Live score
@@ -7204,7 +7248,7 @@ async function loadBots() {
                 sortedDogGameKeys.forEach(gk => {
                     const groupIds = dogGameGroups[gk];
                     const sampleBot = bots[groupIds[0]];
-                    const groupName = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
+                    const groupName = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
                     const rawTickerDog = sampleBot.ticker || '';
                     const sampleTicker = rawTickerDog.toUpperCase();
                     const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
@@ -7307,7 +7351,7 @@ async function loadBots() {
             // ── Game group header ──
             const groupBots = gameGroups[gameKey];
             const sampleBot = bots[groupBots[0]];
-            const groupMatchup = formatBotDisplayName(sampleBot.ticker).split('·')[0].split('—')[0].trim();
+            const groupMatchup = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
             // Live detection: use game_scores from backend OR Kalshi-native live detection
             const groupGameScore = gameScores[gameKey] || {};
             const groupIsLive = groupGameScore.status === 'in' || groupBots.some(id => {
@@ -8741,7 +8785,7 @@ async function phantomModify(botId) {
     const html = `
         <div style="background:#0f1419;border:1px solid #ff66aa44;border-radius:12px;padding:20px;max-width:320px;">
             <div style="color:#ff66aa;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Phantom</div>
-            <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '')} · ${(bot.dog_side || '?').toUpperCase()}</div>
+            <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')} · ${(bot.dog_side || '?').toUpperCase()}</div>
             ${statusNote}
             <div style="margin-bottom:10px;">
                 <label style="color:#8892a6;font-size:10px;">Contracts per run</label>

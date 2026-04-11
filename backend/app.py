@@ -7799,9 +7799,19 @@ def create_ladder_arb_bot():
         live_yes_ask = 100 - live_no_bid if live_no_bid > 0 else 99
         live_no_ask = 100 - live_yes_bid if live_yes_bid > 0 else 99
 
+        # Fetch Kalshi market title for display (one-time at creation)
+        _market_title = ''
+        try:
+            api_read_limiter.wait()
+            _mkt_data = kalshi_client.get_market(ticker)
+            _market_title = (_mkt_data.get('market', _mkt_data) if isinstance(_mkt_data, dict) else {}).get('title', '')
+        except Exception:
+            pass
+
         # Initialize bot state first (needed by _apex_mm_post_ladder)
         active_bots[bot_id] = {
             'ticker': ticker,
+            'market_title': _market_title,
             'bot_category': 'ladder_arb',
             'type': 'apex_mm',
             'status': 'market_making_active',
@@ -14842,6 +14852,23 @@ def create_middle_bot():
 @app.route('/api/bot/list', methods=['GET'])
 def list_bots():
     """Get all bots with live market data"""
+    # Backfill market_title from Kalshi for bots that don't have it yet
+    _title_fetched = set()
+    for bid, bot in list(active_bots.items()):
+        if not bot.get('market_title') and bot.get('ticker') and bot['ticker'] not in _title_fetched:
+            _title_fetched.add(bot['ticker'])
+            try:
+                api_read_limiter.wait()
+                _mkt = kalshi_client.get_market(bot['ticker'])
+                _t = (_mkt.get('market', _mkt) if isinstance(_mkt, dict) else {}).get('title', '')
+                if _t:
+                    # Set title on ALL bots with this ticker
+                    for _b2 in active_bots.values():
+                        if _b2.get('ticker') == bot['ticker'] and not _b2.get('market_title'):
+                            _b2['market_title'] = _t
+            except Exception:
+                pass
+
     # Enrich bots with live WS prices
     for bid, bot in list(active_bots.items()):
         st = bot.get('status', '')

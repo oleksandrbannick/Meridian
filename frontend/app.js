@@ -13230,8 +13230,8 @@ function renderPhantomSportDropdown(sport, allTrades) {
                 </div>
             </div>` : ''}
 
-            <!-- Depth floor stats (scoped to sport + period) -->
-            ${depths.length > 0 ? `
+            <!-- Depth floor stats (hidden when outer depth filter already active — redundant) -->
+            ${_phantomActiveDepth !== 'all' ? '' : (depths.length > 0 ? `
             <div>
                 <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${depthLabel}${_phantomActivePeriod !== 'all' ? ` <span style="color:#555;">(${depthTrades.length} trades)</span>` : ''}</div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;">
@@ -13250,7 +13250,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
                         </div>`;
                     }).join('')}
                 </div>
-            </div>` : `${_phantomActivePeriod !== 'all' ? '<div style="color:#555;font-size:11px;text-align:center;padding:8px;">No depth data for this period</div>' : ''}`}
+            </div>` : `${_phantomActivePeriod !== 'all' ? '<div style="color:#555;font-size:11px;text-align:center;padding:8px;">No depth data for this period</div>' : ''}`)}
 
             <!-- Score diff breakdown -->
             ${scoreDiffs.length > 0 && sport !== 'Tennis' ? `

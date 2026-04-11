@@ -16401,8 +16401,8 @@ def cancel_bot(bot_id):
                             sold_positions.append(f'{side.upper()} {net_held}x @{_mm_price}¢ (maker)')
                             sp = _mm_price
                             sell_prices[side] = sp
-                            if (sell_info or {}).get('order_id') == 'already_cleared':
-                                already_cleared_sides.add(side)
+                            # Clear net — sell is tracked by maker sell follow-through
+                            bot[f'net_{side}'] = 0
                         else:
                             warnings.append(f'FAILED to sell {side.upper()} {net_held}x')
 

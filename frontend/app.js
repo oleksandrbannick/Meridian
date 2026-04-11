@@ -5812,7 +5812,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     // Stop reason for header display
     let _stopReason = '';
     if (_isCompletedSummary) {
-        if (_isDeathZone) _stopReason = bot._death_zone_reason || 'game ending';
+        if (_isDeathZone) _stopReason = '';  // scorecard already shows time — no redundant text
         else if (bot._stop_reason) _stopReason = bot._stop_reason;
         else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
         else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
@@ -6180,20 +6180,22 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const _floorBadge2 = _depFloor2 > 0 ? ' <span style="color:#ff66aa;font-size:8px;font-weight:700;background:#ff66aa18;padding:0 3px;border-radius:2px;margin-left:2px;">F' + _depFloor2 + '</span>' : '';
                     const _hedgeMs2 = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
                     const _hmsStr = _hedgeMs2 != null ? ' <span style="color:' + (_hedgeMs2 < 1 ? '#00ffcc' : _hedgeMs2 < 5 ? '#00ff88' : '#ffaa00') + ';font-size:8px;font-weight:700;margin-left:2px;">⚡' + (_hedgeMs2 < 1 ? _hedgeMs2.toFixed(1) : Math.round(_hedgeMs2)) + 'ms</span>' : '';
-                    return '<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:4px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
+                    // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor)
+                    const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
+                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _c = _dc >= _df ? '#00ff88' : _dc >= _df - 2 ? '#ffaa00' : '#ff4444'; return '<span style="color:' + _c + ';font-size:8px;font-weight:700;">' + _dc + '/' + _df + '</span>'; })()
+                        : '';
+                    return '<div style="display:grid;grid-template-columns:18px 1fr 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
-                    + '<span style="display:flex;align-items:center;gap:3px;">'
-                    + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '¢</span>'
-                    + '<span style="color:#3a4560;">' + (_isExit ? '→' : '+') + '</span>'
-                    + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '¢</span>'
-                    + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '¢</span>' : '')
-                    + (_isExit ? ' <span style="color:' + _exitCol + ';font-size:8px;font-weight:700;background:' + _exitCol + '18;padding:0 3px;border-radius:2px;">' + _exitLabel + '</span>' : '')
-                    + (r.taker ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;background:#ffaa0018;padding:0 3px;border-radius:2px;margin-left:2px;">T</span>' : '')
-                    + _depBadge2
-                    + _floorBadge2
-                    + _hmsStr
+                    + '<span style="display:flex;align-items:center;gap:3px;flex-wrap:nowrap;overflow:hidden;">'
+                    + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '</span>'
+                    + '<span style="color:#3a4560;">+</span>'
+                    + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '</span>'
+                    + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '</span>' : '')
+                    + (_depCombo ? '<span style="color:#444;margin:0 1px;">·</span>' + _depCombo : '')
+                    + (_hmsStr || '')
+                    + (r.taker ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">T</span>' : '')
                     + '</span>'
-                    + '<span style="color:#00e5ff;font-weight:700;">x' + (r.qty || 1) + '</span>'
+                    + '<span style="color:#00e5ff;font-weight:700;text-align:center;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>'
                     + '';

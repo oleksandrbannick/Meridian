@@ -5814,7 +5814,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     if (_isCompletedSummary) {
         if (_isDeathZone) _stopReason = '';  // scorecard already shows time — no redundant text
         else if (bot._stop_reason) _stopReason = bot._stop_reason;
-        else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
+        else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot.consecutive_losses || 2} consecutive losses`;
         else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
         else if (bot._smart_stop_reason === 'manual') _stopReason = 'manually stopped';
         else if (status === 'stopped') _stopReason = 'manually stopped';

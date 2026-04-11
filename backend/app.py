@@ -2253,6 +2253,7 @@ def get_fills():
 active_bots = {}  # bot_id -> bot_config
 trade_history = []  # completed/stopped bots log (newest first)
 _opening_lines = {}  # ticker -> {'yes_price': int, 'captured_at': float} — pre-game closing line
+_pending_maker_sells = {}  # sell_id -> {oid, ticker, side, qty, posted_price, posted_at, reason}
 
 # ─── Activity Log ─────────────────────────────────────────────────────────────
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'activity_log.jsonl')
@@ -8812,6 +8813,12 @@ def execute_maker_sell(ticker, side, count, reason='maker_exit'):
         oid = resp.get('order', {}).get('order_id', '')
         if oid:
             print(f'📤 MAKER SELL ({reason}): {side} {count}x {ticker} @{ask}¢')
+            # Track for bid-following until filled
+            _sell_key = f'{oid[:12]}_{int(time.time())}'
+            _pending_maker_sells[_sell_key] = {
+                'oid': oid, 'ticker': ticker, 'side': side, 'qty': count,
+                'posted_price': ask, 'posted_at': time.time(), 'reason': reason,
+            }
             return oid, ask
         else:
             print(f'⚠ execute_maker_sell({reason}): no order_id in response')
@@ -11983,6 +11990,67 @@ def _run_monitor():
     try:
         # Auto-reset P&L if the date has changed
         auto_reset_daily_pnl()
+
+        # ── Pending maker sells: follow bid until filled ──
+        for _sk, _sv in list(_pending_maker_sells.items()):
+            try:
+                _s_oid = _sv['oid']
+                _s_ticker = _sv['ticker']
+                _s_side = _sv['side']
+                _s_qty = _sv['qty']
+                _s_age = time.time() - _sv['posted_at']
+                # Check if filled
+                api_read_limiter.wait()
+                _s_resp = kalshi_client.get_order(_s_oid)
+                _s_ord = _s_resp.get('order', _s_resp) if isinstance(_s_resp, dict) else {}
+                _s_fills = _parse_fill_count(_s_ord)
+                _s_status = _s_ord.get('status', '')
+                if _s_fills >= _s_qty or _s_status in ('filled', 'executed'):
+                    print(f'✅ MAKER SELL FILLED: {_sv["reason"]} {_s_side} {_s_qty}x {_s_ticker} — confirmed')
+                    bot_log('MAKER_SELL_CONFIRMED', f'sell_{_s_ticker}', {
+                        'side': _s_side, 'qty': _s_qty, 'price': _sv['posted_price'],
+                        'age_s': round(_s_age), 'reason': _sv['reason'],
+                    })
+                    del _pending_maker_sells[_sk]
+                    continue
+                if _s_status in ('cancelled', 'canceled'):
+                    # Order was cancelled externally — repost at current ask
+                    print(f'⚠ MAKER SELL CANCELLED: {_sv["reason"]} — reposting')
+                    del _pending_maker_sells[_sk]
+                    execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                    continue
+                # Still resting — amend to current ask if price moved (every 10s)
+                if _s_age > 10 and (time.time() - _sv.get('_last_amend', 0)) > 10:
+                    _sv['_last_amend'] = time.time()
+                    api_read_limiter.wait()
+                    _s_ob = kalshi_client.get_market_orderbook(_s_ticker)
+                    _s_ask = _best_ask(_s_ob, _s_side)
+                    if _s_ask > 0 and _s_ask != _sv['posted_price']:
+                        try:
+                            _amend_kw = {f'{_s_side}_price': _s_ask}
+                            api_rate_limiter.wait()
+                            kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, **_amend_kw)
+                            _sv['posted_price'] = _s_ask
+                            print(f'📤 MAKER SELL AMEND: {_sv["reason"]} {_s_side} {_s_ticker} → {_s_ask}¢')
+                        except Exception as _ae:
+                            if '404' in str(_ae) or 'not found' in str(_ae).lower():
+                                # Order gone — repost
+                                del _pending_maker_sells[_sk]
+                                execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                # Timeout: after 5 min, cancel and repost fresh
+                if _s_age > 300:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(_s_oid)
+                    except Exception:
+                        pass
+                    del _pending_maker_sells[_sk]
+                    if _s_fills < _s_qty:
+                        execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+            except Exception as _se:
+                # Don't let one bad sell break the whole monitor
+                if time.time() - _sv['posted_at'] > 600:
+                    del _pending_maker_sells[_sk]  # give up after 10 min
 
         # ── Cross-market awaiting settlement: fix qty + auto smart exit ──
         _cross_fixed = 0

@@ -3741,13 +3741,13 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
                 })
                 save_state()
                 return
-        # Cross-market or can't flip — just cancel
-        _safe_cancel(dog_oid, f'ws_drift_cancel_{bot_id}')
+        # Cross-market or can't flip — pull and wait for recovery
+        _safe_cancel(dog_oid, f'ws_drift_pull_{bot_id}')
         bot['dog_order_id'] = None
-        bot['status'] = 'completed'
-        bot['completed_at'] = time.time()
-        print(f'⚡ WS DRIFT GUARD: {bot_id} bid={dog_bid}¢ > 50¢ — cancelled')
-        bot_log('PHANTOM_WS_DRIFT_GUARD', bot_id, {'dog_bid': dog_bid})
+        bot['_price_floor_pulled'] = True
+        bot['_price_floor_since'] = time.time()
+        print(f'⚡ WS DRIFT PULL: {bot_id} bid={dog_bid}¢ > 50¢ — pulled, waiting')
+        bot_log('PHANTOM_WS_DRIFT_PULL', bot_id, {'dog_bid': dog_bid})
         save_state()
         return
 
@@ -9446,11 +9446,22 @@ def _handle_phantom(bot_id, bot, actions):
         try:
             api_read_limiter.wait()
             _mkt = kalshi_client.get_market(ticker)
-            if isinstance(_mkt, dict) and _mkt.get('status') in ('settled', 'finalized'):
+            _mkt_data = _mkt.get('market', _mkt) if isinstance(_mkt, dict) else {}
+            _mkt_status = _mkt_data.get('status', '').lower()
+            _settled = _mkt_status in ('settled', 'finalized')
+            if not _settled and _mkt_status == 'closed':
+                _dog_s = bot.get('dog_side', 'no')
+                _db = bot.get(f'live_{_dog_s}_bid', 0)
+                _fb = bot.get(f'live_{"yes" if _dog_s == "no" else "no"}_bid', 0)
+                _sc = _get_game_score_for_ticker(ticker)
+                _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
+                if (_db <= 0 and _fb <= 0 and _sc_done) or (_db <= 0 and _fb >= 99):
+                    _settled = True
+            if _settled:
                 bot['_market_settled_at'] = now
                 bot['_smart_stopped'] = True
                 bot['_smart_stop_reason'] = 'final'
-                print(f'🏁 SETTLED: {bot_id} market settled → 5 min purge timer started')
+                print(f'🏁 SETTLED: {bot_id} market {_mkt_status} → 5 min purge timer started')
                 save_state()
         except Exception:
             pass
@@ -9742,22 +9753,7 @@ def _handle_phantom(bot_id, bot, actions):
                         bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'min_viable': _min_viable_bid})
                         bot['_price_floor_pulled'] = True
                         bot['_price_floor_since'] = now
-                    # Game-over exit: if pulled for 5+ min OR game is over, complete the bot
-                    _pulled_age = now - bot.get('_price_floor_since', now)
-                    _game_over = _is_game_over_cached(ticker)
-                    _fav_bid = bot.get(f'live_{"yes" if dog_side == "no" else "no"}_bid', 0)
-                    if _game_over or _pulled_age > 300 or _fav_bid >= 95:
-                        _exit_reason = 'game_over' if _game_over else ('fav_95+' if _fav_bid >= 95 else 'pulled_5min')
-                        print(f'🏁 PHANTOM EXIT DECIDED: {bot_id} {_exit_reason} dog_bid={current_dog_bid}¢ fav_bid={_fav_bid}¢ pulled={int(_pulled_age)}s')
-                        bot_log('PHANTOM_EXIT_DECIDED', bot_id, {
-                            'reason': _exit_reason, 'dog_bid': current_dog_bid,
-                            'fav_bid': _fav_bid, 'pulled_age_s': int(_pulled_age),
-                        })
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        bot['_price_floor_pulled'] = False
-                        save_state()
-                        return
+                    # Bot stays pulled — waits indefinitely for recovery or settlement
                     save_state()
                     return
 
@@ -9817,29 +9813,13 @@ def _handle_phantom(bot_id, bot, actions):
                             })
                             save_state()
                             return
-                    # Cross-market or can't flip → cancel
-                    print(f'🚫 PHANTOM DRIFT: {bot_id} dog bid now {current_dog_bid}¢ (>50¢) — cancelling')
-                    _safe_cancel(dog_order_id, f'phantom drift cancel {bot_id}')
-                    for _drift_key in ('fav_order_id', 'hedge_order_id'):
-                        _drift_oid = bot.get(_drift_key)
-                        if _drift_oid:
-                            _safe_cancel(_drift_oid, f'phantom drift cancel {_drift_key} {bot_id}')
-                    for _drift_oid in bot.get('_all_dog_order_ids', []):
-                        if _drift_oid and _drift_oid != dog_order_id:
-                            _safe_cancel(_drift_oid, f'phantom drift cancel old dog {bot_id}')
-                    _has_any_fills = _has_settled_positions or (bot.get('dog_fill_qty', 0) > 0) or (bot.get('_cross_settled_qty', 0) > 0)
-                    if _is_cross_drift and _has_any_fills:
-                        bot['status'] = 'awaiting_settlement'
-                        bot['awaiting_since'] = now
-                        bot['awaiting_qty_dog'] = bot.get('_cross_settled_qty_dog', bot.get('_cross_settled_qty', 0))
-                        bot['awaiting_qty_fav'] = bot.get('_cross_settled_qty_fav', bot.get('_cross_settled_qty', 0))
-                        print(f'⏳ PHANTOM DRIFT → AWAITING SETTLEMENT: {bot_id} holding {ticker} + {bot.get("hedge_ticker")}')
-                        bot_log('PHANTOM_CROSS_GAME_OVER', bot_id, {'settled_qty': bot.get('_cross_settled_qty', 0), 'trigger': 'drift'})
-                    else:
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        bot['_stop_reason'] = f'coinflip territory (dog bid {current_dog_bid}¢)'
-                    actions.append({'bot_id': bot_id, 'action': 'anchor_drift_cancel', 'dog_bid': current_dog_bid})
+                    # Cross-market or can't flip → pull and wait for recovery
+                    _safe_cancel(dog_order_id, f'phantom drift pull {bot_id}')
+                    bot['dog_order_id'] = None
+                    bot['_price_floor_pulled'] = True
+                    bot['_price_floor_since'] = now
+                    print(f'⏸ PHANTOM DRIFT PULL: {bot_id} dog bid {current_dog_bid}¢ > 50¢ — pulled, waiting')
+                    bot_log('PHANTOM_DRIFT_PULL', bot_id, {'dog_bid': current_dog_bid, 'cross': bool(_is_cross_drift)})
                     save_state()
                     return
 
@@ -9863,17 +9843,32 @@ def _handle_phantom(bot_id, bot, actions):
                             'dog_bid': current_dog_bid, 'new_price': new_dog_price, 'depth': anchor_depth,
                         })
                         bot['_price_floor_pulled'] = True
-                    # Check if market is truly dead (settled/finalized)
+                    # Check if market is truly dead (settled/finalized/closed+dead)
                     if now - bot.get('_last_settle_check_pf', 0) > 30:
                         bot['_last_settle_check_pf'] = now
                         try:
                             api_read_limiter.wait()
                             _pf_mkt = kalshi_client.get_market(ticker)
                             _pf_mkt_data = _pf_mkt.get('market', _pf_mkt) if isinstance(_pf_mkt, dict) else {}
-                            if _pf_mkt_data.get('status', '').lower() in ('settled', 'finalized'):
-                                print(f'🏁 PHANTOM SETTLED DURING FLOOR: {bot_id} — market settled')
+                            _pf_status = _pf_mkt_data.get('status', '').lower()
+                            _is_settled = _pf_status in ('settled', 'finalized')
+                            # Tennis: closed + no bids + score finished = settled
+                            if not _is_settled and _pf_status == 'closed':
+                                _dog_bid_pf = bot.get(f'live_{dog_side}_bid', 0)
+                                _fav_bid_pf = bot.get(f'live_{"yes" if dog_side == "no" else "no"}_bid', 0)
+                                _score_pf = _get_game_score_for_ticker(ticker)
+                                _score_done = _score_pf and _score_pf.get('status') in ('post', 'final', 'finished')
+                                if _dog_bid_pf <= 0 and _fav_bid_pf <= 0 and _score_done:
+                                    _is_settled = True
+                                elif _dog_bid_pf <= 0 and _fav_bid_pf >= 99:
+                                    _is_settled = True
+                            if _is_settled:
+                                print(f'🏁 PHANTOM SETTLED DURING FLOOR: {bot_id} — market {_pf_status}')
                                 bot['status'] = 'completed'
                                 bot['completed_at'] = now
+                                bot['_market_settled_at'] = now
+                                bot['_smart_stopped'] = True
+                                bot['_smart_stop_reason'] = 'final'
                                 bot['repeat_count'] = 0
                                 save_state()
                                 return
@@ -10062,6 +10057,9 @@ def _handle_phantom(bot_id, bot, actions):
                 }, bot)
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
+                bot['_market_settled_at'] = now
+                bot['_smart_stopped'] = True
+                bot['_smart_stop_reason'] = 'final'
                 _audit('PHANTOM_SETTLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'result': mkt_result, 'dog_won': dog_won, 'profit': profit})
                 _audit_position_check(bot_id, ticker, dog_side, 'after_settlement')
                 save_state()
@@ -10424,6 +10422,8 @@ def _handle_phantom(bot_id, bot, actions):
                 else:
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
+                    if not bot.get('_smart_stopped') and not bot.get('_stop_reason'):
+                        bot['_stop_reason'] = 'completed runs'
                 bot['_just_completed'] = True
                 bot['_last_pnl'] = net_pnl
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
@@ -10717,24 +10717,16 @@ def _handle_phantom(bot_id, bot, actions):
                     current_dog_ask = _best_ask(ob, dog_side)
 
             if current_dog_bid <= 0:
-                # Preserve repeats — no market is temporary
-                _repeat_count = bot.get('repeat_count', 0)
-                _repeats_done = bot.get('repeats_done', 0)
-                if _repeat_count > 0 and _repeats_done < _repeat_count:
-                    bot['status'] = 'waiting_repeat'
-                    bot['waiting_repeat_since'] = time.time()
-                    print(f'🔄 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — waiting for recovery (cycle {_repeats_done}/{_repeat_count})')
-                else:
-                    _is_cross_zero = hedge_ticker and hedge_ticker != ticker and (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0)
-                    if _is_cross_zero:
-                        bot['status'] = 'awaiting_settlement'
-                        bot['awaiting_since'] = now
-                        print(f'⏳ PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — awaiting settlement (cross-market)')
-                    else:
-                        bot['status'] = 'completed'
-                        bot['completed_at'] = now
-                        print(f'🛑 PHANTOM DRIFT STOP: {bot_id} dog_bid=0 — no market, stopping')
-                    bot['repeat_count'] = 0
+                # No market — pull and wait for recovery or settlement
+                bot['status'] = 'dog_anchor_posted'
+                bot['_price_floor_pulled'] = True
+                if not bot.get('_price_floor_since'):
+                    bot['_price_floor_since'] = now
+                bot['dog_order_id'] = None
+                if not bot.get('_drift_pull_logged'):
+                    bot['_drift_pull_logged'] = True
+                    print(f'⏸ PHANTOM NO MARKET: {bot_id} dog_bid=0 — pulled, waiting for settlement')
+                    bot_log('PHANTOM_NO_MARKET_PULL', bot_id, {'dog_bid': 0})
                 save_state()
                 return
             # Cross-market: re-check who's the dog — teams may have flipped
@@ -10924,6 +10916,9 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
                 bot['_positions_cleared'] = True
+                bot['_market_settled_at'] = now
+                bot['_smart_stopped'] = True
+                bot['_smart_stop_reason'] = 'final'
                 print(f'✅ SETTLED: {bot_id} both positions cleared ({ticker} + {_hedge_t})')
                 bot_log('PHANTOM_CROSS_MARKET_SETTLED', bot_id, {
                     'ticker': ticker, 'hedge_ticker': _hedge_t,
@@ -10935,12 +10930,11 @@ def _handle_phantom(bot_id, bot, actions):
 
 
 def _handle_phantom_ladder(bot_id, bot, actions):
-    """REMOVED — anchor_ladder is dead code. Only anchor_dog (single phantom) remains.
-    This stub exists only so any stale anchor_ladder bots in data.json auto-complete."""
+    """REMOVED — anchor_ladder deleted. Auto-complete any stale bots from old data."""
     bot['status'] = 'completed'
     bot['completed_at'] = time.time()
+    bot['_stop_reason'] = 'legacy ladder (removed)'
     save_state()
-    return
     # (remaining anchor_ladder dead code removed — ~1000 lines of waiting_repeat, ladder_posted,
     #  ladder_filled_no_fav, fav_hedge_posted state handlers were here)
     pass  # end of stub

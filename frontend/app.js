@@ -2898,9 +2898,7 @@ function formatBotDisplayName(ticker, spreadLine) {
         if (t1 && t2) {
             // Resolve abbreviations to full names — sport-specific to avoid CLE=Cavaliers vs CLE=Guardians
             const _sport = detectSport(ticker);
-            const _sportMap = { 'NBA': 'Basketball', 'NHL': 'Hockey', 'MLB': 'Baseball', 'NFL': 'Football', 'NCAAB': 'Basketball', 'MLS': 'Soccer', 'EPL': 'Soccer', 'UCL': 'Soccer' };
-            const _espnSport = _sportMap[_sport] || '';
-            const sportNames = _espnSport ? (window._abbrToNameBySport || {})[_espnSport] || {} : {};
+            const sportNames = (window._abbrToNameBySport || {})[_sport] || {};
             const fallbackNames = window._abbrToName || {};
             const n1 = sportNames[t1] || fallbackNames[t1] || _teamMap[t1] || t1;
             const n2 = sportNames[t2] || fallbackNames[t2] || _teamMap[t2] || t2;
@@ -5750,23 +5748,23 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         else if (bot._smart_stop_reason === 'losses') _stopReason = `${bot._smart_losses || 0} consecutive losses`;
         else if (bot._smart_stop_reason === 'final') _stopReason = 'market settled';
         else if (bot._smart_stop_reason === 'manual') _stopReason = 'manually stopped';
-        else if (bot._smart_stop_reason === 'coinflip') _stopReason = 'coinflip territory';
-        else if (bot._smart_stop_reason === 'bottom') _stopReason = 'hit bottom';
-        else if (status === 'stopped') _stopReason = 'stopped';
+        else if (status === 'stopped') _stopReason = 'manually stopped';
     }
+    const _isSettled = bot._smart_stop_reason === 'final' || bot._market_settled_at > 0;
+    const _isCompletedRuns = bot._stop_reason === 'completed runs';
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
-        'completed': _isAwaitingSettlement ? '⏳ SETTLED' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : '✅ COMPLETE',
+        'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
-        'awaiting_settlement': '⏳ SETTLED',
+        'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
         'fav_hedge_posted': '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
-        'completed': _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
+        'completed': _isSettled ? '#ffaa00' : _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
         'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#ff4444',
         'awaiting_settlement': '#818cf8',
     };

@@ -3440,9 +3440,9 @@ class KalshiWSManager:
                         threading.Thread(target=_ws_maker_sell_follow, args=(ticker, ya, na), daemon=True).start()
                 except Exception:
                     pass
-                # ── Real-time Apex MM stop-loss: combined > 100+width → emergency exit ──
+                # ── Real-time Apex MM: stop-loss + snap-down on every tick ──
                 try:
-                    threading.Thread(target=_ws_apex_mm_stop_loss, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    threading.Thread(target=_ws_apex_mm_tick, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception:
                     pass
             return
@@ -3898,14 +3898,14 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
     pass
 
 
-# ─── WS Apex MM Stop-Loss: emergency exit on every tick ─────────────────────
-_ws_apex_mm_stop_lock = threading.Lock()
+# ─── WS Apex MM: stop-loss + snap-down on every tick ─────────────────────────
+_ws_apex_mm_tick_lock = threading.Lock()
 
-def _ws_apex_mm_stop_loss(ticker, yes_bid, no_bid, yes_ask, no_ask):
-    """WS-tick stop-loss: on every tick, check if any Apex MM bot's combined cost
-    exceeds the stop threshold (100 + width). Fires _apex_mm_begin_exit immediately.
-    Priority 1 — catches adverse moves faster than the 2s monitor loop."""
-    if not _ws_apex_mm_stop_lock.acquire(blocking=False):
+def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
+    """WS-tick handler for Apex MM. Fires on every price tick. Two jobs:
+    Priority 1: Stop-loss — if combined >= 100+width, emergency exit immediately.
+    Priority 2: Snap-down — if exit bid dropped below posted price, amend down for better fill."""
+    if not _ws_apex_mm_tick_lock.acquire(blocking=False):
         return  # another check in progress — skip
     try:
         for bot_id, bot in list(active_bots.items()):
@@ -3932,7 +3932,7 @@ def _ws_apex_mm_stop_loss(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 exit_side = 'yes'
                 held_side = 'no'
 
-            # Cheapest exit: buy opposite at ask OR sell held at bid
+            # ── Priority 1: Stop-loss ──
             exit_ask = yes_ask if exit_side == 'yes' else no_ask
             held_bid = yes_bid if held_side == 'yes' else no_bid
             buy_opp = (held_avg + exit_ask) if exit_ask > 0 else 999
@@ -3948,8 +3948,42 @@ def _ws_apex_mm_stop_loss(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, width={_w})')
                 threading.Thread(target=_fire_exit, daemon=True).start()
                 return  # one exit per tick max
+
+            # ── Priority 2: Snap-down — chase cheaper exit price ──
+            exit_oid = bot.get(f'_{exit_side}_exit_oid')
+            if not exit_oid:
+                continue
+            current_price = bot.get('_exit_price', 0)
+            if current_price <= 0:
+                continue
+            exit_bid = yes_bid if exit_side == 'yes' else no_bid
+            if exit_bid <= 0 or exit_bid >= current_price - 1:
+                continue  # bid not below current — nothing to snap to
+
+            snap_price = max(1, exit_bid)
+            target_price = bot.get('_exit_target_price', 0)
+            net_held = abs(net_yes - net_no)
+            try:
+                price_kwarg = {f'{exit_side}_price': snap_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                          count=net_held, action='buy', **price_kwarg)
+                bot['_exit_price'] = snap_price
+                bot['_wall_parked'] = False
+                if snap_price <= target_price:
+                    bot['_exit_soak_start'] = time.time()
+                    bot['_exit_walk_count'] = 0
+                combined = held_avg + snap_price
+                print(f'📊 APEX MM WS SNAP-DOWN: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (combined={combined}c, bid={exit_bid})')
+                bot_log('APEX_MM_WS_SNAP_DOWN', bot_id, {
+                    'old': current_price, 'new': snap_price, 'bid': exit_bid,
+                    'combined': combined, 'target': target_price,
+                })
+            except Exception as e:
+                if '404' not in str(e) and 'filled' not in str(e).lower():
+                    print(f'⚠ APEX MM WS SNAP-DOWN FAIL: {bot_id}: {e}')
     finally:
-        _ws_apex_mm_stop_lock.release()
+        _ws_apex_mm_tick_lock.release()
 
 
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────

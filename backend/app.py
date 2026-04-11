@@ -4201,8 +4201,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     threading.Thread(target=_apex_mm_cycle_reset, args=(bot_id, bot), daemon=True).start()
                     print(f'📊 APEX MM FLAT: {bot_id} → cycle reset')
                 elif abs(net_yes - net_no) > 0:
-                    # Still holding some — amend exit order with reduced count
+                    # Still holding some — amend exit order with reduced count + refill freed slots
                     threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, matched_side), daemon=True).start()
+                    # Slot-recovery: refill freed entry rung if gates pass
+                    if close_qty > 0:
+                        threading.Thread(target=_apex_mm_refill_entry, args=(bot_id, bot, close_qty), daemon=True).start()
 
                 bot_log('APEX_MM_EXIT_FILL', bot_id, {
                     'side': matched_side, 'price': exit_price, 'count': count,
@@ -7046,6 +7049,101 @@ def _apex_mm_walk_up(bot_id, bot):
             print(f'⚡ APEX MM WALK FILLED: {bot_id} — exit filled during walk amend')
         else:
             print(f'⚠ APEX MM WALK ERROR: {bot_id} {e}')
+
+
+def _apex_mm_refill_entry(bot_id, bot, freed_qty):
+    """Slot-recovery: refill freed entry slots at rung 1 after exit fills close positions.
+    Gated by profitability, OBI, and spread gap to prevent reloading into trends."""
+    if freed_qty <= 0:
+        return
+    if bot.get('status') != 'market_making_active':
+        return
+
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if net_yes == 0 and net_no == 0:
+        return  # Flat — cycle reset will handle
+
+    # Determine held side (the side we want to refill entry on)
+    if net_yes > net_no:
+        held_side = 'yes'
+        avg_held = bot.get('avg_yes_cost', 0)
+    else:
+        held_side = 'no'
+        avg_held = bot.get('avg_no_cost', 0)
+
+    exit_price = bot.get('_exit_price', 0)
+    ticker = bot.get('ticker', '')
+
+    # ── GATE 1: Profitability — exit still in profit territory ──
+    if exit_price <= 0:
+        return
+    combined = avg_held + exit_price
+    if combined >= 100:
+        bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {'gate': 'profitability', 'combined': combined})
+        return
+
+    # ── GATE 2: OBI — book not one-sided ──
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
+    if should_pull:
+        bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {'gate': 'obi', 'reason': pull_reason})
+        return
+
+    # ── Compute rung 1 price (closest to market) ──
+    midpoint = _apex_mm_midpoint(ticker)
+    if midpoint is None:
+        yb = bot.get('live_yes_bid', 0)
+        nb = bot.get('live_no_bid', 0)
+        if yb > 0 and nb > 0:
+            midpoint = round((yb + (100 - nb)) / 2)
+        else:
+            return
+    start_gap = bot.get('start_gap', 4)
+    if held_side == 'yes':
+        refill_price = midpoint - start_gap
+    else:
+        refill_price = (100 - midpoint) - start_gap
+
+    if refill_price < 1 or refill_price > 98:
+        return
+
+    # ── GATE 3: Spread gap — refill + exit must leave room for profit ──
+    if refill_price + exit_price >= 99:
+        bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {
+            'gate': 'spread_gap', 'refill': refill_price, 'exit': exit_price,
+            'combined': refill_price + exit_price,
+        })
+        return
+
+    # ── GATE 4: Inventory limit — don't exceed ladder max ──
+    inv_limit = bot.get('inventory_limit', 50)
+    current_net = net_yes if held_side == 'yes' else net_no
+    refill_qty = min(freed_qty, inv_limit - current_net)
+    if refill_qty <= 0:
+        return
+
+    # ── Post the refill ──
+    try:
+        api_rate_limiter.wait()
+        resp, actual_price = create_order_maker(ticker, held_side, 'buy', refill_qty, refill_price)
+        oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+        if oid:
+            # Track as normal ladder order
+            orders_dict = bot.setdefault(f'{held_side}_orders', {})
+            price_str = str(actual_price)
+            orders_dict[price_str] = {'oid': oid, 'qty': refill_qty, 'fill_qty': 0}
+            bot.setdefault('_all_placed_order_ids', []).append(oid)
+            refill_combined = actual_price + exit_price
+            print(f'🔄 APEX MM REFILL: {bot_id} {held_side.upper()} {refill_qty}x @{actual_price}c (rung 1, exit@{exit_price}c, combined={refill_combined}c)')
+            bot_log('APEX_MM_REFILL', bot_id, {
+                'side': held_side, 'price': actual_price, 'qty': refill_qty,
+                'exit_price': exit_price, 'combined': refill_combined,
+                'midpoint': midpoint, 'inv_limit': inv_limit, 'current_net': current_net,
+            })
+        else:
+            print(f'⚠ APEX MM REFILL: {bot_id} no order_id in response')
+    except Exception as e:
+        print(f'⚠ APEX MM REFILL ERROR: {bot_id} {e}')
 
 
 def _apex_mm_cycle_reset(bot_id, bot):

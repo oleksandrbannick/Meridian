@@ -9790,20 +9790,20 @@ def _handle_phantom(bot_id, bot, actions):
                 bot_log('DEATH_ZONE_FILL_CATCH', bot_id, {'fills': _dz_fills, 'reason': _dz_reason})
                 save_state()
                 return
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
             bot['_death_zone_stopped'] = True
             bot['_death_zone_reason'] = _dz_reason
+            bot['_price_floor_pulled'] = True
+            bot['repeat_count'] = 0
             # Cache last known score so card still shows it after ESPN stops
             _dz_score = _get_game_score_for_ticker(ticker)
             if _dz_score:
                 bot['_cached_score'] = _dz_score
-            print(f'🛑 END OF GAME STOP: {bot_id} — {_dz_reason} (dog cancelled)')
+            print(f'🛑 DEATH ZONE: {bot_id} — {_dz_reason} (dog pulled, waiting for settlement)')
             bot_log('PHANTOM_DEATH_ZONE_STOP', bot_id, {
                 'reason': _dz_reason, 'state': 'dog_anchor_posted',
                 'dog_order_id': (dog_order_id or '')[:12],
             })
-            _push_notification('death_zone_stop', f'🛑 {bot_id}: END OF GAME STOP — {_dz_reason}', {
+            _push_notification('death_zone_stop', f'🛑 {bot_id}: DEATH ZONE — {_dz_reason}', {
                 'bot_id': bot_id, 'ticker': ticker, 'reason': _dz_reason,
             })
             save_state()
@@ -9826,7 +9826,9 @@ def _handle_phantom(bot_id, bot, actions):
                         return
                 except Exception:
                     pass
-            # Check if bid recovered enough to repost
+            # Check if bid recovered enough to repost (NOT if death zone — stay pulled)
+            if bot.get('_death_zone_stopped'):
+                return
             _pf_ws_bid = bot.get(f'live_{dog_side}_bid', 0)
             _pf_depth = bot.get('anchor_depth', 5)
             _pf_new_price = max(1, _pf_ws_bid - _pf_depth) if _pf_ws_bid > 0 else 0
@@ -10986,19 +10988,18 @@ def _handle_phantom(bot_id, bot, actions):
         _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
         if _dz:
             _is_cross_dz = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            bot['_death_zone_stopped'] = True
+            bot['_death_zone_reason'] = _dz_reason
+            bot['_price_floor_pulled'] = True
+            bot['repeat_count'] = 0
             if _is_cross_dz and bot.get('_cross_settled_qty', 0) > 0:
                 bot['status'] = 'awaiting_settlement'
                 bot['awaiting_since'] = now
-            else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-            bot['_death_zone_stopped'] = True
-            bot['_death_zone_reason'] = _dz_reason
-            print(f'🛑 END OF GAME STOP: {bot_id} — {_dz_reason} (not re-anchoring)')
+            print(f'🛑 DEATH ZONE: {bot_id} — {_dz_reason} (waiting for settlement)')
             bot_log('PHANTOM_DEATH_ZONE_STOP', bot_id, {
                 'reason': _dz_reason, 'state': 'waiting_repeat',
             })
-            _push_notification('death_zone_stop', f'🛑 {bot_id}: END OF GAME STOP — {_dz_reason}', {
+            _push_notification('death_zone_stop', f'🛑 {bot_id}: DEATH ZONE — {_dz_reason}', {
                 'bot_id': bot_id, 'ticker': ticker, 'reason': _dz_reason,
             })
             save_state()

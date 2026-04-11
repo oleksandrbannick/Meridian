@@ -3557,8 +3557,8 @@ function displayOrderbookLadder(orderbook) {
 function _updateGhostPill(ticker, catchScore) {
     const pill = document.querySelector(`[data-ghost-ticker="${ticker}"]`);
     if (!pill) return;
-    const col = catchScore >= 70 ? '#00ff88' : catchScore >= 40 ? '#ffaa00' : '#ff4444';
-    const qualLabel = catchScore >= 70 ? '🟢' : catchScore >= 40 ? '🟡' : '🔴';
+    const col = catchScore >= 75 ? '#00ff88' : catchScore >= 55 ? '#00ccff' : catchScore >= 35 ? '#ffaa00' : '#ff4444';
+    const qualLabel = catchScore >= 75 ? '🟢' : catchScore >= 55 ? '🔵' : catchScore >= 35 ? '🟡' : '🔴';
     const labelEl = pill.querySelector('.ghost-label');
     if (labelEl) {
         labelEl.textContent = `${qualLabel}${catchScore}`;

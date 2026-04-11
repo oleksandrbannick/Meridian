@@ -4432,6 +4432,12 @@ def _execute_phantom_hedge(bot_id):
         if not bot or bot.get('status') in ('stopped', 'completed'):
             return
 
+        # Guard: monitor path may have already posted a hedge
+        with ws_fill_lock:
+            if bot.get('fav_order_id'):
+                print(f'⚡ WS HEDGE SKIPPED: {bot_id} monitor already posted fav_order_id={bot["fav_order_id"][:12]}')
+                return
+
         ticker = bot['ticker']
         hedge_ticker = bot.get('hedge_ticker', ticker)
         fav_side = bot['fav_side']
@@ -9811,14 +9817,18 @@ def _handle_phantom(bot_id, bot, actions):
                 if isinstance(_dz_result, tuple) and _dz_result[0] == 'filled':
                     _dz_fills = _dz_result[1]
             bot['dog_order_id'] = None
-            if _dz_fills > 0 and not bot.get('_hedge_fired'):
-                # Dog filled during death zone cancel — hedge it
+            if _dz_fills > 0:
+                # Dog filled during death zone cancel — hedge it (lock to prevent WS race)
+                with ws_fill_lock:
+                    if bot.get('_hedge_fired'):
+                        save_state()
+                        return
+                    bot['_hedge_fired'] = True
                 bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _dz_fills)
                 _ds = bot.get('dog_side', 'no')
                 bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
                 bot['status'] = 'dog_filled'
                 bot['dog_filled_at'] = now
-                bot['_hedge_fired'] = True
                 if _dz_fills < qty:
                     bot['_original_qty'] = qty
                     bot['_partial_hedge_qty'] = _dz_fills
@@ -9930,16 +9940,17 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_fill_qty'] = dog_filled
 
         if dog_filled >= qty:
-            # Guard: WS handler may have already fired the hedge
-            if bot.get('_hedge_fired'):
-                bot_log('PHANTOM_DOG_FILLED_WS_HANDLING', bot_id, {
-                    'dog_filled': dog_filled, 'qty': qty, '_hedge_fired': True,
-                    'fav_order_id': bot.get('fav_order_id', 'none')[:12] if bot.get('fav_order_id') else 'none',
-                })
-                bot['status'] = 'dog_filled'  # let WS thread handle it
-                return
-            # DOG FILLED — immediately hedge the favorite
-            bot['_hedge_fired'] = True
+            # Acquire lock to prevent race with WS fill handler
+            with ws_fill_lock:
+                if bot.get('_hedge_fired'):
+                    bot_log('PHANTOM_DOG_FILLED_WS_HANDLING', bot_id, {
+                        'dog_filled': dog_filled, 'qty': qty, '_hedge_fired': True,
+                        'fav_order_id': bot.get('fav_order_id', 'none')[:12] if bot.get('fav_order_id') else 'none',
+                    })
+                    bot['status'] = 'dog_filled'  # let WS thread handle it
+                    return
+                # DOG FILLED — claim hedge under lock, post after releasing
+                bot['_hedge_fired'] = True
             bot['dog_filled_at'] = now
             actual_dog_price = get_actual_fill_price(dog_order_id, dog_side) or bot['dog_price']
             bot['dog_price'] = actual_dog_price
@@ -9972,8 +9983,8 @@ def _handle_phantom(bot_id, bot, actions):
             # Post at fav bid — no ceiling cap
             hedge_price = fav_bid
 
-            # Guard: WS handler may have already posted the fav hedge
-            if bot.get('_hedge_fired') and bot.get('fav_order_id'):
+            # Safety net: if WS hedge posted between lock release and here
+            if bot.get('fav_order_id'):
                 return
 
             # Post the fav hedge at target-width-capped price (maker)
@@ -10028,13 +10039,17 @@ def _handle_phantom(bot_id, bot, actions):
             _ending_fills = 0
             if isinstance(_ending_result, tuple) and _ending_result[0] == 'filled':
                 _ending_fills = _ending_result[1]
-            if _ending_fills > 0 and not bot.get('_hedge_fired'):
+            if _ending_fills > 0:
+                with ws_fill_lock:
+                    if bot.get('_hedge_fired'):
+                        save_state()
+                        return
+                    bot['_hedge_fired'] = True
                 bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _ending_fills)
                 _ds = bot.get('dog_side', 'no')
                 bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
                 bot['status'] = 'dog_filled'
                 bot['dog_filled_at'] = now
-                bot['_hedge_fired'] = True
                 if _ending_fills < qty:
                     bot['_original_qty'] = qty
                     bot['_partial_hedge_qty'] = _ending_fills
@@ -10126,6 +10141,11 @@ def _handle_phantom(bot_id, bot, actions):
                                     _safe_cancel(_old_oid, f'phantom drift flip old {bot_id}')
                             if _total_fills > 0:
                                 # Orders FILLED — abort flip, fire hedge IMMEDIATELY
+                                with ws_fill_lock:
+                                    if bot.get('_hedge_fired'):
+                                        save_state()
+                                        return
+                                    bot['_hedge_fired'] = True
                                 _hedge_qty = min(_total_fills, qty)
                                 print(f'🚨 PHANTOM DRIFT FLIP → HEDGE: {bot_id} {_total_fills} fills found — firing hedge for {_hedge_qty}')
                                 bot_log('PHANTOM_DRIFT_FLIP_FILLS', bot_id, {
@@ -10138,7 +10158,6 @@ def _handle_phantom(bot_id, bot, actions):
                                     bot['no_fill_qty'] = _hedge_qty
                                 bot['status'] = 'dog_filled'
                                 bot['dog_filled_at'] = time.time()
-                                bot['_hedge_fired'] = True
                                 if _hedge_qty < qty:
                                     bot['_original_qty'] = qty
                                     bot['_partial_hedge_qty'] = _hedge_qty

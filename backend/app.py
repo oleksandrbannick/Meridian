@@ -16625,7 +16625,9 @@ def cancel_bot(bot_id):
                     session_pnl['completed_bots'] += 1
                 bot_log('MANUAL_DELETE', bot_id, {'sold': sold_positions, 'cancelled': cancelled, 'sell_prices': sell_prices})
 
-        del active_bots[bot_id]
+        # Don't delete — set to stopped, let settlement flow handle purge
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = time.time()
         save_state()
 
         result = {'success': True, 'cancelled_orders': cancelled, 'sold_positions': sold_positions, 'sell_prices': sell_prices}

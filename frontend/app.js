@@ -2617,19 +2617,32 @@ function getPriceButtonStyle(price, side, marketTier) {
 // Extract team label from ticker suffix (e.g., KXNBAGAME-26FEB28HOUMIA-MIA -> "Miami")
 function getTeamLabelFromTicker(ticker) {
     if (!ticker) return 'Winner';
-    // Ticker format: PREFIX-DATEXXXXXX-SUFFIX
-    // e.g., KXNBAGAME-26FEB28HOUMIA-MIA, KXEPLGAME-26MAR01ARSCFC-TIE
     const parts = ticker.split('-');
     const rawSuffix = parts[parts.length - 1] || '';
     if (!rawSuffix) return 'Winner';
 
-    // For spread tickers, strip trailing digits (e.g. ORL3 → ORL, ATL1 → ATL)
     const prefix = (parts[0] || '').toUpperCase();
     const isSpread = prefix.includes('SPREAD');
     const suffix = isSpread ? rawSuffix.replace(/\d+$/, '') : rawSuffix;
     if (!suffix) return 'Winner';
-    
-    // Use the same team map as parseTeamNames
+    const code = suffix.toUpperCase();
+
+    // Sport-aware resolution: ESPN/API Tennis data first, then hardcoded fallback
+    const _sport = detectSport(ticker);
+    const sportNames = (window._abbrToNameBySport || {})[_sport] || {};
+    const fallbackNames = window._abbrToName || {};
+
+    // Check sport-keyed data first (ESPN → "Pistons", API Tennis → "Collington")
+    if (sportNames[code]) return sportNames[code];
+    if (fallbackNames[code]) return fallbackNames[code];
+
+    // Tennis/golf: never fall through to team names — just return cleaned abbreviation
+    const _isTennisOrGolf = _sport === 'Tennis' || _sport === 'Golf';
+    if (_isTennisOrGolf) {
+        return suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase();
+    }
+
+    // Hardcoded team names for when ESPN data isn't loaded
     const teamMap = {
         'ATL': 'Atlanta', 'BOS': 'Boston', 'BKN': 'Brooklyn', 'CHA': 'Charlotte',
         'CHI': 'Chicago', 'CLE': 'Cleveland', 'DAL': 'Dallas', 'DEN': 'Denver',
@@ -2639,7 +2652,6 @@ function getTeamLabelFromTicker(ticker) {
         'OKC': 'OKC', 'ORL': 'Orlando', 'PHI': 'Philadelphia', 'PHX': 'Phoenix',
         'POR': 'Portland', 'SAC': 'Sacramento', 'SAS': 'San Antonio', 'TOR': 'Toronto',
         'UTA': 'Utah', 'WAS': 'Washington',
-        // NHL
         'CAR': 'Carolina', 'SEA': 'Seattle', 'COL': 'Colorado',
         'VGK': 'Vegas', 'WPG': 'Winnipeg', 'WSH': 'Washington',
         'VAN': 'Vancouver', 'FLA': 'Florida', 'NYR': 'NY Rangers',
@@ -2648,7 +2660,6 @@ function getTeamLabelFromTicker(ticker) {
         'STL': 'St. Louis', 'EDM': 'Edmonton', 'CGY': 'Calgary',
         'OTT': 'Ottawa', 'MTL': 'Montreal', 'BUF': 'Buffalo',
         'ARI': 'Arizona', 'ANA': 'Anaheim', 'SJS': 'San Jose',
-        // EPL
         'LEE': 'Leeds', 'MCI': 'Man City', 'LFC': 'Liverpool', 'TOT': 'Tottenham',
         'NFO': 'Nottingham', 'FUL': 'Fulham', 'BRE': 'Brentford', 'WOL': 'Wolves',
         'ARS': 'Arsenal', 'EVE': 'Everton', 'NEW': 'Newcastle', 'BUR': 'Burnley',
@@ -2657,16 +2668,9 @@ function getTeamLabelFromTicker(ticker) {
         'IPS': 'Ipswich', 'LEI': 'Leicester', 'BOH': 'Bournemouth', 'BOU': 'Bournemouth',
         'BRI': 'Brighton', 'SUN': 'Sunderland',
         'TIE': 'Draw',
-        // NCAAB common codes
         'WIN': 'Winthrop', 'DRKE': 'Drake', 'BEL': 'Belmont', 'OWIN': 'Winthrop',
     };
-    // For tennis: extract player name from title (suffix is just 3-letter abbrev like MCD, ARN)
-    if (!teamMap[suffix.toUpperCase()]) {
-        // This might be a tennis ticker — try to extract full player name from the title in the modal
-        // For now just capitalize the abbreviation nicely
-        return suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase();
-    }
-    return teamMap[suffix.toUpperCase()];
+    return teamMap[code] || suffix;
 }
 
 // Extract team sides from market title for winner markets

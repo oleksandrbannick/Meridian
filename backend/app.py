@@ -3440,6 +3440,11 @@ class KalshiWSManager:
                         threading.Thread(target=_ws_maker_sell_follow, args=(ticker, ya, na), daemon=True).start()
                 except Exception:
                     pass
+                # ── Real-time Apex MM stop-loss: combined > 100+width → emergency exit ──
+                try:
+                    threading.Thread(target=_ws_apex_mm_stop_loss, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                except Exception:
+                    pass
             return
 
         if msg_type == 'fill':
@@ -3891,6 +3896,60 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
     Kept for signature compatibility.
     """
     pass
+
+
+# ─── WS Apex MM Stop-Loss: emergency exit on every tick ─────────────────────
+_ws_apex_mm_stop_lock = threading.Lock()
+
+def _ws_apex_mm_stop_loss(ticker, yes_bid, no_bid, yes_ask, no_ask):
+    """WS-tick stop-loss: on every tick, check if any Apex MM bot's combined cost
+    exceeds the stop threshold (100 + width). Fires _apex_mm_begin_exit immediately.
+    Priority 1 — catches adverse moves faster than the 2s monitor loop."""
+    if not _ws_apex_mm_stop_lock.acquire(blocking=False):
+        return  # another check in progress — skip
+    try:
+        for bot_id, bot in list(active_bots.items()):
+            if bot.get('bot_category') != 'ladder_arb':
+                continue
+            if bot.get('type') != 'apex_mm':
+                continue
+            if bot.get('status') != 'market_making_active':
+                continue
+            if bot.get('ticker') != ticker:
+                continue
+
+            net_yes = bot.get('net_yes', 0)
+            net_no = bot.get('net_no', 0)
+            if net_yes <= 0 and net_no <= 0:
+                continue
+
+            if net_yes > net_no:
+                held_avg = bot.get('avg_yes_cost', 0)
+                exit_side = 'no'
+                held_side = 'yes'
+            else:
+                held_avg = bot.get('avg_no_cost', 0)
+                exit_side = 'yes'
+                held_side = 'no'
+
+            # Cheapest exit: buy opposite at ask OR sell held at bid
+            exit_ask = yes_ask if exit_side == 'yes' else no_ask
+            held_bid = yes_bid if held_side == 'yes' else no_bid
+            buy_opp = (held_avg + exit_ask) if exit_ask > 0 else 999
+            sell_held = (held_avg + (100 - held_bid)) if held_bid > 0 else 999
+            best_combined = min(buy_opp, sell_held)
+
+            width = bot.get('start_gap', 4) * 2
+            stop = 100 + width
+
+            if best_combined >= stop and best_combined < 999:
+                print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — emergency exit')
+                def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _s=stop, _w=width):
+                    _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, width={_w})')
+                threading.Thread(target=_fire_exit, daemon=True).start()
+                return  # one exit per tick max
+    finally:
+        _ws_apex_mm_stop_lock.release()
 
 
 # ─── WS Fill Lock: prevent WS fill handler and monitor from double-acting ─────
@@ -7088,8 +7147,9 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
 
 
 def _apex_mm_walk_up(bot_id, bot):
-    """Linear decay walk: move exit order from target → max_loss over 5 minutes.
-    Symmetric risk: target = 100-width (profit), max_loss = 100+width (loss).
+    """Linear decay walk: move exit order from target → 100c breakeven wall.
+    Walk stops at breakeven (combined=100c) — never voluntarily prices into a loss.
+    WS-tick stop-loss handles emergency exit if market drags combined past 100+width.
     Snap-back: if market improves during walk, snap price back down."""
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
@@ -7114,12 +7174,12 @@ def _apex_mm_walk_up(bot_id, bot):
     current_price = bot.get('_exit_price', 0)
     width = bot.get('start_gap', 4) * 2  # full width (start_gap is half)
     target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width // 2))
-    max_loss_price = max(1, min(99, 100 - avg_held + width // 2))  # symmetric: risk = reward
-    walk_range = max(1, max_loss_price - target_price)
+    max_walk_price = max(target_price + 1, min(99, 100 - avg_held))  # breakeven wall (combined=100c)
+    walk_range = max(1, max_walk_price - target_price)
 
     SOAK_SECONDS = 15   # queue seniority window — sit still, preserve FIFO priority
-    TIME_BUDGET = 300   # total life: 5 minutes
-    walk_seconds = TIME_BUDGET - SOAK_SECONDS  # 285s for the linear walk
+    TIME_BUDGET = 600   # 10 minutes — wall is safe (breakeven), WS stop-loss handles adverse moves
+    walk_seconds = TIME_BUDGET - SOAK_SECONDS  # walk portion of the budget
     interval = walk_seconds / walk_range if walk_range > 0 else 999  # ~24s per cent for 12¢ range
 
     # Use _exit_soak_start for snap-back resets (different from _exit_posted_at)
@@ -7128,15 +7188,22 @@ def _apex_mm_walk_up(bot_id, bot):
         bot['_exit_soak_start'] = soak_start
     age = now - soak_start
 
-    # Kill: 5-minute hard stop — use cheapest path to get flat
+    # Kill: 10-minute hard stop — safety net if WS stop-loss didn't fire
     total_age = now - bot.get('_exit_posted_at', now)
     if total_age > TIME_BUDGET + 10:
-        _apex_mm_begin_exit(bot_id, bot, f'time_expired ({int(total_age)}s, walk done)')
+        _apex_mm_begin_exit(bot_id, bot, f'time_expired ({int(total_age)}s)')
         return
 
-    # At or past max loss? Begin exit
-    if current_price >= max_loss_price:
-        _apex_mm_begin_exit(bot_id, bot, f'walk_maxed (combined={avg_held + current_price}c)')
+    # At breakeven wall? Park — WS stop-loss handles exit if market drags past 100+width
+    if current_price >= max_walk_price:
+        if not bot.get('_wall_parked'):
+            bot['_wall_parked'] = True
+            bot['_wall_parked_at'] = now
+            print(f'📊 APEX MM WALL: {bot_id} parked at {current_price}c (combined={avg_held + current_price}c, breakeven)')
+            bot_log('APEX_MM_WALL_PARKED', bot_id, {
+                'exit_price': current_price, 'avg_held': avg_held,
+                'combined': avg_held + current_price, 'width': width,
+            })
         return
 
     # Snap-back: if market recovers to target or better, snap back and reset soak
@@ -7152,6 +7219,7 @@ def _apex_mm_walk_up(bot_id, bot):
             bot['_exit_price'] = target_price
             bot['_exit_soak_start'] = now  # reset soak timer
             bot['_exit_walk_count'] = 0
+            bot['_wall_parked'] = False
             print(f'📊 APEX MM SNAP-BACK → SOAK: {bot_id} {current_price}→{target_price}c (market recovered, 15s soak restart)')
             bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': target_price, 'bid': live_exit_bid, 'soak_reset': True})
         except Exception:
@@ -7167,6 +7235,7 @@ def _apex_mm_walk_up(bot_id, bot):
             kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                       count=net_held, action='buy', **price_kwarg)
             bot['_exit_price'] = snap_price
+            bot['_wall_parked'] = False
             if snap_price <= target_price:
                 bot['_exit_soak_start'] = now  # back at/below target — restart soak
                 bot['_exit_walk_count'] = 0
@@ -7180,15 +7249,15 @@ def _apex_mm_walk_up(bot_id, bot):
     if age < SOAK_SECONDS:
         return  # patience — sit still
 
-    # Walk phase: 15s-300s — linear walk, 1¢ per ~24s
+    # Walk phase: 15s-600s — linear walk toward breakeven wall
     walk_age = age - SOAK_SECONDS
     expected_steps = min(walk_range, int(walk_age / interval)) if interval > 0 else walk_range
-    expected_price = min(max_loss_price, target_price + expected_steps)
+    expected_price = min(max_walk_price, target_price + expected_steps)
 
     if expected_price <= current_price:
         return  # not time for next step yet
 
-    new_price = min(expected_price, max_loss_price)
+    new_price = min(expected_price, max_walk_price)
     try:
         price_kwarg = {f'{exit_side}_price': new_price}
         net_held = abs(net_yes - net_no)

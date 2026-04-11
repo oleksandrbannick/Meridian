@@ -4347,6 +4347,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if not _is_late_fill:
                     orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
                     level = orders_dict.get(str(matched_price), {})
+                    # RE-VERIFY: if cycle_reset cleared this OID under the lock,
+                    # it already counted these fills — don't double-count
+                    if level.get('oid') != order_id:
+                        _already = bot.get('_counted_order_fills', {}).get(order_id, 0)
+                        print(f'🛡️ APEX MM FILL DEDUP: {bot_id} {matched_side.upper()} order {order_id[:12]} OID cleared by cycle_reset (counted={_already}) — skipping')
+                        bot_log('APEX_MM_FILL_DEDUP', bot_id, {
+                            'side': matched_side, 'price': matched_price, 'ws_count': count,
+                            'already_counted': _already, 'order_id': order_id,
+                        })
+                        save_state()
+                        break
                     level['fill_qty'] = level.get('fill_qty', 0) + count
                     # Track cumulative fills per order for late-fill dedup
                     if order_id:

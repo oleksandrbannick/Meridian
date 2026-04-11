@@ -6183,7 +6183,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor)
                     // Captured in green/yellow/red based on how much of floor was caught, floor stays pink
                     const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
-                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : '#556'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
+                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#556' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
                         : '';
                     return '<div style="display:grid;grid-template-columns:18px 1fr 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'

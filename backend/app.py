@@ -9611,9 +9611,28 @@ def _handle_phantom(bot_id, bot, actions):
         _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
         if _dz:
             dog_order_id = bot.get('dog_order_id')
+            _dz_fills = 0
             if dog_order_id:
-                _safe_cancel(dog_order_id, f'death_zone_{bot_id}')
+                _dz_result = _safe_cancel(dog_order_id, f'death_zone_{bot_id}')
+                if isinstance(_dz_result, tuple) and _dz_result[0] == 'filled':
+                    _dz_fills = _dz_result[1]
             bot['dog_order_id'] = None
+            if _dz_fills > 0 and not bot.get('_hedge_fired'):
+                # Dog filled during death zone cancel — hedge it
+                bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _dz_fills)
+                _ds = bot.get('dog_side', 'no')
+                bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
+                bot['status'] = 'dog_filled'
+                bot['dog_filled_at'] = now
+                bot['_hedge_fired'] = True
+                if _dz_fills < qty:
+                    bot['_original_qty'] = qty
+                    bot['_partial_hedge_qty'] = _dz_fills
+                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                print(f'⚡ DEATH ZONE FILL CATCH: {bot_id} {_dz_fills}x fills during cancel — hedge fired')
+                bot_log('DEATH_ZONE_FILL_CATCH', bot_id, {'fills': _dz_fills, 'reason': _dz_reason})
+                save_state()
+                return
             bot['status'] = 'completed'
             bot['completed_at'] = now
             bot['_death_zone_stopped'] = True
@@ -9809,7 +9828,24 @@ def _handle_phantom(bot_id, bot, actions):
         # Game ending: cancel to free capital
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
             print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
-            _safe_cancel(dog_order_id, f'phantom ending cancel {bot_id}')
+            _ending_result = _safe_cancel(dog_order_id, f'phantom ending cancel {bot_id}')
+            _ending_fills = 0
+            if isinstance(_ending_result, tuple) and _ending_result[0] == 'filled':
+                _ending_fills = _ending_result[1]
+            if _ending_fills > 0 and not bot.get('_hedge_fired'):
+                bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _ending_fills)
+                _ds = bot.get('dog_side', 'no')
+                bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
+                bot['status'] = 'dog_filled'
+                bot['dog_filled_at'] = now
+                bot['_hedge_fired'] = True
+                if _ending_fills < qty:
+                    bot['_original_qty'] = qty
+                    bot['_partial_hedge_qty'] = _ending_fills
+                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                print(f'⚡ ENDING FILL CATCH: {bot_id} {_ending_fills}x fills during cancel — hedge fired')
+                save_state()
+                return
             _phantom_set_final_status(bot, bot_id)
             bot['_smart_stopped'] = True
             bot['_smart_stop_reason'] = 'final'

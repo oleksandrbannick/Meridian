@@ -12872,8 +12872,8 @@ function renderDogStatsAndDepth(trades, pnl) {
         // Total contracts
         const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
 
-        const _bub = (label, value, sub, color) => `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-            <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
+        const _bub = (label, value, sub, color) => `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #ffaa0018;">
+            <div style="color:#ffaa00;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
             <div style="color:${color};font-size:22px;font-weight:800;">${value}</div>
             ${sub ? `<div style="color:#555;font-size:10px;margin-top:2px;">${sub}</div>` : ''}
         </div>`;
@@ -12886,9 +12886,9 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${_bub('Win Rate', `${ltWinRate}%`, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
                 ${_bub('Avg Profit', ltAvgProfit === '—' ? '—' : `${parseFloat(ltAvgProfit)>=0?'+':''}${ltAvgProfit}¢`, `${ltTotal} trades`, ltAvgCol)}
                 ${_bub('Sellbacks', sellbacks, `${ltTotal > 0 ? Math.round(sellbacks / ltTotal * 100) : 0}% of trades`, '#ff4444')}
-                ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#8892a6')}
-                ${_bub('Contracts', totalContracts, 'total pushed', '#00ddff')}
-                ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#00ffcc')}
+                ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
+                ${_bub('Contracts', totalContracts, 'total pushed', '#ff66aa')}
+                ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
             </div>`;
     }
 
@@ -12926,7 +12926,7 @@ function renderDogStatsAndDepth(trades, pnl) {
                     const total = d.wins + d.losses;
                     const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
                     const isActive = _phantomActiveDepth === d.depth;
-                    const borderCol = isActive ? '#ff66aa' : '#1e2740';
+                    const borderCol = isActive ? '#ff66aa' : '#ffaa0018';
                     const bgCol = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
                     const capPct = d.capCount > 0 ? Math.round((d.capTotal / d.capCount) / d.depth * 100) : 0;
                     const capCol = capPct >= 90 ? '#00ff88' : capPct >= 70 ? '#ffaa00' : '#ff4444';
@@ -12971,11 +12971,11 @@ function renderDogSportBreakdown(allTrades) {
                     const icon = _si[sport] || '';
                     const total = d.wins + d.losses;
                     const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
-                    const borderCol = isActive ? '#ff66aa' : '#1e2740';
+                    const borderCol = isActive ? '#ff66aa' : '#ffaa0018';
                     const bgCol = isActive ? '#ff66aa12' : '#0f1419';
                     return `<div onclick="selectPhantomSport('${sport}')" style="background:${bgCol};border-radius:8px;padding:12px 16px;border:1px solid ${borderCol};text-align:center;min-width:100px;flex:1;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                         <div style="font-size:16px;margin-bottom:2px;">${icon}</div>
-                        <div style="color:${isActive ? '#ff66aa' : '#8892a6'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
+                        <div style="color:${isActive ? '#ff66aa' : '#ffaa00'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
                         <div style="color:${col};font-size:18px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
                         <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
@@ -12986,6 +12986,146 @@ function renderDogSportBreakdown(allTrades) {
         sportBrkPanel.innerHTML = '';
     }
 
+}
+
+// ── Sport-specific period labels ──
+const SPORT_PERIOD_LABELS = {
+    'NBA':    { 1:'Q1', 2:'Q2', 3:'Q3', 4:'Q4', 5:'OT' },
+    'NHL':    { 1:'P1', 2:'P2', 3:'P3', 4:'OT' },
+    'MLB':    { 1:'1st', 2:'2nd', 3:'3rd', 4:'4th', 5:'5th', 6:'6th', 7:'7th', 8:'8th', 9:'9th' },
+    'NFL':    { 1:'Q1', 2:'Q2', 3:'Q3', 4:'Q4', 5:'OT' },
+    'NCAAB':  { 1:'1H', 2:'2H', 3:'OT' },
+    'NCAAW':  { 1:'Q1', 2:'Q2', 3:'Q3', 4:'Q4', 5:'OT' },
+    'Tennis': { 1:'Set 1', 2:'Set 2', 3:'Set 3' },
+    'MLS':    { 1:'1H', 2:'2H' },
+    'EPL':    { 1:'1H', 2:'2H' },
+    'UCL':    { 1:'1H', 2:'2H' },
+};
+
+function renderPhantomSportDropdown(sport, allTrades) {
+    const panel = document.getElementById('dog-sport-dropdown');
+    if (!panel) return;
+
+    if (sport === 'all') {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        return;
+    }
+
+    const trades = allTrades.filter(t => (t.sport || 'Other') === sport);
+    if (trades.length === 0) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        return;
+    }
+
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const icon = _si[sport] || '🎯';
+    const labels = SPORT_PERIOD_LABELS[sport] || {};
+
+    // ── Period breakdown ──
+    const periodMap = {};
+    trades.forEach(t => {
+        const gc = t.game_context || {};
+        const p = gc.period || 0;
+        if (p <= 0) return;
+        const key = labels[p] || (p > 4 ? 'OT' : `P${p}`);
+        if (!periodMap[key]) periodMap[key] = { wins: 0, losses: 0, net: 0, count: 0, _order: p };
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        periodMap[key].net += net;
+        periodMap[key].count++;
+        if (net > 0) periodMap[key].wins++;
+        else if (net < 0) periodMap[key].losses++;
+    });
+    const periods = Object.entries(periodMap).sort((a, b) => a[1]._order - b[1]._order);
+
+    // ── Depth floor breakdown (scoped to this sport) ──
+    const depthMap = {};
+    trades.forEach(t => {
+        const d = t.anchor_depth || 0;
+        if (d <= 0) return;
+        if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0, capTotal: 0, capCount: 0 };
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        depthMap[d].net += net;
+        depthMap[d].count++;
+        if (net > 0 && (t.profit_cents || 0) > 0) depthMap[d].wins++;
+        else if (net < 0) depthMap[d].losses++;
+        const ds = t.dog_side || t.first_leg || 'no';
+        const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
+        const fp = t.fav_price || (ds === 'yes' ? t.no_price : t.yes_price) || 0;
+        if (dp > 0 && fp > 0) {
+            depthMap[d].capTotal += 100 - dp - fp;
+            depthMap[d].capCount++;
+        }
+    });
+    const depths = Object.values(depthMap).sort((a, b) => a.depth - b.depth);
+
+    // ── Sport-level summary ──
+    const totalNet = trades.reduce((s, t) => s + (t.profit_cents || 0) - (t.loss_cents || 0), 0);
+    const totalWins = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) > 0).length;
+    const totalLosses = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) < 0).length;
+    const totalAll = totalWins + totalLosses;
+    const winRate = totalAll > 0 ? Math.round(totalWins / totalAll * 100) : 0;
+    const netCol = totalNet >= 0 ? '#00ff88' : '#ff4444';
+
+    // ── Render ──
+    panel.style.display = 'block';
+    panel.innerHTML = `
+        <div style="background:#0a0e16;border:1px solid #ffaa0033;border-radius:12px;padding:16px;animation:fadeIn 0.2s ease-out;">
+            <!-- Header -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:22px;">${icon}</span>
+                    <span style="color:#ffaa00;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${sport} Breakdown</span>
+                </div>
+                <div style="text-align:right;">
+                    <span style="color:${netCol};font-size:18px;font-weight:800;">${totalNet >= 0 ? '+' : ''}$${(totalNet / 100).toFixed(2)}</span>
+                    <span style="color:#555;font-size:10px;margin-left:6px;">${totalWins}W/${totalLosses}L · ${winRate}%</span>
+                </div>
+            </div>
+
+            <!-- Period stats -->
+            ${periods.length > 0 ? `
+            <div style="margin-bottom:14px;">
+                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">By ${sport === 'MLB' ? 'Inning' : sport === 'NHL' ? 'Period' : sport === 'Tennis' ? 'Set' : sport === 'MLS' || sport === 'EPL' || sport === 'UCL' ? 'Half' : sport === 'NCAAB' ? 'Half' : 'Quarter'}</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:6px;">
+                    ${periods.map(([label, d]) => {
+                        const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                        const total = d.wins + d.losses;
+                        const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
+                        const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                        return `<div style="background:#0f1419;border-radius:8px;padding:10px 8px;text-align:center;border:1px solid #ffaa0015;">
+                            <div style="color:#ffaa00;font-size:12px;font-weight:800;margin-bottom:3px;">${label}</div>
+                            <div style="color:${col};font-size:14px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                            <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
+                            <div style="color:#3a4560;font-size:9px;">avg ${avg >= 0 ? '+' : ''}${avg}¢</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>` : ''}
+
+            <!-- Depth floor stats for this sport -->
+            ${depths.length > 0 ? `
+            <div>
+                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Depth Floor · ${sport}</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;">
+                    ${depths.map(d => {
+                        const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                        const total = d.wins + d.losses;
+                        const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
+                        const capPct = d.capCount > 0 ? Math.round((d.capTotal / d.capCount) / d.depth * 100) : 0;
+                        const capCol = capPct >= 90 ? '#00ff88' : capPct >= 70 ? '#ffaa00' : '#ff4444';
+                        const capAvg = d.capCount > 0 ? (d.capTotal / d.capCount).toFixed(1) : '—';
+                        return `<div style="background:#0f1419;border-radius:8px;padding:10px;text-align:center;border:1px solid #ffaa0015;">
+                            <div style="color:#ff66aa;font-size:13px;font-weight:800;">⬇${d.depth}¢</div>
+                            <div style="color:${col};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                            <div style="color:#555;font-size:9px;">${d.wins}W/${d.losses}L · ${wr}%</div>
+                            <div style="color:${capCol};font-size:9px;margin-top:2px;">capture ${capPct}%${capAvg !== '—' ? ` (${capAvg}¢)` : ''}</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>` : ''}
+        </div>`;
 }
 
 function _applyPhantomFilters(trades) {
@@ -13005,6 +13145,7 @@ function selectPhantomSport(sport) {
 
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
     renderDogSportBreakdown(allTrades);
+    renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
 }
 
@@ -13016,7 +13157,7 @@ function selectPhantomDepth(depth) {
     document.querySelectorAll('#dog-depth-panel [data-depth]').forEach(card => {
         const d = Number(card.getAttribute('data-depth'));
         const isActive = d === _phantomActiveDepth;
-        card.style.borderColor = isActive ? '#ff66aa' : '#1e2740';
+        card.style.borderColor = isActive ? '#ff66aa' : 'rgba(255,170,0,0.09)';
         card.style.background = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
     });
 
@@ -13063,6 +13204,7 @@ async function loadDogHistory() {
 
         renderDogStatsAndDepth(trades, pnl);
         renderDogSportBreakdown(trades);
+        renderPhantomSportDropdown(_phantomActiveSport, trades);
 
         // ── Trade log ──
         if (trades.length === 0) {
@@ -13140,10 +13282,10 @@ function filterPhantomLog() {
         // Phase badge
         const phaseBadge = t.game_phase ? `<span style="background:${t.game_phase==='live'?'#00ff8815':'#8892a612'};color:${t.game_phase==='live'?'#00ff88':'#8892a6'};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">${t.game_phase.toUpperCase()}</span>` : '';
 
-        // Card border glow
-        const borderGlow = net > 0 ? 'border-left:3px solid #00ff8866;' : net < 0 ? 'border-left:3px solid #ff444466;' : '';
+        // Card border glow — Phantom yellow/pink theme
+        const borderGlow = net > 0 ? 'border-left:3px solid #00ff8866;' : net < 0 ? 'border-left:3px solid #ff444466;' : 'border-left:3px solid #ffaa0033;';
 
-        return `<div style="background:#0f1419;border:1px solid ${net > 0 ? '#00ff8818' : net < 0 ? '#ff444418' : '#1e2740'};border-radius:12px;padding:14px 16px;${borderGlow}">
+        return `<div style="background:#0f1419;border:1px solid ${net > 0 ? '#00ff8818' : net < 0 ? '#ff444418' : '#ffaa0015'};border-radius:12px;padding:14px 16px;${borderGlow}">
             <!-- Header: Icon + Match + Badges + P&L -->
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
                 <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
@@ -13192,7 +13334,7 @@ function filterPhantomLog() {
             </div>
 
             <!-- Footer: speed + stats -->
-            <div style="display:flex;gap:10px;align-items:center;font-size:10px;padding-top:8px;border-top:1px solid #1a2030;flex-wrap:wrap;">
+            <div style="display:flex;gap:10px;align-items:center;font-size:10px;padding-top:8px;border-top:1px solid #ffaa0012;flex-wrap:wrap;">
                 <span style="color:#3a4560;">${dateStr} ${timeStr}</span>
                 ${rawMs != null ? `<span style="color:${rawCol};font-weight:700;">⚡${rawMs.toFixed(1)}ms</span>` : ''}
                 ${rtMs != null ? `<span style="color:#5a6484;">rt ${Math.round(rtMs)}ms</span>` : ''}

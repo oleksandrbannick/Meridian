@@ -303,6 +303,7 @@
             background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAKCAYAAACALL/6AAAARUlEQVR4nGNgQAL/VzH8B2EGYsCZcohiEI1LDdwwkCJ0TFDD/7v4NcDFsJmO10aSFMNARyjDf3yYJA1YgwubJEENxIoDAJa6fS5G21ksAAAAAElFTkSuQmCC') no-repeat center/contain;
             image-rendering: pixelated;
         }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes buddyFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
 
         /* ◈ MERIDIAN — Wide rounded pill, calm/stable, purple theme, crown */
@@ -912,13 +913,14 @@
                 </div>
                 <div id="dog-depth-panel" style="margin-bottom:20px;"></div>
                 <div id="dog-sport-breakdown-panel" style="margin-bottom:20px;"></div>
+                <div id="dog-sport-dropdown" style="margin-bottom:20px;display:none;"></div>
                 <div id="dog-exit-filter" style="margin-bottom:20px;"></div>
-                <h3 style="color:#8892a6;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Phantom Trade Log</h3>
+                <h3 id="phantom-log-heading" style="color:#ffaa00;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Phantom Trade Log</h3>
                 <div id="dog-history-list">
                     <div class="empty-state">
-                        <div class="icon">🎯</div>
-                        <div class="title">No dog bot trades yet</div>
-                        <div class="desc">Anchor and ladder trades will appear here</div>
+                        <div class="icon">👻</div>
+                        <div class="title">No Phantom trades yet</div>
+                        <div class="desc">Phantom trades will appear here</div>
                     </div>
                 </div>
             </div>
@@ -3191,7 +3193,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260411225500"></script>
+    <script src="app.js?v=20260412010000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

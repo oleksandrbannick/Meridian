@@ -12911,6 +12911,11 @@ function renderDogStatsAndDepth(trades, pnl) {
         // Total contracts
         const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
 
+        // Hedge fill time (post to fill, not post latency)
+        const hfTrades = trades.filter(t => t.hedge_fill_latency_ms != null && t.hedge_fill_latency_ms < 300000);
+        const avgHedgeFillS = hfTrades.length > 0 ? (hfTrades.reduce((s,t) => s + t.hedge_fill_latency_ms, 0) / hfTrades.length / 1000) : null;
+        const fmtFillTime = (s) => { if (s === null) return '—'; if (s < 60) return `${s.toFixed(0)}s`; return `${Math.floor(s/60)}m ${Math.round(s%60)}s`; };
+
         const _bub = (label, value, sub, color) => `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #ffaa0018;">
             <div style="color:#ffaa00;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
             <div style="color:${color};font-size:22px;font-weight:800;">${value}</div>
@@ -12928,6 +12933,7 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
                 ${_bub('Contracts', totalContracts, 'total pushed', '#ff66aa')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
+                ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;
     }
 
@@ -13111,6 +13117,61 @@ function renderPhantomSportDropdown(sport, allTrades) {
     });
     const depths = Object.values(depthMap).sort((a, b) => a.depth - b.depth);
 
+    // ── Score diff breakdown (sport-aware buckets) ──
+    const SCORE_DIFF_BUCKETS = {
+        'NBA':    [[0,5,'0-5'],[6,10,'6-10'],[11,20,'11-20'],[21,999,'21+']],
+        'NFL':    [[0,7,'0-7'],[8,14,'8-14'],[15,21,'15-21'],[22,999,'22+']],
+        'NCAAB':  [[0,5,'0-5'],[6,10,'6-10'],[11,20,'11-20'],[21,999,'21+']],
+        'NCAAW':  [[0,5,'0-5'],[6,10,'6-10'],[11,20,'11-20'],[21,999,'21+']],
+        'MLB':    [[0,1,'0-1'],[2,3,'2-3'],[4,999,'4+']],
+        'NHL':    [[0,1,'0-1'],[2,3,'2-3'],[4,999,'4+']],
+        'MLS':    [[0,1,'0-1'],[2,999,'2+']],
+        'EPL':    [[0,1,'0-1'],[2,999,'2+']],
+        'UCL':    [[0,1,'0-1'],[2,999,'2+']],
+    };
+    const sdBuckets = SCORE_DIFF_BUCKETS[sport] || [[0,3,'0-3'],[4,7,'4-7'],[8,15,'8-15'],[16,999,'16+']];
+    const sdMap = {};
+    sdBuckets.forEach(([lo, hi, label]) => { sdMap[label] = { wins: 0, losses: 0, net: 0, count: 0, _lo: lo }; });
+    let sdMissing = { wins: 0, losses: 0, net: 0, count: 0 };
+    trades.forEach(t => {
+        const gc = t.game_context || {};
+        const sd = gc.score_diff;
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        if (sd == null) { sdMissing.net += net; sdMissing.count++; if (net > 0) sdMissing.wins++; else if (net < 0) sdMissing.losses++; return; }
+        const absSd = Math.abs(sd);
+        for (const [lo, hi, label] of sdBuckets) {
+            if (absSd >= lo && absSd <= hi) {
+                sdMap[label].net += net;
+                sdMap[label].count++;
+                if (net > 0) sdMap[label].wins++;
+                else if (net < 0) sdMap[label].losses++;
+                break;
+            }
+        }
+    });
+    const scoreDiffs = Object.entries(sdMap).filter(([_, d]) => d.count > 0);
+
+    // ── Dog price range breakdown (by 5s, cap at 40) ──
+    const DOG_PRICE_BUCKETS = [[5,9,'5-9'],[10,14,'10-14'],[15,19,'15-19'],[20,24,'20-24'],[25,29,'25-29'],[30,34,'30-34'],[35,40,'35-40']];
+    const dpMap = {};
+    DOG_PRICE_BUCKETS.forEach(([lo, hi, label]) => { dpMap[label] = { wins: 0, losses: 0, net: 0, count: 0, _lo: lo }; });
+    trades.forEach(t => {
+        const ds = t.dog_side || t.first_leg || 'no';
+        const dp = t.dog_price || t.avg_dog_price || (ds === 'yes' ? t.yes_price : t.no_price) || 0;
+        if (dp <= 0) return;
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        for (const [lo, hi, label] of DOG_PRICE_BUCKETS) {
+            if (dp >= lo && dp <= hi) {
+                dpMap[label].net += net;
+                dpMap[label].count++;
+                if (net > 0) dpMap[label].wins++;
+                else if (net < 0) dpMap[label].losses++;
+                break;
+            }
+        }
+    });
+    const dogPrices = Object.entries(dpMap).filter(([_, d]) => d.count > 0);
+
     // ── Sport-level summary ──
     const totalNet = trades.reduce((s, t) => s + (t.profit_cents || 0) - (t.loss_cents || 0), 0);
     const totalWins = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) > 0).length;
@@ -13188,6 +13249,52 @@ function renderPhantomSportDropdown(sport, allTrades) {
                     }).join('')}
                 </div>
             </div>` : `${_phantomActivePeriod !== 'all' ? '<div style="color:#555;font-size:11px;text-align:center;padding:8px;">No depth data for this period</div>' : ''}`}
+
+            <!-- Score diff breakdown -->
+            ${scoreDiffs.length > 0 && sport !== 'Tennis' ? `
+            <div style="margin-top:14px;">
+                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">By Score Diff · ${sport}</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px;">
+                    ${scoreDiffs.map(([label, d]) => {
+                        const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                        const total = d.wins + d.losses;
+                        const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
+                        const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                        return `<div style="background:#0f1419;border-radius:8px;padding:10px 8px;text-align:center;border:1px solid #ffaa0015;">
+                            <div style="color:#ffaa00;font-size:12px;font-weight:800;margin-bottom:3px;">${label} pts</div>
+                            <div style="color:${col};font-size:14px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                            <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
+                            <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
+                        </div>`;
+                    }).join('')}
+                    ${sdMissing.count > 0 ? `<div style="background:#0f1419;border-radius:8px;padding:10px 8px;text-align:center;border:1px solid #ffaa0015;">
+                        <div style="color:#555;font-size:12px;font-weight:800;margin-bottom:3px;">—</div>
+                        <div style="color:${sdMissing.net >= 0 ? '#00ff88' : '#ff4444'};font-size:14px;font-weight:800;">${sdMissing.net >= 0 ? '+' : ''}$${(sdMissing.net / 100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${sdMissing.wins}W/${sdMissing.losses}L</div>
+                        <div style="color:#3a4560;font-size:9px;">${sdMissing.count} no data</div>
+                    </div>` : ''}
+                </div>
+            </div>` : ''}
+
+            <!-- Dog price range breakdown -->
+            ${dogPrices.length > 0 ? `
+            <div style="margin-top:14px;">
+                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">By Dog Price · ${sport}</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px;">
+                    ${dogPrices.map(([label, d]) => {
+                        const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                        const total = d.wins + d.losses;
+                        const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
+                        const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                        return `<div style="background:#0f1419;border-radius:8px;padding:10px 8px;text-align:center;border:1px solid #ffaa0015;">
+                            <div style="color:#ffaa00;font-size:12px;font-weight:800;margin-bottom:3px;">${label}¢</div>
+                            <div style="color:${col};font-size:14px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                            <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
+                            <div style="color:#3a4560;font-size:9px;">avg ${avg >= 0 ? '+' : ''}${avg}¢ · ${d.count}</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>` : ''}
         </div>`;
 }
 

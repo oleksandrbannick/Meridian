@@ -6588,7 +6588,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>` : ''}
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#00d4ff;font-weight:600;">Width: ${width}¢</span>
+            <span style="color:#66bbcc;font-weight:600;">Width: ${width}¢</span>
             <span style="color:#8892a6;">Mid: ${midpoint}¢</span>
             <span style="color:#66bbcc;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x${bot.auto_scale !== false ? ' (scaled)' : ''}</span>
             <span style="color:#66bbcc;">Rungs: ${bot.levels || '?'}</span>
@@ -8897,7 +8897,7 @@ async function apexMmModify(botId) {
                 <input id="apex-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:#00d4ff;color:#000;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
+                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00d4ff,#66bbcc);color:#000;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
                 <button onclick="document.getElementById('apex-mm-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
             </div>
         </div>`;

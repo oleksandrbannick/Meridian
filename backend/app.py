@@ -7750,6 +7750,13 @@ def _apex_mm_exit_tick(bot_id, bot):
                         'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                         'timestamp': now, 'fill_source': 'apex_mm_exit',
                     })
+                    bot.setdefault('_exit_log', []).append({
+                        'type': 'arb_complete', 'held_side': held_side, 'held_avg': held_avg,
+                        'exit_side': side, 'exit_price': actual_price,
+                        'combined': held_avg + actual_price, 'qty': target,
+                        'fee': total_fee, 'pnl': pnl, 'reason': bot.get('_exit_reason', ''),
+                        'ts': now,
+                    })
                     print(f'✅ APEX MM ARB EXIT: {bot_id} bought {side.upper()} {target}x @{actual_price}c + held {held_side.upper()} avg@{held_avg}c → pnl={pnl}c (fee={total_fee}c)')
                 else:
                     # Sell held side (original path)
@@ -7778,6 +7785,12 @@ def _apex_mm_exit_tick(bot_id, bot):
                         'quantity': target, 'fee_cents': total_fee,
                         'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                         'timestamp': now, 'fill_source': 'apex_mm_exit',
+                    })
+                    bot.setdefault('_exit_log', []).append({
+                        'type': 'sellback', 'held_side': side, 'held_avg': avg_cost,
+                        'sell_price': actual_price, 'qty': target,
+                        'fee': total_fee, 'pnl': pnl, 'reason': bot.get('_exit_reason', ''),
+                        'ts': now,
                     })
                     print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c, fee={total_fee}c)')
                 all_sold = True  # will recheck

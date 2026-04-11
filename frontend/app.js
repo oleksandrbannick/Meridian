@@ -6606,6 +6606,23 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             }).join('')}
         </div>` : ''}
 
+        ${(bot._exit_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #ff444422;border-radius:6px;padding:6px;margin-bottom:8px;">
+            <div style="color:#ff4444;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Exit History</div>
+            ${(bot._exit_log || []).map((ex, i) => {
+                const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
+                const typeLabel = ex.type === 'arb_complete' ? 'ARB' : 'SELL';
+                const priceInfo = ex.type === 'arb_complete'
+                    ? `<span style="color:#ff8844;font-weight:700;">${ex.held_avg}¢</span><span style="color:#3a4560;">+</span><span style="color:#ff6666;font-weight:700;">${ex.exit_price}¢</span><span style="color:#3a4560;">=</span><span style="color:#ff4444;font-weight:700;">${ex.combined}¢</span>`
+                    : `<span style="color:#ff8844;font-weight:700;">${ex.held_avg}¢</span><span style="color:#3a4560;">→</span><span style="color:#ff6666;font-weight:700;">${ex.sell_price}¢</span>`;
+                return `<div style="display:grid;grid-template-columns:34px 1fr 38px 50px;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
+                    <span style="color:#ff6666;font-weight:700;font-size:10px;">${typeLabel}</span>
+                    <span style="display:flex;align-items:center;gap:3px;">${priceInfo}</span>
+                    <span style="color:#ff8844;font-weight:700;">x${ex.qty}</span>
+                    <span style="color:${pCol};font-weight:800;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}¢</span>
+                </div>`;
+            }).join('')}
+        </div>` : ''}
+
         <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#66bbcc;font-weight:600;">Width: ${width}¢</span>
             <span style="color:#8892a6;">Mid: ${midpoint}¢</span>

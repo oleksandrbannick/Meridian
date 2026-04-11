@@ -8868,6 +8868,7 @@ async function apexMmModify(botId) {
     const curGap = bot.start_gap || 4;
     const curQty = bot.qty_per_level || bot.base_qty || 10;
     const curWidth = curGap * 2;
+    const curLevels = bot.levels || 7;
     const status = bot.status || '';
     const isFlat = (bot.net_yes || 0) === 0 && (bot.net_no || 0) === 0;
     const statusNote = status === 'market_making_active' && isFlat
@@ -8881,9 +8882,13 @@ async function apexMmModify(botId) {
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')}</div>
             ${statusNote}
             <div style="margin-bottom:10px;">
-                <label style="color:#8892a6;font-size:10px;">Width (¢ from midpoint per side)</label>
-                <input id="apex-edit-gap" type="number" value="${curGap}" min="2" max="20" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div id="apex-edit-gap-hint" style="color:#00d4ff;font-size:10px;margin-top:2px;">Width: ${curWidth}¢ total spread</div>
+                <label style="color:#8892a6;font-size:10px;">Width (¢ total spread)</label>
+                <input id="apex-edit-width" type="number" value="${curWidth}" min="4" max="40" step="2" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+                <div id="apex-edit-width-hint" style="color:#00d4ff;font-size:10px;margin-top:2px;">${curWidth/2}¢ each side from midpoint</div>
+            </div>
+            <div style="margin-bottom:10px;">
+                <label style="color:#8892a6;font-size:10px;">Rungs per side</label>
+                <input id="apex-edit-levels" type="number" value="${curLevels}" min="1" max="15" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
             </div>
             <div style="margin-bottom:14px;">
                 <label style="color:#8892a6;font-size:10px;">Contracts per rung</label>
@@ -8902,25 +8907,27 @@ async function apexMmModify(botId) {
     modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
     modal.innerHTML = html;
     document.body.appendChild(modal);
-    document.getElementById('apex-edit-gap')?.addEventListener('input', (e) => {
+    document.getElementById('apex-edit-width')?.addEventListener('input', (e) => {
         const v = parseInt(e.target.value) || 0;
-        document.getElementById('apex-edit-gap-hint').textContent = `Width: ${v * 2}¢ total spread`;
+        document.getElementById('apex-edit-width-hint').textContent = `${Math.floor(v/2)}¢ each side from midpoint`;
     });
 }
 
 async function apexMmModifySave(botId) {
-    const gap = Math.max(2, Math.min(20, parseInt(document.getElementById('apex-edit-gap')?.value) || 4));
+    const width = Math.max(4, Math.min(40, parseInt(document.getElementById('apex-edit-width')?.value) || 8));
+    const gap = Math.floor(width / 2);  // convert total width to start_gap
+    const levels = Math.max(1, Math.min(15, parseInt(document.getElementById('apex-edit-levels')?.value) || 7));
     const qty = Math.max(1, Math.min(100, parseInt(document.getElementById('apex-edit-qty')?.value) || 10));
     try {
         const resp = await fetch(`${API_BASE}/bot/apex-mm/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ start_gap: gap, qty_per_level: qty })
+            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels })
         });
         const data = await resp.json();
         if (data.ok) {
             const applied = data.applied_now ? 'Applied now' : 'Queued for next cycle';
-            showNotification(`Apex MM updated: width ${gap * 2}¢ · ${qty}x/rung — ${applied}`);
+            showNotification(`Apex MM updated: width ${width}¢ · ${levels} rungs · ${qty}x/rung — ${applied}`);
             document.getElementById('apex-mm-modify-modal')?.remove();
         } else {
             showNotification('Failed: ' + (data.error || 'unknown'));

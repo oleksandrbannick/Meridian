@@ -16810,6 +16810,7 @@ def apex_mm_edit(bot_id):
     payload = request.get_json(force=True) or {}
     new_gap = payload.get('start_gap')
     new_qty = payload.get('qty_per_level')
+    new_levels = payload.get('levels')
     if new_gap is not None:
         new_gap = int(new_gap)
         if new_gap < 2 or new_gap > 20:
@@ -16818,7 +16819,11 @@ def apex_mm_edit(bot_id):
         new_qty = int(new_qty)
         if new_qty < 1 or new_qty > 100:
             return jsonify({'error': 'Qty per rung must be 1-100'}), 400
-    if new_gap is None and new_qty is None:
+    if new_levels is not None:
+        new_levels = int(new_levels)
+        if new_levels < 1 or new_levels > 15:
+            return jsonify({'error': 'Levels must be 1-15'}), 400
+    if new_gap is None and new_qty is None and new_levels is None:
         return jsonify({'error': 'Nothing to change'}), 400
     changes = {}
     if new_gap is not None and new_gap != bot.get('start_gap'):
@@ -16828,6 +16833,9 @@ def apex_mm_edit(bot_id):
         changes['qty_per_level'] = {'old': bot.get('qty_per_level'), 'new': new_qty}
         bot['qty_per_level'] = new_qty
         bot['base_qty'] = new_qty
+    if new_levels is not None and new_levels != bot.get('levels'):
+        changes['levels'] = {'old': bot.get('levels'), 'new': new_levels}
+        bot['levels'] = new_levels
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
     status = bot.get('status', '')

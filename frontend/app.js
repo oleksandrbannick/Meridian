@@ -12980,8 +12980,11 @@ function renderDogStatsAndDepth(trades, pnl) {
                     const capPct = d.capCount > 0 ? Math.round((d.capTotal / d.capCount) / d.depth * 100) : 0;
                     const capCol = capPct >= 90 ? '#00ff88' : capPct >= 70 ? '#ffaa00' : '#ff4444';
                     const capAvg = d.capCount > 0 ? (d.capTotal / d.capCount).toFixed(1) : '—';
+                    const _tierLabel = d.depth <= 3 ? 'WALL' : d.depth <= 4 ? 'PRIME' : d.depth <= 6 ? 'SNIPER' : d.depth <= 9 ? 'TRAP' : '';
+                    const _tierCol = d.depth <= 3 ? '#00ff88' : d.depth <= 4 ? '#00ccff' : d.depth <= 6 ? '#ffaa00' : d.depth <= 9 ? '#ff8800' : '#555';
                     return `<div data-depth="${d.depth}" onclick="selectPhantomDepth(${d.depth})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                         <div style="color:#ff66aa;font-size:14px;font-weight:800;">⬇${d.depth}¢</div>
+                        ${_tierLabel ? `<div style="color:${_tierCol};font-size:8px;font-weight:700;letter-spacing:.05em;margin-top:-2px;">${_tierLabel}</div>` : ''}
                         <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net>=0?'+':''}$${(d.net/100).toFixed(2)}</div>
                         <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins/total*100) + '%' : ''}</div>
                         <div style="color:${capCol};font-size:9px;margin-top:2px;">capture ${capPct}%${capAvg !== '—' ? ` (${capAvg}¢)` : ''}</div>

@@ -9522,7 +9522,18 @@ def _handle_phantom(bot_id, bot, actions):
         try:
             api_read_limiter.wait()
             _mkt = kalshi_client.get_market(ticker)
-            if isinstance(_mkt, dict) and _mkt.get('status') in ('settled', 'finalized'):
+            _mkt_data = _mkt.get('market', _mkt) if isinstance(_mkt, dict) else _mkt
+            _mkt_st = (_mkt_data.get('status', '') if isinstance(_mkt_data, dict) else _mkt.get('status', '')).lower()
+            # Check Kalshi status OR game score "finished" (tennis has no death zone)
+            _is_settled = _mkt_st in ('settled', 'finalized')
+            if not _is_settled and _mkt_st == 'closed':
+                _sc = _get_game_score_for_ticker(ticker)
+                _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
+                _yb = bot.get('live_yes_bid', 0)
+                _nb = bot.get('live_no_bid', 0)
+                if _sc_done or (_yb <= 0 and _nb <= 0):
+                    _is_settled = True
+            if _is_settled:
                 _cancel_oid = bot.get('dog_order_id')
                 if _cancel_oid:
                     try:

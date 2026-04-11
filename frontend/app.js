@@ -3522,6 +3522,13 @@ function displayOrderbookLadder(orderbook) {
         <div style="padding:5px 8px;background:${verdictCol}11;border:1px solid ${verdictCol}33;border-radius:5px;margin-bottom:6px;">
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;font-size:8px;font-weight:600;">
+            <span style="color:#00ff88;background:#00ff8811;padding:1px 5px;border-radius:3px;">85+ WALL 3¢</span>
+            <span style="color:#00ccff;background:#00ccff11;padding:1px 5px;border-radius:3px;">70+ PRIME 4¢</span>
+            <span style="color:#ffaa00;background:#ffaa0011;padding:1px 5px;border-radius:3px;">50+ SNIPER 6¢</span>
+            <span style="color:#ff8800;background:#ff880011;padding:1px 5px;border-radius:3px;">30+ RISKY 10¢</span>
+            <span style="color:#ff4444;background:#ff444411;padding:1px 5px;border-radius:3px;">&lt;30 OFF</span>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
                 <div style="color:${dogCol};font-size:9px;font-weight:700;margin-bottom:2px;">DOG · ${dogSideLabel} @ ${dogBidPrice}¢</div>

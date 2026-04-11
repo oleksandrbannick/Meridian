@@ -6984,15 +6984,22 @@ def _apex_mm_walk_up(bot_id, bot):
     target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width // 2))
     max_loss_price = max(1, min(99, 100 - avg_held + width // 2))  # symmetric: risk = reward
     walk_range = max(1, max_loss_price - target_price)
-    time_budget = 300  # 5 minutes
-    interval = time_budget / walk_range  # seconds per cent
 
-    exit_posted_at = bot.get('_exit_posted_at', now)
-    age = now - exit_posted_at
+    SOAK_SECONDS = 15   # queue seniority window — sit still, preserve FIFO priority
+    TIME_BUDGET = 300   # total life: 5 minutes
+    walk_seconds = TIME_BUDGET - SOAK_SECONDS  # 285s for the linear walk
+    interval = walk_seconds / walk_range if walk_range > 0 else 999  # ~24s per cent for 12¢ range
 
-    # 5-minute hard stop: if still holding after full walk time, begin exit
-    if age > time_budget + 10:
-        _apex_mm_begin_exit(bot_id, bot, f'time_expired ({int(age)}s, walk done)')
+    # Use _exit_soak_start for snap-back resets (different from _exit_posted_at)
+    soak_start = bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now)
+    if not bot.get('_exit_soak_start'):
+        bot['_exit_soak_start'] = soak_start
+    age = now - soak_start
+
+    # Kill: 5-minute hard stop — use cheapest path to get flat
+    total_age = now - bot.get('_exit_posted_at', now)
+    if total_age > TIME_BUDGET + 10:
+        _apex_mm_begin_exit(bot_id, bot, f'time_expired ({int(total_age)}s, walk done)')
         return
 
     # At or past max loss? Begin exit
@@ -7000,33 +7007,55 @@ def _apex_mm_walk_up(bot_id, bot):
         _apex_mm_begin_exit(bot_id, bot, f'walk_maxed (combined={avg_held + current_price}c)')
         return
 
-    # Snap-back: if bid dropped below our exit price, snap down to bid for fill
-    # Even below target is fine — still profitable (just less than ideal)
+    # Snap-back: if market recovers to target or better, snap back and reset soak
     live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
-    if live_exit_bid > 0 and live_exit_bid < current_price - 1:
-        snap_price = max(1, live_exit_bid)  # follow bid, no target cap
-        if snap_price < current_price:
-            try:
-                net_held = abs(net_yes - net_no)
-                price_kwarg = {f'{exit_side}_price': snap_price}
-                api_rate_limiter.wait()
-                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                          count=net_held, action='buy', **price_kwarg)
-                bot['_exit_price'] = snap_price
-                print(f'📊 APEX MM SNAP-BACK: {bot_id} {current_price}→{snap_price}c (bid improved)')
-                bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid})
-            except Exception:
-                pass
-            return
+    if live_exit_bid > 0 and current_price > target_price and live_exit_bid <= target_price:
+        # Market recovered — snap to target and restart soak
+        try:
+            net_held = abs(net_yes - net_no)
+            price_kwarg = {f'{exit_side}_price': target_price}
+            api_rate_limiter.wait()
+            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                      count=net_held, action='buy', **price_kwarg)
+            bot['_exit_price'] = target_price
+            bot['_exit_soak_start'] = now  # reset soak timer
+            bot['_exit_walk_count'] = 0
+            print(f'📊 APEX MM SNAP-BACK → SOAK: {bot_id} {current_price}→{target_price}c (market recovered, 15s soak restart)')
+            bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': target_price, 'bid': live_exit_bid, 'soak_reset': True})
+        except Exception:
+            pass
+        return
+    # Also snap down if bid dropped below current (follow bid for fill, even below target)
+    elif live_exit_bid > 0 and live_exit_bid < current_price - 1:
+        snap_price = max(1, live_exit_bid)
+        try:
+            net_held = abs(net_yes - net_no)
+            price_kwarg = {f'{exit_side}_price': snap_price}
+            api_rate_limiter.wait()
+            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                      count=net_held, action='buy', **price_kwarg)
+            bot['_exit_price'] = snap_price
+            if snap_price <= target_price:
+                bot['_exit_soak_start'] = now  # back at/below target — restart soak
+                bot['_exit_walk_count'] = 0
+            print(f'📊 APEX MM SNAP-BACK: {bot_id} {current_price}→{snap_price}c (bid improved)')
+            bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid})
+        except Exception:
+            pass
+        return
 
-    # Linear decay: calculate where we should be based on time elapsed
-    expected_steps = min(walk_range, int(age / interval)) if interval > 0 else walk_range
+    # Soak phase: 0-15s — hold position, preserve queue seniority
+    if age < SOAK_SECONDS:
+        return  # patience — sit still
+
+    # Walk phase: 15s-300s — linear walk, 1¢ per ~24s
+    walk_age = age - SOAK_SECONDS
+    expected_steps = min(walk_range, int(walk_age / interval)) if interval > 0 else walk_range
     expected_price = min(max_loss_price, target_price + expected_steps)
 
     if expected_price <= current_price:
         return  # not time for next step yet
 
-    # Walk to expected price
     new_price = min(expected_price, max_loss_price)
     try:
         price_kwarg = {f'{exit_side}_price': new_price}
@@ -7039,11 +7068,11 @@ def _apex_mm_walk_up(bot_id, bot):
         combined = avg_held + new_price
         pnl_at_price = 100 - combined
         phase = 'profit' if pnl_at_price > 0 else ('breakeven' if pnl_at_price == 0 else f'loss {abs(pnl_at_price)}c')
-        print(f'📊 APEX MM WALK: {bot_id} {exit_side.upper()} {current_price}→{new_price}c (combined={combined}c, {phase}, {int(age)}s/{time_budget}s)')
+        print(f'📊 APEX MM WALK: {bot_id} {exit_side.upper()} {current_price}→{new_price}c (combined={combined}c, {phase}, soak+{int(walk_age)}s)')
         bot_log('APEX_MM_WALK', bot_id, {
             'exit_side': exit_side, 'old_price': current_price, 'new_price': new_price,
             'combined': combined, 'pnl_at_price': pnl_at_price, 'age_s': int(age),
-            'interval': round(interval, 1), 'range': walk_range,
+            'walk_age_s': int(walk_age), 'interval': round(interval, 1), 'range': walk_range,
         })
     except Exception as e:
         if 'filled' in str(e).lower():

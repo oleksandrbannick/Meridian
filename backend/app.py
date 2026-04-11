@@ -7542,8 +7542,10 @@ def _apex_mm_exit_tick(bot_id, bot):
     yes_done = not bot.get('_exit_sell_oids', {}).get('yes', {}).get('oid')
     no_done = not bot.get('_exit_sell_oids', {}).get('no', {}).get('oid')
     if yes_done and no_done and bot.get('net_yes', 0) <= 0 and bot.get('net_no', 0) <= 0:
-        # Count this exit as a loss for smart mode tracking
-        bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+        # Only count exit as loss if realized P&L from this exit was negative
+        _exit_pnl = bot.get('_last_exit_pnl', 0)
+        if _exit_pnl < 0:
+            bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
         # Smart mode: restart if we haven't hit the loss limit
         _smart_limit = bot.get('smart_mode', 0)
         if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
@@ -7596,11 +7598,12 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + net_pnl
     bot['round_trips_completed'] = bot.get('round_trips_completed', 0) + 1
 
-    # Smart mode tracking
+    # Smart mode tracking — only wins reset the counter, breakeven (0c) doesn't
     if net_pnl < 0:
         bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
-    else:
+    elif net_pnl > 0:
         bot['consecutive_losses'] = 0
+    # net_pnl == 0: breakeven — don't reset, don't increment
 
     # Deduct from opposite inventory
     opp_net = bot.get(f'net_{opposite}', 0)
@@ -11842,14 +11845,12 @@ def _handle_apex(bot_id, bot, actions):
         _best_combined = min(_buy_opp_combined, _sell_held_combined)
         _width = bot.get('start_gap', 4) * 2
         _stop = 100 + _width  # symmetric: risk = reward
-        # Instant stop: market jumped past stop
+        # Drift stop: pull and wait — never kill while holding. Recovery checked each tick.
         if _best_combined > _stop and _best_combined < 999:
-            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width})')
-            return
-        # 5-minute hard stop: capital stuck too long
-        _exit_age = now - bot.get('_exit_posted_at', now)
-        if _exit_age > 310 and bot.get('_exit_posted_at', 0) > 0:
-            _apex_mm_begin_exit(bot_id, bot, f'time_stop ({int(_exit_age)}s holding)')
+            if status == 'market_making_active':
+                _apex_mm_pull_all(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width})')
+                bot['_drift_pulled'] = True
+            # If already pulled, just keep waiting — recovery checked below in OBI/repost logic
             return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)

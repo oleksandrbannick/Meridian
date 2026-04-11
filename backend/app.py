@@ -10331,8 +10331,10 @@ def _handle_phantom(bot_id, bot, actions):
                 all_dog_ids.append(dog_order_id)
                 bot['_all_dog_order_ids'] = all_dog_ids
 
-                # Cancel old order
-                _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
+                # Cancel old order — check for cancel-race fills
+                _repost_cancel = _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
+                if isinstance(_repost_cancel, tuple) and _repost_cancel[0] == 'filled':
+                    print(f'⚠ REPOST CANCEL-RACE: {bot_id} {_repost_cancel[1]} fills on old order — letting verify handle it')
                 # If WS already detected a fill and fired hedge, abort repost
                 if bot.get('_hedge_fired') or bot.get('status') != 'dog_anchor_posted':
                     print(f'⚠ REPOST ABORT: {bot_id} WS fill detected during cancel — hedge already firing')
@@ -10798,7 +10800,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
-                bot['_all_dog_order_ids'] = []  # clear so verify doesn't double-count prior repeats
+                # Keep _all_dog_order_ids until new order placed — WS fills on old orders
+                # can still arrive during waiting_repeat cooldown. Cleared at re-anchor.
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)
                 bot['_last_repost_at'] = 0
                 bot['net_pnl_cents'] = 0  # reset — lifetime_pnl has all history now
@@ -11263,7 +11266,7 @@ def _handle_phantom(bot_id, bot, actions):
                 count=qty, price=new_dog_price
             )
             bot['dog_order_id'] = dog_resp['order']['order_id']
-            bot.setdefault('_all_dog_order_ids', []).append(bot['dog_order_id'])
+            bot['_all_dog_order_ids'] = [bot['dog_order_id']]  # fresh start — old IDs no longer needed
             bot['dog_price'] = actual_price
             # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
             bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)

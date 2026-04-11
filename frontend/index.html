@@ -1095,7 +1095,7 @@
                 <!-- ═══════ APEX MARKET MAKER SECTION ═══════ -->
                 <div id="arb-section" style="display:none;">
                     <!-- Strategy header -->
-                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:12px 14px;background:linear-gradient(135deg,#00d4ff08 0%,#060a14 100%);border:1px solid #00d4ff22;border-left:3px solid #00d4ff;border-radius:8px;font-size:11px;color:#6a7488;line-height:1.6;display:flex;align-items:center;gap:12px;">
+                    <div id="apex-mode-desc" style="margin-bottom:16px;padding:12px 14px;background:linear-gradient(135deg,#00d4ff08 0%,#00cc8808 100%);border:1px solid #00d4ff22;border-left:3px solid #00cc88;border-radius:8px;font-size:11px;color:#6a7488;line-height:1.6;display:flex;align-items:center;gap:12px;">
                         <canvas id="apex-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
                         <div><strong style="color:#00d4ff;font-size:12px;">Apex Market Maker</strong><br>Weighted ladder on both sides. Inventory skew pushes exit aggressive. OBI gating protects against hostile flow.</div>
                     </div>
@@ -1146,17 +1146,17 @@
 
                     <!-- Options row -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
-                        <div style="padding:10px 14px;background:#00d4ff06;border:1px solid #00d4ff18;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
+                        <div style="padding:10px 14px;background:#00cc8806;border:1px solid #00cc8818;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                <input type="checkbox" id="mm-auto-scale" checked style="accent-color:#00d4ff;width:16px;height:16px;" onchange="updateMMPreview()">
-                                <span style="color:#00d4ff;font-size:11px;font-weight:700;">Auto-Scale</span>
+                                <input type="checkbox" id="mm-auto-scale" checked style="accent-color:#00cc88;width:16px;height:16px;" onchange="updateMMPreview()">
+                                <span style="color:#00cc88;font-size:11px;font-weight:700;">Auto-Scale</span>
                             </label>
                             <span style="color:#3a4560;font-size:9px;">Deeper = more qty</span>
                         </div>
-                        <div style="padding:10px 14px;background:#00d4ff06;border:1px solid #00d4ff18;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
+                        <div style="padding:10px 14px;background:#00cc8806;border:1px solid #00cc8818;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00d4ff;width:16px;height:16px;">
-                                <span style="color:#00d4ff;font-size:11px;font-weight:700;">Smart Mode</span>
+                                <input type="checkbox" id="mm-smart-mode" checked style="accent-color:#00cc88;width:16px;height:16px;">
+                                <span style="color:#00cc88;font-size:11px;font-weight:700;">Smart Mode</span>
                             </label>
                             <span style="color:#3a4560;font-size:9px;">Stop after 2 losses</span>
                         </div>
@@ -1169,11 +1169,11 @@
                     <input type="hidden" id="mm-inventory-limit" value="0">
 
                     <!-- Ladder Preview -->
-                    <div id="mm-ladder-preview" style="margin-bottom:16px;padding:12px 14px;background:#0a0e1a;border:1px solid #00d4ff15;border-radius:10px;font-size:11px;"></div>
+                    <div id="mm-ladder-preview" style="margin-bottom:16px;padding:12px 14px;background:#0a0e1a;border:1px solid #00cc8822;border-radius:10px;font-size:11px;"></div>
 
                     <!-- Deploy -->
                     <div style="display:flex;gap:8px;">
-                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:14px;background:linear-gradient(135deg,#00d4ff 0%,#0088bb 100%);color:#000;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.03em;transition:opacity .15s;" onmousedown="this.style.opacity='0.85'" onmouseup="this.style.opacity='1'">Deploy Market Maker</button>
+                        <button id="deploy-btn" onclick="deployMarketMaker()" style="flex:1;padding:14px;background:linear-gradient(135deg,#00d4ff 0%,#00cc88 100%);color:#000;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.03em;transition:opacity .15s;" onmousedown="this.style.opacity='0.85'" onmouseup="this.style.opacity='1'">Deploy Market Maker</button>
                         <button onclick="closeModal()" style="padding:14px 18px;background:#0f1419;color:#556;border:1px solid #1e2740;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
                     </div>
                 </div>
@@ -1399,7 +1399,7 @@
                         <div style="color:#555;font-size:9px;margin-top:3px;">After completion or sellback, re-anchors dog at smart price from orderbook</div>
                     </div>
                     <!-- Preview -->
-                    <div id="anchor-preview" style="margin-bottom:12px;background:#060a14;border:1px solid #1e2740;border-radius:8px;padding:10px;">
+                    <div id="anchor-preview" style="margin-bottom:12px;background:#060a14;border:1px solid #ff66aa22;border-radius:8px;padding:10px;">
                         <div id="anchor-preview-content">
                             <div style="text-align:center;color:#555;font-size:11px;padding:8px;">Set price and qty to preview</div>
                         </div>
@@ -1408,7 +1408,7 @@
                         </div>
                     </div>
                     <!-- Deploy button -->
-                    <button id="anchor-deploy-btn" onclick="deployAnchorBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#ffaa00 0%,#ff8800 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
+                    <button id="anchor-deploy-btn" onclick="deployAnchorBot()" style="width:100%;padding:14px;background:linear-gradient(135deg,#ffaa00 0%,#ff66aa 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
                         👻 Deploy Phantom Bot
                     </button>
                 </div>
@@ -3182,7 +3182,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260411202000"></script>
+    <script src="app.js?v=20260411202100"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

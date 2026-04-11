@@ -11814,9 +11814,10 @@ def _handle_apex(bot_id, bot, actions):
         # Drift guard: don't recover if market is too decided
         _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
         if _drift_max >= 75:
+            # Update pull reason to show drift guard is active (overrides OBI reason)
+            bot['_last_pull_reason'] = f'drift guard {_drift_max}c (market decided)'
             if not bot.get('_drift_pulled'):
                 bot['_drift_pulled'] = True
-                bot['_last_pull_reason'] = f'drift {_drift_max}c (market decided)'
                 print(f'📊 APEX MM DRIFT HOLD: {bot_id} max_bid={_drift_max}c — staying pulled')
             # If holding inventory, begin exit — don't just sit here
             net_yes = bot.get('net_yes', 0)

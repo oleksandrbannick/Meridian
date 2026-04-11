@@ -3361,39 +3361,55 @@ function displayOrderbookLadder(orderbook) {
     // Hedge room display (informational only — not used in score)
     const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
 
-    // ── CATCH SCORE (0-100) — calibrated from 992 phantom trades ──
-    // Data: Tennis 59% WR +5.4c, NBA 52% -5.1c, MLB 51% -14.3c, NHL 56% +36.6c
+    // ── PHANTOM PRECISION INDEX (PPI) — 0-100, pure market physics ──
+    // No sport penalties. Four pillars: Density, Gaps, Spread, Time.
     const _favPL = favAnalysis.perLevel;
     const _obTk = ob._ticker || orderbook?.ticker || '';
     const _scoreSport = detectSport(_obTk);
 
-    // 1. Fav contracts/level (35pts) — can the hedge fill?
-    const favPLpts = _favPL >= 50 ? 35 : _favPL >= 30 ? 28 : _favPL >= 20 ? 22 : _favPL >= 10 ? 14 : _favPL >= 5 ? 6 : 0;
-    // 2. Fav top-3 liquidity (15pts) — absorb your hedge qty
-    const favTop3Pts = favAnalysis.top3Qty >= 500 ? 15 : favAnalysis.top3Qty >= 100 ? 12 : favAnalysis.top3Qty >= 30 ? 6 : 0;
-    // 3. Fav dominance (10pts) — fav dwarfs dog = stable hedge
-    const favDomPts = favDepth > dogDepth * 5 ? 10 : favDepth > dogDepth * 3 ? 7 : favDepth > dogDepth * 2 ? 4 : favDepth > dogDepth ? 2 : 0;
-    // 4. Clean book bonus (10pts) — no fav gaps = reliable catch
-    const favNoGapPts = favAnalysis.gaps === 0 ? 10 : favAnalysis.gaps === 1 ? 5 : 0;
-    // 5. Sport factor (±15pts) — from 992 trades: Tennis prints, MLB bleeds
-    const _sportPts = { 'Tennis': 15, 'MLS': 12, 'EPL': 10, 'UCL': 10, 'NHL': 5, 'NCAAB': 0, 'NBA': -8, 'MLB': -15 }[_scoreSport] || 0;
-    // 6. Dog gaps penalty (-8pts) — sweeps skip levels
-    const dogGapPenalty = dogAnalysis.gaps >= 3 ? -8 : dogAnalysis.gaps >= 2 ? -4 : 0;
-    // 7. Fav gaps penalty (-12pts) — hedge may miss levels
-    const gapPenalty = favAnalysis.gaps >= 3 ? -12 : favAnalysis.gaps >= 2 ? -8 : favAnalysis.gaps >= 1 ? -4 : 0;
-    // 8. Fav concentration penalty (-10pts) — fragile if 80%+ is one wall
-    const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
-    const concPenalty = _favConc > 0.8 ? -10 : _favConc > 0.6 ? -5 : 0;
-    // 9. Room penalty (-15pts) — combined at bid too tight
-    const roomPenalty = hedgeRoom <= 0 ? -15 : hedgeRoom === 1 ? -8 : hedgeRoom === 2 ? -3 : 0;
-    // 10. Dog thinness bonus (10pts) — thin dog = more fills, faster
-    const dogThinPts = dogDepth < 100 ? 10 : dogDepth < 300 ? 7 : dogDepth < 1000 ? 3 : 0;
-    // Max safe qty: conservative — don't be a whale, cap at 50
-    const maxSafeQty = Math.min(50, Math.max(1, Math.floor(favAnalysis.top3Qty / 3)));
+    // 1. DENSITY SCORE (40pts) — avg contracts per penny in fav first 10 levels
+    const _densityRaw = _favPL >= 100000 ? 100 : _favPL >= 50000 ? 90 : _favPL >= 10000 ? 80
+        : _favPL >= 5000 ? 70 : _favPL >= 1000 ? 60 : _favPL >= 500 ? 50
+        : _favPL >= 100 ? 40 : _favPL >= 50 ? 30 : _favPL >= 20 ? 20
+        : _favPL >= 10 ? 15 : _favPL >= 5 ? 8 : 0;
+    const densityPts = Math.round(_densityRaw * 0.4);
 
-    const catchScore = Math.min(100, Math.max(0, Math.round(favPLpts + favTop3Pts + favDomPts + favNoGapPts + _sportPts + dogGapPenalty + gapPenalty + concPenalty + roomPenalty + dogThinPts)));
-    const catchLabel = catchScore >= 70 ? 'PRIME' : catchScore >= 50 ? 'GOOD' : catchScore >= 35 ? 'OK' : 'WEAK';
-    const catchCol = catchScore >= 70 ? '#00ff88' : catchScore >= 50 ? '#00ccff' : catchScore >= 35 ? '#ffaa00' : '#ff4444';
+    // 2. GAP PENALTY (-25pts max) — each fav gap in first 10 levels subtracts 5pts
+    const _favGapCount = favAnalysis.gaps;
+    const gapPenalty = Math.min(25, _favGapCount * 5);
+
+    // 3. SPREAD MULTIPLIER (20pts) — tighter spread = safer hedge
+    const _spread = (dogBidPrice && favBidPrice) ? Math.max(0, 100 - dogBidPrice - favBidPrice) : 5;
+    const spreadPts = _spread <= 1 ? 20 : _spread === 2 ? 15 : _spread === 3 ? 10 : _spread === 4 ? 5 : 0;
+
+    // 4. TIME-TO-BUZZER (15pts) — early = safe, late = volatile
+    // Use game phase from score data if available
+    const _gameScoreData = window._latestGameScores || {};
+    const _obTkParts = _obTk.split('-');
+    const _gameKey = _obTkParts.length >= 2 ? _obTkParts[1] : _obTkParts[0];
+    const _gScore = _gameScoreData[_gameKey] || {};
+    const _gPeriod = _gScore.period || 0;
+    const _gStatus = (_gScore.status || '').toLowerCase();
+    let timePts = 15; // default: early/pregame
+    if (_gStatus === 'in') {
+        // Detect late game from period
+        const _maxPeriod = { 'NBA': 4, 'NHL': 3, 'MLB': 9, 'NCAAB': 2 }[_scoreSport] || 4;
+        if (_gPeriod >= _maxPeriod) timePts = 0; // final period
+        else if (_gPeriod >= _maxPeriod - 1) timePts = 5; // second to last
+        else if (_gPeriod >= Math.ceil(_maxPeriod / 2)) timePts = 10; // mid game
+    } else if (_gStatus === 'post' || _gStatus === 'final') {
+        timePts = 0;
+    }
+
+    // PPI = Density(40) - Gaps(25) + Spread(20) + Time(15)
+    const catchScore = Math.min(100, Math.max(0, Math.round(densityPts - gapPenalty + spreadPts + timePts)));
+    const catchLabel = catchScore >= 85 ? 'WALL' : catchScore >= 70 ? 'PRIME' : catchScore >= 50 ? 'SNIPER' : catchScore >= 30 ? 'RISKY' : 'OFF';
+    const catchCol = catchScore >= 85 ? '#00ff88' : catchScore >= 70 ? '#00ccff' : catchScore >= 50 ? '#ffaa00' : catchScore >= 30 ? '#ff8800' : '#ff4444';
+
+    // Fav concentration for display
+    const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
+    // Max safe qty
+    const maxSafeQty = Math.min(50, Math.max(1, Math.floor(favAnalysis.top3Qty / 3)));
 
     // Fill difficulty — how likely your anchor actually fills (separate from catch quality)
     const fillDiff = dogDepth < 100 ? 'easy fill' : dogDepth < 500 ? 'moderate' : dogDepth < 2000 ? 'busy' : dogDepth < 10000 ? 'crowded' : 'packed';
@@ -3425,114 +3441,63 @@ function displayOrderbookLadder(orderbook) {
     }
 
     // Score breakdown tooltip
-    const _scoreBreakdown = `Fav ${_favPL}/lvl: ${favPLpts}pts · Top3: ${favTop3Pts}pts · FavDom: ${favDomPts}pts · Clean: ${favNoGapPts}pts · ${_scoreSport}: ${_sportPts}pts · DogThin: ${dogThinPts}pts · DogGap: ${dogGapPenalty}pts · FavGap: ${gapPenalty}pts · Conc: ${concPenalty}pts · Room: ${roomPenalty}pts`;
+    const _scoreBreakdown = `PPI: D=${densityPts}pts (${_favPL}/lvl) · G=-${gapPenalty}pts (${_favGapCount} gaps) · S=${spreadPts}pts (${_spread}¢ spread) · T=${timePts}pts`;
 
     // ── Verdict: plain-language summary of whether this market is good for phantom ──
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
-    const _isBadSport = ['MLB'].includes(_scoreSport);
-    const _isRiskySport = ['NBA', 'MLB'].includes(_scoreSport);
-    const _isGreatSport = ['Tennis', 'MLS', 'EPL', 'UCL'].includes(_scoreSport);
-    const _sportMinDepth = { 'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4 }[_scoreSport] || 4;
-    // ── Compute recDepth from book structure (same logic as bot creation card) ──
-    let _recDepth = _sportMinDepth;
-    // Fav liquidity: thick fav = tighter depth safe, thin fav = wider needed
-    if (_favPL >= 50) _recDepth = Math.max(_recDepth, 4);
-    else if (_favPL >= 30) _recDepth = Math.max(_recDepth, 5);
-    else if (_favPL >= 15) _recDepth = Math.max(_recDepth, 5);
-    else if (_favPL >= 8) _recDepth = Math.max(_recDepth, 6);
-    else if (_favPL >= 4) _recDepth = Math.max(_recDepth, 7);
-    else _recDepth = Math.max(_recDepth, 8);
-    // Dog gaps shrink effective depth — bump recommendation
-    if (dogDepth < 5000) {
-        if (dogAnalysis.gaps >= 4) _recDepth = Math.max(_recDepth, 8);
-        else if (dogAnalysis.gaps >= 3) _recDepth = Math.max(_recDepth, 7);
-        else if (dogAnalysis.gaps >= 2) _recDepth = Math.max(_recDepth, 6);
-        else if (dogAnalysis.gaps >= 1 && _recDepth <= 4) _recDepth = Math.max(_recDepth, 5);
-    }
-    // Fav gaps = hedge may miss levels
-    if (favAnalysis.gaps >= 4) _recDepth = Math.max(_recDepth, 8);
-    else if (favAnalysis.gaps >= 3) _recDepth = Math.max(_recDepth, 7);
-    else if (favAnalysis.gaps >= 2) _recDepth = Math.max(_recDepth, 6);
-    else if (favAnalysis.gaps >= 1 && _recDepth <= 4) _recDepth = Math.max(_recDepth, 5);
-    // Fav concentration: single wall = fragile
-    const _favConc2 = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
-    if (_favConc2 > 0.8) _recDepth = Math.max(_recDepth, 6);
-    else if (_favConc2 > 0.65 && _recDepth <= 4) _recDepth = Math.max(_recDepth, 5);
-    _recDepth = Math.min(_recDepth, 12);
+    // ── Depth rec driven by PPI score — no sport penalties ──
+    let _recDepth;
+    if (catchScore >= 85) _recDepth = 3;       // Concrete Wall — 2-3c
+    else if (catchScore >= 70) _recDepth = 4;   // Prime Zone — 4-5c
+    else if (catchScore >= 50) _recDepth = 6;   // Sniper Zone — 6-8c
+    else if (catchScore >= 30) _recDepth = 10;  // High-Risk Trap — 10-12c
+    else _recDepth = 0;                          // No-Trade Zone — DISARM
+    // Fav gaps override: if fav has gaps, bump regardless of score
+    if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
+    else if (favAnalysis.gaps >= 2 && _recDepth < 6) _recDepth = 6;
+    else if (favAnalysis.gaps >= 1 && _recDepth < 5) _recDepth = 5;
+    if (_recDepth > 0) _recDepth = Math.min(_recDepth, 12);
     const _favIsThick = _favPL >= 20;
     const _favIsThin = _favPL < 5;
     const _favIsLight = _favPL >= 5 && _favPL < 10;
     const _dogIsPacked = dogDepth >= 5000;
     const _dogIsThin = dogDepth < 300;
     const _favGappy = favAnalysis.gaps >= 3;
-    const _dogGappy = dogAnalysis.gaps >= 3;
     const _tightRoom = hedgeRoom <= 1;
-    const _okRoom = hedgeRoom >= 2 && hedgeRoom <= 3;
-    const _wideRoom = hedgeRoom >= 4;
-    // Build a specific verdict from the actual conditions
-    if (catchScore >= 70) {
-        if (_dogIsThin && _isGreatSport) {
-            verdict = `${_scoreSport} + thin dog + thick fav — ideal phantom setup`;
-        } else if (_dogIsThin) {
-            verdict = 'Thin dog + thick fav — fast fills, hedge catches easy';
-        } else if (_dogIsPacked) {
-            verdict = 'Hedge will catch but dog is crowded — fills will be slow';
-        } else {
-            verdict = `Strong phantom market${_isGreatSport ? ' — ' + _scoreSport + ' is consistent' : ''}`;
-        }
+    // Build verdict from PPI pillars — no sport bias
+    if (catchScore >= 85) {
+        verdict = `Concrete Wall — ${Math.round(_favPL/1000)}k/lvl fav, 0 gaps, use ${_recDepth}¢ depth`;
         verdictCol = '#00ff88';
+    } else if (catchScore >= 70) {
+        if (_dogIsPacked) {
+            verdict = `Prime Zone — hedge catches easy but dog crowded (${Math.round(dogDepth/1000)}k)`;
+        } else {
+            verdict = `Prime Zone — ${_favPL}/lvl fav, ${_recDepth}¢ depth`;
+        }
+        verdictCol = '#00ccff';
     } else if (catchScore >= 50) {
-        if (_tightRoom) {
-            verdict = `Good book but only ${hedgeRoom}¢ room — thin profit margin`;
-            verdictCol = '#ff8800';
-        } else if (_isRiskySport && _dogIsPacked) {
-            verdict = `${_scoreSport} — hedge catches but dog packed + sport volatile`;
-            verdictCol = '#ffaa00';
-        } else if (_dogIsPacked) {
-            verdict = `Fav is solid but dog packed (${Math.round(dogDepth/1000)}k) — slow anchor fills`;
-            verdictCol = '#ffaa00';
-        } else if (_isGreatSport) {
-            verdict = `${_scoreSport} + decent book — should work at ${_recDepth}¢+ depth`;
-            verdictCol = '#00ccff';
-        } else {
-            verdict = `Good setup — ${_favPL}/lvl fav, use ${_recDepth}¢+ depth`;
-            verdictCol = '#00ccff';
-        }
-    } else if (catchScore >= 35) {
-        if (_isBadSport) {
-            verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
-            verdictCol = '#ff4444';
-        } else if (_isRiskySport && _dogIsPacked) {
-            verdict = `${_scoreSport} + packed dog — slow fills, use ${_recDepth}¢+ depth`;
-            verdictCol = '#ff8800';
-        } else if (_favGappy) {
-            verdict = `${favAnalysis.gaps} fav gaps — hedge may skip levels, use wider depth`;
-            verdictCol = '#ffaa00';
+        if (_favGappy) {
+            verdict = `Sniper Zone — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
         } else if (_tightRoom) {
-            verdict = `Only ${hedgeRoom}¢ room — any fav bid move kills profit`;
-            verdictCol = '#ff8800';
-        } else if (_favIsLight) {
-            verdict = `Fav only ${_favPL}/lvl — hedge may lag on fast moves`;
-            verdictCol = '#ffaa00';
+            verdict = `Sniper Zone — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
         } else {
-            verdict = `Marginal — ${_scoreSport || 'this sport'} + book structure drag score down`;
-            verdictCol = '#ffaa00';
+            verdict = `Sniper Zone — ${_favPL}/lvl fav, ${_recDepth}¢+ depth`;
         }
+        verdictCol = '#ffaa00';
+    } else if (catchScore >= 30) {
+        if (_favIsThin) {
+            verdict = `High-Risk — fav only ${_favPL}/lvl, hedge may miss`;
+        } else if (_favGappy) {
+            verdict = `High-Risk — ${favAnalysis.gaps} fav gaps, unreliable hedge`;
+        } else {
+            verdict = `High-Risk — late game or thin book. ${_recDepth}¢+ depth if trading`;
+        }
+        verdictCol = '#ff8800';
     } else {
-        // WEAK < 35
-        if (_isBadSport) {
-            verdict = `${_scoreSport} — volatile fav, high sellback risk. Use 8¢+ depth`;
-            verdictCol = '#ff4444';
-        } else if (_isRiskySport && _favIsThick && _dogIsPacked) {
-            verdict = `${_scoreSport} — thick fav but packed dog (${Math.round(dogDepth/1000)}k) + sport risk`;
-            verdictCol = '#ff8800';
-        } else if (_isRiskySport && _favIsThick) {
-            verdict = `${_scoreSport} — fav catches but sport volatility + gaps drag score`;
-            verdictCol = '#ff8800';
-        } else if (_favIsThin) {
-            verdict = `Fav only ${_favPL}/lvl — too thin to reliably catch the hedge`;
+        if (_favIsThin) {
+            verdict = `No-Trade — fav ${_favPL}/lvl too thin to catch hedge`;
             verdictCol = '#ff4444';
         } else if (_favGappy) {
             verdict = `${favAnalysis.gaps} gaps on fav — hedge will miss levels, unreliable`;

@@ -1447,45 +1447,58 @@ def get_depth_rec(ticker):
     elif 'KXEPL' in tu: sport = 'EPL'
     elif 'KXUCL' in tu: sport = 'UCL'
     elif 'KXNCAA' in tu or 'KXMARMAD' in tu: sport = 'NCAAB'
-    sport_mins = {'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4}
-    rd = sport_mins.get(sport, 4)
-    reasons = []
-    if sport: reasons.append(f'{sport.lower()}: min {rd}c')
+    # ── PPI (Phantom Precision Index) — pure market physics, no sport penalties ──
     fpl = fav_analysis['perLevel']
-    if fpl >= 50: rd = max(rd, 4); reasons.append(f'fav {fpl}/lvl thick')
-    elif fpl >= 30: rd = max(rd, 5); reasons.append(f'fav {fpl}/lvl solid')
-    elif fpl >= 15: rd = max(rd, 5); reasons.append(f'fav {fpl}/lvl decent')
-    elif fpl >= 8: rd = max(rd, 6); reasons.append(f'fav {fpl}/lvl moderate')
-    elif fpl >= 4: rd = max(rd, 7); reasons.append(f'fav {fpl}/lvl light')
-    elif fpl > 0: rd = max(rd, 8); reasons.append(f'fav {fpl}/lvl thin')
-    dd = dog_analysis['totalDepth']
-    dg = dog_analysis['gaps']
-    if dd < 5000:
-        if dg >= 4: rd = max(rd, 8); reasons.append(f'{dg} dog gaps')
-        elif dg >= 3: rd = max(rd, 7); reasons.append(f'{dg} dog gaps')
-        elif dg >= 2: rd = max(rd, 6); reasons.append(f'{dg} dog gaps')
-        elif dg >= 1 and rd <= 4: rd = max(rd, 5); reasons.append(f'{dg} dog gap')
     fg = fav_analysis['gaps']
-    if fg >= 4: rd = max(rd, 8); reasons.append(f'{fg} fav gaps')
-    elif fg >= 3: rd = max(rd, 7); reasons.append(f'{fg} fav gaps')
-    elif fg >= 2: rd = max(rd, 6); reasons.append(f'{fg} fav gaps')
-    elif fg >= 1 and rd <= 4: rd = max(rd, 5); reasons.append(f'{fg} fav gap')
+    dd = dog_analysis['totalDepth']
     fc = fav_analysis['concentration']
-    if fc > 0.8: rd = max(rd, 6); reasons.append(f'fav {round(fc*100)}% wall')
-    elif fc > 0.65 and rd <= 4: rd = max(rd, 5); reasons.append(f'fav {round(fc*100)}% conc')
-    rd = min(rd, 12)
+    reasons = []
+    # 1. Density (40pts)
+    _density_raw = 100 if fpl >= 100000 else 90 if fpl >= 50000 else 80 if fpl >= 10000 else 70 if fpl >= 5000 else 60 if fpl >= 1000 else 50 if fpl >= 500 else 40 if fpl >= 100 else 30 if fpl >= 50 else 20 if fpl >= 20 else 15 if fpl >= 10 else 8 if fpl >= 5 else 0
+    _density_pts = round(_density_raw * 0.4)
+    # 2. Gap penalty (-25pts max)
+    _gap_penalty = min(25, fg * 5)
+    # 3. Spread (20pts)
+    _dog_bid = lob.get_best_bid(dog_side)
+    _fav_bid = lob.get_best_bid(fav_side)
+    _spread = max(0, 100 - (_dog_bid or 0) - (_fav_bid or 0)) if _dog_bid and _fav_bid else 5
+    _spread_pts = 20 if _spread <= 1 else 15 if _spread == 2 else 10 if _spread == 3 else 5 if _spread == 4 else 0
+    # 4. Time (15pts) — uses game score if available
+    _time_pts = 15  # default: early/pregame
+    _sc = _get_game_score_for_ticker(ticker)
+    if _sc and _sc.get('status') == 'in':
+        _period = _sc.get('period', 0)
+        _max_p = {'NBA': 4, 'NHL': 3, 'MLB': 9, 'NCAAB': 2}.get(sport, 4)
+        if _period >= _max_p: _time_pts = 0
+        elif _period >= _max_p - 1: _time_pts = 5
+        elif _period >= _max_p // 2: _time_pts = 10
+    # PPI score
+    ppi = max(0, min(100, round(_density_pts - _gap_penalty + _spread_pts + _time_pts)))
+    # Depth rec from PPI
+    if ppi >= 85: rd = 3
+    elif ppi >= 70: rd = 4
+    elif ppi >= 50: rd = 6
+    elif ppi >= 30: rd = 10
+    else: rd = 0  # no-trade
+    # Fav gaps override
+    if fg >= 3 and rd < 7: rd = 7
+    elif fg >= 2 and rd < 6: rd = 6
+    elif fg >= 1 and rd < 5: rd = 5
+    if rd > 0: rd = min(rd, 12)
+    reasons.append(f'PPI {ppi}: D={_density_pts} G=-{_gap_penalty} S={_spread_pts} T={_time_pts}')
     return jsonify({
         'rec_depth': rd,
+        'ppi_score': ppi,
         'sport': sport,
         'reasons': reasons,
         'fav_per_level': fpl,
-        'dog_gaps': dg,
+        'dog_gaps': dog_analysis['gaps'],
         'fav_gaps': fg,
         'fav_concentration': fc,
         'dog_depth': dd,
         'fav_depth': fav_analysis['totalDepth'],
-        'dog_bid': lob.get_best_bid(dog_side),
-        'fav_bid': lob.get_best_bid(fav_side),
+        'dog_bid': _dog_bid,
+        'fav_bid': _fav_bid,
         'max_safe_qty': min(50, max(1, fav_analysis['top1Qty'] // 3)) if fav_analysis['top1Qty'] > 0 else 1,
         'age_ms': round(age_s * 1000),
     })

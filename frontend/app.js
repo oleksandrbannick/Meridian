@@ -6436,7 +6436,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const walkCount = bot._exit_walk_count || 0;
         const range = maxExit - targetPrice;
         const walkPct = range > 0 ? Math.min(100, Math.round((exitPrice - targetPrice) / range * 100)) : 0;
-        const bePct = range > 0 ? Math.round((breakeven - targetPrice) / range * 100) : 50;
+        const bePct = 50;  // symmetric walk: BE is always dead center
         // Walk status — static labels
         let walkStatus = '';
         if (walkCount > 0) {

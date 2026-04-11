@@ -10475,6 +10475,11 @@ def _handle_phantom(bot_id, bot, actions):
                 else:
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
+                    # Clear per-cycle fills so card doesn't show stale filled bars
+                    bot['dog_fill_qty'] = 0
+                    bot['fav_fill_qty'] = 0
+                    bot['yes_fill_qty'] = 0
+                    bot['no_fill_qty'] = 0
                     if not bot.get('_smart_stopped') and not bot.get('_stop_reason'):
                         bot['_stop_reason'] = 'completed runs'
                 bot['_just_completed'] = True

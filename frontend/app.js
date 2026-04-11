@@ -13325,10 +13325,12 @@ function selectPhantomSport(sport) {
     const allTrades = window._phantomAllTrades || [];
     const filtered = _applyPhantomFilters(allTrades);
 
-    renderDogStatsAndDepth._skipDepth = true;  // don't rebuild depth cards on sport change
+    // Sport bubbles respect depth filter, depth cards don't rebuild on sport change
+    const depthScoped = _phantomActiveDepth !== 'all' ? allTrades.filter(t => (t.anchor_depth||0) === _phantomActiveDepth) : allTrades;
+    renderDogStatsAndDepth._skipDepth = true;
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
     renderDogStatsAndDepth._skipDepth = false;
-    renderDogSportBreakdown(allTrades);
+    renderDogSportBreakdown(depthScoped);
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
     window.scrollTo({ top: scrollY, behavior: 'instant' });
@@ -13350,10 +13352,11 @@ function selectPhantomDepth(depth) {
     const scrollY = window.scrollY;
     const allTrades = window._phantomAllTrades || [];
     const filtered = _applyPhantomFilters(allTrades);
+    const depthScoped = _phantomActiveDepth !== 'all' ? allTrades.filter(t => (t.anchor_depth||0) === _phantomActiveDepth) : allTrades;
     renderDogStatsAndDepth._skipDepth = true;
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
     renderDogStatsAndDepth._skipDepth = false;
-    renderDogSportBreakdown(allTrades);
+    renderDogSportBreakdown(depthScoped);
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
     window.scrollTo({ top: scrollY, behavior: 'instant' });

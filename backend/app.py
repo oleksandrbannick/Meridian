@@ -16763,6 +16763,59 @@ def phantom_edit(bot_id):
     return jsonify({'ok': True, 'applied_now': applied_now, 'changes': changes})
 
 
+@app.route('/api/bot/apex-mm/edit/<bot_id>', methods=['POST'])
+def apex_mm_edit(bot_id):
+    """Edit Apex MM bot settings (width, qty per rung). Reposts ladder if active."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if bot.get('type') != 'apex_mm':
+        return jsonify({'error': 'Not an Apex MM bot'}), 400
+    payload = request.get_json(force=True) or {}
+    new_gap = payload.get('start_gap')
+    new_qty = payload.get('qty_per_level')
+    if new_gap is not None:
+        new_gap = int(new_gap)
+        if new_gap < 2 or new_gap > 20:
+            return jsonify({'error': 'Width (start_gap) must be 2-20'}), 400
+    if new_qty is not None:
+        new_qty = int(new_qty)
+        if new_qty < 1 or new_qty > 100:
+            return jsonify({'error': 'Qty per rung must be 1-100'}), 400
+    if new_gap is None and new_qty is None:
+        return jsonify({'error': 'Nothing to change'}), 400
+    changes = {}
+    if new_gap is not None and new_gap != bot.get('start_gap'):
+        changes['start_gap'] = {'old': bot.get('start_gap'), 'new': new_gap}
+        bot['start_gap'] = new_gap
+    if new_qty is not None and new_qty != bot.get('qty_per_level'):
+        changes['qty_per_level'] = {'old': bot.get('qty_per_level'), 'new': new_qty}
+        bot['qty_per_level'] = new_qty
+        bot['base_qty'] = new_qty
+    if not changes:
+        return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
+    status = bot.get('status', '')
+    applied_now = False
+    # If actively quoting and flat, pull and repost with new params
+    if status == 'market_making_active' and bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+        _apex_mm_pull_all(bot_id, bot, 'edit_repost')
+        # Recalculate levels and repost — monitor will handle on next tick
+        applied_now = True
+    elif status == 'mm_depth_pulled':
+        applied_now = True  # next repost will use new params
+    # Recalculate inventory limit
+    if new_qty or new_gap:
+        _levels = bot.get('levels', 7)
+        _spacing = bot.get('spacing', 1)
+        _gap = bot.get('start_gap', 4)
+        _qty = bot.get('qty_per_level', 10)
+        bot['inventory_limit'] = _levels * _qty
+    save_state()
+    bot_log('APEX_MM_EDIT', bot_id, {'changes': changes, 'applied_now': applied_now, 'status': status})
+    print(f'🔧 APEX MM EDIT: {bot_id} — {changes} (applied_now={applied_now})')
+    return jsonify({'ok': True, 'applied_now': applied_now, 'changes': changes})
+
+
 @app.route('/api/bot/middle/rebalancer/<bot_id>', methods=['POST'])
 def middle_rebalancer_toggle(bot_id):
     """Toggle rebalancer on/off for a Meridian bot."""

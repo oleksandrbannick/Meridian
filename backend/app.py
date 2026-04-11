@@ -9798,8 +9798,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_smart_stopped'] = True
                 bot['_smart_stop_reason'] = 'final'
                 bot['_market_settled_at'] = now
-                bot_log('PHANTOM_SETTLED_CLEANUP', bot_id, {'prev_status': status, 'mkt_status': _mkt.get('status')})
-                print(f'🧹 SETTLED CLEANUP: {bot_id} market {_mkt.get("status")} → {bot["status"]}')
+                bot_log('PHANTOM_SETTLED_CLEANUP', bot_id, {'prev_status': status, 'mkt_status': _mkt_st})
+                print(f'🧹 SETTLED CLEANUP: {bot_id} market {_mkt_st} → {bot["status"]}')
                 save_state()
                 return
         except Exception:

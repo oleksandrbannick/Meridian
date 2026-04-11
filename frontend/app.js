@@ -13058,7 +13058,9 @@ function renderPhantomSportDropdown(sport, allTrades) {
         return;
     }
 
-    const trades = allTrades.filter(t => (t.sport || 'Other') === sport);
+    let trades = allTrades.filter(t => (t.sport || 'Other') === sport);
+    // Chain with depth filter if active
+    if (_phantomActiveDepth !== 'all') trades = trades.filter(t => (t.anchor_depth || 0) === _phantomActiveDepth);
     if (trades.length === 0) {
         panel.style.display = 'none';
         panel.innerHTML = '';
@@ -13196,7 +13198,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
                 <div style="display:flex;align-items:center;gap:8px;">
                     <span style="font-size:22px;">${icon}</span>
-                    <span style="color:#ffaa00;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${sport} Breakdown</span>
+                    <span style="color:#ffaa00;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${sport} Breakdown${_phantomActiveDepth !== 'all' ? ` · ${_phantomActiveDepth}¢` : ''}</span>
                     ${_phantomActivePeriod !== 'all' ? `<span onclick="selectPhantomPeriod('all')" style="color:#ff66aa;font-size:10px;cursor:pointer;font-weight:600;">Clear ${_phantomActivePeriod} ✕</span>` : ''}
                 </div>
                 <div style="text-align:right;">
@@ -13346,6 +13348,7 @@ function selectPhantomDepth(depth) {
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
     renderDogStatsAndDepth._skipDepth = false;
     renderDogSportBreakdown(allTrades);
+    renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
 }
 

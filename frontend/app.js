@@ -13068,9 +13068,9 @@ function renderPhantomSportDropdown(sport, allTrades) {
     trades.forEach(t => {
         const gc = t.game_context || {};
         const p = gc.period || 0;
-        if (p <= 0) return;
-        const key = labels[p] || (p > 4 ? 'OT' : `P${p}`);
-        if (!periodMap[key]) periodMap[key] = { wins: 0, losses: 0, net: 0, count: 0, _order: p };
+        const key = p > 0 ? (labels[p] || (p > 4 ? 'OT' : `P${p}`)) : '—';
+        const order = p > 0 ? p : 999;
+        if (!periodMap[key]) periodMap[key] = { wins: 0, losses: 0, net: 0, count: 0, _order: order };
         const net = (t.profit_cents || 0) - (t.loss_cents || 0);
         periodMap[key].net += net;
         periodMap[key].count++;
@@ -13085,8 +13085,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
         depthTrades = trades.filter(t => {
             const gc = t.game_context || {};
             const p = gc.period || 0;
-            if (p <= 0) return false;
-            const key = labels[p] || (p > 4 ? 'OT' : `P${p}`);
+            const key = p > 0 ? (labels[p] || (p > 4 ? 'OT' : `P${p}`)) : '—';
             return key === _phantomActivePeriod;
         });
     }

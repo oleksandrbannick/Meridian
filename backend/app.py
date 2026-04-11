@@ -13110,7 +13110,7 @@ def _run_monitor():
                 if bot.get('type') == 'watch':
                     watch_side = bot.get('side', 'yes')
                     entry = bot.get('entry_price', 50)
-                    sl = bot.get('stop_loss_cents', 5)
+                    sl = bot.get('stop_loss_cents', 0)
                     tp = bot.get('take_profit_cents', 0)
                     has_sl_tp = bot.get('has_sl_tp', sl > 0 or tp > 0)
 
@@ -13278,7 +13278,7 @@ def _run_monitor():
                     cur_bid = bot.get('live_bid', 0)
 
                     # Stop-loss: sell at 1¢ (gets price improvement to actual bid)
-                    if cur_bid <= entry - sl:
+                    if sl > 0 and cur_bid <= entry - sl:
                         # ── REST VERIFY: double-check bid via REST API before firing ──
                         # WS can send stale/incorrect bids (e.g. Clowney 15+ showed 21¢
                         # when real bid was 60¢). One REST call prevents false SL fires.

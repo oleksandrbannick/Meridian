@@ -13305,8 +13305,10 @@ function renderPhantomSportDropdown(sport, allTrades) {
 function selectPhantomPeriod(period) {
     if (period === _phantomActivePeriod && period !== 'all') period = 'all';
     _phantomActivePeriod = period;
+    const scrollY = window.scrollY;
     const allTrades = window._phantomAllTrades || [];
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
 function _applyPhantomFilters(trades) {
@@ -13322,13 +13324,17 @@ function selectPhantomSport(sport) {
     _phantomActiveSport = sport;
     _phantomActivePeriod = 'all';  // reset period filter on sport change
 
+    const scrollY = window.scrollY;
     const allTrades = window._phantomAllTrades || [];
     const filtered = _applyPhantomFilters(allTrades);
 
+    renderDogStatsAndDepth._skipDepth = true;  // don't rebuild depth cards on sport change
     renderDogStatsAndDepth(filtered, window._phantomPnl || {});
+    renderDogStatsAndDepth._skipDepth = false;
     renderDogSportBreakdown(allTrades);
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
 function selectPhantomDepth(depth) {
@@ -13344,6 +13350,7 @@ function selectPhantomDepth(depth) {
     });
 
     // Re-render stats + trade log but NOT depth cards
+    const scrollY = window.scrollY;
     const allTrades = window._phantomAllTrades || [];
     const filtered = _applyPhantomFilters(allTrades);
     renderDogStatsAndDepth._skipDepth = true;
@@ -13352,6 +13359,7 @@ function selectPhantomDepth(depth) {
     renderDogSportBreakdown(allTrades);
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
 // ── Dog Bot history ──────────────────────────────────────────────────────────

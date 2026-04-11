@@ -6183,7 +6183,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor)
                     // Captured in green/yellow/red based on how much of floor was caught, floor stays pink
                     const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
-                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#cc6688' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
+                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#cc6688' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;display:inline-flex;min-width:28px;justify-content:flex-end;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
                         : '';
                     return '<div style="display:grid;grid-template-columns:18px 72px 30px auto 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
@@ -6393,20 +6393,20 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const active = level.oid ? true : false;
         const isFull = filled >= qty;
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
-        const bg = isFull ? sideCol + '22' : active ? sideCol + '08' : '#0a0e18';
-        const col = isFull ? sideCol : active ? '#00d4ff' : '#334';
-        const fillCol = filled > 0 ? sideCol : '#222';
-        const statusDot = isFull ? `<span style="color:${sideCol};font-size:8px;">FILLED</span>` : active ? `<span style="color:#00d4ff;font-size:7px;">LIVE</span>` : `<span style="color:#334;font-size:7px;">OFF</span>`;
-        return `<div style="padding:3px 6px;background:${bg};border-radius:4px;border:1px solid ${isFull ? sideCol + '33' : '#141a24'};">
+        // Unfilled = teal (secondary), filled = side color (green YES / red NO)
+        const displayCol = isFull ? sideCol : '#66bbcc';
+        const bg = isFull ? sideCol + '22' : active ? '#66bbcc08' : '#0a0e18';
+        const statusDot = isFull ? `<span style="color:${sideCol};font-size:8px;">FILLED</span>` : active ? `<span style="color:#66bbcc;font-size:7px;">LIVE</span>` : `<span style="color:#334;font-size:7px;">OFF</span>`;
+        return `<div style="padding:3px 6px;background:${bg};border-radius:4px;border:1px solid ${isFull ? sideCol + '33' : '#66bbcc18'};">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-                <span style="color:${col};font-weight:700;font-size:12px;">${price}¢</span>
+                <span style="color:${isFull ? sideCol : active ? '#66bbcc' : '#334'};font-weight:700;font-size:12px;">${price}¢</span>
                 <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:${filled > 0 ? sideCol : '#334'};font-size:10px;font-weight:700;">${filled}/${qty}</span>
+                    <span style="color:${filled > 0 ? sideCol : '#66bbcc55'};font-size:10px;font-weight:700;">${filled}/${qty}</span>
                     ${statusDot}
                 </div>
             </div>
             <div style="height:3px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                <div style="width:${fillPct}%;height:100%;background:${sideCol};border-radius:2px;transition:width .3s;"></div>
+                <div style="width:${fillPct}%;height:100%;background:${isFull ? sideCol : '#66bbcc'};border-radius:2px;transition:width .3s;"></div>
             </div>
         </div>`;
     };

@@ -4304,6 +4304,12 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 close_qty = min(count, opp_held)
                 exit_price = matched_price or bot.get('_exit_price', 0)
 
+                # CRITICAL: track exit fills in _counted_order_fills so late-fill
+                # path doesn't re-add them as inventory when exit_oid is cleared
+                if order_id:
+                    _cum = bot.setdefault('_counted_order_fills', {})
+                    _cum[order_id] = _cum.get(order_id, 0) + count
+
                 if close_qty > 0:
                     _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
                     bot['_exit_fill_qty'] = bot.get('_exit_fill_qty', 0) + close_qty
@@ -4338,6 +4344,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
             elif is_exit_fill:
                 # Exit sell fill (end-of-game sellback) — handled by _apex_mm_exit_tick
+                # Track in _counted_order_fills to prevent late-fill re-count
+                if order_id:
+                    _cum = bot.setdefault('_counted_order_fills', {})
+                    _cum[order_id] = _cum.get(order_id, 0) + count
                 sell_info = bot.get('_exit_sell_oids', {}).get(matched_side, {})
                 old_fill = sell_info.get('_ws_fill_qty', 0)
                 sell_info['_ws_fill_qty'] = old_fill + count

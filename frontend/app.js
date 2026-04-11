@@ -6501,7 +6501,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
-                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#ff66aa22;color:#ff66aa;border:1px solid #ff66aa44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                 ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
@@ -8876,21 +8876,21 @@ async function apexMmModify(botId) {
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
     const html = `
-        <div style="background:#0f1419;border:1px solid #ff66aa44;border-radius:12px;padding:20px;max-width:320px;">
-            <div style="color:#ff66aa;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Apex MM</div>
+        <div style="background:#0f1419;border:1px solid #00d4ff44;border-radius:12px;padding:20px;max-width:320px;">
+            <div style="color:#00d4ff;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Apex MM</div>
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')}</div>
             ${statusNote}
             <div style="margin-bottom:10px;">
                 <label style="color:#8892a6;font-size:10px;">Width (¢ from midpoint per side)</label>
                 <input id="apex-edit-gap" type="number" value="${curGap}" min="2" max="20" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div id="apex-edit-gap-hint" style="color:#ff66aa;font-size:10px;margin-top:2px;">Width: ${curWidth}¢ total spread</div>
+                <div id="apex-edit-gap-hint" style="color:#00d4ff;font-size:10px;margin-top:2px;">Width: ${curWidth}¢ total spread</div>
             </div>
             <div style="margin-bottom:14px;">
                 <label style="color:#8892a6;font-size:10px;">Contracts per rung</label>
                 <input id="apex-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:#ff66aa;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
+                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:#00d4ff;color:#000;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
                 <button onclick="document.getElementById('apex-mm-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
             </div>
         </div>`;

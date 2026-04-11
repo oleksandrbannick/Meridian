@@ -1510,7 +1510,7 @@ function displayMarkets(markets) {
     const phantomDetails = {};  // ticker → [{side, cross}] for phantom pills
     const pnlMap = {};  // ticker → total net P&L in cents (all bots, including completed)
     if (window._lastBotsData) {
-        const deadSt = new Set(['completed','stopped','cancelled','drift_cancelled']);
+        const deadSt = new Set(['completed','stopped','cancelled']);
         const catLabel = { anchor_dog: 'phantom', anchor_ladder: 'phantom', ladder_arb: 'apex' };
         for (const bid in window._lastBotsData) {
             const b = window._lastBotsData[bid];
@@ -7494,7 +7494,7 @@ async function loadBots() {
                 amending_yes:     '🔧 AMENDING YES',
                 waiting_repeat:       bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
                 flipping:             '⚡ EXITING',
-                drift_cancelled:      '🚫 DRIFT GUARD',
+                // drift_cancelled removed — park/flip handles this
                 awaiting_settlement:  '⏳ AWAITING SETTLEMENT',
                 dog_anchor_posted:    '👻 ANCHORED',
                 fav_hedge_posted:     '🔒 HEDGING FAV',

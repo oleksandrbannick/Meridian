@@ -12488,30 +12488,7 @@ def _run_monitor():
                 print(f'🧹 Purged {len(_purge_ids)} stale bots')
             save_state()
 
-        # ── Drift-cancelled smart wait: re-enter waiting_repeat if prices recover ──
-        _now = time.time()
-        for _bot_id, _bot in list(active_bots.items()):
-            if _bot.get('status') == 'drift_cancelled':
-                _tk = _bot.get('ticker', '')
-                _ws = (ws_manager.get_price(_tk) if ws_manager else None) or {}
-                _fy = _ws.get('yes_bid', 0) or 0
-                _fn = _ws.get('no_bid', 0) or 0
-                if _fy > 0 and _fn > 0 and max(_fy, _fn) < 80:
-                    # Market came back — only re-enter if repeats remain
-                    _repeats_done = _bot.get('repeats_done', 0)
-                    _repeat_total = _bot.get('repeat_count', 0)
-                    if _repeats_done < _repeat_total:
-                        _bot['status'] = 'waiting_repeat'
-                        _bot['waiting_repeat_since'] = _now
-                        _bot.pop('drift_cancelled_at', None)
-                        print(f'🔄 DRIFT RECOVERY: {_bot_id} Y={_fy}¢ N={_fn}¢ back < 80¢ — re-entering waiting_repeat')
-                    else:
-                        _bot['status'] = 'completed'
-                        _bot['completed_at'] = _now
-                        print(f'🏁 DRIFT RECOVERY SKIP: {_bot_id} no repeats left — marking completed')
-                elif _now - _bot.get('drift_cancelled_at', _now) >= 300:
-                    # Still drifted after 5 min — give up
-                    _bot['status'] = 'completed'
+        # (drift-cancelled recovery loop removed — drift_cancelled status no longer used)
 
         # Drain any WS-queued actions (completions, repeats) so the frontend sees them
         with _pending_ws_actions_lock:
@@ -13564,19 +13541,7 @@ def _run_monitor():
                         actions.append({'bot_id': bot_id, 'action': 'repeat_game_over'})
                         continue
 
-                    # ── Drift guard: don't repost into a drifted market ──
-                    # At 85c+, the partial-fill window shrinks (game may end before
-                    # both legs fill). Both legs DO fill in continuous moves but
-                    # gap-fills become more likely when a game ends suddenly.
-                    drift_side = max(fresh_yes_bid, fresh_no_bid)
-                    if drift_side >= 85:
-                        bot['status'] = 'drift_cancelled'
-                        bot['drift_cancelled_at'] = now
-                        bot['drift_yes_bid'] = fresh_yes_bid
-                        bot['drift_no_bid'] = fresh_no_bid
-                        print(f'🚫 REPEAT DRIFT GUARD: {bot_id} market at Y={fresh_yes_bid}¢ N={fresh_no_bid}¢ — too drifted to repost safely')
-                        actions.append({'bot_id': bot_id, 'action': 'repeat_drift_guard', 'yes_bid': fresh_yes_bid, 'no_bid': fresh_no_bid})
-                        continue
+                    # (drift guard removed — park/flip system handles high-bid scenarios)
 
                     # Also bail if either side has no bids at all
                     if fresh_yes_bid == 0 or fresh_no_bid == 0:
@@ -13907,24 +13872,7 @@ def _run_monitor():
                 # NEVER go above the current bid. Repost AT the bid to stay competitive
                 # without overpaying. Favorite-anchoring: shave less from the fav side.
                 if yes_filled == 0 and no_filled == 0 and age_min >= REPOST_AFTER_MINUTES:
-                    # ── Drift guard: don't repost into a drifted market ──
-                    if max(yes_bid, no_bid) >= 85:
-                        print(f'🚫 REPOST DRIFT GUARD: {bot_id} market at Y={yes_bid}¢ N={no_bid}¢ — too drifted, cancelling')
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['yes_order_id'])
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(bot['no_order_id'])
-                        except Exception:
-                            pass
-                        bot['status'] = 'drift_cancelled'
-                        bot['drift_cancelled_at'] = now
-                        bot['drift_yes_bid'] = yes_bid
-                        bot['drift_no_bid'] = no_bid
-                        bot['completed_at'] = now
-                        actions.append({'bot_id': bot_id, 'action': 'repost_drift_guard', 'yes_bid': yes_bid, 'no_bid': no_bid})
-                        save_state()
-                        continue
+                    # (drift guard removed — park/flip system handles high-bid scenarios)
                     # Width-aware repost: identify fav (higher bid) and dog (lower bid).
                     # Dog posts at its current bid — fav is capped so that
                     # fav + dog = 100 - min_width, preserving target spread.

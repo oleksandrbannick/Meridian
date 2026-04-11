@@ -6160,8 +6160,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             if (_rh.length > 0) {
                 html += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1e2740;">';
                 const _dogSide = bot.dog_side || 'no';
-                const _dogCol3 = '#ccd6e0';
-                const _favCol3 = '#ccd6e0';
+                const _dogCol3 = '#ffaa00';
+                const _favCol3 = '#ff66aa';
                 html += _rh.map((r, i) => {
                     const _comb2 = (r.dog_price || 0) + (r.fav_price || 0);
                     const _combCol2 = _comb2 <= 96 ? '#00ff88' : _comb2 <= 98 ? '#ffaa00' : '#ff4444';
@@ -6183,7 +6183,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor)
                     // Captured in green/yellow/red based on how much of floor was caught, floor stays pink
                     const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
-                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#556' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
+                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#6a8a9a' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
                         : '';
                     return '<div style="display:grid;grid-template-columns:18px 1fr 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
@@ -6205,8 +6205,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             }
             if (_rh.length > 0 && (bot._smart_stopped || status === 'completed' || status === 'stopped' || status === 'awaiting_settlement')) {
                 const _ltPnlDisp = bot.lifetime_pnl ?? _ltPnl;
-                html += '<div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;">'
-                    + '<span>Runs: <strong style="color:#fff;">' + (bot.repeats_done || _rh.length) + '</strong></span>'
+                html += '<div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #ff66aa22;">'
+                    + '<span>Runs: <strong style="color:#ff66aa;">' + (bot.repeats_done || _rh.length) + '</strong></span>'
                     + (_isCross && (_crossQtyDog > 0 || _crossQtyFav > 0) ? '<span>Holding: <strong style="color:#fff;">' + (_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x') + '</strong></span>' : '')
                     + '<span>P&L: <strong style="color:' + (_ltPnlDisp >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnlDisp >= 0 ? '+' : '') + _ltPnlDisp + '¢</strong></span>'
                     + (bot.anchor_depth ? '<span>Depth: <strong style="color:#ff66aa;">' + bot.anchor_depth + '¢</strong></span>' : '')
@@ -6499,15 +6499,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${accentCol}22;color:${accentCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
-                ${smartMode > 0 ? `<span style="background:#00e5ff22;color:#00e5ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
+                ${smartMode > 0 ? `<span style="background:#00cc8822;color:#00cc88;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
                 <span style="color:#556;font-size:10px;">${ageStr}</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
-                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#00cc8822;color:#00cc88;border:1px solid #00cc8844;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00cc8822;color:#00cc88;border:1px solid #00cc8844;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#00cc8822;color:#00cc88;border:1px solid #00cc8844;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
@@ -6568,17 +6568,17 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>`;
         })()}
 
-        ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #1e2740;border-radius:6px;padding:6px;margin-bottom:8px;">
-            <div style="color:#00d4ff;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Round Trip History</div>
+        ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #00cc8822;border-radius:6px;padding:6px;margin-bottom:8px;">
+            <div style="color:#00cc88;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Round Trip History</div>
             ${(bot._rt_log || []).map((rt, i) => {
-                const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
-                const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
+                const combCol = rt.combined <= 96 ? '#00cc88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
+                const pCol = rt.pnl >= 0 ? '#00cc88' : '#ff4444';
                 return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                     <span style="color:#00d4ff;font-weight:700;font-size:10px;">#${i + 1}</span>
                     <span style="display:flex;align-items:center;gap:3px;">
-                        <span style="color:#ffaa00;font-weight:700;">${rt.entry_price}¢</span>
+                        <span style="color:#00d4ff;font-weight:700;">${rt.entry_price}¢</span>
                         <span style="color:#3a4560;">+</span>
-                        <span style="color:#00aaff;font-weight:700;">${rt.exit_price}¢</span>
+                        <span style="color:#00cc88;font-weight:700;">${rt.exit_price}¢</span>
                         <span style="color:#3a4560;">=</span>
                         <span style="color:${combCol};font-weight:700;">${rt.combined}¢</span>
                     </span>
@@ -6590,9 +6590,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#00d4ff;font-weight:600;">Width: ${width}¢</span>
-            <span style="color:#8892a6;">Mid: ${midpoint}¢</span>
-            <span style="color:#8892a6;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x${bot.auto_scale !== false ? ' (scaled)' : ''}</span>
-            <span style="color:#8892a6;">Rungs: ${bot.levels || '?'}</span>
+            <span style="color:#00cc88;">Mid: ${midpoint}¢</span>
+            <span style="color:#00cc88;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x${bot.auto_scale !== false ? ' (scaled)' : ''}</span>
+            <span style="color:#00cc88;">Rungs: ${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room <= 2 ? 700 : 400};">${room <= 2 ? '⚠ ' : ''}Room: ${room}¢</span>` : ''}
             ${obiHtml}
             ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls: ${pullCount}</span>` : ''}
@@ -8887,7 +8887,7 @@ async function apexMmModify(botId) {
             <div style="margin-bottom:10px;">
                 <label style="color:#8892a6;font-size:10px;">Width (¢ total spread)</label>
                 <input id="apex-edit-width" type="number" value="${curWidth}" min="4" max="40" step="2" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div id="apex-edit-width-hint" style="color:#00d4ff;font-size:10px;margin-top:2px;">${curWidth/2}¢ each side from midpoint</div>
+                <div id="apex-edit-width-hint" style="color:#00cc88;font-size:10px;margin-top:2px;">${curWidth/2}¢ each side from midpoint</div>
             </div>
             <div style="margin-bottom:10px;">
                 <label style="color:#8892a6;font-size:10px;">Rungs per side</label>

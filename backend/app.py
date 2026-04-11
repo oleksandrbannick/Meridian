@@ -16982,15 +16982,19 @@ def phantom_edit(bot_id):
     payload = request.get_json(force=True) or {}
     new_qty = payload.get('quantity')
     new_depth = payload.get('anchor_depth')
+    new_auto_depth = payload.get('auto_depth')
     if new_depth is not None and int(new_depth) < 3:
         return jsonify({'error': 'Depth floor minimum is 3¢'}), 400
-    if new_qty is None and new_depth is None:
+    if new_qty is None and new_depth is None and new_auto_depth is None:
         return jsonify({'error': 'Nothing to change'}), 400
     changes = {}
     if new_qty is not None and new_qty != bot.get('quantity'):
         changes['quantity'] = {'old': bot.get('quantity'), 'new': new_qty}
         bot['quantity'] = int(new_qty)
-    if new_depth is not None and new_depth != bot.get('anchor_depth'):
+    if new_auto_depth is not None and new_auto_depth != bot.get('auto_depth', False):
+        changes['auto_depth'] = {'old': bot.get('auto_depth', False), 'new': new_auto_depth}
+        bot['auto_depth'] = bool(new_auto_depth)
+    if new_depth is not None and new_depth != bot.get('anchor_depth') and not bot.get('auto_depth'):
         changes['anchor_depth'] = {'old': bot.get('anchor_depth'), 'new': new_depth}
         bot['anchor_depth'] = int(new_depth)
         bot['target_width'] = int(new_depth)  # keep in sync

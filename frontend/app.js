@@ -8795,6 +8795,8 @@ async function phantomModify(botId) {
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Waiting for next run — changes apply immediately</div>'
         : '<div style="color:#00ff88;font-size:10px;margin-bottom:8px;">Will cancel & repost with new settings</div>';
 
+    const autoDepth = !!bot.auto_depth;
+
     const html = `
         <div style="background:#0f1419;border:1px solid #ff66aa44;border-radius:12px;padding:20px;max-width:320px;">
             <div style="color:#ff66aa;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Phantom</div>
@@ -8805,9 +8807,15 @@ async function phantomModify(botId) {
                 <input id="phantom-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
             </div>
             <div style="margin-bottom:14px;">
-                <label style="color:#8892a6;font-size:10px;">Depth floor (¢ below bid)</label>
-                <input id="phantom-edit-depth" type="number" value="${curDepth}" min="3" max="30" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:10px;margin-top:2px;">Dog posts at bid - ${curDepth}¢</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                    <label style="color:#8892a6;font-size:10px;">Depth floor (¢ below bid)</label>
+                    <div onclick="togglePhantomAutoDepth()" id="phantom-edit-auto-toggle" style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:2px 8px;border-radius:4px;border:1px solid ${autoDepth ? '#ffaa0066' : '#33333366'};background:${autoDepth ? '#ffaa0015' : '#1a2540'};">
+                        <div style="width:8px;height:8px;border-radius:50%;background:${autoDepth ? '#ffaa00' : '#555'};transition:background 0.15s;"></div>
+                        <span style="color:${autoDepth ? '#ffaa00' : '#555'};font-size:10px;font-weight:700;">PPI Auto</span>
+                    </div>
+                </div>
+                <input id="phantom-edit-depth" type="number" value="${curDepth}" min="3" max="30" style="width:100%;background:#1a2540;color:${autoDepth ? '#555' : '#fff'};border:1px solid ${autoDepth ? '#222' : '#333'};border-radius:6px;padding:6px 10px;font-size:13px;${autoDepth ? 'opacity:0.5;' : ''}" ${autoDepth ? 'disabled' : ''}>
+                <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:10px;margin-top:2px;">${autoDepth ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + curDepth + '¢'}</div>
             </div>
             <div style="display:flex;gap:8px;">
                 <button onclick="phantomModifySave('${botId}')" style="flex:1;background:#ff66aa;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
@@ -8825,26 +8833,56 @@ async function phantomModify(botId) {
     modal.innerHTML = html;
     document.body.appendChild(modal);
 
+    // Store auto_depth state on the modal for save
+    modal._autoDepth = autoDepth;
+
     document.getElementById('phantom-edit-depth')?.addEventListener('input', (e) => {
         const v = parseInt(e.target.value) || 0;
         document.getElementById('phantom-edit-depth-hint').textContent = 'Dog posts at bid - ' + v + '¢';
     });
 }
 
+function togglePhantomAutoDepth() {
+    const modal = document.getElementById('phantom-modify-modal');
+    if (!modal) return;
+    modal._autoDepth = !modal._autoDepth;
+    const on = modal._autoDepth;
+    const toggle = document.getElementById('phantom-edit-auto-toggle');
+    const depthInput = document.getElementById('phantom-edit-depth');
+    const hint = document.getElementById('phantom-edit-depth-hint');
+    if (toggle) {
+        toggle.style.borderColor = on ? '#ffaa0066' : '#33333366';
+        toggle.style.background = on ? '#ffaa0015' : '#1a2540';
+        toggle.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${on ? '#ffaa00' : '#555'};transition:background 0.15s;"></div><span style="color:${on ? '#ffaa00' : '#555'};font-size:10px;font-weight:700;">PPI Auto</span>`;
+    }
+    if (depthInput) {
+        depthInput.disabled = on;
+        depthInput.style.color = on ? '#555' : '#fff';
+        depthInput.style.borderColor = on ? '#222' : '#333';
+        depthInput.style.opacity = on ? '0.5' : '1';
+    }
+    if (hint) {
+        hint.textContent = on ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + (depthInput?.value || '5') + '¢';
+    }
+}
+
 async function phantomModifySave(botId) {
+    const modal = document.getElementById('phantom-modify-modal');
     const qty = parseInt(document.getElementById('phantom-edit-qty')?.value) || 1;
     const depth = Math.max(3, parseInt(document.getElementById('phantom-edit-depth')?.value) || 5);
+    const autoDepth = modal?._autoDepth || false;
     try {
         const resp = await fetch(`${API_BASE}/bot/phantom/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ quantity: qty, anchor_depth: depth })
+            body: JSON.stringify({ quantity: qty, anchor_depth: depth, auto_depth: autoDepth })
         });
         const data = await resp.json();
         if (data.ok) {
             const applied = data.applied_now ? 'Applied now' : 'Queued for next run';
-            showNotification(`Phantom updated: ${qty}x · depth ${depth}¢ — ${applied}`);
-            document.getElementById('phantom-modify-modal')?.remove();
+            const depthLabel = autoDepth ? 'PPI auto' : `depth ${depth}¢`;
+            showNotification(`Phantom updated: ${qty}x · ${depthLabel} — ${applied}`);
+            modal?.remove();
         } else {
             showNotification('Failed: ' + (data.error || 'unknown'));
         }

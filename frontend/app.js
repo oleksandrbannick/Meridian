@@ -3368,10 +3368,10 @@ function displayOrderbookLadder(orderbook) {
     const _scoreSport = detectSport(_obTk);
 
     // 1. DENSITY SCORE (40pts) — avg contracts per penny in fav first 10 levels
-    const _densityRaw = _favPL >= 100000 ? 100 : _favPL >= 50000 ? 90 : _favPL >= 10000 ? 80
-        : _favPL >= 5000 ? 70 : _favPL >= 1000 ? 60 : _favPL >= 500 ? 50
-        : _favPL >= 100 ? 40 : _favPL >= 50 ? 30 : _favPL >= 20 ? 20
-        : _favPL >= 10 ? 15 : _favPL >= 5 ? 8 : 0;
+    const _densityRaw = _favPL >= 100000 ? 100 : _favPL >= 50000 ? 95 : _favPL >= 10000 ? 90
+        : _favPL >= 5000 ? 85 : _favPL >= 1000 ? 80 : _favPL >= 500 ? 70
+        : _favPL >= 200 ? 60 : _favPL >= 100 ? 50 : _favPL >= 50 ? 40
+        : _favPL >= 20 ? 30 : _favPL >= 10 ? 20 : _favPL >= 5 ? 10 : 0;
     const densityPts = Math.round(_densityRaw * 0.4);
 
     // 2. GAP PENALTY (-25pts max) — each fav gap in first 10 levels subtracts 5pts
@@ -3380,7 +3380,7 @@ function displayOrderbookLadder(orderbook) {
 
     // 3. SPREAD MULTIPLIER (20pts) — tighter spread = safer hedge
     const _spread = (dogBidPrice && favBidPrice) ? Math.max(0, 100 - dogBidPrice - favBidPrice) : 5;
-    const spreadPts = _spread <= 1 ? 20 : _spread === 2 ? 15 : _spread === 3 ? 10 : _spread === 4 ? 5 : 0;
+    const spreadPts = _spread <= 1 ? 20 : _spread === 2 ? 18 : _spread === 3 ? 15 : _spread === 4 ? 12 : _spread <= 6 ? 8 : _spread <= 8 ? 4 : 0;
 
     // 4. TIME-TO-BUZZER (15pts) — early = safe, late = volatile
     // Use game phase from score data if available

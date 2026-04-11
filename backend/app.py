@@ -5770,7 +5770,7 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     fg = fav_analysis['gaps']
 
     # 1. Density (40pts) — fav contracts/level
-    _dr = 100 if fpl >= 100000 else 90 if fpl >= 50000 else 80 if fpl >= 10000 else 70 if fpl >= 5000 else 60 if fpl >= 1000 else 50 if fpl >= 500 else 40 if fpl >= 100 else 30 if fpl >= 50 else 20 if fpl >= 20 else 15 if fpl >= 10 else 8 if fpl >= 5 else 0
+    _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
     d_pts = round(_dr * 0.4)
 
     # 2. Gap penalty (-25pts max) — each fav gap subtracts 5
@@ -5778,7 +5778,7 @@ def _calculate_ppi(ticker, fav_side, dog_side):
 
     # 3. Spread (20pts)
     spread = max(0, 100 - (dog_bid or 0) - (fav_bid or 0)) if dog_bid and fav_bid else 5
-    s_pts = 20 if spread <= 1 else 15 if spread == 2 else 10 if spread == 3 else 5 if spread == 4 else 0
+    s_pts = 20 if spread <= 1 else 18 if spread == 2 else 15 if spread == 3 else 12 if spread == 4 else 8 if spread <= 6 else 4 if spread <= 8 else 0
 
     # 4. Time (15pts) — game phase
     t_pts = 15

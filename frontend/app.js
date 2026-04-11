@@ -5769,6 +5769,20 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
 }
 
 
+function _sportIcon(ticker) {
+    const t = (ticker || '').toUpperCase();
+    if (t.includes('NBA')) return '🏀';
+    if (t.includes('NHL')) return '🏒';
+    if (t.includes('KXMLS') || t.includes('KXEPL') || t.includes('KXUCL')) return '⚽';
+    if (t.includes('MLB')) return '⚾';
+    if (t.includes('NFL')) return '🏈';
+    if (t.includes('ATP') || t.includes('WTA') || t.includes('TENNIS')) return '🎾';
+    if (t.includes('NCAA')) return '🏀';
+    if (t.includes('GOLF') || t.includes('PGA')) return '⛳';
+    if (t.includes('KXNBL') || t.includes('KXWBC')) return '🏀';
+    return '🏟️';
+}
+
 let botsTabMode = 'arb';  // 'arb' | 'middle'
 function _renderDogBotCard(bot, botId, container, gameScores) {
     const nowSec = Date.now() / 1000;
@@ -7173,7 +7187,7 @@ async function loadBots() {
                     const rawTickerBets = sampleBot.ticker || '';
                     const sampleTicker = rawTickerBets.toUpperCase();
                     const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
-                    const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+                    const sportIcon = _sportIcon(sampleTicker);
                     const kalshiUrl = `https://kalshi.com/markets/${rawTickerBets.split('-')[0]}/${rawTickerBets}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
@@ -7220,7 +7234,7 @@ async function loadBots() {
                     const rawTickerMid = sampleBot.ticker_a || sampleBot.ticker || '';
                     const sampleTicker = rawTickerMid.toUpperCase();
                     const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
-                    const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+                    const sportIcon = _sportIcon(sampleTicker);
                     const kalshiUrl = `https://kalshi.com/markets/${rawTickerMid.split('-')[0]}/${rawTickerMid}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
@@ -7268,7 +7282,7 @@ async function loadBots() {
                     const groupName = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
                     const rawTickerDog = sampleBot.ticker || '';
                     const sampleTicker = rawTickerDog.toUpperCase();
-                    const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+                    const sportIcon = _sportIcon(sampleTicker);
                     const kalshiUrl = `https://kalshi.com/markets/${rawTickerDog.split('-')[0]}/${rawTickerDog}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
@@ -7421,7 +7435,7 @@ async function loadBots() {
             groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00d4ff;border-radius:4px;font-size:12px;';
             const rawTickerApex = sampleBot.ticker || '';
             const sampleTicker = rawTickerApex.toUpperCase();
-            const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
+            const sportIcon = _sportIcon(sampleTicker);
             const kalshiUrl = `https://kalshi.com/markets/${rawTickerApex.split('-')[0]}/${rawTickerApex}`;
             // Live score from backend
             const gs = gameScores[gameKey] || {};

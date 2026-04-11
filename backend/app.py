@@ -11250,34 +11250,12 @@ def _handle_phantom(bot_id, bot, actions):
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
         # Defensive: cancel old dog order before placing new one
-        # Check for cancel-race fills — if the old order filled, hedge immediately
+        # DO NOT hedge cancel-race fills here — this order is from the COMPLETED run,
+        # its fills are already hedged. Hedging again creates naked orphan positions.
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
-            _cleanup_result = _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
+            _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
             bot['dog_order_id'] = None
-            if isinstance(_cleanup_result, tuple) and _cleanup_result[0] == 'filled':
-                _cleanup_fills = _cleanup_result[1]
-                with ws_fill_lock:
-                    if bot.get('_hedge_fired'):
-                        # WS already handling — skip
-                        pass
-                    else:
-                        bot['_hedge_fired'] = True
-                        _hedge_qty = min(_cleanup_fills, qty)
-                        bot['dog_fill_qty'] = _hedge_qty
-                        bot[f'{dog_side}_fill_qty'] = _hedge_qty
-                        bot['status'] = 'dog_filled'
-                        bot['dog_filled_at'] = time.time()
-                        if _hedge_qty < qty:
-                            bot['_original_qty'] = qty
-                            bot['_partial_hedge_qty'] = _hedge_qty
-                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                        print(f'⚡ REPEAT CLEANUP FILL CATCH: {bot_id} {_cleanup_fills}x fills on old order — hedge fired')
-                        bot_log('REPEAT_CLEANUP_FILL_CATCH', bot_id, {
-                            'fills': _cleanup_fills, 'hedge_qty': _hedge_qty, 'old_order': old_dog_oid[:12],
-                        })
-                        save_state()
-                        return
 
         try:
             dog_resp, actual_price = create_order_maker(

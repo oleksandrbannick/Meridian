@@ -5801,7 +5801,11 @@ def _is_phantom_death_zone(ticker, bot=None):
 
     # In the death zone period — check clock if applicable
     if dz_secs is None:
-        # No clock threshold (MLB) — entire period is death zone
+        # MLB: entire 9th is death zone UNLESS tied (extras coming)
+        home = score_info.get('home_score', 0)
+        away = score_info.get('away_score', 0)
+        if home == away and home > 0:
+            return False, ''  # tied — extras coming, keep playing
         return True, f'{rule["name"]}: period {period}'
 
     clock = score_info.get('clock', '')

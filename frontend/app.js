@@ -3803,9 +3803,14 @@ function setTradeMode(mode) {
         let _savedPhantom = null;
         try { _savedPhantom = JSON.parse(localStorage.getItem('phantom_settings')); } catch (e) {}
         const depthEl = document.getElementById('anchor-depth');
-        const _restoredDepth = Math.max(5, _savedPhantom?.depth ?? 5);
-        if (depthEl) depthEl.value = _restoredDepth;
-        if (typeof setDepthFloor === 'function') setDepthFloor(_restoredDepth);
+        const _restoredAutoDepth = _savedPhantom?.autoDepth ?? true;
+        if (_restoredAutoDepth) {
+            if (typeof setAutoDepth === 'function') setAutoDepth();
+        } else {
+            const _restoredDepth = Math.max(3, _savedPhantom?.depth ?? 5);
+            if (depthEl) depthEl.value = _restoredDepth;
+            if (typeof setDepthFloor === 'function') setDepthFloor(_restoredDepth);
+        }
         // Restore repeat count + smart mode
         const repeatEl = document.getElementById('anchor-repeat-count');
         if (repeatEl && _savedPhantom?.repeatCount != null) repeatEl.value = _savedPhantom.repeatCount;
@@ -4566,6 +4571,7 @@ async function deployAnchorBot() {
             try {
                 localStorage.setItem('phantom_settings', JSON.stringify({
                     depth: anchorDepth,
+                    autoDepth: !!window._phantomAutoDepth,
                     baseQty: _anchorRungs[0]?.qty || 1,
                     repeatCount: repeatCount,
                     smartMode: smartMode,

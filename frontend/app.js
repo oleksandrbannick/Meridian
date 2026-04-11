@@ -6499,15 +6499,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
                 <span style="background:${accentCol}22;color:${accentCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${liveScoreHtml}
-                ${smartMode > 0 ? `<span style="background:#00cc8822;color:#00cc88;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
+                ${smartMode > 0 ? `<span style="background:#00d4ff22;color:#00d4ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
                 <span style="color:#556;font-size:10px;">${ageStr}</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
                 ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#00cc8822;color:#00cc88;border:1px solid #00cc8844;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00cc8822;color:#00cc88;border:1px solid #00cc8844;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#00cc8822;color:#00cc88;border:1px solid #00cc8844;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
+                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
@@ -6571,8 +6571,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #00cc8822;border-radius:6px;padding:6px;margin-bottom:8px;">
             <div style="color:#00cc88;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Round Trip History</div>
             ${(bot._rt_log || []).map((rt, i) => {
-                const combCol = rt.combined <= 96 ? '#00cc88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
-                const pCol = rt.pnl >= 0 ? '#00cc88' : '#ff4444';
+                const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
+                const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
                 return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
                     <span style="color:#00d4ff;font-weight:700;font-size:10px;">#${i + 1}</span>
                     <span style="display:flex;align-items:center;gap:3px;">
@@ -6590,7 +6590,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#00d4ff;font-weight:600;">Width: ${width}¢</span>
-            <span style="color:#00cc88;">Mid: ${midpoint}¢</span>
+            <span style="color:#8892a6;">Mid: ${midpoint}¢</span>
             <span style="color:#00cc88;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x${bot.auto_scale !== false ? ' (scaled)' : ''}</span>
             <span style="color:#00cc88;">Rungs: ${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room <= 2 ? 700 : 400};">${room <= 2 ? '⚠ ' : ''}Room: ${room}¢</span>` : ''}
@@ -7425,7 +7425,7 @@ async function loadBots() {
             }, 0);
 
             const groupHeader = document.createElement('div');
-            groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00aaff;border-radius:4px;font-size:12px;';
+            groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00d4ff;border-radius:4px;font-size:12px;';
             const rawTickerApex = sampleBot.ticker || '';
             const sampleTicker = rawTickerApex.toUpperCase();
             const sportIcon = sampleTicker.includes('NBA') ? '🏀' : sampleTicker.includes('NHL') ? '🏒' : sampleTicker.includes('MLB') ? '⚾' : sampleTicker.includes('NFL') ? '🏈' : sampleTicker.includes('TENNIS') || sampleTicker.includes('ATP') || sampleTicker.includes('WTA') ? '🎾' : sampleTicker.includes('NCAA') ? '🏀' : '📊';
@@ -7440,7 +7440,7 @@ async function loadBots() {
             const escapedGameKey = gameKey.replace(/'/g, "\\'");
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <a href="${kalshiUrl}" target="_blank" style="color:#00aaff;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupMatchup}</a>
+                    <a href="${kalshiUrl}" target="_blank" style="color:#00d4ff;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupMatchup}</a>
                     <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                     ${groupScoreBadge}
                     ${groupSignalBadge}

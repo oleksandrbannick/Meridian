@@ -3401,8 +3401,8 @@ function displayOrderbookLadder(orderbook) {
     // PPI = Density(40) - Gaps(25) + Spread(20) + Time(15), normalized to 0-100
     const _rawPPI = densityPts - gapPenalty + spreadPts + timePts;
     const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI * 100 / 75)));
-    const catchLabel = catchScore >= 90 ? 'WALL' : catchScore >= 70 ? 'PRIME' : catchScore >= 50 ? 'SNIPER' : catchScore >= 35 ? 'RISKY' : 'OFF';
-    const catchCol = catchScore >= 90 ? '#00ff88' : catchScore >= 70 ? '#00ccff' : catchScore >= 50 ? '#ffaa00' : catchScore >= 35 ? '#ff8800' : '#ff4444';
+    const catchLabel = catchScore >= 90 ? 'WALL' : catchScore >= 75 ? 'PRIME' : catchScore >= 55 ? 'SNIPER' : catchScore >= 35 ? 'TRAP' : 'KILL';
+    const catchCol = catchScore >= 90 ? '#00ff88' : catchScore >= 75 ? '#00ccff' : catchScore >= 55 ? '#ffaa00' : catchScore >= 35 ? '#ff8800' : '#ff4444';
 
     // Fav concentration for display
     const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
@@ -3447,11 +3447,11 @@ function displayOrderbookLadder(orderbook) {
     let verdict = '', verdictCol = '';
     // ── Depth rec driven by PPI score — no sport penalties ──
     let _recDepth;
-    if (catchScore >= 90) _recDepth = 3;       // Concrete Wall — 2-3c
-    else if (catchScore >= 70) _recDepth = 4;   // Prime Zone — 4-5c
-    else if (catchScore >= 50) _recDepth = 6;   // Sniper Zone — 6-8c
-    else if (catchScore >= 35) _recDepth = 10;  // High-Risk Trap — 10-12c
-    else _recDepth = 0;                          // No-Trade Zone — DISARM
+    if (catchScore >= 90) _recDepth = 3;                                   // WALL — pristine book
+    else if (catchScore >= 75) _recDepth = 4;                              // PRIME — high conviction
+    else if (catchScore >= 55) _recDepth = 6 - Math.floor((catchScore - 55) / 10);  // SNIPER — 55-64→6¢, 65-74→5¢
+    else if (catchScore >= 35) _recDepth = 9 - Math.floor((catchScore - 35) / 7);   // TRAP — 35-41→9¢, 42-48→8¢, 49-54→7¢
+    else _recDepth = 0;                                                    // KILL — pull
     // Fav gaps override: if fav has gaps, bump regardless of score
     if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
     else if (favAnalysis.gaps >= 2 && _recDepth < 6) _recDepth = 6;
@@ -3466,51 +3466,51 @@ function displayOrderbookLadder(orderbook) {
     const _tightRoom = hedgeRoom <= 1;
     // Build verdict from PPI pillars — no sport bias
     if (catchScore >= 90) {
-        verdict = `Concrete Wall — ${Math.round(_favPL/1000)}k/lvl fav, 0 gaps, use ${_recDepth}¢ depth`;
+        verdict = `WALL — ${Math.round(_favPL/1000)}k/lvl fav, 0 gaps, use ${_recDepth}¢ depth`;
         verdictCol = '#00ff88';
-    } else if (catchScore >= 70) {
+    } else if (catchScore >= 75) {
         if (_dogIsPacked) {
-            verdict = `Prime Zone — hedge catches easy but dog crowded (${Math.round(dogDepth/1000)}k)`;
+            verdict = `PRIME — hedge catches easy but dog crowded (${Math.round(dogDepth/1000)}k)`;
         } else {
-            verdict = `Prime Zone — ${_favPL}/lvl fav, ${_recDepth}¢ depth`;
+            verdict = `PRIME — ${_favPL}/lvl fav, ${_recDepth}¢ depth`;
         }
         verdictCol = '#00ccff';
-    } else if (catchScore >= 50) {
+    } else if (catchScore >= 55) {
         if (_favGappy) {
-            verdict = `Sniper Zone — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
+            verdict = `SNIPER — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
         } else if (_tightRoom) {
-            verdict = `Sniper Zone — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
+            verdict = `SNIPER — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
         } else {
-            verdict = `Sniper Zone — ${_favPL}/lvl fav, ${_recDepth}¢+ depth`;
+            verdict = `SNIPER — ${_favPL}/lvl fav, ${_recDepth}¢+ depth`;
         }
         verdictCol = '#ffaa00';
     } else if (catchScore >= 35) {
         if (_favIsThin) {
-            verdict = `High-Risk — fav only ${_favPL}/lvl, hedge may miss`;
+            verdict = `TRAP — fav only ${_favPL}/lvl, hedge may miss`;
         } else if (_favGappy) {
-            verdict = `High-Risk — ${favAnalysis.gaps} fav gaps, unreliable hedge`;
+            verdict = `TRAP — ${favAnalysis.gaps} fav gaps, unreliable hedge`;
         } else {
-            verdict = `High-Risk — late game or thin book. ${_recDepth}¢+ depth if trading`;
+            verdict = `TRAP — low liquidity or late game. ${_recDepth}¢+ depth if trading`;
         }
         verdictCol = '#ff8800';
     } else {
         if (_favIsThin) {
-            verdict = `No-Trade — fav ${_favPL}/lvl too thin to catch hedge`;
+            verdict = `KILL — fav ${_favPL}/lvl too thin to catch hedge`;
             verdictCol = '#ff4444';
         } else if (_favGappy) {
-            verdict = `${favAnalysis.gaps} gaps on fav — hedge will miss levels, unreliable`;
+            verdict = `KILL — ${favAnalysis.gaps} gaps on fav, hedge will miss levels`;
             verdictCol = '#ff4444';
         } else if (_tightRoom) {
-            verdict = `Only ${hedgeRoom}¢ room — hedge fills at breakeven, no profit`;
+            verdict = `KILL — only ${hedgeRoom}¢ room, hedge fills at breakeven`;
             verdictCol = '#ff4444';
         } else if (_dogIsPacked && _favIsThick) {
-            verdict = `Dog packed (${Math.round(dogDepth/1000)}k) — anchor won't fill. Fav is fine.`;
+            verdict = `KILL — dog packed (${Math.round(dogDepth/1000)}k), anchor won't fill`;
             verdictCol = '#ff8800';
         } else if (_dogIsPacked) {
-            verdict = `Dog packed (${Math.round(dogDepth/1000)}k) + fav ${_favPL}/lvl — slow fills, weak catch`;
+            verdict = `KILL — dog packed (${Math.round(dogDepth/1000)}k) + fav ${_favPL}/lvl, weak catch`;
             verdictCol = '#ff4444';
         } else {
-            verdict = `Low score — ${_favPL}/lvl fav, ${favAnalysis.gaps} gaps, ${hedgeRoom}¢ room`;
+            verdict = `KILL — ${_favPL}/lvl fav, ${favAnalysis.gaps} gaps, ${hedgeRoom}¢ room`;
             verdictCol = '#ff4444';
         }
     }
@@ -3525,10 +3525,10 @@ function displayOrderbookLadder(orderbook) {
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;font-size:8px;font-weight:600;">
             <span style="color:#00ff88;background:#00ff8811;padding:1px 5px;border-radius:3px;">90+ WALL 3¢</span>
-            <span style="color:#00ccff;background:#00ccff11;padding:1px 5px;border-radius:3px;">70+ PRIME 4¢</span>
-            <span style="color:#ffaa00;background:#ffaa0011;padding:1px 5px;border-radius:3px;">50+ SNIPER 6¢</span>
-            <span style="color:#ff8800;background:#ff880011;padding:1px 5px;border-radius:3px;">35+ RISKY 10¢</span>
-            <span style="color:#ff4444;background:#ff444411;padding:1px 5px;border-radius:3px;">&lt;35 OFF</span>
+            <span style="color:#00ccff;background:#00ccff11;padding:1px 5px;border-radius:3px;">75+ PRIME 4¢</span>
+            <span style="color:#ffaa00;background:#ffaa0011;padding:1px 5px;border-radius:3px;">55+ SNIPER 5-6¢</span>
+            <span style="color:#ff8800;background:#ff880011;padding:1px 5px;border-radius:3px;">35+ TRAP 7-9¢</span>
+            <span style="color:#ff4444;background:#ff444411;padding:1px 5px;border-radius:3px;">&lt;35 KILL</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
@@ -6053,10 +6053,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
             <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${(() => {
-                const _ppi = bot._last_ppi;
+                const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
-                    const _ppiCol = _ppi >= 85 ? '#00ff88' : _ppi >= 70 ? '#00ccff' : _ppi >= 50 ? '#ffaa00' : _ppi >= 30 ? '#ff8800' : '#ff4444';
-                    const _ppiLabel = _ppi >= 85 ? 'WALL' : _ppi >= 70 ? 'PRIME' : _ppi >= 50 ? 'SNIPER' : _ppi >= 30 ? 'RISKY' : 'OFF';
+                    const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 75 ? '#00ccff' : _ppi >= 55 ? '#ffaa00' : _ppi >= 35 ? '#ff8800' : '#ff4444';
+                    const _ppiLabel = _ppi >= 90 ? 'WALL' : _ppi >= 75 ? 'PRIME' : _ppi >= 55 ? 'SNIPER' : _ppi >= 35 ? 'TRAP' : 'KILL';
                     return `<span style="color:${_ppiCol};font-size:9px;font-weight:700;">PPI:${_ppi} ${_ppiLabel}</span>`;
                 }
                 const _rd = bot._rec_depth;

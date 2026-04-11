@@ -5892,12 +5892,14 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts - g_pts + s_pts + t_pts
     ppi = max(0, min(100, round(_raw * 100 / 75)))
 
-    # PPI → depth rec
-    if ppi >= 90: rec = 3
-    elif ppi >= 70: rec = 4
-    elif ppi >= 50: rec = 6
-    elif ppi >= 35: rec = 10
-    else: rec = 0  # pull
+    # PPI → depth rec (interpolated within tiers)
+    if ppi >= 90: rec = 3                              # WALL: pristine book
+    elif ppi >= 75: rec = 4                            # PRIME: high conviction
+    elif ppi >= 55:                                    # SNIPER: interpolate 5-6¢
+        rec = 6 - (ppi - 55) // 10                     #   55-64→6¢, 65-74→5¢
+    elif ppi >= 35:                                    # TRAP: interpolate 7-9¢
+        rec = 9 - (ppi - 35) // 7                      #   35-41→9¢, 42-48→8¢, 49-54→7¢
+    else: rec = 0                                      # KILL: pull
     # Fav gaps override
     if fg >= 3 and rec < 7: rec = 7
     elif fg >= 2 and rec < 6: rec = 6
@@ -15362,9 +15364,10 @@ def list_bots():
                 bot['_fav_depth_top3'] = round(_lob.get_total_depth(_fav_side, 3))
                 bot['_obi_age_ms'] = round((time.time() - _lob.last_update_ts) * 1000)
                 # Live PPI score + depth rec from book structure
+                # Use _live_ppi for display — do NOT overwrite _last_ppi (monitor hysteresis baseline)
                 _ppi, _ppi_rec, _ppi_det = _calculate_ppi(bot.get('ticker', ''), _fav_side, _dog_side)
                 if _ppi is not None:
-                    bot['_last_ppi'] = _ppi
+                    bot['_live_ppi'] = _ppi
                     bot['_rec_depth'] = _ppi_rec
 
         # Apex MM — OBI + depth signals

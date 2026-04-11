@@ -4386,6 +4386,15 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         bot[f'avg_{matched_side}_cost'] = 0
                         bot[f'total_{matched_side}_cost'] = 0
 
+                # If ladder RT made us flat, cancel exit order NOW to prevent orphan fills
+                if opp_held > 0 and bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+                    for _cancel_exit_side in ('yes', 'no'):
+                        _cancel_exit_oid = bot.get(f'_{_cancel_exit_side}_exit_oid')
+                        if _cancel_exit_oid:
+                            bot[f'_{_cancel_exit_side}_exit_oid'] = None  # clear FIRST to prevent WS re-match
+                            threading.Thread(target=_safe_cancel, args=(_cancel_exit_oid, f'rt_flat_cancel_{bot_id}'), daemon=True).start()
+                            print(f'🛡️ APEX MM RT FLAT: cancelled {_cancel_exit_side} exit {_cancel_exit_oid[:12]} to prevent orphan')
+
                 bot_log('APEX_MM_WS_FILL', bot_id, {
                     'side': matched_side, 'price': matched_price, 'count': count,
                     'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
@@ -7088,7 +7097,17 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             avg_held = bot.get('avg_no_cost', 0)
             net_held = net_no - net_yes
         else:
-            return  # flat, no exit needed
+            # Flat — cancel any lingering exit orders to prevent orphan fills
+            for _flat_side in ('yes', 'no'):
+                _flat_oid = bot.get(f'_{_flat_side}_exit_oid')
+                if _flat_oid:
+                    bot[f'_{_flat_side}_exit_oid'] = None
+                    try:
+                        _safe_cancel(_flat_oid, f'amend_exit_flat_{bot_id}')
+                        print(f'🛡️ APEX MM AMEND EXIT FLAT: cancelled stale {_flat_side} exit {_flat_oid[:12]}')
+                    except Exception:
+                        pass
+            return
 
         # Calculate exit price: breakeven with profit target (half width)
         width = bot.get('start_gap', 4) * 2
@@ -7397,6 +7416,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
         bot[f'_{side}_exit_oid'] = None
 
     # Cancel remaining entry orders — check each for fills before clearing
+    # LOCK: acquire ws_fill_lock to prevent WS handler from double-counting the same fills
     _late_fills = 0
     for side_key in ('yes_orders', 'no_orders'):
         _side = 'yes' if side_key == 'yes_orders' else 'no'
@@ -7407,23 +7427,34 @@ def _apex_mm_cycle_reset(bot_id, bot):
             _cr = _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
             if isinstance(_cr, tuple) and _cr[0] == 'filled':
                 _kalshi_fills = _cr[1]
-                _ws_already = level.get('fill_qty', 0)  # WS handler already counted these
-                _new_fills = max(0, _kalshi_fills - _ws_already)  # only add the difference
-                if _new_fills > 0:
-                    _price = int(price_str)
-                    _late_fills += _new_fills
-                    bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
-                    bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
-                    _net = bot[f'net_{_side}']
-                    bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
-                    print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already} net_{_side}={_net})')
-                    bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
-                        'side': _side, 'fills': _kalshi_fills, 'new_fills': _new_fills,
-                        'price': _price, 'net': _net, 'ws_already': _ws_already,
-                    }, level='WARN')
-                elif _kalshi_fills > 0:
-                    print(f'✅ CYCLE RESET: {bot_id} {_side.upper()} order had {_kalshi_fills} fills — already counted by WS (fill_qty={_ws_already})')
-            level['oid'] = None
+                # Lock to prevent WS handler from racing on the same fills
+                with ws_fill_lock:
+                    _ws_already = max(level.get('fill_qty', 0),
+                                      bot.get('_counted_order_fills', {}).get(oid, 0))
+                    _new_fills = max(0, _kalshi_fills - _ws_already)
+                    if _new_fills > 0:
+                        _price = int(price_str)
+                        _late_fills += _new_fills
+                        bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
+                        bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
+                        _net = bot[f'net_{_side}']
+                        bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                        # Mark as counted so WS handler won't re-add
+                        level['fill_qty'] = _kalshi_fills
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                        print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already} net_{_side}={_net})')
+                        bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
+                            'side': _side, 'fills': _kalshi_fills, 'new_fills': _new_fills,
+                            'price': _price, 'net': _net, 'ws_already': _ws_already,
+                        }, level='WARN')
+                    elif _kalshi_fills > 0:
+                        # Ensure counted_order_fills is up to date even when WS already counted
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                        print(f'✅ CYCLE RESET: {bot_id} {_side.upper()} order had {_kalshi_fills} fills — already counted by WS (fill_qty={_ws_already})')
+                    # Clear OID under lock so WS handler can't match it after we've counted
+                    level['oid'] = None
+            else:
+                level['oid'] = None
 
     # If late fills found, we're NOT flat — don't reset, let exit system handle
     if _late_fills > 0:
@@ -17954,6 +17985,9 @@ def emergency_sell():
             _cancelled_orphan_orders = []
             try:
                 _active_oids = set()
+                # Protect the sell order we just posted
+                if _eo_oid:
+                    _active_oids.add(_eo_oid)
                 for _b in active_bots.values():
                     if _b.get('ticker') == ticker and _b.get('status', '') not in ('completed', 'cancelled'):
                         for _key in ('hedge_order_id', '_orphan_hedge_oid'):
@@ -17962,6 +17996,18 @@ def emergency_sell():
                                 _active_oids.add(_oid)
                         for _oid in _b.get('_all_hedge_order_ids', []):
                             _active_oids.add(_oid)
+                        # Protect Apex MM ladder orders + exit orders
+                        for _oid in _b.get('_all_placed_order_ids', []):
+                            _active_oids.add(_oid)
+                        for _side_key in ('yes_orders', 'no_orders'):
+                            for _lvl in _b.get(_side_key, {}).values():
+                                _lvl_oid = _lvl.get('oid')
+                                if _lvl_oid:
+                                    _active_oids.add(_lvl_oid)
+                        for _exit_s in ('_yes_exit_oid', '_no_exit_oid'):
+                            _exit_id = _b.get(_exit_s)
+                            if _exit_id:
+                                _active_oids.add(_exit_id)
                 api_read_limiter.wait()
                 _resting = kalshi_client.get_orders(status='resting', ticker=ticker)
                 _resting_orders = _resting.get('orders', []) if isinstance(_resting, dict) else []

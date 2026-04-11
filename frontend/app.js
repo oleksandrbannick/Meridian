@@ -4166,9 +4166,9 @@ function initAnchorDogPrices() {
                     <div id="anchor-auto-dog-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorDogBid}¢${dogAsk ? ` · ask: ${dogAsk}¢` : ''}${_anchorIsBrokenSpread ? ' <span style="color:#ff8800;">(broken)</span>' : ''} <span style="color:#ffaa00;">− ${anchorDepth}¢ depth = ${smartPrice}¢</span></div>
                 </div>
                 <div style="color:#555;font-size:14px;">→</div>
-                <div style="background:#060a14;border:1px solid #00aaff44;border-radius:8px;padding:8px;text-align:center;">
-                    <div style="color:#00aaff;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">FAV (HEDGE)</div>
-                    <div id="anchor-auto-fav-side" style="color:#00aaff;font-weight:800;font-size:18px;">${_anchorFavSide.toUpperCase()}</div>
+                <div style="background:#060a14;border:1px solid #ff66aa44;border-radius:8px;padding:8px;text-align:center;">
+                    <div style="color:#ff66aa;font-weight:700;font-size:9px;letter-spacing:.05em;margin-bottom:2px;">FAV (HEDGE)</div>
+                    <div id="anchor-auto-fav-side" style="color:#ff66aa;font-weight:800;font-size:18px;">${_anchorFavSide.toUpperCase()}</div>
                     <div id="anchor-auto-fav-bid" style="color:#555;font-size:10px;margin-top:1px;">bid: ${_anchorFavBid}¢</div>
                 </div>`;
         }
@@ -4176,7 +4176,7 @@ function initAnchorDogPrices() {
         const _fav_shave_preview = 0;  // all depth on dog, fav posts at bid
         const _fav_start = _fav_shave_preview > 0 ? Math.max(1, _anchorFavBid - _fav_shave_preview) : _anchorFavBid;
         const favBidElNew = document.getElementById('anchor-auto-fav-bid');
-        if (favBidElNew) favBidElNew.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#00aaff;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
+        if (favBidElNew) favBidElNew.innerHTML = `bid: ${_anchorFavBid}¢` + (_fav_shave_preview > 0 ? ` <span style="color:#ff66aa;">− ${_fav_shave_preview}¢ shave = ${_fav_start}¢</span>` : ` <span style="color:#00ff88;">→ posts at bid</span>`);
     }
     // Sync depth display
     const depthDisplaySync = document.getElementById('anchor-depth-display');
@@ -4385,7 +4385,7 @@ function updateAnchorPreview() {
                 `<div style="margin-top:2px;color:#ffaa00;font-size:9px;font-weight:600;">Max safe qty: ${maxQty}</div>` +
                 `</div>`;
         }
-        shaveInfo.innerHTML = `<span style="color:#ff66aa;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#00aaff;">Hedge: posts at bid instantly</span>${depthRec}`;
+        shaveInfo.innerHTML = `<span style="color:#ff66aa;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#ff66aa;">Hedge: posts at bid instantly</span>${depthRec}`;
     }
 
     const previewEl = document.getElementById('anchor-preview-content');
@@ -6490,7 +6490,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     if (!isCompleted && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444');
 
     const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid #66bbcc33;border-left:3px solid ${accentCol};border-radius:12px;padding:14px;margin-bottom:10px;`;
+    item.style.cssText = `background:#0f1419;border:1px solid #66bbcc33;border-left:3px solid #00d4ff;border-radius:12px;padding:14px;margin-bottom:10px;`;
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">

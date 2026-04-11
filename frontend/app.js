@@ -13058,20 +13058,22 @@ function renderPhantomSportDropdown(sport, allTrades) {
         return;
     }
 
-    let trades = allTrades.filter(t => (t.sport || 'Other') === sport);
-    // Chain with depth filter if active
-    if (_phantomActiveDepth !== 'all') trades = trades.filter(t => (t.anchor_depth || 0) === _phantomActiveDepth);
-    if (trades.length === 0) {
+    const sportTrades = allTrades.filter(t => (t.sport || 'Other') === sport);
+    if (sportTrades.length === 0) {
         panel.style.display = 'none';
         panel.innerHTML = '';
         return;
     }
+    // Depth-scoped trades for period/score/dog breakdowns (NOT for depth section itself)
+    const trades = _phantomActiveDepth !== 'all'
+        ? sportTrades.filter(t => (t.anchor_depth || 0) === _phantomActiveDepth)
+        : sportTrades;
 
     const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
     const icon = _si[sport] || '🎯';
     const labels = SPORT_PERIOD_LABELS[sport] || {};
 
-    // ── Period breakdown (always from full sport trades) ──
+    // ── Period breakdown (from depth-scoped trades) ──
     const periodMap = {};
     trades.forEach(t => {
         const gc = t.game_context || {};
@@ -13087,10 +13089,10 @@ function renderPhantomSportDropdown(sport, allTrades) {
     });
     const periods = Object.entries(periodMap).sort((a, b) => a[1]._order - b[1]._order);
 
-    // ── Scope depth trades by active period filter ──
-    let depthTrades = trades;
+    // ── Scope depth trades by active period filter (uses ALL sport trades, not depth-filtered) ──
+    let depthTrades = sportTrades;
     if (_phantomActivePeriod !== 'all') {
-        depthTrades = trades.filter(t => {
+        depthTrades = sportTrades.filter(t => {
             const gc = t.game_context || {};
             const p = gc.period || 0;
             const key = p > 0 ? (labels[p] || (p > 4 ? 'OT' : `P${p}`)) : '—';
@@ -13098,7 +13100,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
         });
     }
 
-    // ── Depth floor breakdown (scoped to sport + period) ──
+    // ── Depth floor breakdown (always shows ALL depths for this sport, scoped by period only) ──
     const depthMap = {};
     depthTrades.forEach(t => {
         const d = t.anchor_depth || 0;
@@ -13230,8 +13232,8 @@ function renderPhantomSportDropdown(sport, allTrades) {
                 </div>
             </div>` : ''}
 
-            <!-- Depth floor stats (hidden when outer depth filter already active — redundant) -->
-            ${_phantomActiveDepth !== 'all' ? '' : (depths.length > 0 ? `
+            <!-- Depth floor stats (always shows all depths for this sport) -->
+            ${depths.length > 0 ? `
             <div>
                 <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${depthLabel}${_phantomActivePeriod !== 'all' ? ` <span style="color:#555;">(${depthTrades.length} trades)</span>` : ''}</div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;">
@@ -13250,7 +13252,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
                         </div>`;
                     }).join('')}
                 </div>
-            </div>` : `${_phantomActivePeriod !== 'all' ? '<div style="color:#555;font-size:11px;text-align:center;padding:8px;">No depth data for this period</div>' : ''}`)}
+            </div>` : `${_phantomActivePeriod !== 'all' ? '<div style="color:#555;font-size:11px;text-align:center;padding:8px;">No depth data for this period</div>' : ''}`}
 
             <!-- Score diff breakdown -->
             ${scoreDiffs.length > 0 && sport !== 'Tennis' ? `

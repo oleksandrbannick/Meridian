@@ -11537,6 +11537,7 @@ let calendarViewDate = new Date(); // tracks which month is displayed
 let selectedHistoryDays = [];      // Array of YYYY-MM-DD strings, empty = full history
 let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
 let _phantomActiveDepth = 'all';   // Depth floor filter for Phantom history panels
+let _phantomActivePeriod = 'all';  // Period filter within sport dropdown
 // _phantomActiveExit removed (ceiling exit system removed)
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
@@ -13009,6 +13010,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
     if (sport === 'all') {
         panel.style.display = 'none';
         panel.innerHTML = '';
+        _phantomActivePeriod = 'all';
         return;
     }
 
@@ -13023,7 +13025,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
     const icon = _si[sport] || '🎯';
     const labels = SPORT_PERIOD_LABELS[sport] || {};
 
-    // ── Period breakdown ──
+    // ── Period breakdown (always from full sport trades) ──
     const periodMap = {};
     trades.forEach(t => {
         const gc = t.game_context || {};
@@ -13039,9 +13041,21 @@ function renderPhantomSportDropdown(sport, allTrades) {
     });
     const periods = Object.entries(periodMap).sort((a, b) => a[1]._order - b[1]._order);
 
-    // ── Depth floor breakdown (scoped to this sport) ──
+    // ── Scope depth trades by active period filter ──
+    let depthTrades = trades;
+    if (_phantomActivePeriod !== 'all') {
+        depthTrades = trades.filter(t => {
+            const gc = t.game_context || {};
+            const p = gc.period || 0;
+            if (p <= 0) return false;
+            const key = labels[p] || (p > 4 ? 'OT' : `P${p}`);
+            return key === _phantomActivePeriod;
+        });
+    }
+
+    // ── Depth floor breakdown (scoped to sport + period) ──
     const depthMap = {};
-    trades.forEach(t => {
+    depthTrades.forEach(t => {
         const d = t.anchor_depth || 0;
         if (d <= 0) return;
         if (!depthMap[d]) depthMap[d] = { depth: d, wins: 0, losses: 0, net: 0, count: 0, capTotal: 0, capCount: 0 };
@@ -13068,6 +13082,14 @@ function renderPhantomSportDropdown(sport, allTrades) {
     const winRate = totalAll > 0 ? Math.round(totalWins / totalAll * 100) : 0;
     const netCol = totalNet >= 0 ? '#00ff88' : '#ff4444';
 
+    // Period type label
+    const periodTypeLabel = sport === 'MLB' ? 'Inning' : sport === 'NHL' ? 'Period' : sport === 'Tennis' ? 'Set' : sport === 'MLS' || sport === 'EPL' || sport === 'UCL' ? 'Half' : sport === 'NCAAB' ? 'Half' : 'Quarter';
+
+    // Depth section label — shows period scope when filtered
+    const depthLabel = _phantomActivePeriod !== 'all'
+        ? `Depth Floor · ${sport} · ${_phantomActivePeriod}`
+        : `Depth Floor · ${sport}`;
+
     // ── Render ──
     panel.style.display = 'block';
     panel.innerHTML = `
@@ -13077,6 +13099,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
                 <div style="display:flex;align-items:center;gap:8px;">
                     <span style="font-size:22px;">${icon}</span>
                     <span style="color:#ffaa00;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${sport} Breakdown</span>
+                    ${_phantomActivePeriod !== 'all' ? `<span onclick="selectPhantomPeriod('all')" style="color:#ff66aa;font-size:10px;cursor:pointer;font-weight:600;">Clear ${_phantomActivePeriod} ✕</span>` : ''}
                 </div>
                 <div style="text-align:right;">
                     <span style="color:${netCol};font-size:18px;font-weight:800;">${totalNet >= 0 ? '+' : ''}$${(totalNet / 100).toFixed(2)}</span>
@@ -13084,30 +13107,33 @@ function renderPhantomSportDropdown(sport, allTrades) {
                 </div>
             </div>
 
-            <!-- Period stats -->
+            <!-- Period stats (clickable) -->
             ${periods.length > 0 ? `
             <div style="margin-bottom:14px;">
-                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">By ${sport === 'MLB' ? 'Inning' : sport === 'NHL' ? 'Period' : sport === 'Tennis' ? 'Set' : sport === 'MLS' || sport === 'EPL' || sport === 'UCL' ? 'Half' : sport === 'NCAAB' ? 'Half' : 'Quarter'}</div>
+                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">By ${periodTypeLabel}${_phantomActivePeriod !== 'all' ? ' · click to clear' : ' · click to filter depth'}</div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:6px;">
                     ${periods.map(([label, d]) => {
                         const col = d.net >= 0 ? '#00ff88' : '#ff4444';
                         const total = d.wins + d.losses;
                         const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
                         const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
-                        return `<div style="background:#0f1419;border-radius:8px;padding:10px 8px;text-align:center;border:1px solid #ffaa0015;">
-                            <div style="color:#ffaa00;font-size:12px;font-weight:800;margin-bottom:3px;">${label}</div>
+                        const isActive = _phantomActivePeriod === label;
+                        const borderCol = isActive ? '#ff66aa' : '#ffaa0015';
+                        const bgCol = isActive ? '#ff66aa12' : '#0f1419';
+                        return `<div onclick="selectPhantomPeriod('${label}')" style="background:${bgCol};border-radius:8px;padding:10px 8px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                            <div style="color:${isActive ? '#ff66aa' : '#ffaa00'};font-size:12px;font-weight:800;margin-bottom:3px;">${label}</div>
                             <div style="color:${col};font-size:14px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
                             <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
-                            <div style="color:#3a4560;font-size:9px;">avg ${avg >= 0 ? '+' : ''}${avg}¢</div>
+                            <div style="color:#3a4560;font-size:9px;">avg ${avg >= 0 ? '+' : ''}${avg}¢ · ${d.count} trades</div>
                         </div>`;
                     }).join('')}
                 </div>
             </div>` : ''}
 
-            <!-- Depth floor stats for this sport -->
+            <!-- Depth floor stats (scoped to sport + period) -->
             ${depths.length > 0 ? `
             <div>
-                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Depth Floor · ${sport}</div>
+                <div style="color:#ff66aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${depthLabel}${_phantomActivePeriod !== 'all' ? ` <span style="color:#555;">(${depthTrades.length} trades)</span>` : ''}</div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;">
                     ${depths.map(d => {
                         const col = d.net >= 0 ? '#00ff88' : '#ff4444';
@@ -13124,8 +13150,15 @@ function renderPhantomSportDropdown(sport, allTrades) {
                         </div>`;
                     }).join('')}
                 </div>
-            </div>` : ''}
+            </div>` : `${_phantomActivePeriod !== 'all' ? '<div style="color:#555;font-size:11px;text-align:center;padding:8px;">No depth data for this period</div>' : ''}`}
         </div>`;
+}
+
+function selectPhantomPeriod(period) {
+    if (period === _phantomActivePeriod && period !== 'all') period = 'all';
+    _phantomActivePeriod = period;
+    const allTrades = window._phantomAllTrades || [];
+    renderPhantomSportDropdown(_phantomActiveSport, allTrades);
 }
 
 function _applyPhantomFilters(trades) {
@@ -13139,6 +13172,7 @@ function selectPhantomSport(sport) {
     // Toggle: clicking same sport deselects back to all
     if (sport === _phantomActiveSport && sport !== 'all') sport = 'all';
     _phantomActiveSport = sport;
+    _phantomActivePeriod = 'all';  // reset period filter on sport change
 
     const allTrades = window._phantomAllTrades || [];
     const filtered = _applyPhantomFilters(allTrades);
@@ -13201,6 +13235,7 @@ async function loadDogHistory() {
         window._phantomAllTrades = trades;
         _phantomActiveSport = 'all';
         _phantomActiveDepth = 'all';
+        _phantomActivePeriod = 'all';
 
         renderDogStatsAndDepth(trades, pnl);
         renderDogSportBreakdown(trades);

@@ -3452,11 +3452,13 @@ function displayOrderbookLadder(orderbook) {
     else if (catchScore >= 55) _recDepth = 6 - Math.floor((catchScore - 55) / 10);  // SNIPER — 55-64→6¢, 65-74→5¢
     else if (catchScore >= 35) _recDepth = 9 - Math.floor((catchScore - 35) / 7);   // TRAP — 35-41→9¢, 42-48→8¢, 49-54→7¢
     else _recDepth = 0;                                                    // KILL — pull
-    // Fav gaps override: if fav has gaps, bump regardless of score
-    if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
-    else if (favAnalysis.gaps >= 2 && _recDepth < 6) _recDepth = 6;
-    else if (favAnalysis.gaps >= 1 && _recDepth < 5) _recDepth = 5;
-    if (_recDepth > 0) _recDepth = Math.min(_recDepth, 12);
+    // Fav gaps override (only when not KILL — gaps don't save a toxic book)
+    if (_recDepth > 0) {
+        if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
+        else if (favAnalysis.gaps >= 2 && _recDepth < 6) _recDepth = 6;
+        else if (favAnalysis.gaps >= 1 && _recDepth < 5) _recDepth = 5;
+        _recDepth = Math.min(_recDepth, 12);
+    }
     const _favIsThick = _favPL >= 20;
     const _favIsThin = _favPL < 5;
     const _favIsLight = _favPL >= 5 && _favPL < 10;

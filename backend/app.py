@@ -1447,7 +1447,12 @@ def get_depth_rec(ticker):
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
     tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 75 else 'SNIPER' if ppi >= 55 else 'TRAP' if ppi >= 35 else 'KILL'
+    # Base depth before gap overrides
+    _base_rd = 3 if ppi >= 90 else 4 if ppi >= 75 else (6 - (ppi - 55) // 10) if ppi >= 55 else (9 - (ppi - 35) // 7) if ppi >= 35 else 0
+    _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
+    if _gap_bumped:
+        reasons.append(f'{ppi_det.get("fg",0)} fav gaps → {_base_rd}→{rd}¢')
     return jsonify({
         'rec_depth': rd,
         'ppi_score': ppi,
@@ -5862,11 +5867,12 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     elif ppi >= 35:                                    # TRAP: interpolate 7-9¢
         rec = 9 - (ppi - 35) // 7                      #   35-41→9¢, 42-48→8¢, 49-54→7¢
     else: rec = 0                                      # KILL: pull
-    # Fav gaps override
-    if fg >= 3 and rec < 7: rec = 7
-    elif fg >= 2 and rec < 6: rec = 6
-    elif fg >= 1 and rec < 5: rec = 5
-    if rec > 0: rec = min(rec, 12)
+    # Fav gaps override (only when not KILL — gaps don't save a toxic book)
+    if rec > 0:
+        if fg >= 3 and rec < 7: rec = 7
+        elif fg >= 2 and rec < 6: rec = 6
+        elif fg >= 1 and rec < 5: rec = 5
+        rec = min(rec, 12)
 
     return ppi, rec, {'d': d_pts, 'g': g_pts, 's': s_pts, 't': t_pts, 'fpl': fpl, 'fg': fg, 'spread': spread}
 

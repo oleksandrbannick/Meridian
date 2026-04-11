@@ -3421,6 +3421,12 @@ class KalshiWSManager:
                     _ws_phantom_retreat(ticker, yb, nb)
                 except Exception:
                     pass
+                # ── Real-time maker sell follow: amend pending sells on ask change ──
+                try:
+                    if _pending_maker_sells:
+                        threading.Thread(target=_ws_maker_sell_follow, args=(ticker, ya, na), daemon=True).start()
+                except Exception:
+                    pass
             return
 
         if msg_type == 'fill':
@@ -3585,6 +3591,40 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                 save_state()
     finally:
         _phantom_retreat_lock.release()
+
+
+_maker_sell_follow_lock = threading.Lock()
+
+def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
+    """WS-driven: instantly amend pending maker sells when ask drops below posted price."""
+    if not _pending_maker_sells:
+        return
+    if not _maker_sell_follow_lock.acquire(blocking=False):
+        return
+    try:
+        for _sk, _sv in list(_pending_maker_sells.items()):
+            if _sv.get('ticker') != ticker:
+                continue
+            _side = _sv.get('side', '')
+            _current_ask = yes_ask if _side == 'yes' else no_ask
+            if _current_ask <= 0:
+                continue
+            _posted = _sv.get('posted_price', 0)
+            if _current_ask >= _posted:
+                continue  # ask hasn't dropped, we're already competitive
+            # Ask dropped below us — amend down instantly
+            try:
+                _amend_kw = {f'{_side}_price': _current_ask}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(_sv['oid'], ticker=ticker, side=_side,
+                                         count=_sv.get('qty', 1), **_amend_kw)
+                _sv['posted_price'] = _current_ask
+                print(f'⚡ WS MAKER SELL SNAP: {_sv["reason"]} {_side} {ticker} → {_current_ask}¢')
+            except Exception as _e:
+                if '404' in str(_e) or 'not found' in str(_e).lower():
+                    print(f'⚠ WS MAKER SELL SNAP: order gone for {_sv["reason"]} — will repost on next monitor tick')
+    finally:
+        _maker_sell_follow_lock.release()
 
 
 # Lock to prevent concurrent phantom drop amends
@@ -12104,19 +12144,36 @@ def _run_monitor():
                     del _pending_maker_sells[_sk]
                     execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
                     continue
-                # Still resting — amend to current ask if price moved (every 10s)
+                # Still resting — follow ask down, and walk toward bid if stale
                 if _s_age > 10 and (time.time() - _sv.get('_last_amend', 0)) > 10:
                     _sv['_last_amend'] = time.time()
                     api_read_limiter.wait()
                     _s_ob = kalshi_client.get_market_orderbook(_s_ticker)
                     _s_ask = _best_ask(_s_ob, _s_side)
-                    if _s_ask > 0 and _s_ask != _sv['posted_price']:
+                    # Also get bid for walk-down
+                    _opp_side = 'no' if _s_side == 'yes' else 'yes'
+                    _s_bid = _best_bid(_s_ob, _s_side) if callable(globals().get('_best_bid', None)) else 0
+                    if _s_bid <= 0:
+                        _opp_ask_raw = _s_ob.get(f'{_opp_side}', {})
+                        _opp_bids = _opp_ask_raw if isinstance(_opp_ask_raw, dict) else {}
+                        # bid for our side = 100 - opp ask
+                        _ws_p = ws_manager.get_price(_s_ticker) if ws_manager else None
+                        if _ws_p:
+                            _s_bid = _ws_p.get(f'{_s_side}_bid', 0)
+                    _new_price = _sv['posted_price']
+                    if _s_ask > 0 and _s_ask < _sv['posted_price']:
+                        # Ask dropped below us — follow down
+                        _new_price = _s_ask
+                    elif _s_age > 30 and _s_bid > 0 and _sv['posted_price'] > _s_bid + 1:
+                        # Stale >30s — walk 1c toward bid every 10s
+                        _new_price = _sv['posted_price'] - 1
+                    if _new_price != _sv['posted_price'] and _new_price > 0:
                         try:
-                            _amend_kw = {f'{_s_side}_price': _s_ask}
+                            _amend_kw = {f'{_s_side}_price': _new_price}
                             api_rate_limiter.wait()
                             kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, **_amend_kw)
-                            _sv['posted_price'] = _s_ask
-                            print(f'📤 MAKER SELL AMEND: {_sv["reason"]} {_s_side} {_s_ticker} → {_s_ask}¢')
+                            _sv['posted_price'] = _new_price
+                            print(f'📤 MAKER SELL AMEND: {_sv["reason"]} {_s_side} {_s_ticker} → {_new_price}¢ (ask={_s_ask} bid={_s_bid})')
                         except Exception as _ae:
                             if '404' in str(_ae) or 'not found' in str(_ae).lower():
                                 # Order gone — repost
@@ -12273,7 +12330,8 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if (b.get('status') == 'cancelled'
                           and (b.get('cancelled_at') or 0) < _purge_cutoff)
-                      or (b.get('status') in ('completed', 'stopped')
+                      or (b.get('status') == 'completed'
+                          and b.get('_smart_stop_reason') != 'manual'
                           and b.get('_market_settled_at', 0) > 0
                           and b['_market_settled_at'] < _purge_cutoff)
                       ]
@@ -18417,6 +18475,18 @@ def get_active_positions():
                     else:
                         _display_title = f'{ticker} — {side.upper()}'
 
+                # Check for pending maker sells on this ticker+side
+                _pending_sell = None
+                for _psk, _psv in _pending_maker_sells.items():
+                    if _psv.get('ticker') == ticker and _psv.get('side') == side:
+                        _pending_sell = {
+                            'price': _psv.get('posted_price', 0),
+                            'qty': _psv.get('qty', 0),
+                            'age_s': round(time.time() - _psv.get('posted_at', time.time())),
+                            'reason': _psv.get('reason', ''),
+                        }
+                        break
+
                 enriched.append({
                     'ticker':     ticker,
                     'title':      _display_title,
@@ -18437,6 +18507,7 @@ def get_active_positions():
                     'is_orphaned': bool(orphan_info),
                     'orphaned_qty': orphan_info.get('orphaned_qty', 0),
                     'managing_bots': _breakdown_list(ticker, side),
+                    'pending_sell': _pending_sell,
                 })
             except Exception:
                 enriched.append({

@@ -6924,7 +6924,7 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
                 <span style="color:#00ff88;font-size:11px;font-weight:700;">💰 BET</span>
                 <a href="#" onclick="navigateToMarket('${ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${watchDisplayName}</a>
                 ${watchScoreBadge}
-                <span class="bot-status watching">${orderFilled ? 'WATCHING' : 'PENDING'}</span>
+                <span class="bot-status watching">${isStopped ? (exitReason === 'stop_loss' ? 'SL EXIT' : exitReason === 'take_profit' ? 'TP EXIT' : 'STOPPED') : (orderFilled ? 'WATCHING' : 'PENDING')}</span>
                 <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
                 ${fillStatusHtml}
                 <span style="color:#555;font-size:10px;">${ageMin >= 60 ? Math.floor(ageMin/60)+'h '+ageMin%60+'m' : ageMin+'m'} ago</span>
@@ -6939,10 +6939,10 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             <div>Entry: <strong style="color:#fff;">${entry}¢</strong></div>
             <div>Qty: <strong style="color:#fff;">×${watchQty}</strong></div>
             ${isStopped && exitPrice
-                ? `<div>Exit: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPrice}¢</strong></div>
-                   <div>P&L: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong></div>`
-                : `<div>Live bid: <strong style="color:${typeof liveBid === 'number' && sl > 0 && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
-                   <div>${sl > 0 ? `SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>` : `SL: <strong style="color:#666;">none</strong>`}${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>`}
+                ? `<div>Sell at: <strong style="color:#ffaa00;">${exitPrice}¢</strong></div>
+                   <div>P&L: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong> <span style="color:#666;font-size:9px;">(if filled)</span></div>`
+                : `<div>Bid: <strong style="color:${typeof liveBid === 'number' && sl > 0 && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
+                   <div>${sl > 0 ? `SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>` : `SL: <strong style="color:#666;">off</strong>`}${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>`}
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
             <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
@@ -13367,7 +13367,10 @@ async function loadPositions() {
                     const c = BOT_COLORS[mb.type] || '#888';
                     return `<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:${c}22;border:1px solid ${c}44;border-radius:6px;font-size:11px;font-weight:600;color:${c};">${botIconImg(mb.type, 12)} ×${mb.qty}</span>`;
                 }).join('')}</div>` : ''}
-                ${isOrphaned ? `<div style="margin-top:6px;padding:6px 10px;background:#ff444422;border:1px solid #ff444444;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+                ${pos.pending_sell ? `<div style="margin-top:6px;padding:6px 10px;background:#ffaa0022;border:1px solid #ffaa0044;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:11px;color:#ffaa00;font-weight:600;">📤 SELLING ${pos.pending_sell.qty}x at ${pos.pending_sell.price}¢ — ${pos.pending_sell.age_s}s</span>
+                    <span style="font-size:10px;color:#888;">following ask</span>
+                </div>` : isOrphaned ? `<div style="margin-top:6px;padding:6px 10px;background:#ff444422;border:1px solid #ff444444;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
                     <span style="font-size:11px;color:#ff4444;font-weight:600;">👻 ${pos.orphaned_qty} orphaned — no bot managing</span>
                     <button onclick="sellOrphan('${pos.ticker}','${pos.side}',${pos.orphaned_qty})" style="background:#ff4444;color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;">Sell Orphan</button>
                 </div>` : ''}
@@ -13388,7 +13391,7 @@ async function sellOrphan(ticker, side, qty) {
         });
         const data = await resp.json();
         if (data.success) {
-            showNotification(`Orphan sold: ${qty}x ${side.toUpperCase()} on ${ticker} at ${data.sell_price}¢`);
+            showNotification(`Sell posted: ${qty}x ${side.toUpperCase()} at ${data.sell_price}¢ — following ask until filled`);
             loadPositions();
         } else {
             showNotification(`Sell failed: ${data.error || 'unknown'}`, 'error');

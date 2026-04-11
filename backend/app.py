@@ -3542,37 +3542,37 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
             if 0 <= gap <= 2:
                 def _retreat_cancel(oid, bid, bot_ref=bot, bot_id_ref=bot_id):
                     result = _safe_cancel(oid, f'ws_retreat_{bid}')
-                    # 404 = order gone. Could be filled! Check before assuming safe.
-                    if result == '404' or result is None:
+                    # _safe_cancel returns ('filled', count) when 404 with fills
+                    # Only recover if WS fill handler hasn't already fired the hedge
+                    _fills = 0
+                    if isinstance(result, tuple) and result[0] == 'filled':
+                        _fills = result[1]
+                    elif result == '404' or result is None:
                         try:
                             api_read_limiter.wait()
                             _ord = kalshi_client.get_order(oid)
                             _od = _ord.get('order', _ord) if isinstance(_ord, dict) else {}
                             _fills = _parse_fill_count(_od)
-                            if _fills > 0:
-                                print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_fills} fills on 404!')
-                                bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
-                                    'order_id': oid, 'fills': _fills, 'dog_price': bot_ref.get('dog_price'),
-                                }, level='ERROR')
-                                _push_notification('retreat_fill', f'🚨 {bot_id_ref[:30]}: {_fills} fills found on retreated order!', {
-                                    'bot_id': bot_id_ref, 'fills': _fills,
-                                })
-                                # Recover: set fills so monitor can hedge
-                                bot_ref['dog_fill_qty'] = max(bot_ref.get('dog_fill_qty', 0), _fills)
-                                _ds = bot_ref.get('dog_side', 'no')
-                                bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
-                                bot_ref['status'] = 'dog_filled'
-                                bot_ref['dog_filled_at'] = time.time()
-                                bot_ref['_hedge_fired'] = True
-                                _qty = bot_ref.get('quantity', 1)
-                                if _fills < _qty:
-                                    bot_ref['_original_qty'] = _qty
-                                    bot_ref['_partial_hedge_qty'] = _fills
-                                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
-                                print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_fills}x fills — hedge fired')
-                                save_state()
                         except Exception as _e:
                             print(f'⚠ WS RETREAT FILL CHECK FAILED: {bot_id_ref}: {_e}')
+                    if _fills > 0 and not bot_ref.get('_hedge_fired'):
+                        print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_fills} fills!')
+                        bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
+                            'order_id': oid, 'fills': _fills, 'dog_price': bot_ref.get('dog_price'),
+                        }, level='ERROR')
+                        bot_ref['dog_fill_qty'] = max(bot_ref.get('dog_fill_qty', 0), _fills)
+                        _ds = bot_ref.get('dog_side', 'no')
+                        bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
+                        bot_ref['status'] = 'dog_filled'
+                        bot_ref['dog_filled_at'] = time.time()
+                        bot_ref['_hedge_fired'] = True
+                        _qty = bot_ref.get('quantity', 1)
+                        if _fills < _qty:
+                            bot_ref['_original_qty'] = _qty
+                            bot_ref['_partial_hedge_qty'] = _fills
+                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
+                        print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_fills}x fills — hedge fired')
+                        save_state()
                 threading.Thread(target=_retreat_cancel, args=(dog_order_id, bot_id), daemon=True).start()
                 bot['dog_order_id'] = None
                 bot['_last_retreat_at'] = time.time()

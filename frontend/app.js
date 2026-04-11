@@ -3398,10 +3398,11 @@ function displayOrderbookLadder(orderbook) {
         timePts = 0;
     }
 
-    // PPI = Density(40) - Gaps(25) + Spread(20) + Time(15)
-    const catchScore = Math.min(100, Math.max(0, Math.round(densityPts - gapPenalty + spreadPts + timePts)));
-    const catchLabel = catchScore >= 85 ? 'WALL' : catchScore >= 70 ? 'PRIME' : catchScore >= 50 ? 'SNIPER' : catchScore >= 30 ? 'RISKY' : 'OFF';
-    const catchCol = catchScore >= 85 ? '#00ff88' : catchScore >= 70 ? '#00ccff' : catchScore >= 50 ? '#ffaa00' : catchScore >= 30 ? '#ff8800' : '#ff4444';
+    // PPI = Density(40) - Gaps(25) + Spread(20) + Time(15), normalized to 0-100
+    const _rawPPI = densityPts - gapPenalty + spreadPts + timePts;
+    const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI * 100 / 75)));
+    const catchLabel = catchScore >= 90 ? 'WALL' : catchScore >= 70 ? 'PRIME' : catchScore >= 50 ? 'SNIPER' : catchScore >= 35 ? 'RISKY' : 'OFF';
+    const catchCol = catchScore >= 90 ? '#00ff88' : catchScore >= 70 ? '#00ccff' : catchScore >= 50 ? '#ffaa00' : catchScore >= 35 ? '#ff8800' : '#ff4444';
 
     // Fav concentration for display
     const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
@@ -3446,10 +3447,10 @@ function displayOrderbookLadder(orderbook) {
     let verdict = '', verdictCol = '';
     // ── Depth rec driven by PPI score — no sport penalties ──
     let _recDepth;
-    if (catchScore >= 85) _recDepth = 3;       // Concrete Wall — 2-3c
+    if (catchScore >= 90) _recDepth = 3;       // Concrete Wall — 2-3c
     else if (catchScore >= 70) _recDepth = 4;   // Prime Zone — 4-5c
     else if (catchScore >= 50) _recDepth = 6;   // Sniper Zone — 6-8c
-    else if (catchScore >= 30) _recDepth = 10;  // High-Risk Trap — 10-12c
+    else if (catchScore >= 35) _recDepth = 10;  // High-Risk Trap — 10-12c
     else _recDepth = 0;                          // No-Trade Zone — DISARM
     // Fav gaps override: if fav has gaps, bump regardless of score
     if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
@@ -3464,7 +3465,7 @@ function displayOrderbookLadder(orderbook) {
     const _favGappy = favAnalysis.gaps >= 3;
     const _tightRoom = hedgeRoom <= 1;
     // Build verdict from PPI pillars — no sport bias
-    if (catchScore >= 85) {
+    if (catchScore >= 90) {
         verdict = `Concrete Wall — ${Math.round(_favPL/1000)}k/lvl fav, 0 gaps, use ${_recDepth}¢ depth`;
         verdictCol = '#00ff88';
     } else if (catchScore >= 70) {
@@ -3483,7 +3484,7 @@ function displayOrderbookLadder(orderbook) {
             verdict = `Sniper Zone — ${_favPL}/lvl fav, ${_recDepth}¢+ depth`;
         }
         verdictCol = '#ffaa00';
-    } else if (catchScore >= 30) {
+    } else if (catchScore >= 35) {
         if (_favIsThin) {
             verdict = `High-Risk — fav only ${_favPL}/lvl, hedge may miss`;
         } else if (_favGappy) {
@@ -3523,11 +3524,11 @@ function displayOrderbookLadder(orderbook) {
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;font-size:8px;font-weight:600;">
-            <span style="color:#00ff88;background:#00ff8811;padding:1px 5px;border-radius:3px;">85+ WALL 3¢</span>
+            <span style="color:#00ff88;background:#00ff8811;padding:1px 5px;border-radius:3px;">90+ WALL 3¢</span>
             <span style="color:#00ccff;background:#00ccff11;padding:1px 5px;border-radius:3px;">70+ PRIME 4¢</span>
             <span style="color:#ffaa00;background:#ffaa0011;padding:1px 5px;border-radius:3px;">50+ SNIPER 6¢</span>
-            <span style="color:#ff8800;background:#ff880011;padding:1px 5px;border-radius:3px;">30+ RISKY 10¢</span>
-            <span style="color:#ff4444;background:#ff444411;padding:1px 5px;border-radius:3px;">&lt;30 OFF</span>
+            <span style="color:#ff8800;background:#ff880011;padding:1px 5px;border-radius:3px;">35+ RISKY 10¢</span>
+            <span style="color:#ff4444;background:#ff444411;padding:1px 5px;border-radius:3px;">&lt;35 OFF</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">

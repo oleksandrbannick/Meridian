@@ -5796,13 +5796,14 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         elif period >= max_p - 1: t_pts = 5
         elif period >= max_p // 2: t_pts = 10
 
-    ppi = max(0, min(100, round(d_pts - g_pts + s_pts + t_pts)))
+    _raw = d_pts - g_pts + s_pts + t_pts
+    ppi = max(0, min(100, round(_raw * 100 / 75)))
 
     # PPI → depth rec
-    if ppi >= 85: rec = 3
+    if ppi >= 90: rec = 3
     elif ppi >= 70: rec = 4
     elif ppi >= 50: rec = 6
-    elif ppi >= 30: rec = 10
+    elif ppi >= 35: rec = 10
     else: rec = 0  # pull
     # Fav gaps override
     if fg >= 3 and rec < 7: rec = 7
@@ -11045,8 +11046,8 @@ def _handle_phantom(bot_id, bot, actions):
                             save_state()
                             return
                     # Recovery: if PPI recovers above 35, re-arm
-                    if bot.get('_ppi_pulled') and _ppi_now >= 35:
-                        print(f'✅ PPI RECOVERY: {bot_id} PPI={_ppi_now} ≥ 35 — re-arming')
+                    if bot.get('_ppi_pulled') and _ppi_now >= 45:
+                        print(f'✅ PPI RECOVERY: {bot_id} PPI={_ppi_now} ≥ 45 — re-arming')
                         bot['_ppi_pulled'] = False
                         bot_log('PPI_RECOVERY', bot_id, {'ppi': _ppi_now})
             new_dog_price = max(1, current_dog_bid - anchor_depth)

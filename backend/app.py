@@ -3542,43 +3542,37 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
             if 0 <= gap <= 2:
                 def _retreat_cancel(oid, bid, bot_ref=bot, bot_id_ref=bot_id):
                     result = _safe_cancel(oid, f'ws_retreat_{bid}')
-
-                    # _safe_cancel returns ('filled', count) when 404 + fills detected
-                    _detected_fills = 0
-                    if isinstance(result, tuple) and result[0] == 'filled':
-                        _detected_fills = result[1]
-                    elif result == '404' or result is None:
-                        # Fallback: _safe_cancel didn't detect fills, check manually
+                    # 404 = order gone. Could be filled! Check before assuming safe.
+                    if result == '404' or result is None:
                         try:
                             api_read_limiter.wait()
                             _ord = kalshi_client.get_order(oid)
                             _od = _ord.get('order', _ord) if isinstance(_ord, dict) else {}
-                            _detected_fills = _parse_fill_count(_od)
+                            _fills = _parse_fill_count(_od)
+                            if _fills > 0:
+                                print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_fills} fills on 404!')
+                                bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
+                                    'order_id': oid, 'fills': _fills, 'dog_price': bot_ref.get('dog_price'),
+                                }, level='ERROR')
+                                _push_notification('retreat_fill', f'🚨 {bot_id_ref[:30]}: {_fills} fills found on retreated order!', {
+                                    'bot_id': bot_id_ref, 'fills': _fills,
+                                })
+                                # Recover: set fills so monitor can hedge
+                                bot_ref['dog_fill_qty'] = max(bot_ref.get('dog_fill_qty', 0), _fills)
+                                _ds = bot_ref.get('dog_side', 'no')
+                                bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
+                                bot_ref['status'] = 'dog_filled'
+                                bot_ref['dog_filled_at'] = time.time()
+                                bot_ref['_hedge_fired'] = True
+                                _qty = bot_ref.get('quantity', 1)
+                                if _fills < _qty:
+                                    bot_ref['_original_qty'] = _qty
+                                    bot_ref['_partial_hedge_qty'] = _fills
+                                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
+                                print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_fills}x fills — hedge fired')
+                                save_state()
                         except Exception as _e:
                             print(f'⚠ WS RETREAT FILL CHECK FAILED: {bot_id_ref}: {_e}')
-
-                    if _detected_fills > 0:
-                        print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_detected_fills} fills!')
-                        bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
-                            'order_id': oid, 'fills': _detected_fills, 'dog_price': bot_ref.get('dog_price'),
-                        }, level='ERROR')
-                        _push_notification('retreat_fill', f'🚨 {bot_id_ref[:30]}: {_detected_fills} fills found on retreated order!', {
-                            'bot_id': bot_id_ref, 'fills': _detected_fills,
-                        })
-                        # Recover: set fills so monitor can hedge
-                        bot_ref['dog_fill_qty'] = max(bot_ref.get('dog_fill_qty', 0), _detected_fills)
-                        _ds = bot_ref.get('dog_side', 'no')
-                        bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
-                        bot_ref['status'] = 'dog_filled'
-                        bot_ref['dog_filled_at'] = time.time()
-                        bot_ref['_hedge_fired'] = True
-                        _qty = bot_ref.get('quantity', 1)
-                        if _detected_fills < _qty:
-                            bot_ref['_original_qty'] = _qty
-                            bot_ref['_partial_hedge_qty'] = _detected_fills
-                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
-                        print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_detected_fills}x fills — hedge fired')
-                        save_state()
                 threading.Thread(target=_retreat_cancel, args=(dog_order_id, bot_id), daemon=True).start()
                 bot['dog_order_id'] = None
                 bot['_last_retreat_at'] = time.time()
@@ -10942,40 +10936,8 @@ def _handle_phantom(bot_id, bot, actions):
         # and fire a duplicate hedge → orphans.
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
-            _cancel_result = _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
+            _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
             bot['dog_order_id'] = None
-            # Cancel-race: order filled during cancel — recover fills and hedge
-            _late_fills = 0
-            if isinstance(_cancel_result, tuple) and _cancel_result[0] == 'filled':
-                _late_fills = _cancel_result[1]
-            elif _cancel_result == '404':
-                # Double-check for fills _safe_cancel might have missed
-                try:
-                    api_read_limiter.wait()
-                    _ord = kalshi_client.get_order(old_dog_oid)
-                    _od = _ord.get('order', _ord) if isinstance(_ord, dict) else {}
-                    _late_fills = _parse_fill_count(_od)
-                except Exception:
-                    pass
-            if _late_fills > 0:
-                print(f'🚨 PHANTOM REPEAT CLEANUP FILL: {bot_id} old order {old_dog_oid[:12]} had {_late_fills} fills — hedging!')
-                bot_log('PHANTOM_REPEAT_CLEANUP_FILL', bot_id, {
-                    'order_id': old_dog_oid, 'fills': _late_fills,
-                    'dog_price': bot.get('dog_price'),
-                }, level='ERROR')
-                bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _late_fills)
-                _ds = bot.get('dog_side', 'no')
-                bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
-                bot['status'] = 'dog_filled'
-                bot['dog_filled_at'] = time.time()
-                bot['_hedge_fired'] = True
-                if _late_fills < qty:
-                    bot['_original_qty'] = qty
-                    bot['_partial_hedge_qty'] = _late_fills
-                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                print(f'⚡ REPEAT CLEANUP → INSTANT HEDGE: {bot_id} {_late_fills}x fills — hedge fired')
-                save_state()
-                return  # Don't place new dog — we're hedging
 
         try:
             dog_resp, actual_price = create_order_maker(

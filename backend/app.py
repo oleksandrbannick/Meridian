@@ -7546,7 +7546,7 @@ def _apex_mm_exit_tick(bot_id, bot):
         bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
         # Smart mode: restart if we haven't hit the loss limit
         _smart_limit = bot.get('smart_mode', 0)
-        if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit:
+        if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
             print(f'🔄 APEX MM RESTART: {bot_id} exit complete but smart {bot["consecutive_losses"]}/{_smart_limit} — cycling')
             bot_log('APEX_MM_SMART_RESTART', bot_id, {
                 'reason': bot.get('_exit_reason', 'exit'),
@@ -15740,6 +15740,26 @@ def stop_smart(bot_id):
     status = bot.get('status', '')
     bot['_smart_stopped'] = True
     bot['_smart_stop_reason'] = 'manual'
+
+    # ── Apex MM: stop immediately by pulling ladder and exiting if holding ──
+    if status in ('market_making_active', 'mm_depth_pulled') and bot.get('type') == 'apex_mm':
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if status == 'market_making_active':
+            _apex_mm_pull_all(bot_id, bot, 'smart_stop_manual')
+        if net_yes > 0 or net_no > 0:
+            # Holding inventory → transition to mm_exiting to sell off
+            _apex_mm_begin_exit(bot_id, bot, 'smart_stop (manual, holding inventory)')
+            bot_log('SMART_STOP_MM_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
+            print(f'⏹ SMART STOP MM → EXITING: {bot_id} holding YES={net_yes} NO={net_no}')
+        else:
+            # Flat → complete immediately
+            bot['status'] = 'completed'
+            bot['completed_at'] = time.time()
+            bot_log('SMART_STOP_MM_IMMEDIATE', bot_id, {'prev_status': status})
+            print(f'⏹ SMART STOP MM → COMPLETED: {bot_id} flat')
+        save_state()
+        return jsonify({'success': True, 'mode': 'immediate', 'message': 'Apex MM stopped'})
 
     # If dog hasn't filled yet, stop immediately by cancelling orders
     if status in ('dog_anchor_posted', 'ladder_posted', 'waiting_repeat'):

@@ -1436,60 +1436,22 @@ def get_depth_rec(ticker):
         return jsonify({'error': 'Orderbook stale', 'age_s': round(age_s)}), 404
     dog_analysis = lob.get_book_analysis(dog_side)
     fav_analysis = lob.get_book_analysis(fav_side)
-    # Sport detection
-    tu = ticker.upper()
-    sport = ''
-    if 'KXNBA' in tu: sport = 'NBA'
-    elif 'KXNHL' in tu: sport = 'NHL'
-    elif 'KXMLB' in tu: sport = 'MLB'
-    elif 'KXATP' in tu or 'KXWTA' in tu: sport = 'Tennis'
-    elif 'KXMLS' in tu: sport = 'MLS'
-    elif 'KXEPL' in tu: sport = 'EPL'
-    elif 'KXUCL' in tu: sport = 'UCL'
-    elif 'KXNCAA' in tu or 'KXMARMAD' in tu: sport = 'NCAAB'
-    # ── PPI (Phantom Precision Index) — pure market physics, no sport penalties ──
     fpl = fav_analysis['perLevel']
     fg = fav_analysis['gaps']
     dd = dog_analysis['totalDepth']
     fc = fav_analysis['concentration']
-    reasons = []
-    # 1. Density (40pts)
-    _density_raw = 100 if fpl >= 100000 else 90 if fpl >= 50000 else 80 if fpl >= 10000 else 70 if fpl >= 5000 else 60 if fpl >= 1000 else 50 if fpl >= 500 else 40 if fpl >= 100 else 30 if fpl >= 50 else 20 if fpl >= 20 else 15 if fpl >= 10 else 8 if fpl >= 5 else 0
-    _density_pts = round(_density_raw * 0.4)
-    # 2. Gap penalty (-25pts max)
-    _gap_penalty = min(25, fg * 5)
-    # 3. Spread (20pts)
     _dog_bid = lob.get_best_bid(dog_side)
     _fav_bid = lob.get_best_bid(fav_side)
-    _spread = max(0, 100 - (_dog_bid or 0) - (_fav_bid or 0)) if _dog_bid and _fav_bid else 5
-    _spread_pts = 20 if _spread <= 1 else 15 if _spread == 2 else 10 if _spread == 3 else 5 if _spread == 4 else 0
-    # 4. Time (15pts) — uses game score if available
-    _time_pts = 15  # default: early/pregame
-    _sc = _get_game_score_for_ticker(ticker)
-    if _sc and _sc.get('status') == 'in':
-        _period = _sc.get('period', 0)
-        _max_p = {'NBA': 4, 'NHL': 3, 'MLB': 9, 'NCAAB': 2}.get(sport, 4)
-        if _period >= _max_p: _time_pts = 0
-        elif _period >= _max_p - 1: _time_pts = 5
-        elif _period >= _max_p // 2: _time_pts = 10
-    # PPI score
-    ppi = max(0, min(100, round(_density_pts - _gap_penalty + _spread_pts + _time_pts)))
-    # Depth rec from PPI
-    if ppi >= 85: rd = 3
-    elif ppi >= 70: rd = 4
-    elif ppi >= 50: rd = 6
-    elif ppi >= 30: rd = 10
-    else: rd = 0  # no-trade
-    # Fav gaps override
-    if fg >= 3 and rd < 7: rd = 7
-    elif fg >= 2 and rd < 6: rd = 6
-    elif fg >= 1 and rd < 5: rd = 5
-    if rd > 0: rd = min(rd, 12)
-    reasons.append(f'PPI {ppi}: D={_density_pts} G=-{_gap_penalty} S={_spread_pts} T={_time_pts}')
+    # Use canonical PPI calculation (same as monitor/auto-depth)
+    ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
+    if ppi is None:
+        ppi, rd, ppi_det = 0, 0, {}
+    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 75 else 'SNIPER' if ppi >= 55 else 'TRAP' if ppi >= 35 else 'KILL'
+    reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
     return jsonify({
         'rec_depth': rd,
         'ppi_score': ppi,
-        'sport': sport,
+        'ppi_tier': tier,
         'reasons': reasons,
         'fav_per_level': fpl,
         'dog_gaps': dog_analysis['gaps'],

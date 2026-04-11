@@ -1308,7 +1308,7 @@
                 <div id="anchor-section" style="display:none;">
                     <div style="background:#0a0e1a;border:1px solid #ffaa0044;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#6a7488;line-height:1.4;display:flex;align-items:center;gap:10px;">
                         <canvas id="phantom-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
-                        <div><strong style="color:#ffaa00;">👻 Phantom Bot:</strong> Posts stealth limit deep below market. When a whale dumps and your anchor fills, instantly hedges the fav. Walk-up system bumps fav price +1¢/20s if snap-back is slow. Halftime-aware.</div>
+                        <div><strong style="color:#ffaa00;">👻 Phantom Bot:</strong> Posts stealth limit deep below market. When a whale dumps and your anchor fills, instantly hedges the fav at bid. Fav snaps to bid every cycle — no ceiling, no walk-up. PPI auto-depth adjusts floor live.</div>
                     </div>
                     <!-- Cross-market toggle (moneyline only) -->
                     <div id="anchor-cross-market-row" style="display:none; margin-bottom:12px;">
@@ -1416,7 +1416,7 @@
                             <div style="text-align:center;color:#555;font-size:11px;padding:8px;">Set price and qty to preview</div>
                         </div>
                         <div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e2740;font-size:9px;color:#555;text-align:center;">
-                            Post-only maker · walk-up +1¢/20s · ceiling 96¢ · sell-back if breached · halftime-aware
+                            Post-only maker · fav snaps to bid · no ceiling · PPI auto-depth · halftime-aware
                         </div>
                     </div>
                     <!-- Deploy button -->
@@ -3194,7 +3194,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260412029000"></script>
+    <script src="app.js?v=20260412030000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

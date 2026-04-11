@@ -2491,13 +2491,13 @@ function createMarketRow(market, label) {
         const spread = liq.avgSpread;  // YES spread = NO spread on binary tickers
         const dogSideLabel = liq.dogSide.toUpperCase();
         const pq = liq.phantomQuality;
-        if (dogPrice >= 7 && dogPrice <= 35 && lowestRung >= 3 && favBid >= 55 && hedgeRoom >= 2 && spread <= 5) {
+        if (dogPrice >= 7 && dogPrice <= 45 && lowestRung >= 3 && favBid >= 50 && hedgeRoom >= 2 && spread <= 5) {
             const liqLabel = spread <= 2 ? 'thick' : spread <= 3 ? 'good' : 'ok';
             const qualLabel = pq >= 60 ? '🟢' : pq >= 35 ? '🟡' : '🔴';
             const _phLabel = `${qualLabel}${pq}`;
             const _phLabelColor = pq >= 60 ? '#00ff88' : pq >= 35 ? '#ffaa00' : '#ff4444';
             recoTypes.push({ type: 'phantom', label: _phLabel, labelColor: _phLabelColor, tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢, ~${hedgeRoom}¢ room · spread ${spread}¢ (${liqLabel}) · ${qualLabel} ${pq}/100` });
-        } else if (dogPrice >= 7 && dogPrice <= 35 && favBid >= 55 && hedgeRoom >= 2 && spread > 5 && spread <= 8) {
+        } else if (dogPrice >= 7 && dogPrice <= 45 && favBid >= 50 && hedgeRoom >= 2 && spread > 5 && spread <= 8) {
             recoTypes.push({ type: 'phantom', label: '⚠️', labelColor: '#ff8800', tip: `Phantom: ${dogSideLabel} dog at ${dogPrice}¢ — ⚠️ spread ${spread}¢ (thin, hedge may not catch)` });
         }
     }

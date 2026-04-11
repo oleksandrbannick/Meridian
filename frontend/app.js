@@ -5894,13 +5894,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const fillAgeStr = fillAgeS >= 60 ? `${Math.floor(fillAgeS / 60)}m ${fillAgeS % 60}s` : `${fillAgeS}s`;
     const walkCount = bot.fav_walk_count || 0;
 
-    // Dog fill bar
+    // Dog fill bar — dim when bot is done
     const dogFillPct = qty > 0 ? Math.round((dogFillQty / qty) * 100) : 0;
-    const dogFillCol = dogFilled ? '#00ff88' : dogFillQty > 0 ? '#ffaa00' : '#333';
+    const dogFillCol = _isCompletedSummary ? '#33554488' : dogFilled ? '#00ff88' : dogFillQty > 0 ? '#ffaa00' : '#333';
 
-    // Fav fill bar
+    // Fav fill bar — dim when bot is done
     const favFillPct = hedgeQty > 0 ? Math.round((favFillQty / hedgeQty) * 100) : 0;
-    const favFillCol = favFilled ? '#00ff88' : favFillQty > 0 ? '#ffaa00' : '#333';
+    const favFillCol = _isCompletedSummary ? '#33554488' : favFilled ? '#00ff88' : favFillQty > 0 ? '#ffaa00' : '#333';
 
     // Fav status text
     const favShave = bot.fav_shave || 0;

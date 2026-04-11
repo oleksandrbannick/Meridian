@@ -14637,7 +14637,7 @@ def _run_monitor():
                                  (_cb.get('_cross_settled_qty_dog', 0) or 0) > 0)
                 if _has_fills:
                     continue  # has positions — keep for settlement tracking
-                # No fills + old → cancel resting orders on Kalshi, then auto-complete
+                # No fills + market settled → cancel resting orders, set proper settlement status
                 _cancelled_orders = []
                 for _okey in ('dog_order_id', 'fav_order_id', 'hedge_order_id', 'order_a_id', 'order_b_id', 'yes_order_id', 'no_order_id'):
                     _oid = _cb.get(_okey)
@@ -14667,7 +14667,6 @@ def _run_monitor():
                                     _cancelled_orders.append(_oid[:12])
                                 except Exception:
                                     pass
-                # Also cancel any tracked dog order IDs
                 for _oid in _cb.get('_all_dog_order_ids', []):
                     if _oid:
                         try:
@@ -14676,10 +14675,13 @@ def _run_monitor():
                             _cancelled_orders.append(_oid[:12])
                         except Exception:
                             pass
+                # Proper settlement path — same as all other bots
                 _cb['status'] = 'completed'
                 _cb['completed_at'] = _cleanup_now
-                _cb['_auto_cleaned'] = True
-                print(f'🧹 AUTO-CLEAN: {_cid} ({_cs}) — market {_mkt_status}/{_mkt_result}, no fills, cancelled {len(_cancelled_orders)} orders, marking completed')
+                _cb['_smart_stopped'] = True
+                _cb['_smart_stop_reason'] = 'final'
+                _cb['_market_settled_at'] = _cleanup_now  # 5 min purge timer
+                print(f'🏁 SETTLED CLEANUP: {_cid} ({_cs}) — market {_mkt_status}/{_mkt_result}, no fills, cancelled {len(_cancelled_orders)} orders → 5 min purge')
                 bot_log('AUTO_CLEAN_STALE', _cid, {'market_status': _mkt_status, 'market_result': _mkt_result, 'cancelled_orders': _cancelled_orders})
                 actions.append({'bot_id': _cid, 'action': 'auto_clean_stale'})
             elif _cs == 'stopped':

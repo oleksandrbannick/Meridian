@@ -13058,16 +13058,13 @@ function renderPhantomSportDropdown(sport, allTrades) {
         return;
     }
 
-    const sportTrades = allTrades.filter(t => (t.sport || 'Other') === sport);
-    if (sportTrades.length === 0) {
+    // Dropdown always shows FULL sport data — outer depth filter doesn't chain here
+    const trades = allTrades.filter(t => (t.sport || 'Other') === sport);
+    if (trades.length === 0) {
         panel.style.display = 'none';
         panel.innerHTML = '';
         return;
     }
-    // Depth-scoped trades for period/score/dog breakdowns (NOT for depth section itself)
-    const trades = _phantomActiveDepth !== 'all'
-        ? sportTrades.filter(t => (t.anchor_depth || 0) === _phantomActiveDepth)
-        : sportTrades;
 
     const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
     const icon = _si[sport] || '🎯';
@@ -13089,10 +13086,10 @@ function renderPhantomSportDropdown(sport, allTrades) {
     });
     const periods = Object.entries(periodMap).sort((a, b) => a[1]._order - b[1]._order);
 
-    // ── Scope depth trades by active period filter (uses ALL sport trades, not depth-filtered) ──
-    let depthTrades = sportTrades;
+    // ── Scope depth trades by active period filter ──
+    let depthTrades = trades;
     if (_phantomActivePeriod !== 'all') {
-        depthTrades = sportTrades.filter(t => {
+        depthTrades = trades.filter(t => {
             const gc = t.game_context || {};
             const p = gc.period || 0;
             const key = p > 0 ? (labels[p] || (p > 4 ? 'OT' : `P${p}`)) : '—';
@@ -13200,7 +13197,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
                 <div style="display:flex;align-items:center;gap:8px;">
                     <span style="font-size:22px;">${icon}</span>
-                    <span style="color:#ffaa00;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${sport} Breakdown${_phantomActiveDepth !== 'all' ? ` · ${_phantomActiveDepth}¢` : ''}</span>
+                    <span style="color:#ffaa00;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;">${sport} Breakdown</span>
                     ${_phantomActivePeriod !== 'all' ? `<span onclick="selectPhantomPeriod('all')" style="color:#ff66aa;font-size:10px;cursor:pointer;font-weight:600;">Clear ${_phantomActivePeriod} ✕</span>` : ''}
                 </div>
                 <div style="text-align:right;">
@@ -13308,7 +13305,7 @@ function selectPhantomPeriod(period) {
     const scrollY = window.scrollY;
     const allTrades = window._phantomAllTrades || [];
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
-    requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
 }
 
 function _applyPhantomFilters(trades) {
@@ -13334,7 +13331,7 @@ function selectPhantomSport(sport) {
     renderDogSportBreakdown(allTrades);
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
-    requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
 }
 
 function selectPhantomDepth(depth) {
@@ -13359,7 +13356,7 @@ function selectPhantomDepth(depth) {
     renderDogSportBreakdown(allTrades);
     renderPhantomSportDropdown(_phantomActiveSport, allTrades);
     filterPhantomLog();
-    requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
 }
 
 // ── Dog Bot history ──────────────────────────────────────────────────────────

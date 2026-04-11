@@ -5949,7 +5949,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     }
 
     const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid ${borderCol}33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
+    item.style.cssText = `background:#0f1419;border:1px solid #ff66aa33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     try {
     item.innerHTML = `
@@ -5997,10 +5997,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             </div>`;
             })()}
             <!-- FAV SIDE -->
-            <div style="background:#060a14;border:1px solid ${favPrice > 0 ? '#00aaff33' : '#1e2740'};border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
-                <div style="color:#00aaff;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ ${isCrossMarket ? hedgeTeamCode + ' · ' : ''}FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>
+            <div style="background:#060a14;border:1px solid ${favPrice > 0 ? '#ff66aa33' : '#1e2740'};border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
+                <div style="color:#ff66aa;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ ${isCrossMarket ? hedgeTeamCode + ' · ' : ''}FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `${wouldPostAt}¢`}</div>
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#00aaff;">${favBid || '?'}¢</strong> · ask <strong style="color:#00aaff;">${favAsk || '?'}¢</strong></div>
+                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ff66aa;">${favBid || '?'}¢</strong> · ask <strong style="color:#ff66aa;">${favAsk || '?'}¢</strong></div>
                 <div style="color:#8892a6;font-size:10px;margin-bottom:4px;">${favStatusText}</div>
                 ${favPrice > 0 ? `
                     <div style="display:flex;align-items:center;gap:6px;">

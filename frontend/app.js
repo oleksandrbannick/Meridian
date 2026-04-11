@@ -2851,10 +2851,16 @@ function formatBotDisplayName(ticker, spreadLine, marketTitle) {
     // or "Collington vs. Hernandez: Winner?" or "Team A at Team B: Spread"
     if (marketTitle) {
         let kalshiMatchup = '';
+        // Tennis/golf: "Will X win the Y vs Z: Event?" — extract Y vs Z
+        const winTheM = marketTitle.match(/Will .+ win the (.+?)\s+vs\.?\s+(.+?)(?:\s*[:?]|$)/i);
+        // Sports: "Will the Detroit Pistons beat the Charlotte Hornets?"
         const beatM = marketTitle.match(/Will (?:the )?(.+?) beat (?:the )?(.+?)(?:\?|$)/i);
+        // "Team A vs Team B: Winner?"
         const vsM = marketTitle.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s*[:?]|\s+Winner|\s+Moneyline|$)/i);
+        // "Team A at Team B: Winner?"
         const atM = marketTitle.match(/^(.+?)\s+at\s+(.+?)(?:\s*[:?]|\s+Winner|\s+Moneyline|\s+Spread|\s+Total|$)/i);
-        if (beatM) kalshiMatchup = `${beatM[1].trim()} vs ${beatM[2].trim()}`;
+        if (winTheM) kalshiMatchup = `${winTheM[1].trim()} vs ${winTheM[2].trim()}`;
+        else if (beatM) kalshiMatchup = `${beatM[1].trim()} vs ${beatM[2].trim()}`;
         else if (vsM) kalshiMatchup = `${vsM[1].trim()} vs ${vsM[2].trim()}`;
         else if (atM) kalshiMatchup = `${atM[1].trim()} vs ${atM[2].trim()}`;
         if (kalshiMatchup) {

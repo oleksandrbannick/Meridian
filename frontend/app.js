@@ -2860,25 +2860,39 @@ function formatBotDisplayName(ticker, spreadLine) {
     // Parse teams from gameId: 26MAR02BOSMIL → BOS vs MIL
     const cleaned = gameId.replace(/^\d+[A-Z]{3}\d+/, '');  // strip date prefix
     let matchup = '';
-    const _teamMap = {
-        'ATL': 'ATL', 'BOS': 'BOS', 'BKN': 'BKN', 'CHA': 'CHA',
-        'CHI': 'CHI', 'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN',
-        'DET': 'DET', 'GSW': 'GSW', 'HOU': 'HOU', 'IND': 'IND',
-        'LAC': 'LAC', 'LAL': 'LAL', 'MEM': 'MEM', 'MIA': 'MIA',
-        'MIL': 'MIL', 'MIN': 'MIN', 'NOP': 'NOP', 'NYK': 'NYK',
-        'OKC': 'OKC', 'ORL': 'ORL', 'PHI': 'PHI', 'PHX': 'PHX',
-        'POR': 'POR', 'SAC': 'SAC', 'SAS': 'SAS', 'TOR': 'TOR',
-        'UTA': 'UTA', 'WAS': 'WAS',
-        'CAR': 'CAR', 'SEA': 'SEA', 'COL': 'COL', 'VGK': 'VGK',
-        'WPG': 'WPG', 'WSH': 'WSH', 'VAN': 'VAN', 'FLA': 'FLA',
-        'NYR': 'NYR', 'NYI': 'NYI', 'TBL': 'TBL', 'NJD': 'NJD',
-        'PIT': 'PIT', 'CBJ': 'CBJ', 'NSH': 'NSH', 'STL': 'STL',
-        'EDM': 'EDM', 'CGY': 'CGY', 'OTT': 'OTT', 'MTL': 'MTL',
-        'BUF': 'BUF', 'ARI': 'ARI', 'ANA': 'ANA', 'SJS': 'SJS',
-        // 2-letter MLB/other codes
-        'KC': 'KC', 'SD': 'SD', 'SF': 'SF', 'TB': 'TB', 'LA': 'LA', 'NY': 'NY',
-        'CIN': 'CIN', 'TEX': 'TEX', 'BAL': 'BAL', 'CWS': 'CWS',
+    // Sport-specific team code sets — used ONLY for ticker parsing (splitting gameId into two team codes).
+    // Display names come from _abbrToNameBySport (ESPN/API Tennis) first, then _teamNameMap below.
+    const _sport = detectSport(ticker);
+    const _isTennisOrGolf = _sport === 'Tennis' || _sport === 'Golf';
+
+    // Full team NAME map — used as fallback when ESPN data isn't loaded
+    const _teamNameMap = {
+        // NBA
+        'ATL': 'Atlanta', 'BOS': 'Boston', 'BKN': 'Brooklyn', 'CHA': 'Charlotte',
+        'CHI': 'Chicago', 'CLE': 'Cleveland', 'DAL': 'Dallas', 'DEN': 'Denver',
+        'DET': 'Detroit', 'GSW': 'Golden State', 'HOU': 'Houston', 'IND': 'Indiana',
+        'LAC': 'Clippers', 'LAL': 'Lakers', 'MEM': 'Memphis', 'MIA': 'Miami',
+        'MIL': 'Milwaukee', 'MIN': 'Minnesota', 'NOP': 'New Orleans', 'NYK': 'Knicks',
+        'OKC': 'Oklahoma City', 'ORL': 'Orlando', 'PHI': 'Philadelphia', 'PHX': 'Phoenix',
+        'POR': 'Portland', 'SAC': 'Sacramento', 'SAS': 'San Antonio', 'TOR': 'Toronto',
+        'UTA': 'Utah', 'WAS': 'Washington',
+        // NHL
+        'CAR': 'Carolina', 'SEA': 'Seattle', 'COL': 'Colorado', 'VGK': 'Vegas',
+        'WPG': 'Winnipeg', 'WSH': 'Washington', 'VAN': 'Vancouver', 'FLA': 'Florida',
+        'NYR': 'Rangers', 'NYI': 'Islanders', 'TBL': 'Tampa Bay', 'NJD': 'New Jersey',
+        'PIT': 'Pittsburgh', 'CBJ': 'Columbus', 'NSH': 'Nashville', 'STL': 'St. Louis',
+        'EDM': 'Edmonton', 'CGY': 'Calgary', 'OTT': 'Ottawa', 'MTL': 'Montreal',
+        'BUF': 'Buffalo', 'ARI': 'Arizona', 'ANA': 'Anaheim', 'SJS': 'San Jose',
+        // MLB 2-letter
+        'KC': 'Kansas City', 'SD': 'San Diego', 'SF': 'San Francisco', 'TB': 'Tampa Bay',
+        'LA': 'Los Angeles', 'NY': 'New York',
+        // MLB 3-letter
+        'CIN': 'Cincinnati', 'TEX': 'Texas', 'BAL': 'Baltimore', 'CWS': 'White Sox',
     };
+
+    // For tennis/golf: don't use team code map for parsing — just split positionally
+    // This prevents "SAS" in a tennis ticker from matching San Antonio Spurs
+    const _teamMap = _isTennisOrGolf ? {} : _teamNameMap;
     if (cleaned.length >= 4) {
         // Try 3+3 first, then 2+3, then 3+2, then 2+2
         let t1 = '', t2 = '';
@@ -2897,11 +2911,12 @@ function formatBotDisplayName(ticker, spreadLine) {
         }
         if (t1 && t2) {
             // Resolve abbreviations to full names — sport-specific to avoid CLE=Cavaliers vs CLE=Guardians
-            const _sport = detectSport(ticker);
             const sportNames = (window._abbrToNameBySport || {})[_sport] || {};
             const fallbackNames = window._abbrToName || {};
-            const n1 = sportNames[t1] || fallbackNames[t1] || _teamMap[t1] || t1;
-            const n2 = sportNames[t2] || fallbackNames[t2] || _teamMap[t2] || t2;
+            // For non-tennis/golf: use sport-keyed ESPN → generic ESPN → hardcoded team names → raw abbreviation
+            // For tennis/golf: use sport-keyed API Tennis → generic → raw abbreviation (never team names)
+            const n1 = sportNames[t1] || fallbackNames[t1] || (_isTennisOrGolf ? t1 : (_teamNameMap[t1] || t1));
+            const n2 = sportNames[t2] || fallbackNames[t2] || (_isTennisOrGolf ? t2 : (_teamNameMap[t2] || t2));
             matchup = `${n1} vs ${n2}`;
         }
     }

@@ -8323,6 +8323,12 @@ def create_anchor_bot():
             if dog_side not in ('yes', 'no'):
                 dog_side = 'no'
 
+        # Determine fav side early (needed for auto-depth PPI calculation)
+        if cross_market and hedge_ticker != ticker:
+            fav_side = dog_side  # same side, different ticker
+        else:
+            fav_side = 'yes' if dog_side == 'no' else 'no'
+
         # Anchor depth: how far below market to post the dog anchor
         # depth_floor IS the anchor_depth — post exactly that many cents from the market
         auto_depth = data.get('auto_depth', False)
@@ -8355,11 +8361,6 @@ def create_anchor_bot():
         elif live_dog_bid <= 0:
             _start_pulled = True
             dog_price = 1
-
-        if cross_market and hedge_ticker != ticker:
-            fav_side = dog_side  # same side, different ticker
-        else:
-            fav_side = 'yes' if dog_side == 'no' else 'no'
 
         # Fav liquidity check — warn if hedge side is thin
         _fav_depth_init = 0

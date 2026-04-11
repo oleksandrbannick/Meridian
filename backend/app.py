@@ -4174,6 +4174,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         _is_late_fill = False
         if not matched_side:
             if order_id in (bot.get('_all_placed_order_ids') or []):
+                # DEDUP: skip if we already fully counted this order's fills
+                _already_counted = bot.get('_counted_order_fills', {}).get(order_id, 0)
                 # Late fill from old cycle — VERIFY with Kalshi before trusting WS
                 _late_price = 0
                 _late_verified_fills = 0
@@ -4205,14 +4207,21 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         'kalshi_fills': _late_verified_fills, 'kalshi_status': _late_status,
                     }, level='WARN')
                     continue  # skip this fill entirely
+                # DEDUP: only count NEW fills beyond what we already tracked
+                _new_fills = max(0, _late_verified_fills - _already_counted)
+                if _new_fills <= 0:
+                    print(f'👻 APEX MM LATE FILL DEDUP: {bot_id} {side.upper()} order {order_id[:12]} has {_late_verified_fills} fills but {_already_counted} already counted — skipping')
+                    continue
+                # Record that we've counted these fills
+                bot.setdefault('_counted_order_fills', {})[order_id] = _late_verified_fills
                 matched_side = side
                 matched_price = _late_price
-                # Use verified fill count, not WS count (WS can double-deliver)
-                count = _late_verified_fills
+                count = _new_fills  # Only add the delta, not total
                 _is_late_fill = True
-                print(f'🚨 APEX MM LATE FILL (verified): {bot_id} {side.upper()} +{count} @{_late_price}c on order {order_id[:12]} (status={_late_status})')
+                print(f'🚨 APEX MM LATE FILL (verified): {bot_id} {side.upper()} +{count} @{_late_price}c on order {order_id[:12]} (kalshi_total={_late_verified_fills} already_counted={_already_counted})')
                 bot_log('APEX_MM_LATE_FILL', bot_id, {
-                    'order_id': order_id, 'side': side, 'verified_count': count,
+                    'order_id': order_id, 'side': side, 'new_fills': count,
+                    'kalshi_total': _late_verified_fills, 'already_counted': _already_counted,
                     'price': _late_price, 'kalshi_status': _late_status,
                     'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
                 }, level='WARN')
@@ -4272,6 +4281,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
                     level = orders_dict.get(str(matched_price), {})
                     level['fill_qty'] = level.get('fill_qty', 0) + count
+                    # Track cumulative fills per order for late-fill dedup
+                    if order_id:
+                        _cum = bot.setdefault('_counted_order_fills', {})
+                        _cum[order_id] = _cum.get(order_id, 0) + count
 
                 # Add to inventory
                 bot[f'net_{matched_side}'] = bot.get(f'net_{matched_side}', 0) + count

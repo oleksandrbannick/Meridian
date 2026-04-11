@@ -3976,7 +3976,21 @@ function setCrossMarketSide(side) {
     });
 })();
 
+function setAutoDepth() {
+    window._phantomAutoDepth = true;
+    const displayEl = document.getElementById('anchor-depth-display');
+    if (displayEl) displayEl.textContent = 'AUTO';
+    document.querySelectorAll('#depth-floor-buttons .depth-btn').forEach(btn => {
+        const isAuto = btn.getAttribute('data-depth') === 'auto';
+        btn.style.background = isAuto ? 'rgba(100,255,218,0.15)' : 'transparent';
+        btn.style.color = isAuto ? '#64ffda' : '#5a6484';
+        btn.style.boxShadow = isAuto ? 'inset 0 -2px 0 #64ffda' : 'none';
+    });
+    if (typeof initAnchorDogPrices === 'function') initAnchorDogPrices();
+}
+
 function setDepthFloor(value) {
+    window._phantomAutoDepth = false;
     const hiddenInput = document.getElementById('anchor-depth');
     if (hiddenInput) hiddenInput.value = value;
     // Update button states
@@ -4509,6 +4523,7 @@ async function deployAnchorBot() {
             repeat_count: smartMode ? 0 : repeatCount,
             smart_mode: smartMode,
             anchor_depth: anchorDepth,
+            auto_depth: !!window._phantomAutoDepth,
         };
 
         // Add cross-market fields if active
@@ -6032,7 +6047,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢</span>${(() => {
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${(() => {
+                const _ppi = bot._last_ppi;
+                if (_ppi != null) {
+                    const _ppiCol = _ppi >= 85 ? '#00ff88' : _ppi >= 70 ? '#00ccff' : _ppi >= 50 ? '#ffaa00' : _ppi >= 30 ? '#ff8800' : '#ff4444';
+                    const _ppiLabel = _ppi >= 85 ? 'WALL' : _ppi >= 70 ? 'PRIME' : _ppi >= 50 ? 'SNIPER' : _ppi >= 30 ? 'RISKY' : 'OFF';
+                    return `<span style="color:${_ppiCol};font-size:9px;font-weight:700;">PPI:${_ppi} ${_ppiLabel}</span>`;
+                }
                 const _rd = bot._rec_depth;
                 if (_rd == null) return '';
                 const _curD = bot.anchor_depth || targetWidth || 5;

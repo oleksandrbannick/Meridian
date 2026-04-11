@@ -5752,6 +5752,67 @@ _LATE_GAME_RULES = {
     'KXWTA':    {'final': 3, 'block_period': 3, 'block_secs': None, 'block_ot': False, 'name': 'WTA Set 3', 'tennis': True},
 }
 
+# ── Phantom Precision Index (PPI) ──────────────────────────────────
+# Sport-agnostic market quality score. Four pillars: Density, Gaps, Spread, Time.
+# Score drives depth floor recommendation and auto-pull decisions.
+
+def _calculate_ppi(ticker, fav_side, dog_side):
+    """Calculate PPI (0-100) from live LocalOrderbook. Returns (ppi_score, rec_depth, details_dict).
+    Returns (None, None, {}) if no orderbook available."""
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0 or (time.time() - lob.last_update_ts) > 30:
+        return None, None, {}
+    fav_analysis = lob.get_book_analysis(fav_side)
+    dog_analysis = lob.get_book_analysis(dog_side)
+    fav_bid = lob.get_best_bid(fav_side)
+    dog_bid = lob.get_best_bid(dog_side)
+    fpl = fav_analysis['perLevel']
+    fg = fav_analysis['gaps']
+
+    # 1. Density (40pts) — fav contracts/level
+    _dr = 100 if fpl >= 100000 else 90 if fpl >= 50000 else 80 if fpl >= 10000 else 70 if fpl >= 5000 else 60 if fpl >= 1000 else 50 if fpl >= 500 else 40 if fpl >= 100 else 30 if fpl >= 50 else 20 if fpl >= 20 else 15 if fpl >= 10 else 8 if fpl >= 5 else 0
+    d_pts = round(_dr * 0.4)
+
+    # 2. Gap penalty (-25pts max) — each fav gap subtracts 5
+    g_pts = min(25, fg * 5)
+
+    # 3. Spread (20pts)
+    spread = max(0, 100 - (dog_bid or 0) - (fav_bid or 0)) if dog_bid and fav_bid else 5
+    s_pts = 20 if spread <= 1 else 15 if spread == 2 else 10 if spread == 3 else 5 if spread == 4 else 0
+
+    # 4. Time (15pts) — game phase
+    t_pts = 15
+    tu = ticker.upper()
+    sport = ''
+    if 'KXNBA' in tu or 'KXNCAA' in tu: sport = 'NBA'
+    elif 'KXNHL' in tu: sport = 'NHL'
+    elif 'KXMLB' in tu: sport = 'MLB'
+    elif 'KXATP' in tu or 'KXWTA' in tu: sport = 'Tennis'
+    sc = _get_game_score_for_ticker(ticker)
+    if sc and sc.get('status') == 'in':
+        period = sc.get('period', 0)
+        max_p = {'NBA': 4, 'NHL': 3, 'MLB': 9, 'NCAAB': 2}.get(sport, 4)
+        if period >= max_p: t_pts = 0
+        elif period >= max_p - 1: t_pts = 5
+        elif period >= max_p // 2: t_pts = 10
+
+    ppi = max(0, min(100, round(d_pts - g_pts + s_pts + t_pts)))
+
+    # PPI → depth rec
+    if ppi >= 85: rec = 3
+    elif ppi >= 70: rec = 4
+    elif ppi >= 50: rec = 6
+    elif ppi >= 30: rec = 10
+    else: rec = 0  # pull
+    # Fav gaps override
+    if fg >= 3 and rec < 7: rec = 7
+    elif fg >= 2 and rec < 6: rec = 6
+    elif fg >= 1 and rec < 5: rec = 5
+    if rec > 0: rec = min(rec, 12)
+
+    return ppi, rec, {'d': d_pts, 'g': g_pts, 's': s_pts, 't': t_pts, 'fpl': fpl, 'fg': fg, 'spread': spread}
+
+
 # ── Phantom Death Zone ──────────────────────────────────────────────
 # Sport-specific kill-switch for Phantom. When the game enters the death zone,
 # phantom stops taking new positions and exits any open trades as maker.
@@ -8160,7 +8221,16 @@ def create_anchor_bot():
 
         # Anchor depth: how far below market to post the dog anchor
         # depth_floor IS the anchor_depth — post exactly that many cents from the market
+        auto_depth = data.get('auto_depth', False)
         anchor_depth = int(data.get('anchor_depth', 0))  # 0 = use target_width as depth
+        if auto_depth:
+            # PPI-driven: calculate optimal depth from live book
+            _ppi, _ppi_rec, _ppi_d = _calculate_ppi(ticker, fav_side, dog_side)
+            if _ppi is not None and _ppi_rec and _ppi_rec > 0:
+                anchor_depth = _ppi_rec
+                print(f'📊 AUTO DEPTH: PPI={_ppi} → depth={anchor_depth}¢ (D={_ppi_d.get("d")} G=-{_ppi_d.get("g")} S={_ppi_d.get("s")} T={_ppi_d.get("t")})')
+            elif anchor_depth <= 0:
+                anchor_depth = 5  # fallback if no book
         if anchor_depth <= 0:
             anchor_depth = max(5, target_width)  # depth = depth_floor, minimum 5¢
         fav_shave = 0  # fav always posts at bid, no shave needed
@@ -8262,6 +8332,7 @@ def create_anchor_bot():
             'smart_mode':          smart_mode,
             'consecutive_losses':  0,
             'anchor_depth':        anchor_depth,
+            'auto_depth':          auto_depth,
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
             'fav_last_walk_at':    None,
@@ -9993,8 +10064,30 @@ def _handle_phantom(bot_id, bot, actions):
                     save_state()
                     return
 
-                # Smart reprice: always anchor_depth below bid — strict depth floor
+                # Auto-depth: recalculate PPI and adjust depth floor (5pt hysteresis)
                 anchor_depth = bot.get('anchor_depth', 5)
+                if bot.get('auto_depth'):
+                    _ppi_now, _ppi_rec, _ppi_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
+                    if _ppi_now is not None:
+                        _last_ppi = bot.get('_last_ppi', _ppi_now)
+                        if abs(_ppi_now - _last_ppi) >= 5:  # hysteresis
+                            bot['_last_ppi'] = _ppi_now
+                            if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                                print(f'📊 AUTO DEPTH ADJUST: {bot_id} PPI {_last_ppi}→{_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
+                                bot['anchor_depth'] = _ppi_rec
+                                anchor_depth = _ppi_rec
+                            elif _ppi_rec == 0:
+                                # PPI < 30 = pull the dog
+                                print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 30 — pulling dog')
+                                if dog_order_id:
+                                    _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
+                                    bot['dog_order_id'] = None
+                                bot['_price_floor_pulled'] = True
+                                bot['_ppi_pulled'] = True
+                                bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
+                                save_state()
+                                return
+                # Smart reprice: always anchor_depth below bid — strict depth floor
                 new_dog_price = max(1, current_dog_bid - anchor_depth)
 
                 # Hard price ceiling: dog never exceeds 40¢ — park there and wait
@@ -10934,6 +11027,28 @@ def _handle_phantom(bot_id, bot, actions):
                 _fav_ob = ob
                 _current_fav_bid = _best_bid(_fav_ob, fav_side)
             anchor_depth = bot.get('anchor_depth', 5)
+            # Auto-depth: recalculate PPI on each repeat (5pt hysteresis)
+            if bot.get('auto_depth'):
+                _ppi_now, _ppi_rec, _ppi_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
+                if _ppi_now is not None:
+                    _last_ppi = bot.get('_last_ppi', _ppi_now)
+                    if abs(_ppi_now - _last_ppi) >= 5:
+                        bot['_last_ppi'] = _ppi_now
+                        if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                            print(f'📊 AUTO DEPTH ADJUST (repeat): {bot_id} PPI {_last_ppi}→{_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
+                            bot['anchor_depth'] = _ppi_rec
+                            anchor_depth = _ppi_rec
+                        elif _ppi_rec == 0:
+                            print(f'⚠ AUTO DEPTH PULL (repeat): {bot_id} PPI={_ppi_now} < 30 — waiting')
+                            bot['_ppi_pulled'] = True
+                            bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
+                            save_state()
+                            return
+                    # Recovery: if PPI recovers above 35, re-arm
+                    if bot.get('_ppi_pulled') and _ppi_now >= 35:
+                        print(f'✅ PPI RECOVERY: {bot_id} PPI={_ppi_now} ≥ 35 — re-arming')
+                        bot['_ppi_pulled'] = False
+                        bot_log('PPI_RECOVERY', bot_id, {'ppi': _ppi_now})
             new_dog_price = max(1, current_dog_bid - anchor_depth)
 
             # Drift guard: stop if dog is dead, price too low, or price too high
@@ -15193,45 +15308,11 @@ def list_bots():
                 bot['_dog_depth_top3'] = round(_lob.get_total_depth(_dog_side, 3))
                 bot['_fav_depth_top3'] = round(_lob.get_total_depth(_fav_side, 3))
                 bot['_obi_age_ms'] = round((time.time() - _lob.last_update_ts) * 1000)
-                # Live depth floor recommendation from book structure
-                _ticker = bot.get('ticker', '')
-                _sport_mins = {'Tennis': 4, 'NBA': 4, 'MLB': 4, 'NHL': 5, 'MLS': 4, 'EPL': 4, 'UCL': 4, 'NCAAB': 4}
-                _sp = ''
-                _tu = _ticker.upper()
-                if 'KXNBA' in _tu: _sp = 'NBA'
-                elif 'KXNHL' in _tu: _sp = 'NHL'
-                elif 'KXMLB' in _tu: _sp = 'MLB'
-                elif 'KXATP' in _tu or 'KXWTA' in _tu: _sp = 'Tennis'
-                elif 'KXMLS' in _tu: _sp = 'MLS'
-                elif 'KXEPL' in _tu: _sp = 'EPL'
-                elif 'KXUCL' in _tu: _sp = 'UCL'
-                elif 'KXNCAA' in _tu or 'KXMARMAD' in _tu: _sp = 'NCAAB'
-                _rd = _sport_mins.get(_sp, 4)
-                _dog_analysis = _lob.get_book_analysis(_dog_side)
-                _fav_analysis = _lob.get_book_analysis(_fav_side)
-                _fpl = _fav_analysis['perLevel']
-                if _fpl >= 50: _rd = max(_rd, 4)
-                elif _fpl >= 30: _rd = max(_rd, 5)
-                elif _fpl >= 15: _rd = max(_rd, 5)
-                elif _fpl >= 8: _rd = max(_rd, 6)
-                elif _fpl >= 4: _rd = max(_rd, 7)
-                elif _fpl > 0: _rd = max(_rd, 8)
-                _dd = _dog_analysis['totalDepth']
-                _dg = _dog_analysis['gaps']
-                if _dd < 5000:
-                    if _dg >= 4: _rd = max(_rd, 8)
-                    elif _dg >= 3: _rd = max(_rd, 7)
-                    elif _dg >= 2: _rd = max(_rd, 6)
-                    elif _dg >= 1 and _rd <= 4: _rd = max(_rd, 5)
-                _fg = _fav_analysis['gaps']
-                if _fg >= 4: _rd = max(_rd, 8)
-                elif _fg >= 3: _rd = max(_rd, 7)
-                elif _fg >= 2: _rd = max(_rd, 6)
-                elif _fg >= 1 and _rd <= 4: _rd = max(_rd, 5)
-                _fc = _fav_analysis['concentration']
-                if _fc > 0.8: _rd = max(_rd, 6)
-                elif _fc > 0.65 and _rd <= 4: _rd = max(_rd, 5)
-                bot['_rec_depth'] = min(_rd, 12)
+                # Live PPI score + depth rec from book structure
+                _ppi, _ppi_rec, _ppi_det = _calculate_ppi(bot.get('ticker', ''), _fav_side, _dog_side)
+                if _ppi is not None:
+                    bot['_last_ppi'] = _ppi
+                    bot['_rec_depth'] = _ppi_rec
 
         # Apex MM — OBI + depth signals
         if bot.get('bot_category') == 'ladder_arb' and bot.get('type') == 'apex_mm' and bot.get('ticker'):

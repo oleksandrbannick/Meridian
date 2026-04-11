@@ -11272,46 +11272,60 @@ def _handle_phantom_ladder(bot_id, bot, actions):
         save_state()
         return
 
-    # ── STATE: ladder_filled_no_fav — retry hedge with timeout ──
+    # ── STATE: ladder_filled_no_fav — keep retrying hedge forever (no timeout, no sellback) ──
     if status == 'ladder_filled_no_fav':
-        # Set dog_filled_at if missing (recovery)
-        if not bot.get('dog_filled_at'):
-            bot['dog_filled_at'] = bot.get('first_fill_at') or now
-        dog_filled_at = bot['dog_filled_at']
-        hedge_timeout_s = bot.get('hedge_timeout_s', 120)
-        wait_s = now - dog_filled_at
-        if wait_s >= hedge_timeout_s:
-            avg_dog = bot.get('avg_fill_price', 0)
-            # Check if market is dead (settled/closed) — don't retry sells on dead markets
+        # Settlement detection: if bids are 0 on both sides, market is done
+        # Mark completed — settlement checker (line ~9454) will set _market_settled_at → 5 min purge
+        _ws_p = ws_manager.get_price(ticker) if ws_manager else None
+        _yb = (_ws_p or {}).get('yes_bid', 0)
+        _nb = (_ws_p or {}).get('no_bid', 0)
+        if _yb <= 0 and _nb <= 0 and _ws_p:
             try:
                 api_read_limiter.wait()
                 _mkt_check = kalshi_client.get_market(ticker)
-                _mkt_data = _mkt_check.get('market', _mkt_check)
+                _mkt_data = _mkt_check.get('market', _mkt_check) if isinstance(_mkt_check, dict) else {}
                 _mkt_status = _mkt_data.get('status', '')
                 if _mkt_status not in ('active', 'open', ''):
-                    print(f'⏰ PHANTOM MARKET SETTLED: {bot_id} market={_mkt_status} — waiting for auto-settlement (no sell needed)')
-                    bot_log('PHANTOM_LADDER_MARKET_SETTLED_TIMEOUT', bot_id, {
-                        'market_status': _mkt_status, 'wait_s': round(wait_s, 1),
-                    })
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
-                    bot['result'] = 'market_settled_with_position'
+                    dog_qty = bot.get('total_dog_fill_qty', bot.get('dog_fill_qty', 0)) or bot.get('quantity', 1)
+                    # Cancel resting hedge
+                    fav_oid = bot.get('fav_order_id')
+                    if fav_oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(fav_oid)
+                        except Exception:
+                            pass
+                    _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+                    if _is_cross:
+                        # Cross-market: holds legs on 2 tickers → awaiting_settlement
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + dog_qty
+                        print(f'⏳ PHANTOM CROSS SETTLED (no fav): {bot_id} market={_mkt_status}, holding {dog_qty}x dog → awaiting settlement')
+                        bot_log('PHANTOM_CROSS_SETTLED_HOLDING', bot_id, {
+                            'market_status': _mkt_status, 'dog_qty': dog_qty,
+                        })
+                    else:
+                        # Same-market: Kalshi settles automatically → completed + 5 min purge
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        bot['result'] = 'settled_holding_dog'
+                        bot['_smart_stopped'] = True
+                        bot['_smart_stop_reason'] = 'final'
+                        bot['_market_settled_at'] = now
+                        print(f'🏁 PHANTOM SETTLED (no fav): {bot_id} market={_mkt_status}, holding {dog_qty}x dog → 5 min purge')
+                        bot_log('PHANTOM_SETTLED_HOLDING_DOG', bot_id, {
+                            'market_status': _mkt_status, 'dog_qty': dog_qty,
+                        })
                     save_state()
-                    actions.append({'bot_id': bot_id, 'action': 'phantom_market_settled'})
                     return
             except Exception:
                 pass
-            print(f'⏰ PHANTOM NO-FAV TIMEOUT: {bot_id} waited {wait_s:.0f}s for fav bid — selling back')
-            bot_log('PHANTOM_LADDER_NO_FAV_TIMEOUT', bot_id, {
-                'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
-                'avg_dog': avg_dog, 'total_fill_qty': bot.get('total_dog_fill_qty', 0),
-            })
-            _phantom_ladder_sell_back(bot_id, bot, avg_dog, 0, 999, actions)
-            return
-        # (ceiling_sellback removed — phantom now posts at bid regardless, 20s timer handles exit)
+        # Keep retrying hedge
         if not bot.get('_hedge_thread_active'):
+            wait_s = now - (bot.get('dog_filled_at') or bot.get('first_fill_at') or now)
             bot_log('PHANTOM_LADDER_NO_FAV_RETRY', bot_id, {
-                'wait_s': round(wait_s, 1), 'hedge_timeout_s': hedge_timeout_s,
+                'wait_s': round(wait_s, 1),
             })
             bot['_hedge_thread_active'] = True
             threading.Thread(target=_execute_phantom_ladder_hedge, args=(bot_id,), daemon=True).start()

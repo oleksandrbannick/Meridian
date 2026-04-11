@@ -5997,7 +5997,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             </div>`;
             })()}
             <!-- FAV SIDE -->
-            <div style="background:#060a14;border:1px solid ${favPrice > 0 ? '#ff66aa33' : '#1e2740'};border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
+            <div style="background:#060a14;border:1px solid #ff66aa44;border-radius:8px;padding:10px;${!dogFilled && !favPrice ? 'opacity:0.6;' : ''}">
                 <div style="color:#ff66aa;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">⭐ ${isCrossMarket ? hedgeTeamCode + ' · ' : ''}FAV · ${favSide.toUpperCase()}${favFilled ? ' · FILLED ✓' : ''}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `${wouldPostAt}¢`}</div>
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ff66aa;">${favBid || '?'}¢</strong> · ask <strong style="color:#ff66aa;">${favAsk || '?'}¢</strong></div>
@@ -6183,19 +6183,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor)
                     // Captured in green/yellow/red based on how much of floor was caught, floor stays pink
                     const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
-                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#6a8a9a' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
+                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#cc6688' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
                         : '';
-                    return '<div style="display:grid;grid-template-columns:18px 1fr 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
+                    return '<div style="display:grid;grid-template-columns:18px 72px 30px auto 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
-                    + '<span style="display:flex;align-items:center;gap:3px;flex-wrap:nowrap;overflow:hidden;">'
+                    + '<span style="white-space:nowrap;">'
                     + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '</span>'
                     + '<span style="color:#3a4560;">+</span>'
                     + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '</span>'
                     + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '</span>' : '')
-                    + (_depCombo ? '<span style="color:#444;margin:0 1px;">·</span>' + _depCombo : '')
-                    + (_hmsStr || '')
-                    + (r.taker ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">T</span>' : '')
                     + '</span>'
+                    + (_depCombo ? '<span>' + _depCombo + '</span>' : '<span></span>')
+                    + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ffaa00;font-size:8px;font-weight:700;">T</span>' : '') + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;text-align:center;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>'

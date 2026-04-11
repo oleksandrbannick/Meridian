@@ -6432,19 +6432,24 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
         const breakeven = 100 - heldAvg;
         const walkCount = bot._exit_walk_count || 0;
-        const postedAt = bot._exit_posted_at || 0;
-        const ageSec = postedAt > 0 ? Math.floor(Date.now() / 1000 - postedAt) : 0;
-        const walkPct = (breakeven > targetPrice) ? Math.min(100, Math.round((exitPrice - targetPrice) / (breakeven - targetPrice) * 100)) : 0;
-        // Walk status text
+        const range = breakeven - targetPrice;
+        const walkPct = range > 0 ? Math.min(100, Math.round((exitPrice - targetPrice) / range * 100)) : 0;
+        // Walk status — static labels, no flashing countdown
         let walkStatus = '';
         if (walkCount > 0) {
             walkStatus = `<span style="color:#ffaa00;font-weight:700;">WALKING +${walkCount}¢</span>`;
-        } else if (ageSec > 0 && ageSec < 60) {
-            walkStatus = `<span style="color:#556;">patience ${60 - ageSec}s</span>`;
-        } else if (ageSec >= 60) {
-            walkStatus = `<span style="color:#ffaa00;">ready to walk</span>`;
+        } else if (exitPrice > targetPrice) {
+            walkStatus = `<span style="color:#ffaa00;">walked</span>`;
         } else {
             walkStatus = `<span style="color:#556;">at target</span>`;
+        }
+        // Tick marks for each cent between target and breakeven
+        let ticks = '';
+        if (range > 1 && range <= 30) {
+            for (let i = 1; i < range; i++) {
+                const pct = (i / range) * 100;
+                ticks += `<div style="position:absolute;left:${pct}%;width:1px;height:100%;background:#1e2740;"></div>`;
+            }
         }
         return `<div style="padding:8px;background:${col}10;border:1px solid ${col}33;border-radius:6px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -6458,16 +6463,17 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:#556;font-size:9px;">Target: ${targetPrice}¢</span>
                 ${walkStatus}
             </div>
-            ${walkCount > 0 ? `<div style="margin-top:4px;">
+            <div style="margin-top:4px;">
                 <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
                     <span style="color:#00ff88;font-size:8px;">${targetPrice}¢</span>
-                    <span style="color:#ffaa00;font-size:8px;font-weight:700;">${exitPrice}¢</span>
+                    ${walkCount > 0 ? `<span style="color:#ffaa00;font-size:8px;font-weight:700;">${exitPrice}¢</span>` : ''}
                     <span style="color:#ff4444;font-size:8px;">BE ${breakeven}¢</span>
                 </div>
-                <div style="height:3px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                    <div style="width:${walkPct}%;height:100%;background:linear-gradient(90deg,#00ff88,#ffaa00);border-radius:2px;"></div>
+                <div style="position:relative;height:5px;background:#0f1520;border-radius:2px;overflow:hidden;">
+                    ${ticks}
+                    <div style="width:${walkPct}%;height:100%;background:linear-gradient(90deg,#00ff88,#ffaa00);border-radius:2px;position:relative;z-index:1;"></div>
                 </div>
-            </div>` : ''}
+            </div>
         </div>`;
     };
     if (!isCompleted && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88');

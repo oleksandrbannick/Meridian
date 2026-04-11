@@ -16740,9 +16740,21 @@ def cancel_bot(bot_id):
                     session_pnl['completed_bots'] += 1
                 bot_log('MANUAL_DELETE', bot_id, {'sold': sold_positions, 'cancelled': cancelled, 'sell_prices': sell_prices})
 
-        # Don't delete — set to stopped, let settlement flow handle purge
-        bot['status'] = 'stopped'
-        bot['stopped_at'] = time.time()
+        # Check if bot still has positions after cancel/sell
+        _has_remaining = False
+        if bot.get('bot_category') == 'ladder_arb':
+            _has_remaining = (bot.get('net_yes', 0) > 0 or bot.get('net_no', 0) > 0)
+        else:
+            _dog_fill = bot.get('dog_fill_qty', 0) or bot.get('total_dog_fill_qty', 0)
+            _fav_fill = bot.get('fav_fill_qty', 0)
+            _has_remaining = _dog_fill > 0 and _dog_fill != _fav_fill
+        if _has_remaining:
+            # Still holding — set stopped, maker sell tracker will follow until filled
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = time.time()
+        else:
+            # Clean — delete immediately
+            del active_bots[bot_id]
         save_state()
 
         result = {'success': True, 'cancelled_orders': cancelled, 'sold_positions': sold_positions, 'sell_prices': sell_prices}

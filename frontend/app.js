@@ -6394,14 +6394,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const isFull = filled >= qty;
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
         // Unfilled = teal (secondary), filled = side color (green YES / red NO)
-        const displayCol = isFull ? sideCol : '#66bbcc';
-        const bg = isFull ? sideCol + '22' : active ? '#66bbcc08' : '#0a0e18';
+        const bg = isFull ? sideCol + '22' : active ? '#66bbcc15' : '#0a0e18';
         const statusDot = isFull ? `<span style="color:${sideCol};font-size:8px;">FILLED</span>` : active ? `<span style="color:#66bbcc;font-size:7px;">LIVE</span>` : `<span style="color:#334;font-size:7px;">OFF</span>`;
-        return `<div style="padding:3px 6px;background:${bg};border-radius:4px;border:1px solid ${isFull ? sideCol + '33' : '#66bbcc18'};">
+        return `<div style="padding:3px 6px;background:${bg};border-radius:4px;border:1px solid ${isFull ? sideCol + '44' : active ? '#66bbcc44' : '#1a2530'};">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-                <span style="color:${isFull ? sideCol : active ? '#66bbcc' : '#334'};font-weight:700;font-size:12px;">${price}¢</span>
+                <span style="color:${isFull ? sideCol : active ? '#66bbcc' : '#445'};font-weight:700;font-size:12px;">${price}¢</span>
                 <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:${filled > 0 ? sideCol : '#66bbcc55'};font-size:10px;font-weight:700;">${filled}/${qty}</span>
+                    <span style="color:${filled > 0 ? sideCol : active ? '#66bbcc' : '#445'};font-size:10px;font-weight:700;">${filled}/${qty}</span>
                     ${statusDot}
                 </div>
             </div>
@@ -6421,8 +6420,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const noIsExit = skewActive && skewDirection === 'exit_no';
     const yesLabel = yesIsExit ? 'YES — HEDGE EXIT' : noIsExit ? 'YES — ENTRY' : 'YES BIDS';
     const noLabel = noIsExit ? 'NO — HEDGE EXIT' : yesIsExit ? 'NO — ENTRY' : 'NO BIDS';
-    const yesBorderCol = yesIsExit ? '#00ff8833' : noIsExit ? '#00d4ff22' : '#00d4ff22';
-    const noBorderCol = noIsExit ? '#ff444433' : yesIsExit ? '#00d4ff22' : '#00d4ff22';
+    const yesBorderCol = yesIsExit ? '#00ff8833' : '#66bbcc33';
+    const noBorderCol = noIsExit ? '#ff444433' : '#66bbcc33';
 
     // When a side is the exit, replace its ladder with the consolidated exit order display
     const exitPrice = bot._exit_price || 0;
@@ -6538,14 +6537,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
             <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${yesIsExit ? '#00ff88' : '#00d4ff'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
+                    <span style="color:${yesIsExit ? '#00ff88' : '#66bbcc'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
                 </div>
                 <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#00ff88;">${liveYesBid || '?'}¢</strong> · ask <strong style="color:#00ff88;">${liveYesAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#334;">No orders</span>'}</div>
+                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#66bbcc55;">No orders</span>'}</div>
             </div>
             <div style="background:#060a14;border:1px solid ${noBorderCol};border-radius:8px;padding:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${noIsExit ? '#ff4444' : '#00d4ff'};font-size:9px;font-weight:800;">${noLabel}${noPaused}</span>
+                    <span style="color:${noIsExit ? '#ff4444' : '#66bbcc'};font-size:9px;font-weight:800;">${noLabel}${noPaused}</span>
                 </div>
                 <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
                 <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">No orders</span>'}</div>

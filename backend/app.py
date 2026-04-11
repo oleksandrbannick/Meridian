@@ -18055,11 +18055,13 @@ def emergency_sell():
                     _active_oids.add(_eo_oid)
                 for _b in active_bots.values():
                     if _b.get('ticker') == ticker and _b.get('status', '') not in ('completed', 'cancelled'):
-                        for _key in ('hedge_order_id', '_orphan_hedge_oid'):
+                        for _key in ('hedge_order_id', '_orphan_hedge_oid', 'dog_order_id', 'fav_order_id', 'yes_order_id', 'no_order_id'):
                             _oid = _b.get(_key)
                             if _oid:
                                 _active_oids.add(_oid)
                         for _oid in _b.get('_all_hedge_order_ids', []):
+                            _active_oids.add(_oid)
+                        for _oid in _b.get('_all_dog_order_ids', []):
                             _active_oids.add(_oid)
                         # Protect Apex MM ladder orders + exit orders
                         for _oid in _b.get('_all_placed_order_ids', []):

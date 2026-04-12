@@ -5891,6 +5891,10 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         if period >= max_p: t_pts = 0
         elif period >= max_p - 1: t_pts = 5
         elif period >= max_p // 2: t_pts = 10
+    elif sport == 'Tennis' and not sc:
+        # No score data = Challenger/small tournament not covered by API Tennis
+        # Penalize: can't detect game phase, flying blind
+        t_pts = 5
 
     _raw = d_pts - g_pts + s_pts + t_pts
     ppi = max(0, min(100, round(_raw * 100 / 75)))

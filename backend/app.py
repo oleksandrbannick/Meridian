@@ -946,8 +946,10 @@ def get_market(ticker):
             temp_client = KalshiAPI('', '', demo=True)
             market = temp_client.get_market(ticker)
         else:
+            if not api_read_limiter.try_wait():
+                return jsonify({'error': 'Rate limit — try again shortly'}), 429
             market = kalshi_client.get_market(ticker)
-        
+
         return jsonify(market)
     
     except Exception as e:
@@ -1081,6 +1083,8 @@ def diagnose_bots_endpoint():
 
         # 1. Orphan detection — positions without managing bots
         try:
+            if not api_read_limiter.try_wait():
+                return jsonify({'error': 'Rate limit — try again shortly'}), 429
             pos_resp = kalshi_client.get_positions()
             positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
             bot_tickers = set()
@@ -1138,6 +1142,8 @@ def diagnose_bots_endpoint():
                     _h_oid = rung.get('hedge_order_id')
                     if _h_oid:
                         known_ids.add(_h_oid)
+            if not api_read_limiter.try_wait():
+                return jsonify({'error': 'Rate limit — try again shortly'}), 429
             resting = kalshi_client.get_orders(status='resting')
             resting_orders = resting.get('orders', [])
             for o in resting_orders:
@@ -1415,6 +1421,8 @@ def get_orderbook(ticker):
         if ws_manager and ws_manager.connected:
             ws_manager.add_ticker(ticker)
 
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         raw = kalshi_client.get_market_orderbook(ticker)
         return jsonify(_normalize_orderbook(raw))
     
@@ -1579,6 +1587,8 @@ def get_balance():
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
         
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         balance = kalshi_client.get_balance()
         return jsonify({
             'balance': balance.get('balance', 0) / 100,
@@ -1596,6 +1606,8 @@ def get_positions():
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
         
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         positions = kalshi_client.get_positions()
         return jsonify(positions)
     
@@ -1666,6 +1678,8 @@ def reconcile_positions():
         return jsonify({'error': 'Not authenticated'}), 401
     try:
         # Get Kalshi's actual positions
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         kalshi_pos = kalshi_client.get_positions(limit=200)
         pos_list = kalshi_pos.get('market_positions', kalshi_pos.get('positions', []))
         actual = {}
@@ -1739,6 +1753,8 @@ def get_orders():
         status = request.args.get('status')
         ticker = request.args.get('ticker')
         
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         orders = kalshi_client.get_orders(status=status, ticker=ticker)
         return jsonify(orders)
     
@@ -1761,10 +1777,14 @@ def get_milestones():
 
         # If specific event requested, fetch just that one
         if event_ticker:
+            if not api_read_limiter.try_wait():
+                return jsonify({'error': 'Rate limit — try again shortly'}), 429
             event_resp = kalshi_client.get_event(event_ticker, with_nested_markets=True)
             event = event_resp.get('event', event_resp)
             # Also fetch milestones via events list filtered to this series
             series_from_event = event_ticker.split('-')[0] if '-' in event_ticker else ''
+            if not api_read_limiter.try_wait():
+                return jsonify({'error': 'Rate limit — try again shortly'}), 429
             ms_resp = kalshi_client.get_events(status=status, with_milestones=True,
                                                 series_ticker=series_from_event, limit=50)
             milestones = ms_resp.get('milestones', [])
@@ -1778,6 +1798,8 @@ def get_milestones():
             })
 
         # Fetch events with milestones for a series
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         resp = kalshi_client.get_events(status=status, with_milestones=True,
                                          series_ticker=series or None, limit=50)
         events = resp.get('events', [])
@@ -2243,6 +2265,8 @@ def get_fills():
             return jsonify({'error': 'Not authenticated'}), 401
         
         ticker = request.args.get('ticker')
+        if not api_read_limiter.try_wait():
+            return jsonify({'error': 'Rate limit — try again shortly'}), 429
         fills = kalshi_client.get_fills(ticker=ticker)
         return jsonify(fills)
     
@@ -5207,6 +5231,7 @@ def _refresh_milestones_cache():
             try:
                 if i > 0 or attempt > 0:
                     time.sleep(0.5)  # 500ms spacing to avoid 429s
+                api_read_limiter.wait()
                 resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
                 milestones = resp.get('milestones', [])
                 events = resp.get('events', [])

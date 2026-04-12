@@ -3901,6 +3901,7 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                                                   count=qty, **amend_kwargs)
                         bot['fav_price'] = fav_ask
                         bot['_taker_fired'] = True
+                        bot['_fav_was_taker'] = True
                         print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s)')
                         bot_log('PHANTOM_WS_TAKER', bot_id, {
                             'fav_price': fav_ask, 'dog_price': dog_price,

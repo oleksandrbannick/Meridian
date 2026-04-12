@@ -6920,19 +6920,37 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=Tru
 
 
 def _apex_mm_pull_all(bot_id, bot, reason):
-    """Cancel all live ladder orders. Set status to mm_depth_pulled."""
+    """Cancel all live ladder orders. Set status to mm_depth_pulled.
+    CRITICAL: check for fills during cancel — if orders filled before cancel went through,
+    add those fills to inventory so they're not lost as orphans."""
     now = time.time()
     cancelled = 0
     for side_key in ('yes_orders', 'no_orders'):
-        for price, level in list(bot.get(side_key, {}).items()):
+        _side = 'yes' if side_key == 'yes_orders' else 'no'
+        for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
             if not oid:
                 continue
-            cr = _cancel_with_retry(oid)
-            if cr == 'filled':
-                # Fill arrived during cancel — will be picked up by WS handler
-                pass
-            elif cr:
+            cr = _safe_cancel(oid, f'apex_mm_pull_{bot_id}')
+            if isinstance(cr, tuple) and cr[0] == 'filled':
+                _kalshi_fills = cr[1]
+                _ws_already = max(level.get('fill_qty', 0),
+                                  bot.get('_counted_order_fills', {}).get(oid, 0))
+                _new_fills = max(0, _kalshi_fills - _ws_already)
+                if _new_fills > 0:
+                    _price = int(price_str)
+                    bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
+                    bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
+                    _net = bot[f'net_{_side}']
+                    bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                    bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                    level['fill_qty'] = _kalshi_fills
+                    print(f'🚨 PULL LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already})')
+                    bot_log('APEX_MM_PULL_LATE_FILL', bot_id, {
+                        'side': _side, 'fills': _kalshi_fills, 'new_fills': _new_fills,
+                        'price': _price, 'ws_already': _ws_already,
+                    }, level='WARN')
+            elif cr and cr != '404':
                 cancelled += 1
             level['oid'] = None
     bot['status'] = 'mm_depth_pulled'
@@ -12544,12 +12562,25 @@ def _handle_apex(bot_id, bot, actions):
         if net_yes > 0 or net_no > 0:
             # Holding inventory: only pull ENTRY side, keep EXIT side live
             entry_side_key = 'yes_orders' if net_yes > net_no else 'no_orders'
+            _entry_side = 'yes' if entry_side_key == 'yes_orders' else 'no'
             cancelled = 0
-            for price, level in list(bot.get(entry_side_key, {}).items()):
+            for price_str, level in list(bot.get(entry_side_key, {}).items()):
                 oid = level.get('oid')
                 if oid:
-                    cr = _cancel_with_retry(oid)
-                    if cr and cr != 'filled':
+                    cr = _safe_cancel(oid, f'apex_mm_pull_entry_{bot_id}')
+                    if isinstance(cr, tuple) and cr[0] == 'filled':
+                        _kf = cr[1]
+                        _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                        _nf = max(0, _kf - _ws)
+                        if _nf > 0:
+                            _pr = int(price_str)
+                            bot[f'net_{_entry_side}'] = bot.get(f'net_{_entry_side}', 0) + _nf
+                            bot[f'total_{_entry_side}_cost'] = bot.get(f'total_{_entry_side}_cost', 0) + (_pr * _nf)
+                            _n = bot[f'net_{_entry_side}']
+                            bot[f'avg_{_entry_side}_cost'] = round(bot[f'total_{_entry_side}_cost'] / _n) if _n > 0 else 0
+                            bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                            print(f'🚨 PULL ENTRY LATE FILL: {bot_id} {_entry_side.upper()} +{_nf}x @{_pr}c')
+                    elif cr and cr != '404':
                         cancelled += 1
                     level['oid'] = None
             bot['_pull_count'] = bot.get('_pull_count', 0) + 1

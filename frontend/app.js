@@ -7317,7 +7317,7 @@ async function loadBots() {
                     _dogSportPnl[sp].count++;
                 });
                 const _dogSportEntries = Object.entries(_dogSportPnl).sort((a,b) => b[1].count - a[1].count);
-                if (_dogSportEntries.length > 1) {
+                if (_dogSportEntries.length >= 1) {
                     const _dTotalNet = _dogSportEntries.reduce((s, [,d]) => s + d.net, 0);
                     const _dTotalCol = _dTotalNet >= 0 ? '#00ff88' : '#ff4444';
                     const _dSportBar = document.createElement('div');
@@ -7425,7 +7425,7 @@ async function loadBots() {
             _sportPnl[sp].count++;
         });
         const _sportEntries = Object.entries(_sportPnl).sort((a,b) => b[1].count - a[1].count);
-        if (_sportEntries.length > 1) {
+        if (_sportEntries.length >= 1) {
             const _totalNet = _sportEntries.reduce((s, [,d]) => s + d.net, 0);
             const _totalCol = _totalNet >= 0 ? '#00ff88' : '#ff4444';
             const sportBar = document.createElement('div');

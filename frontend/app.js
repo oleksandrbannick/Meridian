@@ -1175,10 +1175,19 @@ function isKalshiLive(market) {
 
     // ── Tennis: Use Kalshi milestone_status (authoritative) when available ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
-    if (isTennis && market.milestone_status) {
-        return market.milestone_status === 'live';
+    if (isTennis) {
+        if (market.milestone_status) return market.milestone_status === 'live';
+        // No milestone_status: only fall through for TODAY's matches
+        // Yesterday's unsettled matches should NOT show as live
+        const dateMatch = ticker.match(/(\d{2})([A-Z]{3})(\d{2})/);
+        if (dateMatch) {
+            const monthMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+            const gameDate = new Date(2000 + parseInt(dateMatch[1]), monthMap[dateMatch[2]] || 0, parseInt(dateMatch[3]));
+            const today = new Date(); today.setHours(0,0,0,0);
+            if (gameDate.getTime() < today.getTime()) return false;
+        }
+        // Today's tennis without milestone_status: fall through to expiration-based
     }
-    // If no milestone_status for tennis, fall through to expiration-based detection
 
     const expStr = market.expected_expiration_time;
     if (!expStr) return false;

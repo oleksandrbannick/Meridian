@@ -13017,6 +13017,10 @@ def _run_monitor():
                           and b.get('_smart_stop_reason') != 'manual'
                           and b.get('_market_settled_at', 0) > 0
                           and b['_market_settled_at'] < _purge_cutoff)
+                      # Apex MM: no positions held after completion, purge 5 min after completed_at
+                      or (b.get('status') == 'completed'
+                          and b.get('bot_category') == 'ladder_arb'
+                          and (b.get('completed_at') or 0) < _purge_cutoff)
                       ]
         if _purge_ids:
             for _pid in _purge_ids:

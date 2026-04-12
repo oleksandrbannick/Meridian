@@ -13860,7 +13860,7 @@ async function loadPositions() {
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px 12px;font-size:12px;color:#8892a6;">
                     <div>Qty: <strong style="color:#fff;">${pos.quantity}</strong></div>
                     <div>Entry: <strong style="color:#fff;">${avgEntry}¢</strong></div>
-                    <div>Bid: <strong style="color:${sideColor};">${bid}¢</strong> Ask: <strong>${ask}¢</strong></div>
+                    <div>Bid: <strong style="color:${sideColor};">${bid}¢</strong> · Ask: <strong style="color:#8892a6;">${ask}¢</strong></div>
                     <div>P&L: <strong style="color:${unrealizedColor};">${unrealized >= 0 ? '+' : ''}${unrealized}¢/ea</strong></div>
                     <div>Total: <strong style="color:${unrealizedColor};">${unrealizedTotal >= 0 ? '+' : ''}${unrealizedTotal}¢</strong></div>
                     <div>Realized: <strong style="color:${pnlColor};">$${realizedPnl}</strong></div>

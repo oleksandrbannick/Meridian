@@ -6284,7 +6284,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _isSmartStop = _exitReason.includes('smart_stop');
     const statusMap = {
         'market_making_active': ['ACTIVE', '#00d4ff'],
-        'mm_depth_pulled': ['PULLED — WAITING', '#ffaa00'],
+        'mm_depth_pulled': ['PULLED', '#ffaa00'],
         'mm_exiting': ['EXITING', '#ff8800'],
         'completed': [_isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : 'DONE',
                       _isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88'],
@@ -6311,9 +6311,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const liveNoAsk = bot.live_no_ask || 0;
     const skewActive = bot._skew_active || false;
     const skewDirection = bot._skew_direction || '';
-    const skewExitGap = bot._skew_exit_gap || 0;
-    const skewEntryGap = bot._skew_entry_gap || 0;
     const invLimit = bot.inventory_limit || 0;
+    const hasInv = netYes > 0 || netNo > 0;
 
     const pnlColor = totalPnl >= 0 ? '#00ff88' : '#ff4444';
     const pnlSign = totalPnl >= 0 ? '+' : '';
@@ -6332,137 +6331,140 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
     }
 
-    // Room
+    // Room + OBI for footer
     const room = (liveYesBid > 0 && liveNoBid > 0) ? 100 - liveYesBid - liveNoBid : -1;
     const roomCol = room >= 6 ? '#00ff88' : room >= 3 ? '#ffaa00' : '#ff4444';
-
-    // OBI
-    let obiHtml = '';
+    let obiLabel = '';
     if (bot._obi != null) {
         const obi = bot._obi;
         const absObi = Math.abs(obi);
-        let label, color;
-        if (absObi < 0.15) { label = 'Balanced'; color = '#556'; }
-        else if (absObi < 0.3) { label = obi > 0 ? 'YES building' : 'NO building'; color = obi > 0 ? '#00ff88' : '#ff4444'; }
-        else if (absObi < 0.6) { label = obi > 0 ? 'YES pressure' : 'NO pressure'; color = obi > 0 ? '#00ff88' : '#ff4444'; }
-        else { label = obi > 0 ? 'YES sweep!' : 'NO sweep!'; color = '#ff4444'; }
-        const yesD = bot._yes_depth_top3 != null ? Math.round(bot._yes_depth_top3) : '?';
-        const noD = bot._no_depth_top3 != null ? Math.round(bot._no_depth_top3) : '?';
-        obiHtml = `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | YES depth: ${yesD} | NO depth: ${noD}">OBI: ${label} (${yesD}/${noD})</span>`;
+        if (absObi < 0.15) obiLabel = '<span style="color:#556;">Balanced</span>';
+        else if (absObi < 0.3) obiLabel = `<span style="color:${obi > 0 ? '#00ff88' : '#ff4444'};">${obi > 0 ? 'YES' : 'NO'} building</span>`;
+        else if (absObi < 0.6) obiLabel = `<span style="color:${obi > 0 ? '#00ff88' : '#ff4444'};">${obi > 0 ? 'YES' : 'NO'} pressure</span>`;
+        else obiLabel = `<span style="color:#ff4444;">${obi > 0 ? 'YES' : 'NO'} sweep!</span>`;
     }
 
-    // Skew banner
-    let skewBanner = '';
-    if (skewActive && (netYes > 0 || netNo > 0)) {
+    // ── SECTION 2: Position bar (only when holding) ──
+    const exitPrice = bot._exit_price || 0;
+    const exitFillQty = bot._exit_fill_qty || 0;
+    const exitTotalQty = bot._exit_total_qty || Math.abs(netYes - netNo);
+    let positionBarHtml = '';
+    if (hasInv) {
         const longSide = netYes > netNo ? 'YES' : 'NO';
         const exitSide = netYes > netNo ? 'NO' : 'YES';
         const netHeld = Math.abs(netYes - netNo);
         const avgCost = netYes > netNo ? avgYesCost : avgNoCost;
-        const breakeven = 100 - avgCost;
+        const invPct = invLimit > 0 ? Math.min(100, Math.round(netHeld / invLimit * 100)) : 0;
+        const combined = avgCost + exitPrice;
+        const profit = 100 - combined;
+        const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
+        const stopLoss = 100 + width;
+        const slDist = stopLoss - combined;
         const exitPostedAt = bot._exit_posted_at || 0;
-        const skewSec = exitPostedAt > 0 ? Math.floor(Date.now() / 1000 - exitPostedAt) : 0;
-        const skewTimeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m ${skewSec%60}s` : `${skewSec}s`;
-        skewBanner = `<div style="padding:8px 10px;background:#00d4ff11;border:1px solid #00d4ff33;border-left:3px solid #00d4ff;border-radius:6px;margin-bottom:8px;font-size:10px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <span style="color:#00d4ff;font-weight:700;">HOLDING ${longSide} ${netHeld}x @ ${avgCost}¢</span>
-                <span style="color:#00d4ff;font-size:11px;font-weight:800;">${skewSec > 0 ? skewTimeStr : ''}</span>
+        const skewSec = exitPostedAt > 0 ? Math.floor(nowSec - exitPostedAt) : 0;
+        const timeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m${skewSec%60}s` : `${skewSec}s`;
+        const sideCol = longSide === 'YES' ? '#00ff88' : '#ff4444';
+        // SL zone: when combined >= 100, show pressure bar
+        let slZoneHtml = '';
+        if (combined >= 100 && exitPrice > 0) {
+            const slRange = stopLoss - 100;
+            const slFillPct = slRange > 0 ? Math.min(100, Math.round((combined - 100) / slRange * 100)) : 0;
+            slZoneHtml = `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+                <span style="color:#ff4444;font-size:9px;font-weight:700;white-space:nowrap;">${slDist}c to SL</span>
+                <div style="flex:1;height:4px;background:#1a0a0a;border-radius:2px;overflow:hidden;">
+                    <div style="width:${slFillPct}%;height:100%;background:linear-gradient(90deg,#ff4444,#ff0000);border-radius:2px;transition:width .3s;"></div>
+                </div>
+            </div>`;
+        }
+        // Exit line
+        let exitLineHtml = '';
+        if (exitPrice > 0) {
+            const exitBid = exitSide === 'YES' ? liveYesBid : liveNoBid;
+            const bidDist = exitPrice > exitBid ? `${exitPrice - exitBid}c above` : exitPrice === exitBid ? 'at bid' : `${exitBid - exitPrice}c below`;
+            const walkCount = bot._exit_walk_count || 0;
+            let walkLabel = '';
+            if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-weight:700;">STOP LOSS</span>`;
+            else if (combined >= 100) walkLabel = `<span style="color:#ff4444;font-weight:700;">SL ZONE -${combined - 100}c</span>`;
+            else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-weight:700;">THIN +${profit}c</span>`;
+            else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-weight:700;">WALKING</span>`;
+            else walkLabel = `<span style="color:#00ff88;">at target</span>`;
+            const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
+            exitLineHtml = `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1a2540;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="color:#66bbcc;font-size:10px;font-weight:700;">EXIT ${exitSide} @${exitPrice}c</span>
+                    ${walkLabel}
+                    <span style="color:#445;font-size:9px;">${bidDist}</span>
+                </div>
+                <span style="color:#66bbcc;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
             </div>
-            <div style="color:#556;margin-top:3px;">Exit ${exitSide} · BE: <strong style="color:#ffaa00;">${breakeven}¢</strong> · exit gap: ${skewExitGap}¢ · entry gap: ${skewEntryGap}¢</div>
+            <div style="height:3px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:3px;">
+                <div style="width:${fp}%;height:100%;background:#66bbcc;border-radius:2px;transition:width .3s;"></div>
+            </div>`;
+        }
+        positionBarHtml = `<div style="padding:10px 12px;background:linear-gradient(135deg,${sideCol}08,#0a0e1800);border:1px solid ${sideCol}25;border-radius:8px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="color:${sideCol};font-weight:800;font-size:12px;">HOLDING ${longSide} ${netHeld}x</span>
+                    <span style="color:#556;font-size:10px;">avg ${avgCost}c</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    ${exitPrice > 0 ? `<span style="color:${profitCol};font-weight:800;font-size:14px;">${combined}c</span>
+                    <span style="color:${profitCol};font-weight:700;font-size:11px;">${profit >= 0 ? '+' : ''}${profit}c</span>` : ''}
+                    ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
+                </div>
+            </div>
+            <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:6px;">
+                <div style="width:${invPct}%;height:100%;background:${sideCol};border-radius:2px;opacity:0.7;transition:width .3s;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:2px;">
+                <span style="color:#445;font-size:8px;">${netHeld}/${invLimit} inventory</span>
+                ${exitPrice > 0 ? `<span style="color:#445;font-size:8px;">${avgCost}+${exitPrice}=${combined}c</span>` : ''}
+            </div>
+            ${exitLineHtml}
+            ${slZoneHtml}
         </div>`;
     }
 
-    // Inventory section
-    let invHtml = '';
-    if (netYes > 0 || netNo > 0) {
-        invHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
-        if (netYes > 0) {
-            const pct = invLimit > 0 ? Math.min(100, Math.round(netYes / invLimit * 100)) : 0;
-            invHtml += `<div style="padding:6px 10px;background:#00ff8811;border:1px solid #00ff8833;border-radius:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                    <span style="color:#00ff88;font-size:9px;font-weight:800;">HOLDING YES</span>
-                    <span style="color:#8892a6;font-size:9px;">${netYes}/${invLimit}</span>
-                </div>
-                <div style="color:#fff;font-weight:800;font-size:16px;margin-bottom:2px;">${netYes}x <span style="color:#8892a6;font-size:11px;font-weight:400;">avg ${avgYesCost}¢</span></div>
-                <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:#00ff88;border-radius:2px;"></div></div>
-            </div>`;
-        } else { invHtml += '<div></div>'; }
-        if (netNo > 0) {
-            const pct = invLimit > 0 ? Math.min(100, Math.round(netNo / invLimit * 100)) : 0;
-            invHtml += `<div style="padding:6px 10px;background:#ff444411;border:1px solid #ff444433;border-radius:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                    <span style="color:#ff4444;font-size:9px;font-weight:800;">HOLDING NO</span>
-                    <span style="color:#8892a6;font-size:9px;">${netNo}/${invLimit}</span>
-                </div>
-                <div style="color:#fff;font-weight:800;font-size:16px;margin-bottom:2px;">${netNo}x <span style="color:#8892a6;font-size:11px;font-weight:400;">avg ${avgNoCost}¢</span></div>
-                <div style="height:4px;background:#1a2540;border-radius:2px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:#ff4444;border-radius:2px;"></div></div>
-            </div>`;
-        } else { invHtml += '<div></div>'; }
-        invHtml += '</div>';
-    }
-
-    // Pull reason — show for full pull AND entry-only pull
-    let pullInfo = '';
-    if (status === 'mm_depth_pulled' && bot._last_pull_reason) {
-        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">PULLED: ${bot._last_pull_reason} · waiting for depth recovery</div>`;
-    } else if (status === 'market_making_active' && bot._last_pull_reason && bot._last_pull_reason.includes('entry only')) {
-        pullInfo = `<div style="padding:6px 10px;background:#ffaa0011;border:1px solid #ffaa0033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ffaa00;font-weight:600;">ENTRY PULLED: ${bot._last_pull_reason} · exit side still live</div>`;
-    }
-
-    // Exit reason
-    let exitInfo = '';
-    if (status === 'mm_exiting' && bot._exit_reason) {
-        exitInfo = `<div style="padding:6px 10px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ff8800;font-weight:600;">Exiting: ${bot._exit_reason} · selling inventory at ask (maker)</div>`;
-    }
-
-    // Ladder columns
+    // ── SECTION 3: Ladder grid ──
     const yesOrders = bot.yes_orders || {};
     const noOrders = bot.no_orders || {};
     const sortedYes = Object.entries(yesOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
     const sortedNo = Object.entries(noOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
     const baseQty = bot.base_qty || bot.qty_per_level || 10;
 
-    let yesLadder = '', noLadder = '';
     const _rungHtml = (price, level, sideCol) => {
         const filled = level.fill_qty || 0;
         const qty = level.qty || baseQty;
-        const active = level.oid ? true : false;
+        const active = !!level.oid;
         const isFull = filled >= qty;
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
-        // Unfilled = teal (secondary), filled = side color (green YES / red NO)
-        const bg = isFull ? sideCol + '22' : active ? '#66bbcc15' : '#0a0e18';
-        const statusDot = isFull ? `<span style="color:${sideCol};font-size:8px;">FILLED</span>` : active ? `<span style="color:#66bbcc;font-size:7px;">LIVE</span>` : `<span style="color:#334;font-size:7px;">OFF</span>`;
-        return `<div style="padding:3px 6px;background:${bg};border-radius:4px;border:1px solid ${isFull ? sideCol + '44' : active ? '#66bbcc44' : '#1a2530'};">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-                <span style="color:${isFull ? sideCol : active ? '#66bbcc' : '#445'};font-weight:700;font-size:12px;">${price}¢</span>
-                <div style="display:flex;align-items:center;gap:4px;">
-                    <span style="color:${filled > 0 ? sideCol : active ? '#66bbcc' : '#445'};font-size:10px;font-weight:700;">${filled}/${qty}</span>
-                    ${statusDot}
-                </div>
+        const barCol = isFull ? sideCol : '#66bbcc';
+        const textCol = isFull ? sideCol : active ? '#66bbcc' : '#334';
+        const statusTag = isFull ? `<span style="color:${sideCol};font-size:7px;font-weight:800;letter-spacing:.04em;">FILLED</span>`
+            : active ? `<span style="color:#66bbcc;font-size:7px;font-weight:700;">LIVE</span>`
+            : `<span style="color:#2a3040;font-size:7px;">OFF</span>`;
+        return `<div style="display:flex;align-items:center;gap:4px;padding:2px 0;">
+            <span style="color:${textCol};font-weight:700;font-size:11px;width:28px;text-align:right;">${price}c</span>
+            <div style="flex:1;height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
+                <div style="width:${fillPct}%;height:100%;background:${barCol};border-radius:2px;transition:width .3s;"></div>
             </div>
-            <div style="height:3px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                <div style="width:${fillPct}%;height:100%;background:${isFull ? sideCol : '#66bbcc'};border-radius:2px;transition:width .3s;"></div>
-            </div>
+            <span style="color:${textCol};font-size:9px;font-weight:700;width:28px;text-align:right;">${filled}/${qty}</span>
+            <span style="width:28px;text-align:right;">${statusTag}</span>
         </div>`;
     };
+
+    let yesLadder = '', noLadder = '';
     for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00ff88');
     for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff4444');
 
-    const yesPaused = bot._yes_side_paused ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">PAUSED</span>' : '';
-    const noPaused = bot._no_side_paused ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">PAUSED</span>' : '';
-
-    // Determine which side is exit vs entry for column labels
-    const hasInv = netYes > 0 || netNo > 0;
+    const yesPaused = bot._yes_side_paused;
+    const noPaused = bot._no_side_paused;
     const yesIsExit = hasInv && skewActive && skewDirection === 'exit_yes';
     const noIsExit = hasInv && skewActive && skewDirection === 'exit_no';
-    const yesLabel = yesIsExit ? 'YES — HEDGE EXIT' : (hasInv && noIsExit) ? 'YES — ENTRY' : 'YES BIDS';
-    const noLabel = noIsExit ? 'NO — HEDGE EXIT' : (hasInv && yesIsExit) ? 'NO — ENTRY' : 'NO BIDS';
-    const yesBorderCol = yesIsExit ? '#00ff8833' : '#66bbcc33';
-    const noBorderCol = noIsExit ? '#ff444433' : '#66bbcc33';
+    const yesLabel = yesIsExit ? 'YES EXIT' : (hasInv && noIsExit) ? 'YES ENTRY' : 'YES';
+    const noLabel = noIsExit ? 'NO EXIT' : (hasInv && yesIsExit) ? 'NO ENTRY' : 'NO';
 
-    // When a side is the exit, replace its ladder with the consolidated exit order display
-    const exitPrice = bot._exit_price || 0;
-    const exitFillQty = bot._exit_fill_qty || 0;
-    const exitTotalQty = bot._exit_total_qty || Math.abs(netYes - netNo);
+    // Exit panel replaces ladder column when exiting
     const _buildExitPanel = (col, exitSide) => {
         const exitBid = exitSide === 'yes' ? liveYesBid : liveNoBid;
         const exitAsk = exitSide === 'yes' ? liveYesAsk : liveNoAsk;
@@ -6470,190 +6472,153 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
         const combined = heldAvg + exitPrice;
-        const width = (bot.start_gap || 4) * 2;
         const stopLoss = 100 + width;
         const targetCombined = heldAvg + targetPrice;
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
-        const walkCount = bot._exit_walk_count || 0;
-        // Combined bar: target combined (left) → stop loss (right), no padding
+        // Zone bar: target → 100 (green) → SL (red)
         const barMin = targetCombined;
         const barMax = stopLoss;
         const barRange = barMax - barMin;
         const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
         const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
-        const slPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((stopLoss - barMin) / barRange * 100))) : 100;
-        // Status label — based on combined price zones
-        let statusLabel = '';
-        if (combined >= stopLoss) statusLabel = `<span style="color:#ff4444;font-weight:700;">⚠ STOP LOSS</span>`;
-        else if (combined >= 100) statusLabel = `<span style="color:#ff4444;font-weight:700;">SL ZONE -${combined - 100}¢</span>`;
-        else if (combined >= 98) statusLabel = `<span style="color:#ffaa00;font-weight:700;">THIN +${100 - combined}¢</span>`;
-        else if (walkCount > 0) statusLabel = `<span style="color:#ffaa00;font-weight:700;">WALKING</span>`;
-        else if (combined <= targetCombined) statusLabel = `<span style="color:#00ff88;">at target</span>`;
-        else statusLabel = `<span style="color:#ffaa00;">walked</span>`;
-        return `<div style="padding:8px;background:${col}10;border:1px solid ${col}33;border-radius:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:${profitCol};font-weight:800;font-size:20px;">${combined}¢</span>
-                <span style="color:${profitCol};font-weight:700;font-size:13px;">${profit >= 0 ? '+' : ''}${profit}¢</span>
+        return `<div style="padding:6px;">
+            <div style="text-align:center;margin-bottom:6px;">
+                <span style="color:${profitCol};font-weight:800;font-size:18px;">${combined}c</span>
+                <span style="color:${profitCol};font-weight:700;font-size:11px;margin-left:4px;">${profit >= 0 ? '+' : ''}${profit}c</span>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#556;font-size:9px;">entry ${heldAvg}¢ + hedge ${exitPrice}¢</span>
-                <span style="color:#556;font-size:9px;">${exitFillQty}/${exitTotalQty} filled</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <span style="color:#8892a6;font-size:10px;">bid <strong style="color:${col};">${exitBid}¢</strong> · ask <strong>${exitAsk}¢</strong></span>
-                <span style="color:#556;font-size:9px;">${exitPrice > exitBid ? `${exitPrice - exitBid}¢ above bid` : exitPrice === exitBid ? 'at bid' : `${exitBid - exitPrice}¢ below bid`}</span>
-            </div>
-            <div style="height:5px;background:#0f1520;border-radius:3px;overflow:hidden;margin-bottom:2px;">
+            <div style="color:#556;font-size:9px;text-align:center;margin-bottom:6px;">${heldAvg}c + ${exitPrice}c</div>
+            <div style="height:5px;background:#0a1018;border-radius:3px;overflow:hidden;margin-bottom:2px;">
                 <div style="width:${fp}%;height:100%;background:${col};border-radius:3px;transition:width .3s;"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;">
-                ${statusLabel}
-                <span style="color:#556;font-size:9px;">SL: ${stopLoss}¢</span>
-            </div>
-            <div style="position:relative;height:8px;background:#0f1520;border-radius:4px;overflow:hidden;">
-                <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8812;"></div>
-                <div style="position:absolute;left:${bePct}%;width:${slPct-bePct}%;height:100%;background:#ff444412;"></div>
-                <div style="position:absolute;left:${slPct}%;width:${100-slPct}%;height:100%;background:#ff000022;"></div>
+            <div style="color:#556;font-size:8px;text-align:center;margin-bottom:6px;">${exitFillQty}/${exitTotalQty} filled</div>
+            <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
+                <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8815;"></div>
+                <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#ff444415;"></div>
                 <div style="position:absolute;left:${bePct}%;width:1px;height:100%;background:#ffaa00;z-index:2;"></div>
-                <div style="position:absolute;left:${slPct}%;width:1px;height:100%;background:#ff4444;z-index:2;"></div>
-                <div style="position:absolute;left:${combPct}%;width:6px;height:100%;background:${profitCol};border-radius:2px;z-index:3;transform:translateX(-3px);"></div>
+                <div style="position:absolute;left:${combPct}%;width:5px;height:100%;background:${profitCol};border-radius:2px;z-index:3;transform:translateX(-2px);"></div>
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:7px;font-weight:700;">
-                <span style="color:#00ff88;">${targetCombined}¢</span>
-                <span style="color:#ffaa00;">100¢</span>
-                <span style="color:#ff4444;">${stopLoss}¢</span>
+                <span style="color:#00ff88;">${targetCombined}c</span>
+                <span style="color:#ffaa00;">100c</span>
+                <span style="color:#ff4444;">${stopLoss}c</span>
+            </div>
+            <div style="text-align:center;margin-top:6px;">
+                <span style="color:#556;font-size:9px;">bid <strong style="color:${col};">${exitBid}c</strong> ask <strong>${exitAsk}c</strong></span>
             </div>
         </div>`;
     };
-    // Only show exit panel when actually holding inventory — not when flat with stale skew flags
     const hasInventory = netYes > 0 || netNo > 0;
     if (!isCompleted && hasInventory && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88', 'yes');
     if (!isCompleted && hasInventory && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444', 'no');
 
-    const item = document.createElement('div');
-    item.style.cssText = `background:#0f1419;border:1px solid #66bbcc33;border-left:3px solid #00d4ff;border-radius:12px;padding:14px;margin-bottom:10px;`;
-    item.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="color:#00d4ff;font-weight:800;font-size:10px;letter-spacing:.08em;">APEX MM</span>
-                <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
-                <span style="background:${accentCol}22;color:${accentCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
-                ${liveScoreHtml}
-                ${smartMode > 0 ? `<span style="background:#00d4ff22;color:#00d4ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Smart · ${consLosses}/${smartMode} losses</span>` : ''}
-                <span style="color:#556;font-size:10px;">${ageStr}</span>
+    // ── SECTION 4: Collapsible history ──
+    const historyId = `apex-hist-${botId.replace(/[^a-zA-Z0-9]/g, '')}`;
+    const rtLog = bot._rt_log || [];
+    const exitLog = bot._exit_log || [];
+    const hasHistory = rtLog.length > 0 || exitLog.length > 0 || realizedPnl !== 0 || roundTrips > 0;
+    let historyHtml = '';
+    if (hasHistory) {
+        const rtPnlSum = rtLog.reduce((s, rt) => s + (rt.pnl || 0), 0);
+        const exitPnl = realizedPnl - rtPnlSum;
+        historyHtml = `<div style="border-top:1px solid #1a2540;margin-top:4px;padding-top:4px;">
+            <div onclick="const el=document.getElementById('${historyId}');el.style.display=el.style.display==='none'?'block':'none';this.querySelector('.arr').textContent=el.style.display==='none'?'\\u25B6':'\\u25BC';" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:2px 0;">
+                <div style="display:flex;gap:10px;font-size:10px;">
+                    <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}c</strong></span>
+                    ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}c</strong></span>` : ''}
+                    <span style="color:#66bbcc;">${roundTrips} RTs</span>
+                </div>
+                <span class="arr" style="color:#445;font-size:8px;">&#9654;</span>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-                <span style="color:${pnlColor};font-weight:800;font-size:14px;">${pnlSign}${totalPnl}¢</span>
-                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#66bbcc22;color:#66bbcc;border:1px solid #66bbcc44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
-                ${!smartMode && !isCompleted ? `<button onclick="addRuns('${botId}')" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
-                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+            <div id="${historyId}" style="display:none;margin-top:4px;">
+                ${rtLog.length > 0 ? rtLog.map((rt, i) => {
+                    const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
+                    const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
+                    return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
+                        <span style="color:#00d4ff;">#${i+1}</span>
+                        <span><span style="color:#00d4ff;">${rt.entry_price}</span><span style="color:#334;">+</span><span style="color:#66bbcc;">${rt.exit_price}</span><span style="color:#334;">=</span><span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
+                        <span style="color:#66bbcc;">x${rt.qty}</span>
+                        <span style="color:${pCol};font-weight:700;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
+                    </div>`;
+                }).join('') : ''}
+                ${exitLog.length > 0 ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #1a0a0a;">` +
+                    exitLog.map((ex, i) => {
+                        const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
+                        const typeLabel = ex.type === 'arb_complete' ? 'ARB' : 'SELL';
+                        return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
+                            <span style="color:#ff6666;">${typeLabel}</span>
+                            <span><span style="color:#ff8844;">${ex.held_avg}c</span><span style="color:#334;">${ex.type === 'arb_complete' ? '+' : '>'}</span><span style="color:#ff6666;">${ex.type === 'arb_complete' ? ex.exit_price : ex.sell_price}c</span></span>
+                            <span style="color:#ff8844;">x${ex.qty}</span>
+                            <span style="color:${pCol};font-weight:700;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
+                        </div>`;
+                    }).join('') + '</div>' : ''}
+            </div>
+        </div>`;
+    }
+
+    // ── Status subtitle (pulled/exiting reason — compact, inline) ──
+    let statusSubHtml = '';
+    if (status === 'mm_depth_pulled' && bot._last_pull_reason) {
+        statusSubHtml = `<div style="color:#ffaa00;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ffaa0008;border-radius:4px;">${bot._last_pull_reason}</div>`;
+    } else if (status === 'market_making_active' && bot._last_pull_reason && bot._last_pull_reason.includes('entry only')) {
+        statusSubHtml = `<div style="color:#ffaa00;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ffaa0008;border-radius:4px;">Entry pulled: ${bot._last_pull_reason}</div>`;
+    } else if (status === 'mm_exiting' && _exitReason) {
+        statusSubHtml = `<div style="color:#ff8800;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ff880008;border-radius:4px;">${_exitReason}</div>`;
+    } else if (isCompleted && _exitReason) {
+        statusSubHtml = `<div style="color:#ff8800;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ff880008;border-radius:4px;">Exit: ${_exitReason}</div>`;
+    }
+
+    // ── BUILD CARD ──
+    const item = document.createElement('div');
+    item.style.cssText = `background:#0c1018;border:1px solid #00d4ff18;border-left:3px solid #00d4ff;border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 0 12px rgba(0,212,255,0.04);`;
+    item.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0;">
+                <span style="color:#00d4ff;font-weight:800;font-size:9px;letter-spacing:.1em;opacity:0.8;">APEX MM</span>
+                <span style="color:#e8eaed;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${teamName}</span>
+                <span style="background:${accentCol}15;color:${accentCol};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.03em;">${statusLabel}</span>
+                ${liveScoreHtml}
+                ${smartMode > 0 ? `<span style="color:#00d4ff;font-size:9px;font-weight:600;">${consLosses}/${smartMode}</span>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
+                <span style="color:${pnlColor};font-weight:800;font-size:13px;">${pnlSign}${totalPnl}c</span>
+                <span style="color:#334;font-size:9px;">${ageStr}</span>
+                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#66bbcc15;color:#66bbcc;border:1px solid #66bbcc30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
             </div>
         </div>
 
-        ${!isCompleted ? pullInfo : ''}
-        ${!isCompleted ? exitInfo : ''}
-        ${isCompleted && _exitReason ? `<div style="padding:6px 10px;background:#ff880011;border:1px solid #ff880033;border-radius:6px;margin-bottom:8px;font-size:10px;color:#ff8800;font-weight:600;">Exit: ${_exitReason}</div>` : ''}
+        ${statusSubHtml}
+        ${positionBarHtml}
 
-        ${(netYes > 0 || netNo > 0) ? (() => {
-            const longSide = netYes > netNo ? 'YES' : 'NO';
-            const heldQty = Math.abs(netYes - netNo);
-            const heldAvg = netYes > netNo ? avgYesCost : avgNoCost;
-            const ep = bot._exit_price || 0;
-            const combined = heldAvg + ep;
-            const combCol = combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : combined <= 100 ? '#ff8800' : '#ff4444';
-            const profit = 100 - combined;
-            const exitPostedAt = bot._exit_posted_at || 0;
-            const skewSec = exitPostedAt > 0 ? Math.floor(Date.now() / 1000 - exitPostedAt) : 0;
-            const timeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m ${skewSec%60}s` : `${skewSec}s`;
-            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#00d4ff08;border:1px solid #00d4ff22;border-radius:6px;margin-bottom:8px;font-size:11px;">
-                <span style="color:#00d4ff;font-weight:700;">HOLDING ${longSide} ${heldQty}x @ ${heldAvg}¢</span>
-                <span style="display:flex;gap:8px;align-items:center;">
-                    ${ep > 0 ? `<span style="color:${combCol};font-weight:700;">${heldAvg}+${ep}=${combined}¢ (${profit >= 0 ? '+' : ''}${profit}¢)</span>` : ''}
-                    ${skewSec > 0 ? `<span style="color:#556;">${timeStr}</span>` : ''}
-                </span>
-            </div>`;
-        })() : ''}
-
-        ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-            <div style="background:#060a14;border:1px solid ${yesBorderCol};border-radius:8px;padding:8px;">
+        ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
+            <div style="background:#060a12;border:1px solid ${yesIsExit ? '#00ff8820' : '#66bbcc15'};border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${yesIsExit ? '#00ff88' : '#66bbcc'};font-size:9px;font-weight:800;">${yesLabel}${yesPaused}</span>
+                    <span style="color:${yesIsExit ? '#00ff88' : '#66bbcc'};font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
+                    <span style="color:#334;font-size:8px;">bid ${liveYesBid || '?'}c</span>
                 </div>
-                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#00ff88;">${liveYesBid || '?'}¢</strong> · ask <strong style="color:#00ff88;">${liveYesAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${yesLadder || '<span style="color:#66bbcc55;">No orders</span>'}</div>
+                ${yesLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
             </div>
-            <div style="background:#060a14;border:1px solid ${noBorderCol};border-radius:8px;padding:8px;">
+            <div style="background:#060a12;border:1px solid ${noIsExit ? '#ff444420' : '#66bbcc15'};border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${noIsExit ? '#ff4444' : '#66bbcc'};font-size:9px;font-weight:800;">${noLabel}${noPaused}</span>
+                    <span style="color:${noIsExit ? '#ff4444' : '#66bbcc'};font-size:8px;font-weight:800;letter-spacing:.06em;">${noLabel}${noPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
+                    <span style="color:#334;font-size:8px;">bid ${liveNoBid || '?'}c</span>
                 </div>
-                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ff4444;">${liveNoBid || '?'}¢</strong> · ask <strong style="color:#ff4444;">${liveNoAsk || '?'}¢</strong></div>
-                <div style="display:flex;flex-direction:column;gap:2px;">${noLadder || '<span style="color:#334;">No orders</span>'}</div>
+                ${noLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
             </div>
         </div>` : ''}
 
-        ${(() => {
-            if (realizedPnl === 0 && roundTrips === 0) return '';
-            const rtPnlSum = (bot._rt_log || []).reduce((s, rt) => s + (rt.pnl || 0), 0);
-            const exitPnl = realizedPnl - rtPnlSum;
-            const showBreakdown = exitPnl !== 0 && (bot._rt_log || []).length > 0;
-            return `<div style="display:flex;gap:12px;margin-bottom:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlColor}22;border-radius:6px;font-size:11px;flex-wrap:wrap;">
-            <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}¢</strong></span>
-            ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unrealized: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}¢</strong></span>` : ''}
-            <span style="color:#8892a6;">Round Trips: <strong style="color:#fff;">${roundTrips}</strong></span>
-            ${showBreakdown ? `<span style="color:#555;">|</span>
-            <span style="color:#8892a6;">RTs: <strong style="color:${rtPnlSum >= 0 ? '#00ff88' : '#ff4444'};">${rtPnlSum >= 0 ? '+' : ''}${rtPnlSum}¢</strong></span>
-            <span style="color:#8892a6;">Exits: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong></span>` : ''}
-        </div>`;
-        })()}
+        ${historyHtml}
 
-        ${(bot._rt_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #66bbcc22;border-radius:6px;padding:6px;margin-bottom:8px;">
-            <div style="color:#66bbcc;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Round Trip History</div>
-            ${(bot._rt_log || []).map((rt, i) => {
-                const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
-                const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
-                return `<div style="display:grid;grid-template-columns:22px 1fr 38px 50px;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
-                    <span style="color:#00d4ff;font-weight:700;font-size:10px;">#${i + 1}</span>
-                    <span style="display:flex;align-items:center;gap:3px;">
-                        <span style="color:#00d4ff;font-weight:700;">${rt.entry_price}¢</span>
-                        <span style="color:#3a4560;">+</span>
-                        <span style="color:#66bbcc;font-weight:700;">${rt.exit_price}¢</span>
-                        <span style="color:#3a4560;">=</span>
-                        <span style="color:${combCol};font-weight:700;">${rt.combined}¢</span>
-                    </span>
-                    <span style="color:#00d4ff;font-weight:700;">x${rt.qty}</span>
-                    <span style="color:${pCol};font-weight:800;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}¢</span>
-                </div>`;
-            }).join('')}
-        </div>` : ''}
-
-        ${(bot._exit_log || []).length > 0 ? `<div style="background:#060a14;border:1px solid #ff444422;border-radius:6px;padding:6px;margin-bottom:8px;">
-            <div style="color:#ff4444;font-size:9px;font-weight:700;padding:2px 6px 4px;text-transform:uppercase;letter-spacing:.05em;">Exit History</div>
-            ${(bot._exit_log || []).map((ex, i) => {
-                const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
-                const typeLabel = ex.type === 'arb_complete' ? 'ARB' : 'SELL';
-                const priceInfo = ex.type === 'arb_complete'
-                    ? `<span style="color:#ff8844;font-weight:700;">${ex.held_avg}¢</span><span style="color:#3a4560;">+</span><span style="color:#ff6666;font-weight:700;">${ex.exit_price}¢</span><span style="color:#3a4560;">=</span><span style="color:#ff4444;font-weight:700;">${ex.combined}¢</span>`
-                    : `<span style="color:#ff8844;font-weight:700;">${ex.held_avg}¢</span><span style="color:#3a4560;">→</span><span style="color:#ff6666;font-weight:700;">${ex.sell_price}¢</span>`;
-                return `<div style="display:grid;grid-template-columns:34px 1fr 38px 50px;align-items:center;padding:3px 6px;${i > 0 ? 'border-top:1px solid #141a24;' : ''}font-size:11px;">
-                    <span style="color:#ff6666;font-weight:700;font-size:10px;">${typeLabel}</span>
-                    <span style="display:flex;align-items:center;gap:3px;">${priceInfo}</span>
-                    <span style="color:#ff8844;font-weight:700;">x${ex.qty}</span>
-                    <span style="color:${pCol};font-weight:800;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}¢</span>
-                </div>`;
-            }).join('')}
-        </div>` : ''}
-
-        <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#66bbcc;font-weight:600;">Width: ${width}¢</span>
-            <span style="color:#8892a6;">Mid: ${midpoint}¢</span>
-            <span style="color:#66bbcc;">Base: ${bot.base_qty || bot.qty_per_level || '?'}x${bot.auto_scale !== false ? ' (scaled)' : ''}</span>
-            <span style="color:#66bbcc;">Rungs: ${bot.levels || '?'}</span>
-            ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room <= 2 ? 700 : 400};">${room <= 2 ? '⚠ ' : ''}Room: ${room}¢</span>` : ''}
-            ${obiHtml}
-            ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls: ${pullCount}</span>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
+            <span style="color:#66bbcc;">W:${width}</span>
+            <span>Mid:${midpoint}</span>
+            <span style="color:#66bbcc;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}${bot.auto_scale !== false ? ' scaled' : ''}</span>
+            ${room >= 0 ? `<span style="color:${roomCol};">${room <= 2 ? '! ' : ''}Room:${room}</span>` : ''}
+            ${obiLabel}
+            ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls:${pullCount}</span>` : ''}
         </div>
     `;
     container.appendChild(item);
@@ -9039,7 +9004,7 @@ async function apexMmModify(botId) {
         : status === 'mm_depth_pulled'
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
-    const _widths = [4, 5, 6, 7, 8, 10, 12];
+    const _widths = [4, 6, 8, 10, 12];
     const _rungs = [3, 5, 7, 10];
     const _btnStyle = (active) => `padding:8px 2px;background:${active ? '#00d4ff11' : '#0a0e1a'};border:2px solid ${active ? '#00d4ff' : '#1e274066'};border-radius:8px;color:${active ? '#00d4ff' : '#8892a6'};cursor:pointer;text-align:center;font-weight:800;font-size:14px;transition:all .15s;`;
     const html = `

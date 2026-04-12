@@ -7446,23 +7446,80 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 pass
         bot[f'_{side}_exit_oid'] = None
 
-    # Cancel remaining entry orders — clear OIDs under lock so WS handler
-    # falls through to late-fill path (which has proper dedup via _counted_order_fills).
-    # DO NOT add fills to inventory here — the exit may have already sold those contracts,
-    # and re-adding them creates phantom inventory that doesn't exist on Kalshi.
+    # Cancel remaining entry orders — check for fills, verify against Kalshi position
+    _late_fills = 0
     for side_key in ('yes_orders', 'no_orders'):
+        _side = 'yes' if side_key == 'yes_orders' else 'no'
         for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
             if not oid:
                 continue
-            _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
+            _cr = _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
             with ws_fill_lock:
-                # Mark fills as counted so WS late-fill path won't re-add
-                _kalshi_fills = level.get('fill_qty', 0)
-                if oid and _kalshi_fills > 0:
-                    bot.setdefault('_counted_order_fills', {})[oid] = max(
-                        _kalshi_fills, bot.get('_counted_order_fills', {}).get(oid, 0))
+                if isinstance(_cr, tuple) and _cr[0] == 'filled':
+                    _kalshi_fills = _cr[1]
+                    _ws_already = max(level.get('fill_qty', 0),
+                                      bot.get('_counted_order_fills', {}).get(oid, 0))
+                    _new_fills = max(0, _kalshi_fills - _ws_already)
+                    if _new_fills > 0:
+                        _price = int(price_str)
+                        _late_fills += _new_fills
+                        bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
+                        bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
+                        _net = bot[f'net_{_side}']
+                        bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                        level['fill_qty'] = _kalshi_fills
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                        print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c (kalshi={_kalshi_fills} ws_had={_ws_already})')
+                    elif _kalshi_fills > 0:
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                else:
+                    # Not filled — mark counted to prevent WS re-add
+                    _kalshi_fills = level.get('fill_qty', 0)
+                    if oid and _kalshi_fills > 0:
+                        bot.setdefault('_counted_order_fills', {})[oid] = max(
+                            _kalshi_fills, bot.get('_counted_order_fills', {}).get(oid, 0))
                 level['oid'] = None
+
+    # Late fills found — verify against KALSHI POSITION before trusting
+    if _late_fills > 0:
+        try:
+            api_read_limiter.wait()
+            _pos_resp = kalshi_client.get_positions()
+            _pos_list = _pos_resp.get('market_positions', [])
+            _kalshi_net = 0
+            for _p in _pos_list:
+                if _p.get('ticker') == ticker:
+                    _kalshi_net = int(float(_p.get('position_fp', '0')))
+                    break
+            _bot_net = bot.get('net_yes', 0) - bot.get('net_no', 0)
+            if _kalshi_net == 0 and _bot_net != 0:
+                # Kalshi says flat but bot thinks it has inventory — phantom fills from sold positions
+                print(f'🛡️ CYCLE RESET PHANTOM BLOCKED: {bot_id} kalshi=0 but bot={_bot_net} — clearing phantom inventory')
+                bot['net_yes'] = 0
+                bot['net_no'] = 0
+                bot['avg_yes_cost'] = 0
+                bot['avg_no_cost'] = 0
+                bot['total_yes_cost'] = 0
+                bot['total_no_cost'] = 0
+                _late_fills = 0
+                bot_log('APEX_MM_PHANTOM_BLOCKED', bot_id, {'bot_net': _bot_net, 'kalshi_net': _kalshi_net})
+            elif _kalshi_net != 0:
+                print(f'✅ CYCLE RESET LATE FILLS VERIFIED: {bot_id} kalshi={_kalshi_net} bot={_bot_net}')
+        except Exception as _pe:
+            print(f'⚠ CYCLE RESET position check failed: {_pe}')
+
+    if _late_fills > 0:
+        print(f'🚨 CYCLE RESET ABORTED: {bot_id} {_late_fills} verified late fills — not flat')
+        bot['_skew_active'] = True
+        if bot.get('net_yes', 0) > bot.get('net_no', 0):
+            bot['_skew_direction'] = 'exit_no'
+        else:
+            bot['_skew_direction'] = 'exit_yes'
+        _fill_side = 'yes' if bot.get('net_yes', 0) > bot.get('net_no', 0) else 'no'
+        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+        save_state()
+        return
 
     # Final flat check — WS may have delivered late fills during cancel
     _post_cancel_yes = bot.get('net_yes', 0)

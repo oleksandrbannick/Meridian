@@ -6417,9 +6417,6 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const combPct = combined <= 100
                 ? Math.max(0, Math.min(50, leftRange > 0 ? Math.round((combined - barMin) / leftRange * 50) : 0))
                 : Math.min(100, 50 + (rightRange > 0 ? Math.round((combined - 100) / rightRange * 50) : 0));
-            // Marker for where exit price currently is (vs where it was originally)
-            const exitCombNow = avgCost + exitPrice;
-            const exitPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((exitCombNow - barMin) / barRange * 100))) : 0;
             const walkProfitNow = 100 - combined;
             const walkProfitTarget = 100 - origTargetCombined;
             const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';

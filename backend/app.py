@@ -3919,6 +3919,9 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             stop = 100 + width
 
             if best_combined >= stop and best_combined < 999:
+                # Set status IMMEDIATELY to prevent duplicate exit from next WS tick
+                # (begin_exit runs on background thread — without this, next tick sees 'market_making_active' and fires again)
+                bot['status'] = 'mm_exiting'
                 print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — emergency exit')
                 def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _s=stop, _w=width):
                     _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, width={_w})')
@@ -7597,6 +7600,18 @@ def _apex_mm_cycle_reset(bot_id, bot):
 
 def _apex_mm_begin_exit(bot_id, bot, reason):
     """Cancel all unfilled orders and begin exit sequence."""
+    # Guard: prevent duplicate begin_exit calls (WS tick + monitor can race)
+    if bot.get('_begin_exit_running'):
+        print(f'🛡️ APEX MM BEGIN_EXIT SKIPPED: {bot_id} already in progress')
+        return
+    bot['_begin_exit_running'] = True
+    try:
+        _apex_mm_begin_exit_inner(bot_id, bot, reason)
+    finally:
+        bot['_begin_exit_running'] = False
+
+def _apex_mm_begin_exit_inner(bot_id, bot, reason):
+    """Inner begin_exit logic — protected by _begin_exit_running guard."""
     # Cancel exit OIDs first — CHECK FOR FILLS (cancel-race: exit may have filled)
     for side in ('yes', 'no'):
         oid = bot.get(f'_{side}_exit_oid')

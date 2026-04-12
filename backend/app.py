@@ -7740,6 +7740,35 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
         bot['no_orders'] = {}
 
         ticker = bot['ticker']
+        # Verify against Kalshi — don't sell more than we actually hold
+        try:
+            api_read_limiter.wait()
+            _pos_resp = kalshi_client.get_positions()
+            _pos_list = _pos_resp.get('market_positions', [])
+            _kalshi_pos = 0
+            for _p in _pos_list:
+                if _p.get('ticker') == ticker:
+                    _kalshi_pos = int(float(_p.get('position_fp', '0')))
+                    break
+            _kalshi_yes = max(0, _kalshi_pos)
+            _kalshi_no = max(0, -_kalshi_pos)
+            if net_yes > _kalshi_yes:
+                print(f'🛡️ APEX MM EXIT CLAMP: {bot_id} bot_yes={net_yes} kalshi_yes={_kalshi_yes} — clamping')
+                net_yes = _kalshi_yes
+                bot['net_yes'] = net_yes
+            if net_no > _kalshi_no:
+                print(f'🛡️ APEX MM EXIT CLAMP: {bot_id} bot_no={net_no} kalshi_no={_kalshi_no} — clamping')
+                net_no = _kalshi_no
+                bot['net_no'] = net_no
+            if net_yes == 0 and net_no == 0:
+                print(f'🛡️ APEX MM EXIT PHANTOM: {bot_id} kalshi=0, all inventory was phantom — completing')
+                bot['status'] = 'completed'
+                bot['completed_at'] = time.time()
+                save_state()
+                return
+        except Exception as _pe:
+            print(f'⚠ APEX MM EXIT position verify failed: {_pe}')
+
         for side, net_qty, avg_cost in [('yes', net_yes, bot.get('avg_yes_cost', 0)), ('no', net_no, bot.get('avg_no_cost', 0))]:
             if net_qty <= 0:
                 continue

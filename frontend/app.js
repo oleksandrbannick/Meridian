@@ -6433,7 +6433,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
                 </div>
                 <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">
-                    <span style="color:#00ff88;">+${walkProfitTarget}c</span>
+                    <span style="color:#00ff88;">${origTargetCombined}c</span>
                     <span style="color:#ffaa00;">100c</span>
                     <span style="color:#ff4444;">${stopLoss}c</span>
                 </div>

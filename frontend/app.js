@@ -6394,6 +6394,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const wallParked = bot._wall_parked || false;
         const origTarget = bot._exit_target_price || exitPrice;
         const origTargetCombined = avgCost + origTarget;
+        let slBadge = '';
+        if (combined >= stopLoss) slBadge = '<span style="color:#ff4444;font-weight:800;animation:pulse 1.5s infinite;">SL</span> ';
+        else if (combined >= 100) slBadge = '<span style="color:#ff4444;font-weight:800;">SL</span> ';
         let walkLabel = '';
         if (exitPrice > 0) {
             if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">STOP LOSS</span>`;
@@ -6465,7 +6468,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
                         <span style="color:#556;font-size:9px;">${exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending'}</span>
-                        <span style="font-size:8px;">${combined >= 100 ? `<span style="color:#ff4444;font-weight:800;${combined >= stopLoss ? 'animation:pulse 1.5s infinite;' : ''}">SL</span> ` : ''}<span style="color:#00ff88;">${exitSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${exitSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
+                        <span style="font-size:8px;">${slBadge}<span style="color:#00ff88;">${exitSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${exitSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
                     </div>
                     <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
                         <div style="width:${hedgeFp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>

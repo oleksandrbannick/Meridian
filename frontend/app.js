@@ -6090,7 +6090,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 75 ? '#00ccff' : _ppi >= 55 ? '#ffaa00' : _ppi >= 35 ? '#ff8800' : '#ff4444';
                     const _ppiLabel = _ppi >= 90 ? 'WALL' : _ppi >= 75 ? 'PRIME' : _ppi >= 55 ? 'SNIPER' : _ppi >= 35 ? 'TRAP' : 'KILL';
-                    return `<span style="color:${_ppiCol};font-size:9px;font-weight:700;">PPI:${_ppi} ${_ppiLabel}</span>`;
+                    const _baseD = _ppi >= 90 ? 3 : _ppi >= 75 ? 4 : _ppi >= 55 ? (6 - Math.floor((_ppi - 55) / 10)) : _ppi >= 35 ? (9 - Math.floor((_ppi - 35) / 7)) : 0;
+                    const _recD = bot._rec_depth || _baseD;
+                    const _gapBump = _recD > _baseD && _baseD > 0 ? ` <span style="color:#ff8800;font-size:8px;">gaps→${_recD}¢</span>` : '';
+                    return `<span style="color:${_ppiCol};font-size:9px;font-weight:700;">PPI:${_ppi} ${_ppiLabel}</span>${_gapBump}`;
                 }
                 const _rd = bot._rec_depth;
                 if (_rd == null) return '';

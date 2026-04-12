@@ -11082,6 +11082,12 @@ def _handle_phantom(bot_id, bot, actions):
             except Exception as _se:
                 print(f'⚠ waiting_repeat settle check {bot_id}: {_se}')
 
+        # Apply pending qty from mid-hedge edit
+        _pending_qty = bot.pop('_pending_qty', None)
+        if _pending_qty and _pending_qty != bot.get('quantity'):
+            print(f'🔧 PHANTOM PENDING QTY: {bot_id} {bot.get("quantity")}→{_pending_qty} (from mid-hedge edit)')
+            bot['quantity'] = _pending_qty
+
         # Clear completion linger flag
         bot.pop('_just_completed', None)
         bot.pop('_last_pnl', None)
@@ -17064,8 +17070,14 @@ def phantom_edit(bot_id):
         return jsonify({'error': 'Nothing to change'}), 400
     changes = {}
     if new_qty is not None and new_qty != bot.get('quantity'):
-        changes['quantity'] = {'old': bot.get('quantity'), 'new': new_qty}
-        bot['quantity'] = int(new_qty)
+        _mid_hedge = bot.get('status') in ('fav_hedge_posted', 'dog_filled')
+        if _mid_hedge:
+            # Don't change qty mid-hedge — store for next run
+            bot['_pending_qty'] = int(new_qty)
+            changes['quantity'] = {'old': bot.get('quantity'), 'new': new_qty, 'deferred': True}
+        else:
+            changes['quantity'] = {'old': bot.get('quantity'), 'new': new_qty}
+            bot['quantity'] = int(new_qty)
     if new_auto_depth is not None and new_auto_depth != bot.get('auto_depth', False):
         changes['auto_depth'] = {'old': bot.get('auto_depth', False), 'new': new_auto_depth}
         bot['auto_depth'] = bool(new_auto_depth)

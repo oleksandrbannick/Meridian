@@ -3979,7 +3979,8 @@ def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh,
 _ws_apex_mm_tick_lock = threading.Lock()
 
 def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
-    """WS-tick handler for Apex MM. Fires on every price tick. Two jobs:
+    """WS-tick handler for Apex MM. Fires on every price tick. Three jobs:
+    Priority 0: Shadow exit — instant amend of mm_exiting sell/buy orders to track bid/ask.
     Priority 1: Stop-loss — if combined >= 100+width, emergency exit immediately.
     Priority 2: Snap-down — if exit bid dropped below posted price, amend down for better fill."""
     if not _ws_apex_mm_tick_lock.acquire(blocking=False):
@@ -3990,11 +3991,51 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 continue
             if bot.get('type') != 'apex_mm':
                 continue
-            if bot.get('status') != 'market_making_active':
+            status = bot.get('status', '')
+            if status not in ('market_making_active', 'mm_exiting'):
                 continue
             if bot.get('ticker') != ticker:
                 continue
 
+            # ── Priority 0: Shadow exit orders (mm_exiting) ──
+            if status == 'mm_exiting':
+                for _sh_side, _sh_info in list(bot.get('_exit_sell_oids', {}).items()):
+                    _sh_oid = _sh_info.get('oid')
+                    if not _sh_oid:
+                        continue
+                    _sh_action = _sh_info.get('action', 'sell')
+                    _sh_current = _sh_info.get('price', 0)
+                    _sh_qty = _sh_info.get('qty', 0)
+                    if _sh_current <= 0 or _sh_qty <= 0:
+                        continue
+
+                    if _sh_action == 'buy':
+                        # Buy opposite: shadow the bid (buy at front of bid queue)
+                        _sh_live = yes_bid if _sh_side == 'yes' else no_bid
+                    else:
+                        # Sell held: shadow the ask (sell at front of ask queue)
+                        _sh_opp = 'no' if _sh_side == 'yes' else 'yes'
+                        _sh_opp_bid = yes_bid if _sh_opp == 'yes' else no_bid
+                        _sh_live = (100 - _sh_opp_bid) if _sh_opp_bid > 0 else 0
+
+                    if _sh_live <= 0 or _sh_live == _sh_current:
+                        continue  # no change
+
+                    try:
+                        _sh_price_kwarg = {f'{_sh_side}_price': _sh_live}
+                        api_rate_limiter.wait()
+                        kalshi_client.amend_order(_sh_oid, ticker=ticker, side=_sh_side,
+                                                  count=_sh_qty, action=_sh_action, **_sh_price_kwarg)
+                        _sh_info['price'] = _sh_live
+                        _sh_info['posted_at'] = time.time()
+                        print(f'👤 APEX MM SHADOW: {bot_id} {_sh_action} {_sh_side.upper()} {_sh_current}→{_sh_live}c')
+                    except Exception as _sh_e:
+                        _sh_err = str(_sh_e)
+                        if '404' not in _sh_err and 'filled' not in _sh_err.lower():
+                            print(f'⚠ APEX MM SHADOW FAIL: {bot_id} {_sh_side}: {_sh_e}')
+                continue  # mm_exiting bots skip stop-loss/snap-down
+
+            # ── market_making_active from here ──
             net_yes = bot.get('net_yes', 0)
             net_no = bot.get('net_no', 0)
             if net_yes <= 0 and net_no <= 0:
@@ -4527,6 +4568,42 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 # Keep last 50 fills
                 if len(bot['_fill_log']) > 50:
                     bot['_fill_log'] = bot['_fill_log'][-50:]
+
+                # ── Velocity Gate: detect rapid fills on same side ──
+                _vf_now = time.time()
+                _vfills = bot.setdefault('_velocity_fills', [])
+                _vfills.append({'ts': _vf_now, 'side': matched_side})
+                # Prune entries older than 2s
+                bot['_velocity_fills'] = [v for v in _vfills if _vf_now - v['ts'] <= 2.0]
+                # Check: 3+ fills on same side within 500ms → cancel remaining entry rungs
+                if not bot.get('_velocity_gated'):
+                    _vg_count = sum(1 for v in bot['_velocity_fills']
+                                    if v['side'] == matched_side and _vf_now - v['ts'] <= 0.5)
+                    if _vg_count >= 3:
+                        bot['_velocity_gated'] = True
+                        bot['_velocity_gated_side'] = matched_side
+                        bot['_velocity_gated_at'] = _vf_now
+                        print(f'🚨 APEX MM VELOCITY GATE: {bot_id} {matched_side.upper()} — {_vg_count} fills in 500ms, cancelling entry orders')
+                        bot_log('APEX_MM_VELOCITY_GATE', bot_id, {
+                            'side': matched_side, 'fills_in_window': _vg_count,
+                            'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
+                        }, level='WARN')
+                        # Cancel unfilled entry orders on the swept side (background thread)
+                        _vg_side_key = f'{matched_side}_orders'
+                        _vg_to_cancel = []
+                        for _vg_p, _vg_lvl in list(bot.get(_vg_side_key, {}).items()):
+                            _vg_oid = _vg_lvl.get('oid')
+                            if _vg_oid and _vg_lvl.get('fill_qty', 0) < _vg_lvl.get('qty', 1):
+                                _vg_to_cancel.append((_vg_oid, _vg_lvl))
+                        if _vg_to_cancel:
+                            def _velocity_cancel(_cancel_list, _bid=bot_id):
+                                for _oid, _lvl in _cancel_list:
+                                    try:
+                                        _safe_cancel(_oid, f'velocity_gate_{_bid}')
+                                        _lvl['oid'] = None
+                                    except Exception:
+                                        pass
+                            threading.Thread(target=_velocity_cancel, args=(_vg_to_cancel,), daemon=True).start()
 
                 # Check if this fill closes opposite position (round trip)
                 opposite = 'no' if matched_side == 'yes' else 'yes'
@@ -7326,12 +7403,23 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                     print(f'⚠ APEX MM EXIT CREATE FAILED: {bot_id} no order_id in response')
                     return
 
+            _old_target = bot.get('_exit_target_price', 0)
             bot['_exit_price'] = exit_price
             bot['_exit_total_qty'] = net_held
             bot['_exit_side'] = exit_side
             bot['_exit_held_side'] = held_side
             bot['_exit_avg_cost'] = avg_held
             bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - width // 2))  # original target before walk
+            # Dynamic target recalc: if new fills shifted avg cost and target changed, reset soak
+            if exit_oid and _old_target > 0 and bot['_exit_target_price'] != _old_target:
+                bot['_exit_soak_start'] = time.time()
+                bot['_exit_walk_count'] = 0
+                bot['_wall_parked'] = False
+                print(f'📊 APEX MM TARGET SHIFT: {bot_id} target {_old_target}→{bot["_exit_target_price"]}c (soak reset)')
+                bot_log('APEX_MM_TARGET_SHIFT', bot_id, {
+                    'old_target': _old_target, 'new_target': bot['_exit_target_price'],
+                    'avg_held': avg_held, 'exit_price': exit_price,
+                })
             # Only set posted_at on FIRST exit creation — amends shouldn't restart patience timer
             if not exit_oid:
                 bot['_exit_fill_qty'] = 0
@@ -7755,6 +7843,10 @@ def _apex_mm_cycle_reset(bot_id, bot):
     bot['_exit_fill_qty'] = 0
     bot['_exit_total_qty'] = 0
     bot['_last_pull_reason'] = ''
+    bot['_velocity_gated'] = False
+    bot['_velocity_gated_side'] = ''
+    bot['_velocity_gated_at'] = 0
+    bot['_velocity_fills'] = []
     # Prune old order IDs — only keep current cycle's orders
     # This prevents the late-fill path from re-adding fills from old cycles
     _current_oids = set()
@@ -7822,6 +7914,8 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
     # All orders cancelled above; any fills during cancel were caught and counted
     bot['_all_placed_order_ids'] = []
     bot['_counted_order_fills'] = {}
+    bot['_velocity_gated'] = False
+    bot['_velocity_fills'] = []
 
     # Re-read inventory AFTER cancels — WS handler may have updated during cancel
     net_yes = bot.get('net_yes', 0)
@@ -7957,9 +8051,9 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                     resp, actual_price = create_order_maker(ticker, opposite, 'buy', net_qty, buy_price)
                     oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
                     if oid:
-                        bot['_exit_sell_oids'][opposite] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'buy', 'held_side': side}
+                        bot['_exit_sell_oids'][opposite] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'buy', 'held_side': side, 'shadow_mode': True}
                         bot.setdefault('_all_placed_order_ids', []).append(oid)
-                        print(f'🚪 APEX MM EXIT: {bot_id} buying {opposite.upper()} {net_qty}x @{actual_price}c (arb complete)')
+                        print(f'🚪 APEX MM EXIT (shadow): {bot_id} buying {opposite.upper()} {net_qty}x @{actual_price}c (arb complete, WS shadow active)')
                 except Exception as e:
                     print(f'⚠ APEX MM exit buy {opposite}: {e}')
             else:
@@ -7967,15 +8061,16 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                     resp, actual_price = create_order_maker(ticker, side, 'sell', net_qty, sell_at_ask)
                     oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
                     if oid:
-                        bot['_exit_sell_oids'][side] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'sell'}
+                        bot['_exit_sell_oids'][side] = {'oid': oid, 'qty': net_qty, 'price': actual_price, 'posted_at': time.time(), 'action': 'sell', 'shadow_mode': True}
                         bot.setdefault('_all_placed_order_ids', []).append(oid)
-                        print(f'🚪 APEX MM EXIT: {bot_id} selling {side.upper()} {net_qty}x @{actual_price}c')
+                        print(f'🚪 APEX MM EXIT (shadow): {bot_id} selling {side.upper()} {net_qty}x @{actual_price}c (WS shadow active)')
                 except Exception as e:
                     print(f'⚠ APEX MM exit sell {side}: {e}')
 
         bot_log('APEX_MM_EXIT_START', bot_id, {
             'reason': reason, 'net_yes': net_yes, 'net_no': net_no,
             'realized_pnl': bot.get('realized_pnl_cents', 0),
+            'shadow_mode': True,
         })
     save_state()
 
@@ -8092,7 +8187,9 @@ def _apex_mm_exit_tick(bot_id, bot):
                     })
                     print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c, fee={total_fee}c)')
                 all_sold = True  # will recheck
-            elif now - sell_info.get('posted_at', now) > 5:
+            elif now - sell_info.get('posted_at', now) > 10:
+                # Fallback: WS shadow normally handles price following instantly.
+                # This only fires if WS hasn't updated in 10s (disconnect/stale).
                 if _action == 'buy':
                     # Buy-opposite: follow bid DOWN (buy cheaper)
                     live_bid = bot.get(f'live_{side}_bid', 0)
@@ -8528,6 +8625,8 @@ def create_ladder_arb_bot():
             '_all_placed_order_ids': [],
             '_all_order_group_ids': [],
             '_order_group_id': None,
+            '_velocity_gated': False,
+            '_velocity_fills': [],
         }
 
         success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_levels, no_levels)

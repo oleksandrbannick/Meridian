@@ -6637,6 +6637,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:#00d4ff;font-weight:800;font-size:9px;letter-spacing:.1em;opacity:0.8;">APEX MM</span>
                 <span style="color:#e8eaed;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${teamName}</span>
                 <span style="background:${accentCol}15;color:${accentCol};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.03em;">${statusLabel}</span>
+                ${bot._velocity_gated ? '<span style="background:#ff444420;color:#ff4444;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:800;letter-spacing:.04em;">VEL GATE</span>' : ''}
                 ${liveScoreHtml}
                 ${smartMode > 0 ? `<span style="color:#00d4ff;font-size:9px;font-weight:600;">${consLosses}/${smartMode}</span>` : ''}
             </div>
@@ -7534,6 +7535,10 @@ async function loadBots() {
                 const b = bots[id];
                 if (b.type === 'watch') {
                     return sum + ((100 - (b.entry_price || 50)) * (b.quantity || 1));
+                }
+                // Apex MM: uses realized_pnl_cents + _unrealized_pnl (not Phantom-style fields)
+                if (b.bot_category === 'ladder_arb' && b.type === 'apex_mm') {
+                    return sum + (b.realized_pnl_cents || 0) + (b._unrealized_pnl || 0);
                 }
                 // Use lifetime_pnl or net_pnl_cents for accumulated P&L across all runs
                 if (b.bot_category === 'ladder_arb' || b.bot_category === 'anchor_dog' || b.bot_category === 'anchor_ladder') {

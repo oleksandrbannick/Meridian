@@ -6462,7 +6462,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const exitPrice = bot._exit_price || 0;
     const exitFillQty = bot._exit_fill_qty || 0;
     const exitTotalQty = bot._exit_total_qty || Math.abs(netYes - netNo);
-    const _buildExitPanel = (col) => {
+    const _buildExitPanel = (col, exitSide) => {
+        const exitBid = exitSide === 'yes' ? yesBid : noBid;
+        const exitAsk = exitSide === 'yes' ? yesAsk : noAsk;
         const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
@@ -6492,9 +6494,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:${profitCol};font-weight:800;font-size:20px;">${combined}¢</span>
                 <span style="color:${profitCol};font-weight:700;font-size:13px;">${profit >= 0 ? '+' : ''}${profit}¢</span>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                 <span style="color:#556;font-size:9px;">entry ${heldAvg}¢ + hedge ${exitPrice}¢</span>
                 <span style="color:#556;font-size:9px;">${exitFillQty}/${exitTotalQty} filled</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="color:#8892a6;font-size:10px;">bid <strong style="color:${col};">${exitBid}¢</strong> · ask <strong>${exitAsk}¢</strong></span>
+                <span style="color:#556;font-size:9px;">${exitPrice > exitBid ? `${exitPrice - exitBid}¢ above bid` : exitPrice === exitBid ? 'at bid' : `${exitBid - exitPrice}¢ below bid`}</span>
             </div>
             <div style="height:5px;background:#0f1520;border-radius:3px;overflow:hidden;margin-bottom:2px;">
                 <div style="width:${fp}%;height:100%;background:${col};border-radius:3px;transition:width .3s;"></div>
@@ -6518,8 +6524,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>
         </div>`;
     };
-    if (!isCompleted && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88');
-    if (!isCompleted && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444');
+    if (!isCompleted && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88', 'yes');
+    if (!isCompleted && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444', 'no');
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid #66bbcc33;border-left:3px solid #00d4ff;border-radius:12px;padding:14px;margin-bottom:10px;`;

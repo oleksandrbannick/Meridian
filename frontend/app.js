@@ -6639,7 +6639,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:#334;font-size:9px;">${ageStr}</span>
                 ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${smartMode > 0 && (bot._smart_stopped || isCompleted) ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
             </div>
         </div>

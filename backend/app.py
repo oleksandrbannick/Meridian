@@ -7870,9 +7870,26 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
         })
 
     if net_yes == 0 and net_no == 0:
-        # Flat — done
+        # Flat — check smart mode before completing
+        _exit_pnl = bot.get('_last_exit_pnl', 0)
+        if _exit_pnl < 0:
+            bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+        _smart_limit = bot.get('smart_mode', 0)
+        if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
+            print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} losses={bot["consecutive_losses"]}/{_smart_limit} — cycling')
+            bot_log('APEX_MM_SMART_RESTART', bot_id, {
+                'reason': reason, 'consecutive_losses': bot['consecutive_losses'],
+                'smart_limit': _smart_limit, 'realized_pnl': bot.get('realized_pnl_cents', 0),
+            })
+            bot['status'] = 'market_making_active'
+            bot['_exit_reason'] = None
+            bot['_exit_started_at'] = None
+            bot['_exit_sell_oids'] = {}
+            _apex_mm_cycle_reset(bot_id, bot)
+            return
         bot['status'] = 'completed'
         bot['completed_at'] = time.time()
+        bot['_smart_stop_reason'] = reason
         bot_log('APEX_MM_COMPLETE', bot_id, {
             'reason': reason, 'realized_pnl': bot.get('realized_pnl_cents', 0),
             'round_trips': bot.get('round_trips_completed', 0),

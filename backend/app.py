@@ -11472,9 +11472,44 @@ def _handle_phantom(bot_id, bot, actions):
                             bot[f'{fav_side}_fill_qty'] = _fav_fills
                             # Let the next monitor cycle handle completion
                         elif _fav_fills > 0:
-                            # Partial fill — sell back unfilled portion
-                            print(f'   ⚠ PHANTOM FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{qty}')
-                            bot[f'{fav_side}_fill_qty'] = _fav_fills
+                            # Partial fill — order cancelled but some filled
+                            bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _fav_fills)
+                            bot[f'{fav_side}_fill_qty'] = bot['fav_fill_qty']
+                            _remaining_404 = qty - _fav_fills
+                            if bot.get('_death_zone_stopped') or _remaining_404 <= 0:
+                                # Market ending — go to awaiting settlement with partial fill info
+                                bot['_needs_settlement_pnl'] = True
+                                bot['_settlement_dog_price'] = bot['dog_price']
+                                bot['_settlement_dog_side'] = dog_side
+                                bot['_settlement_fav_fills'] = _fav_fills
+                                bot['_settlement_fav_price'] = bot.get('fav_price', 0)
+                                bot['_settlement_qty'] = qty
+                                _dq = qty
+                                if dog_side == 'yes':
+                                    bot['awaiting_qty_yes'] = _dq
+                                    bot['awaiting_qty_no'] = 0
+                                else:
+                                    bot['awaiting_qty_yes'] = 0
+                                    bot['awaiting_qty_no'] = _dq
+                                bot['status'] = 'awaiting_settlement'
+                                bot['awaiting_since'] = now
+                                print(f'⏳ PHANTOM → AWAITING SETTLEMENT (404 partial): {bot_id} fav {_fav_fills}/{qty} filled, death_zone=True')
+                                bot_log('PHANTOM_404_PARTIAL_AWAITING', bot_id, {
+                                    'fav_fills': _fav_fills, 'qty': qty, 'dog_price': bot['dog_price'],
+                                    'fav_price': bot.get('fav_price', 0),
+                                })
+                                save_state()
+                            else:
+                                # Market active — repost hedge for remaining
+                                print(f'   🔙 PHANTOM FAV PARTIAL REPOST (404 recovery): {bot_id} {_fav_fills}/{qty} — reposting for {_remaining_404}')
+                                bot['fav_order_id'] = None
+                                bot['_hedge_fired'] = False
+                                bot['status'] = 'dog_filled'
+                                bot['dog_filled_at'] = now
+                                bot_log('PHANTOM_404_PARTIAL_REPOST', bot_id, {
+                                    'fav_fills': _fav_fills, 'qty': qty, 'remaining': _remaining_404,
+                                })
+                                save_state()
                         else:
                             # Order gone with 0 fills — re-post hedge
                             print(f'   🔙 PHANTOM FAV GONE (404 recovery): {bot_id} — re-posting hedge')

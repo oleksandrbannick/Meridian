@@ -6466,54 +6466,55 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
-        const breakeven = 100 - heldAvg;
         const combined = heldAvg + exitPrice;
-        const combinedCol = combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444';
+        const width = (bot.start_gap || 4) * 2;
+        const stopLoss = 100 + width;
+        const targetCombined = heldAvg + targetPrice;
         const profit = 100 - combined;
+        const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
         const walkCount = bot._exit_walk_count || 0;
-        // Walk status
-        let walkStatus = '';
-        if (walkCount > 0) {
-            walkStatus = `<span style="color:#ffaa00;font-weight:700;">WALKING +${walkCount}¢</span>`;
-        } else if (exitPrice > targetPrice) {
-            walkStatus = `<span style="color:#ffaa00;">walked</span>`;
-        } else if (exitPrice < targetPrice) {
-            walkStatus = `<span style="color:#00ff88;">below target</span>`;
-        } else {
-            walkStatus = `<span style="color:#00ff88;">at target</span>`;
-        }
-        // Combined price bar: 0c (left, best) to breakeven (right, worst)
-        // Shows where the exit price sits relative to profit zone
-        const barMin = Math.max(0, targetPrice - 4);  // show a few cents below target
-        const barMax = breakeven + 2;  // show past breakeven
+        // Combined bar: target combined (left/green) → 100c BE → stop loss (right/red)
+        const barMin = Math.max(80, targetCombined - 2);
+        const barMax = stopLoss + 2;
         const barRange = barMax - barMin;
-        const pricePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((exitPrice - barMin) / barRange * 100))) : 0;
-        const targetPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((targetPrice - barMin) / barRange * 100))) : 0;
-        const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((breakeven - barMin) / barRange * 100))) : 100;
+        const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
+        const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
+        const slPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((stopLoss - barMin) / barRange * 100))) : 100;
+        // Status label
+        let statusLabel = '';
+        if (combined >= stopLoss) statusLabel = `<span style="color:#ff4444;font-weight:700;">STOP LOSS</span>`;
+        else if (combined >= 100) statusLabel = `<span style="color:#ff4444;font-weight:700;">LOSS ZONE</span>`;
+        else if (walkCount > 0) statusLabel = `<span style="color:#ffaa00;font-weight:700;">WALKING</span>`;
+        else if (combined <= targetCombined) statusLabel = `<span style="color:#00ff88;">at target</span>`;
+        else statusLabel = `<span style="color:#ffaa00;">walked</span>`;
         return `<div style="padding:8px;background:${col}10;border:1px solid ${col}33;border-radius:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <span style="color:${col};font-weight:800;font-size:18px;">${exitPrice}¢</span>
-                <span style="color:${col};font-size:11px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <span style="color:${profitCol};font-weight:800;font-size:20px;">${combined}¢</span>
+                <span style="color:${profitCol};font-weight:700;font-size:13px;">${profit >= 0 ? '+' : ''}${profit}¢</span>
             </div>
-            <div style="height:5px;background:#0f1520;border-radius:3px;overflow:hidden;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="color:#556;font-size:9px;">entry ${heldAvg}¢ + hedge ${exitPrice}¢</span>
+                <span style="color:#556;font-size:9px;">${exitFillQty}/${exitTotalQty} filled</span>
+            </div>
+            <div style="height:5px;background:#0f1520;border-radius:3px;overflow:hidden;margin-bottom:2px;">
                 <div style="width:${fp}%;height:100%;background:${col};border-radius:3px;transition:width .3s;"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#556;font-size:9px;">Target: ${targetPrice}¢</span>
-                ${walkStatus}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;">
+                ${statusLabel}
+                <span style="color:#556;font-size:9px;">SL: ${stopLoss}¢</span>
             </div>
-            <div style="margin-top:4px;">
-                <div style="position:relative;height:5px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                    <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#0a1a0a;border-radius:2px;"></div>
-                    <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#1a0a0a;border-radius:2px;"></div>
-                    <div style="position:absolute;left:${targetPct}%;width:1px;height:100%;background:#00ff8866;z-index:2;"></div>
-                    <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ff4444;z-index:2;"></div>
-                    <div style="position:absolute;left:${pricePct}%;width:4px;height:100%;background:${combinedCol};border-radius:1px;z-index:3;transform:translateX(-2px);"></div>
-                </div>
-                <div style="position:relative;height:10px;font-size:7px;font-weight:700;">
-                    <span style="position:absolute;left:${targetPct}%;transform:translateX(-50%);color:#00ff88;">T</span>
-                    <span style="position:absolute;left:${bePct}%;transform:translateX(-50%);color:#ff4444;">BE</span>
-                </div>
+            <div style="position:relative;height:8px;background:#0f1520;border-radius:4px;overflow:hidden;">
+                <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8812;"></div>
+                <div style="position:absolute;left:${bePct}%;width:${slPct-bePct}%;height:100%;background:#ff444412;"></div>
+                <div style="position:absolute;left:${slPct}%;width:${100-slPct}%;height:100%;background:#ff000022;"></div>
+                <div style="position:absolute;left:${bePct}%;width:1px;height:100%;background:#ffaa00;z-index:2;"></div>
+                <div style="position:absolute;left:${slPct}%;width:1px;height:100%;background:#ff4444;z-index:2;"></div>
+                <div style="position:absolute;left:${combPct}%;width:6px;height:100%;background:${profitCol};border-radius:2px;z-index:3;transform:translateX(-3px);"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:7px;font-weight:700;">
+                <span style="color:#00ff88;">${targetCombined}¢</span>
+                <span style="color:#ffaa00;">100¢</span>
+                <span style="color:#ff4444;">${stopLoss}¢</span>
             </div>
         </div>`;
     };

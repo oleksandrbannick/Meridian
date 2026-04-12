@@ -2,34 +2,28 @@
 cd /root/meridian
 
 DEPLOY_MARKER="/root/meridian/.last_deployed_commit"
+LAST_DEPLOYED=$(cat "$DEPLOY_MARKER" 2>/dev/null || echo "none")
 
-# What's on disk right now, before pulling
-BEFORE_PULL=$(git rev-parse HEAD 2>/dev/null)
+# What's actually on disk right now
+CURRENT=$(git rev-parse HEAD 2>/dev/null)
 
-# Fetch + pull in one step
+# Fetch remote to see if there's anything new
 git fetch origin main -q 2>/dev/null
 REMOTE=$(git rev-parse origin/main 2>/dev/null)
 
-# Nothing new on remote
-if [ "$REMOTE" = "$BEFORE_PULL" ]; then
-    # Sync marker in case someone else already pulled+restarted
-    echo "$BEFORE_PULL" > "$DEPLOY_MARKER"
-    exit 0
+# Pull if remote is ahead of local
+if [ "$CURRENT" != "$REMOTE" ]; then
+    git pull origin main -q 2>/dev/null
+    CURRENT=$(git rev-parse HEAD 2>/dev/null)
 fi
 
-# Pull the new code
-git pull origin main -q 2>/dev/null
-AFTER_PULL=$(git rev-parse HEAD 2>/dev/null)
-
-# If pull didn't change anything (already up to date, e.g. agent already pulled)
-# just update marker and skip restart
-if [ "$BEFORE_PULL" = "$AFTER_PULL" ]; then
-    echo "$AFTER_PULL" > "$DEPLOY_MARKER"
+# If current HEAD matches what's deployed, nothing to do
+if [ "$CURRENT" = "$LAST_DEPLOYED" ]; then
     exit 0
 fi
 
 # Check if server is mid-hedge before restarting
-ACTIVE_HEDGES=$(curl -s --max-time 3 http://localhost:5050/api/bot/list 2>/dev/null | python3 -c "
+ACTIVE_HEDGES=$(curl -s --max-time 3 http://localhost:5001/api/bot/list 2>/dev/null | python3 -c "
 import json,sys
 try:
     bots = json.load(sys.stdin)
@@ -44,7 +38,7 @@ if [ "$ACTIVE_HEDGES" != "0" ] && [ "$ACTIVE_HEDGES" != "" ]; then
     exit 0
 fi
 
-echo "[$(date)] Deploying $AFTER_PULL (was $BEFORE_PULL)..."
-echo "$AFTER_PULL" > "$DEPLOY_MARKER"
+echo "[$(date)] Deploying $CURRENT (was $LAST_DEPLOYED)..."
+echo "$CURRENT" > "$DEPLOY_MARKER"
 systemctl restart meridian
 echo "[$(date)] Server restarted via systemd"

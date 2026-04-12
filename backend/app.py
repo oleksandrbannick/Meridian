@@ -18482,8 +18482,24 @@ def emergency_sell():
         ticker = data.get('ticker', '').strip()
         side = data.get('side', '').strip()
         count = int(data.get('count', 0))
+        taker = data.get('taker', False)
         if not ticker or not side or count <= 0:
             return jsonify({'success': False, 'error': 'Missing ticker, side, or count'}), 400
+        if taker:
+            # Hit the bid — sell at bid price to fill immediately
+            success, info = execute_sell(ticker, side, count, reason='emergency_taker_sell')
+            # Cancel stale pending maker sells for this ticker
+            _cancelled = 0
+            for _sk, _sv in list(_pending_maker_sells.items()):
+                if _sv.get('ticker') == ticker:
+                    try:
+                        _safe_cancel(_sv['oid'], 'emergency_taker_cleanup')
+                    except Exception:
+                        pass
+                    del _pending_maker_sells[_sk]
+                    _cancelled += 1
+            save_state()
+            return jsonify({'success': success, 'sell_price': info.get('fill_price', 0) if isinstance(info, dict) else 0, 'cancelled_stale_orders': _cancelled})
         _eo_oid, _eo_price = execute_maker_sell(ticker, side, count, reason='emergency_orphan_sell')
         success = bool(_eo_oid)
         sell_price = _eo_price

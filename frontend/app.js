@@ -6430,7 +6430,6 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
                     <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
                     <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
-                    ${exitPct !== combPct ? `<div style="position:absolute;left:${exitPct}%;width:3px;height:100%;background:#ff704360;border-radius:1px;z-index:2;transform:translateX(-1px);"></div>` : ''}
                     <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
                 </div>
                 <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">

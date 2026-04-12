@@ -8517,8 +8517,8 @@ def create_ladder_arb_bot():
             return jsonify({'error': 'levels must be 1-15'}), 400
         if spacing < 1 or spacing > 5:
             return jsonify({'error': 'spacing must be 1-5'}), 400
-        if qty_per_level < 1 or qty_per_level > 100:
-            return jsonify({'error': 'qty_per_level must be 1-100'}), 400
+        if qty_per_level < 3 or qty_per_level > 100:
+            return jsonify({'error': 'qty_per_level must be 3-100'}), 400
 
         # Auto-detect game phase
         manual_phase = data.get('game_phase')

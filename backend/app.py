@@ -4229,7 +4229,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         matched = None
         if order_id == bot.get('dog_order_id') and bot['status'] == 'dog_anchor_posted':
             matched = 'dog'
-        elif order_id in (bot.get('_all_dog_order_ids') or []) and bot['status'] == 'dog_anchor_posted':
+        elif order_id in (bot.get('_all_dog_order_ids_set') or set()) and bot['status'] == 'dog_anchor_posted':
             # Cancel-race: old order MIGHT have filled after repost — verify before acting
             # Stale WS events for cancelled orders cause ghost fills if not verified
             try:
@@ -4237,12 +4237,19 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 _race_resp = kalshi_client.get_order(order_id)
                 _race_ord = _race_resp.get('order', _race_resp) if isinstance(_race_resp, dict) else {}
                 _race_fills = _parse_fill_count(_race_ord)
+                _already_counted = bot.get('_counted_dog_fills', {}).get(order_id, 0)
                 if _race_fills <= 0:
                     print(f'👻 WS CANCEL-RACE GHOST: {bot_id} fill event for old order {order_id[:12]} but 0 fills on Kalshi — ignoring')
                     bot_log('PHANTOM_WS_GHOST_FILL_BLOCKED', bot_id, {
                         'old_order_id': order_id[:12], 'kalshi_fills': 0,
                     }, level='WARN')
                     continue
+                if _race_fills <= _already_counted:
+                    print(f'👻 WS CANCEL-RACE DEDUP: {bot_id} order {order_id[:12]} has {_race_fills} fills but {_already_counted} already counted — skipping')
+                    continue
+                # Only count the NEW fills beyond what was already hedged
+                count = _race_fills - _already_counted
+                bot.setdefault('_counted_dog_fills', {})[order_id] = _race_fills
             except Exception as _race_err:
                 print(f'⚠ WS CANCEL-RACE CHECK FAILED: {bot_id} {_race_err} — ignoring fill to be safe')
                 continue
@@ -11698,6 +11705,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['dog_order_id'] = dog_resp['order']['order_id']
             # Keep old order IDs so WS can catch late fills on cancelled reposts
             bot.setdefault('_all_dog_order_ids', []).append(bot['dog_order_id'])
+            bot['_all_dog_order_ids_set'] = set(bot['_all_dog_order_ids'])
             bot['dog_price'] = actual_price
             # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
             bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)

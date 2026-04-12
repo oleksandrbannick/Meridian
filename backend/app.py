@@ -7582,6 +7582,31 @@ def _apex_mm_walk_up(bot_id, bot):
             pass
         return
 
+    # Urgent snap-up: if live combined > 100c and we're below the wall, jump to wall immediately
+    # Don't wait for the slow time-based walk — we're already underwater
+    if live_exit_bid > 0 and current_price < max_walk_price:
+        live_combined = avg_held + live_exit_bid
+        if live_combined > 100:
+            try:
+                net_held = abs(net_yes - net_no)
+                price_kwarg = {f'{exit_side}_price': max_walk_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                          count=net_held, action='buy', **price_kwarg)
+                bot['_exit_price'] = max_walk_price
+                bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (max_walk_price - current_price)
+                print(f'🚨 APEX MM SNAP-UP: {bot_id} {exit_side.upper()} {current_price}→{max_walk_price}c (live_combined={live_combined}c > 100c, jumping to wall)')
+                bot_log('APEX_MM_SNAP_UP', bot_id, {
+                    'old': current_price, 'new': max_walk_price, 'bid': live_exit_bid,
+                    'live_combined': live_combined, 'avg_held': avg_held,
+                })
+            except Exception as e:
+                if 'filled' in str(e).lower():
+                    print(f'⚡ APEX MM SNAP-UP FILLED: {bot_id} — exit filled during snap-up')
+                else:
+                    print(f'⚠ APEX MM SNAP-UP FAIL: {bot_id} {e}')
+            return
+
     # At breakeven wall? Park — WS stop-loss handles exit if market drags past 100+width
     if current_price >= max_walk_price:
         if not bot.get('_wall_parked'):

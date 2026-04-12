@@ -7410,8 +7410,8 @@ async function loadBots() {
         }
         botsList.innerHTML = '';
 
-        // ── Sport filter pills (daily P&L from trade history) ──
-        const _sportPnlRaw = (window._lastPnlData || {}).sport_pnl || {};
+        // ── Sport filter pills (daily P&L from Apex trades only) ──
+        const _sportPnlRaw = (window._lastPnlData || {}).arb_sport_pnl || {};
         const _sportPnl = {};
         const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
         // Seed from daily P&L (in dollars from sport_pnl)

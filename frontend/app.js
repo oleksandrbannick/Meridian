@@ -6467,31 +6467,29 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
         const breakeven = 100 - heldAvg;
-        const gap = bot.start_gap || 3;
-        const maxExit = Math.min(99, breakeven + gap);  // full walk range: target to BE + gap
+        const combined = heldAvg + exitPrice;
+        const combinedCol = combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : '#ff4444';
+        const profit = 100 - combined;
         const walkCount = bot._exit_walk_count || 0;
-        const range = maxExit - targetPrice;
-        const walkPct = range > 0 ? Math.min(100, Math.round((exitPrice - targetPrice) / range * 100)) : 0;
-        const bePct = 50;  // symmetric walk: BE is always dead center
-        // Walk status — static labels
+        // Walk status
         let walkStatus = '';
         if (walkCount > 0) {
             walkStatus = `<span style="color:#ffaa00;font-weight:700;">WALKING +${walkCount}¢</span>`;
         } else if (exitPrice > targetPrice) {
             walkStatus = `<span style="color:#ffaa00;">walked</span>`;
+        } else if (exitPrice < targetPrice) {
+            walkStatus = `<span style="color:#00ff88;">below target</span>`;
         } else {
-            walkStatus = `<span style="color:#556;">at target</span>`;
+            walkStatus = `<span style="color:#00ff88;">at target</span>`;
         }
-        // Tick marks for each cent across full range
-        let ticks = '';
-        if (range > 1 && range <= 30) {
-            for (let i = 1; i < range; i++) {
-                const pct = (i / range) * 100;
-                ticks += `<div style="position:absolute;left:${pct}%;width:1px;height:100%;background:#1e2740;"></div>`;
-            }
-        }
-        // Breakeven marker on the bar
-        const beMarker = bePct > 0 && bePct < 100 ? `<div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ff4444;z-index:2;"></div>` : '';
+        // Combined price bar: 0c (left, best) to breakeven (right, worst)
+        // Shows where the exit price sits relative to profit zone
+        const barMin = Math.max(0, targetPrice - 4);  // show a few cents below target
+        const barMax = breakeven + 2;  // show past breakeven
+        const barRange = barMax - barMin;
+        const pricePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((exitPrice - barMin) / barRange * 100))) : 0;
+        const targetPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((targetPrice - barMin) / barRange * 100))) : 0;
+        const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((breakeven - barMin) / barRange * 100))) : 100;
         return `<div style="padding:8px;background:${col}10;border:1px solid ${col}33;border-radius:6px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <span style="color:${col};font-weight:800;font-size:18px;">${exitPrice}¢</span>
@@ -6505,17 +6503,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${walkStatus}
             </div>
             <div style="margin-top:4px;">
-                <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                    <span style="color:#00ff88;font-size:8px;">${targetPrice}¢</span>
-                    <span style="color:#ff4444;font-size:8px;">Exit ${maxExit}¢</span>
-                </div>
                 <div style="position:relative;height:5px;background:#0f1520;border-radius:2px;overflow:hidden;">
-                    ${ticks}
-                    ${beMarker}
-                    <div style="width:${walkPct}%;height:100%;background:linear-gradient(90deg,#00ff88,${walkPct > bePct ? '#ff4444' : '#ffaa00'});border-radius:2px;position:relative;z-index:1;"></div>
+                    <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#0a1a0a;border-radius:2px;"></div>
+                    <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#1a0a0a;border-radius:2px;"></div>
+                    <div style="position:absolute;left:${targetPct}%;width:1px;height:100%;background:#00ff8866;z-index:2;"></div>
+                    <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ff4444;z-index:2;"></div>
+                    <div style="position:absolute;left:${pricePct}%;width:4px;height:100%;background:${combinedCol};border-radius:1px;z-index:3;transform:translateX(-2px);"></div>
                 </div>
-                <div style="position:relative;height:8px;">
-                    <span style="position:absolute;left:${bePct}%;transform:translateX(-50%);color:#ff4444;font-size:7px;font-weight:700;">BE</span>
+                <div style="position:relative;height:10px;font-size:7px;font-weight:700;">
+                    <span style="position:absolute;left:${targetPct}%;transform:translateX(-50%);color:#00ff88;">T</span>
+                    <span style="position:absolute;left:${bePct}%;transform:translateX(-50%);color:#ff4444;">BE</span>
                 </div>
             </div>
         </div>`;

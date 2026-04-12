@@ -12891,10 +12891,11 @@ def _run_monitor():
                     if _s_ask > 0 and _s_ask < _sv['posted_price']:
                         # Ask dropped below us — follow down instantly
                         _new_price = _s_ask
-                    elif _s_age > 30 and _s_bid > 0 and _sv['posted_price'] > _s_bid + 1 and (time.time() - _sv.get('_last_walk_down', 0)) >= 30:
-                        # Stale >30s — walk -1c toward bid every 30s (never below bid)
-                        _new_price = max(_sv['posted_price'] - 1, _s_bid + 1)
+                    elif _s_age > 30 and _s_bid > 0 and _sv['posted_price'] > _s_bid and (time.time() - _sv.get('_last_walk_down', 0)) >= 30:
+                        # Stale >30s — walk -1c every 30s toward bid (stop AT bid to cross)
+                        _new_price = _sv['posted_price'] - 1
                         _sv['_last_walk_down'] = time.time()
+                        print(f'📤 MAKER SELL WALK: {_sv["reason"]} {_s_side} {_s_ticker} {_sv["posted_price"]}→{_new_price}c (bid={_s_bid} ask={_s_ask} age={int(_s_age)}s)')
                     if _new_price != _sv['posted_price'] and _new_price > 0:
                         try:
                             _amend_kw = {f'{_s_side}_price': _new_price}

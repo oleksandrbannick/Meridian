@@ -6391,14 +6391,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
             exitLineHtml = `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1a2540;">
                 <div style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:#8898a8;font-size:10px;font-weight:700;">EXIT ${exitSide} @${exitPrice}c</span>
+                    <span style="color:#ff7043;font-size:10px;font-weight:700;">EXIT ${exitSide} @${exitPrice}c</span>
                     ${walkLabel}
                     <span style="color:#445;font-size:9px;">${bidDist}</span>
                 </div>
-                <span style="color:#8898a8;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+                <span style="color:#ff7043;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
             </div>
             <div style="height:3px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:3px;">
-                <div style="width:${fp}%;height:100%;background:#8898a8;border-radius:2px;transition:width .3s;"></div>
+                <div style="width:${fp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>
             </div>`;
         }
         positionBarHtml = `<div style="padding:10px 12px;background:linear-gradient(135deg,${sideCol}08,#0a0e1800);border:1px solid ${sideCol}25;border-radius:8px;margin-bottom:8px;">
@@ -6438,10 +6438,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const active = !!level.oid;
         const isFull = filled >= qty;
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
-        const barCol = isFull ? sideCol : '#8898a8';
-        const textCol = isFull ? sideCol : active ? '#8898a8' : '#334';
+        const barCol = isFull ? sideCol : '#ff7043';
+        const textCol = isFull ? sideCol : active ? '#ff7043' : '#334';
         const statusTag = isFull ? `<span style="color:${sideCol};font-size:7px;font-weight:800;letter-spacing:.04em;">FILLED</span>`
-            : active ? `<span style="color:#8898a8;font-size:7px;font-weight:700;">LIVE</span>`
+            : active ? `<span style="color:#ff7043;font-size:7px;font-weight:700;">LIVE</span>`
             : `<span style="color:#2a3040;font-size:7px;">OFF</span>`;
         return `<div style="display:flex;align-items:center;gap:4px;padding:2px 0;">
             <span style="color:${textCol};font-weight:700;font-size:11px;width:28px;text-align:right;">${price}c</span>
@@ -6526,7 +6526,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <div style="display:flex;gap:10px;font-size:10px;">
                     <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}c</strong></span>
                     ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}c</strong></span>` : ''}
-                    <span style="color:#8898a8;">${roundTrips} RTs</span>
+                    <span style="color:#ff7043;">${roundTrips} RTs</span>
                 </div>
                 <span class="arr" style="color:#445;font-size:8px;">&#9654;</span>
             </div>
@@ -6536,8 +6536,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
                     return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
                         <span style="color:#00d4ff;">#${i+1}</span>
-                        <span><span style="color:#00d4ff;">${rt.entry_price}</span><span style="color:#334;">+</span><span style="color:#8898a8;">${rt.exit_price}</span><span style="color:#334;">=</span><span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
-                        <span style="color:#8898a8;">x${rt.qty}</span>
+                        <span><span style="color:#00d4ff;">${rt.entry_price}</span><span style="color:#334;">+</span><span style="color:#ff7043;">${rt.exit_price}</span><span style="color:#334;">=</span><span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
+                        <span style="color:#ff7043;">x${rt.qty}</span>
                         <span style="color:${pCol};font-weight:700;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
                 }).join('') : ''}
@@ -6583,7 +6583,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
                 <span style="color:${pnlColor};font-weight:800;font-size:13px;">${pnlSign}${totalPnl}c</span>
                 <span style="color:#334;font-size:9px;">${ageStr}</span>
-                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#8898a815;color:#8898a8;border:1px solid #8898a830;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                 ${smartMode > 0 && bot._smart_stopped ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
@@ -6594,16 +6594,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${positionBarHtml}
 
         ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
-            <div style="background:#060a12;border:1px solid ${yesIsExit ? '#00ff8820' : '#8898a815'};border-radius:6px;padding:6px 8px;">
+            <div style="background:#060a12;border:1px solid ${yesIsExit ? '#00ff8820' : '#ff704315'};border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${yesIsExit ? '#00ff88' : '#8898a8'};font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
+                    <span style="color:${yesIsExit ? '#00ff88' : '#ff7043'};font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
                     <span style="color:#334;font-size:8px;">bid ${liveYesBid || '?'}c</span>
                 </div>
                 ${yesLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
             </div>
-            <div style="background:#060a12;border:1px solid ${noIsExit ? '#ff444420' : '#8898a815'};border-radius:6px;padding:6px 8px;">
+            <div style="background:#060a12;border:1px solid ${noIsExit ? '#ff444420' : '#ff704315'};border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${noIsExit ? '#ff4444' : '#8898a8'};font-size:8px;font-weight:800;letter-spacing:.06em;">${noLabel}${noPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
+                    <span style="color:${noIsExit ? '#ff4444' : '#ff7043'};font-size:8px;font-weight:800;letter-spacing:.06em;">${noLabel}${noPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
                     <span style="color:#334;font-size:8px;">bid ${liveNoBid || '?'}c</span>
                 </div>
                 ${noLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
@@ -6613,9 +6613,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${historyHtml}
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
-            <span style="color:#8898a8;">W:${width}</span>
+            <span style="color:#ff7043;">W:${width}</span>
             <span>Mid:${midpoint}</span>
-            <span style="color:#8898a8;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}${bot.auto_scale !== false ? ' scaled' : ''}</span>
+            <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}${bot.auto_scale !== false ? ' scaled' : ''}</span>
             ${room >= 0 ? `<span style="color:${roomCol};">${room <= 2 ? '! ' : ''}Room:${room}</span>` : ''}
             ${obiLabel}
             ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls:${pullCount}</span>` : ''}
@@ -9034,7 +9034,7 @@ async function apexMmModify(botId) {
                 </div>
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00d4ff,#8898a8);color:#000;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
+                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00d4ff,#ff7043);color:#000;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
                 <button onclick="document.getElementById('apex-mm-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
             </div>
         </div>`;

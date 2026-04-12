@@ -9039,23 +9039,34 @@ async function apexMmModify(botId) {
         : status === 'mm_depth_pulled'
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
+    const _widths = [4, 5, 6, 7, 8, 10, 12];
+    const _rungs = [3, 5, 7, 10];
+    const _btnStyle = (active) => `padding:8px 2px;background:${active ? '#00d4ff11' : '#0a0e1a'};border:2px solid ${active ? '#00d4ff' : '#1e274066'};border-radius:8px;color:${active ? '#00d4ff' : '#8892a6'};cursor:pointer;text-align:center;font-weight:800;font-size:14px;transition:all .15s;`;
     const html = `
         <div style="background:#0f1419;border:1px solid #00d4ff44;border-radius:12px;padding:20px;max-width:320px;">
             <div style="color:#00d4ff;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Apex MM</div>
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')}</div>
             ${statusNote}
-            <div style="margin-bottom:10px;">
-                <label style="color:#8892a6;font-size:10px;">Width (¢ total spread)</label>
-                <input id="apex-edit-width" type="number" value="${curWidth}" min="4" max="40" step="2" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div id="apex-edit-width-hint" style="color:#66bbcc;font-size:10px;margin-top:2px;">${curWidth/2}¢ each side from midpoint</div>
+            <div style="margin-bottom:12px;">
+                <div style="color:#00d4ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Width</div>
+                <div style="display:grid;grid-template-columns:repeat(${_widths.length}, 1fr);gap:4px;">
+                    ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_btnStyle(false)}');this.style.cssText='${_btnStyle(true)}'" class="ae-w-btn" style="${_btnStyle(w === curWidth)}">${w}¢</button>`).join('')}
+                </div>
+                <input id="apex-edit-width" type="hidden" value="${curWidth}">
             </div>
-            <div style="margin-bottom:10px;">
-                <label style="color:#8892a6;font-size:10px;">Rungs per side</label>
-                <input id="apex-edit-levels" type="number" value="${curLevels}" min="1" max="15" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-            </div>
-            <div style="margin-bottom:14px;">
-                <label style="color:#8892a6;font-size:10px;">Contracts per rung</label>
-                <input id="apex-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+                <div>
+                    <div style="color:#00d4ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Rungs</div>
+                    <div style="display:grid;grid-template-columns:repeat(${_rungs.length}, 1fr);gap:4px;">
+                        ${_rungs.map(r => `<button onclick="document.getElementById('apex-edit-levels').value=${r};document.querySelectorAll('.ae-r-btn').forEach(b=>b.style.cssText='${_btnStyle(false)}');this.style.cssText='${_btnStyle(true)}'" class="ae-r-btn" style="${_btnStyle(r === curLevels)}">${r}</button>`).join('')}
+                    </div>
+                    <input id="apex-edit-levels" type="hidden" value="${curLevels}">
+                </div>
+                <div>
+                    <div style="color:#00d4ff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Contracts</div>
+                    <input id="apex-edit-qty" type="number" value="${curQty}" min="1" max="100"
+                        style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #00d4ff33;border-radius:8px;color:#00d4ff;font-size:16px;font-weight:800;text-align:center;outline:none;" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='#00d4ff33'">
+                </div>
             </div>
             <div style="display:flex;gap:8px;">
                 <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00d4ff,#66bbcc);color:#000;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>

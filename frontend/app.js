@@ -6355,15 +6355,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const netHeld = Math.abs(netYes - netNo);
         const avgCost = netYes > netNo ? avgYesCost : avgNoCost;
         const invPct = invLimit > 0 ? Math.min(100, Math.round(netHeld / invLimit * 100)) : 0;
-        // LIVE combined = what it costs to exit RIGHT NOW at market (same calc as stop-loss)
+        // LIVE combined = cost to exit RIGHT NOW at market (same calc as stop-loss)
         const exitAskLive = exitSide === 'YES' ? liveYesAsk : liveNoAsk;
         const heldBidLive = longSide === 'YES' ? liveYesBid : liveNoBid;
         const liveBuyOpp = (exitAskLive > 0) ? avgCost + exitAskLive : 999;
         const liveSellHeld = (heldBidLive > 0) ? avgCost + (100 - heldBidLive) : 999;
         const liveCombined = Math.min(liveBuyOpp, liveSellHeld);
-        // Target combined = what we get IF hedge fills at posted price
         const targetCombined = avgCost + exitPrice;
-        // Show live as primary (what matters for risk), target as secondary
         const combined = (liveCombined < 999 && exitPrice > 0) ? liveCombined : targetCombined;
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
@@ -6373,69 +6371,78 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const exitPostedAt = bot._exit_posted_at || 0;
         const skewSec = exitPostedAt > 0 ? Math.floor(nowSec - exitPostedAt) : 0;
         const timeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m${skewSec%60}s` : `${skewSec}s`;
-        const sideCol = longSide === 'YES' ? '#00ff88' : '#ff4444';
-        // SL zone: when combined >= 100, show pressure bar
-        let slZoneHtml = '';
-        if (combined >= 100 && exitPrice > 0) {
-            const slRange = stopLoss - 100;
-            const slFillPct = slRange > 0 ? Math.min(100, Math.round((combined - 100) / slRange * 100)) : 0;
-            slZoneHtml = `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
-                <span style="color:#ff4444;font-size:9px;font-weight:700;white-space:nowrap;">${slDist}c to SL</span>
-                <div style="flex:1;height:4px;background:#1a0a0a;border-radius:2px;overflow:hidden;">
-                    <div style="width:${slFillPct}%;height:100%;background:linear-gradient(90deg,#ff4444,#ff0000);border-radius:2px;transition:width .3s;"></div>
-                </div>
-            </div>`;
-        }
-        // Exit line
-        let exitLineHtml = '';
+        // Anchor fills = total fills on the held side from ladder
+        const anchorOrders = longSide === 'YES' ? (bot.yes_orders || {}) : (bot.no_orders || {});
+        const anchorTotalFills = Object.values(anchorOrders).reduce((s, l) => s + (l.fill_qty || 0), 0);
+        const anchorTotalQty = Object.values(anchorOrders).reduce((s, l) => s + (l.qty || (bot.base_qty || 10)), 0);
+        const anchorFp = anchorTotalQty > 0 ? Math.min(100, Math.round(anchorTotalFills / anchorTotalQty * 100)) : 0;
+        // Hedge fills
+        const hedgeFp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
+        // Walk status
+        let walkLabel = '';
         if (exitPrice > 0) {
             const walkCount = bot._exit_walk_count || 0;
-            let walkLabel = '';
-            if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-weight:700;">STOP LOSS</span>`;
-            else if (combined >= 100) walkLabel = `<span style="color:#ff4444;font-weight:700;">SL ZONE -${combined - 100}c</span>`;
-            else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-weight:700;">THIN</span>`;
-            else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-weight:700;">WALKING</span>`;
-            else walkLabel = `<span style="color:#00ff88;">TARGET</span>`;
-            const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
-            exitLineHtml = `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1a2540;">
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:#ff7043;font-size:10px;font-weight:700;">Hedge ${exitSide} @${exitPrice}c</span>
-                    ${walkLabel}
-                </div>
-                <span style="color:#ff7043;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty} filled</span>
+            if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">STOP LOSS</span>`;
+            else if (combined >= 100) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">SL ZONE</span>`;
+            else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">THIN</span>`;
+            else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALKING</span>`;
+            else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET</span>`;
+        }
+        // SL pressure bar
+        let slBarHtml = '';
+        if (combined >= 98 && exitPrice > 0) {
+            const slRange = stopLoss - 96;
+            const slFillPct = slRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - 96) / slRange * 100))) : 0;
+            const bePct = slRange > 0 ? Math.round((100 - 96) / slRange * 100) : 50;
+            slBarHtml = `<div style="position:relative;height:5px;background:#0a1018;border-radius:3px;overflow:hidden;margin-top:6px;">
+                <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8810;"></div>
+                <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#ff444415;"></div>
+                <div style="position:absolute;left:${bePct}%;width:1px;height:100%;background:#ffaa00;z-index:2;"></div>
+                <div style="position:absolute;left:${slFillPct}%;width:5px;height:100%;background:${profitCol};border-radius:2px;z-index:3;transform:translateX(-2px);"></div>
             </div>
-            <div style="height:3px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:3px;">
-                <div style="width:${fp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>
+            <div style="display:flex;justify-content:space-between;font-size:7px;margin-top:1px;">
+                <span style="color:#00ff88;">96c</span>
+                <span style="color:#ffaa00;">100c</span>
+                <span style="color:#ff4444;">${stopLoss}c</span>
             </div>`;
         }
-        positionBarHtml = `<div style="padding:10px 12px;background:linear-gradient(135deg,${sideCol}08,#0a0e1800);border:1px solid ${sideCol}25;border-radius:8px;margin-bottom:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:${sideCol};font-weight:800;font-size:12px;">HOLDING ${longSide} ${netHeld}x</span>
-                    <span style="color:#556;font-size:10px;">avg ${avgCost}c</span>
+        positionBarHtml = `<div style="margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="color:${profitCol};font-weight:800;font-size:16px;">${profit >= 0 ? '+' : ''}${profit}c</span>
+                <span style="color:#556;font-size:9px;">live ${combined}c${targetCombined !== combined && exitPrice > 0 ? ` · target ${targetCombined}c (+${targetProfit}c)` : ''} · SL ${stopLoss}c</span>
+                ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                <div style="padding:8px 10px;background:#00d4ff08;border:1px solid #00d4ff20;border-radius:6px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="color:#00d4ff;font-size:9px;font-weight:800;">ANCHOR ${longSide}</span>
+                        <span style="color:#00d4ff;font-size:10px;font-weight:700;">${avgCost}c</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                        <span style="color:#556;font-size:9px;">${netHeld}x filled</span>
+                        <span style="color:#556;font-size:8px;">bid ${longSide === 'YES' ? liveYesBid : liveNoBid}c</span>
+                    </div>
+                    <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
+                        <div style="width:${anchorFp}%;height:100%;background:#00d4ff;border-radius:2px;transition:width .3s;"></div>
+                    </div>
+                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${anchorTotalFills}/${anchorTotalQty}</div>
                 </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    ${exitPrice > 0 ? `<span style="color:${profitCol};font-weight:800;font-size:14px;">${profit >= 0 ? '+' : ''}${profit}c now</span>` : ''}
-                    ${exitPrice > 0 && targetProfit !== profit ? `<span style="color:#00d4ff;font-size:10px;">(+${targetProfit}c if fills)</span>` : ''}
-                    ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
+                <div style="padding:8px 10px;background:#ff704308;border:1px solid #ff704320;border-radius:6px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="color:#ff7043;font-size:9px;font-weight:800;">HEDGE ${exitSide}</span>
+                        <span style="color:#ff7043;font-size:10px;font-weight:700;">${exitPrice > 0 ? exitPrice + 'c' : '--'}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                        <span style="color:#556;font-size:9px;">${exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending'}</span>
+                        <span style="color:#556;font-size:8px;">${walkLabel} bid ${exitSide === 'YES' ? liveYesBid : liveNoBid}c</span>
+                    </div>
+                    <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
+                        <div style="width:${hedgeFp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>
+                    </div>
+                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${exitFillQty}/${exitTotalQty}</div>
                 </div>
             </div>
-            ${exitPrice > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;color:#556;">
-                <span>LIVE: <strong style="color:${profitCol};">${combined}c</strong> (${profit >= 0 ? '+' : ''}${profit}c)${targetCombined !== combined ? ` · target: <strong style="color:${targetProfit > 0 ? '#00ff88' : '#ffaa00'};">${targetCombined}c</strong> (+${targetProfit}c)` : ''}</span>
-                <span>SL ${stopLoss}c</span>
-            </div>` : ''}
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;">
-                <span style="color:#00ff88;">YES bid:${liveYesBid} ask:${liveYesAsk}</span>
-                <span style="color:#ff4444;">NO bid:${liveNoBid} ask:${liveNoAsk}</span>
-            </div>
-            <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:4px;">
-                <div style="width:${invPct}%;height:100%;background:${sideCol};border-radius:2px;opacity:0.7;transition:width .3s;"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:2px;">
-                <span style="color:#445;font-size:8px;">${netHeld}/${invLimit} inventory</span>
-            </div>
-            ${exitLineHtml}
-            ${slZoneHtml}
+            ${slBarHtml}
         </div>`;
     }
 

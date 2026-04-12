@@ -2,23 +2,29 @@
 cd /root/meridian
 
 DEPLOY_MARKER="/root/meridian/.last_deployed_commit"
-LAST_DEPLOYED=$(cat "$DEPLOY_MARKER" 2>/dev/null || echo "none")
 
-# Fetch remote to check for new commits
+# What's on disk right now, before pulling
+BEFORE_PULL=$(git rev-parse HEAD 2>/dev/null)
+
+# Fetch + pull in one step
 git fetch origin main -q 2>/dev/null
 REMOTE=$(git rev-parse origin/main 2>/dev/null)
 
-# Nothing to do if already on latest
-if [ "$REMOTE" = "$LAST_DEPLOYED" ]; then
+# Nothing new on remote
+if [ "$REMOTE" = "$BEFORE_PULL" ]; then
+    # Sync marker in case someone else already pulled+restarted
+    echo "$BEFORE_PULL" > "$DEPLOY_MARKER"
     exit 0
 fi
 
-# Pull changes
+# Pull the new code
 git pull origin main -q 2>/dev/null
-CURRENT=$(git rev-parse HEAD)
+AFTER_PULL=$(git rev-parse HEAD 2>/dev/null)
 
-# Still matches what's deployed? Done.
-if [ "$CURRENT" = "$LAST_DEPLOYED" ]; then
+# If pull didn't change anything (already up to date, e.g. agent already pulled)
+# just update marker and skip restart
+if [ "$BEFORE_PULL" = "$AFTER_PULL" ]; then
+    echo "$AFTER_PULL" > "$DEPLOY_MARKER"
     exit 0
 fi
 
@@ -38,7 +44,7 @@ if [ "$ACTIVE_HEDGES" != "0" ] && [ "$ACTIVE_HEDGES" != "" ]; then
     exit 0
 fi
 
-echo "[$(date)] Deploying $CURRENT (was $LAST_DEPLOYED)..."
+echo "[$(date)] Deploying $AFTER_PULL (was $BEFORE_PULL)..."
+echo "$AFTER_PULL" > "$DEPLOY_MARKER"
 systemctl restart meridian
-echo "$CURRENT" > "$DEPLOY_MARKER"
 echo "[$(date)] Server restarted via systemd"

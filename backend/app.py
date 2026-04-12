@@ -7557,7 +7557,10 @@ def _apex_mm_cycle_reset(bot_id, bot):
             bot[key] = vals['new']
             if key == 'qty_per_level':
                 bot['base_qty'] = vals['new']
-        bot['inventory_limit'] = bot.get('levels', 7) * bot.get('qty_per_level', 10)
+        # Account for auto-scale: deepest level gets 2x, so total is ~1.5x base
+        _il_levels = bot.get('levels', 7)
+        _il_qty = bot.get('qty_per_level', 10)
+        bot['inventory_limit'] = sum(max(1, round(_il_qty * (1.0 + (i * 1.0 / max(1, _il_levels - 1))))) for i in range(_il_levels))
         print(f'🔧 APEX MM DEFERRED EDIT APPLIED: {bot_id} — {_pending}')
         bot_log('APEX_MM_EDIT_APPLIED', bot_id, {'changes': _pending})
 
@@ -17390,7 +17393,7 @@ def apex_mm_edit(bot_id):
     # Recalculate inventory limit
     _levels = bot.get('levels', 7)
     _qty = bot.get('qty_per_level', 10)
-    bot['inventory_limit'] = _levels * _qty
+    bot['inventory_limit'] = sum(max(1, round(_qty * (1.0 + (i * 1.0 / max(1, _levels - 1))))) for i in range(_levels))
     save_state()
     bot_log('APEX_MM_EDIT', bot_id, {'changes': changes, 'applied_now': applied_now, 'status': status})
     print(f'🔧 APEX MM EDIT: {bot_id} — {changes} (applied_now={applied_now})')

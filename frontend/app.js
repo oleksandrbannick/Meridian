@@ -6394,15 +6394,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const wallParked = bot._wall_parked || false;
         const origTarget = bot._exit_target_price || exitPrice;
         const origTargetCombined = avgCost + origTarget;
+        // Use posted combined (not live) for walk status — live fluctuates but posted is where we actually are
+        const postedCombined = avgCost + exitPrice;
         let slBadge = '';
         if (combined >= stopLoss) slBadge = '<span style="color:#ff4444;font-weight:800;animation:pulse 1.5s infinite;">SL</span> ';
         else if (combined >= 100) slBadge = '<span style="color:#ff4444;font-weight:800;">SL</span> ';
         let walkLabel = '';
         if (exitPrice > 0) {
             if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">STOP LOSS</span>`;
-            else if (combined >= 100) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">SL ZONE</span>`;
-            else if (wallParked) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALL</span>`;
-            else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">THIN</span>`;
+            else if (postedCombined >= 100) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">PARKED</span>`;
+            else if (postedCombined >= 98) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">THIN</span>`;
             else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALKING +${walkCount}</span>`;
             else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET</span>`;
         }

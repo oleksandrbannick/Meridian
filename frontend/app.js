@@ -6476,9 +6476,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
         const walkCount = bot._exit_walk_count || 0;
-        // Combined bar: target combined (left/green) → 100c BE → stop loss (right/red)
-        const barMin = Math.max(80, targetCombined - 2);
-        const barMax = stopLoss + 2;
+        // Combined bar: target combined (left) → stop loss (right), no padding
+        const barMin = targetCombined;
+        const barMax = stopLoss;
         const barRange = barMax - barMin;
         const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
         const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;

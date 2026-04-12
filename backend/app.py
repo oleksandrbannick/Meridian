@@ -3672,8 +3672,13 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
             try:
                 _amend_kw = {f'{_side}_price': _current_ask}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(_sv['oid'], ticker=ticker, side=_side,
+                _sell_resp = kalshi_client.amend_order(_sv['oid'], ticker=ticker, side=_side,
                                          count=_sv.get('qty', 1), **_amend_kw)
+                # Kalshi amend can return a new order ID — track it
+                _sell_ord = _sell_resp.get('order', _sell_resp) if isinstance(_sell_resp, dict) else {}
+                _sell_new_oid = _sell_ord.get('order_id', '')
+                if _sell_new_oid and _sell_new_oid != _sv['oid']:
+                    _sv['oid'] = _sell_new_oid
                 _sv['posted_price'] = _current_ask
                 print(f'⚡ WS MAKER SELL SNAP: {_sv["reason"]} {_side} {ticker} → {_current_ask}¢')
             except Exception as _e:
@@ -11867,8 +11872,8 @@ def _handle_phantom(bot_id, bot, actions):
                 count=qty, price=new_dog_price
             )
             bot['dog_order_id'] = dog_resp['order']['order_id']
-            # Keep old order IDs so WS can catch late fills on cancelled reposts
-            bot.setdefault('_all_dog_order_ids', []).append(bot['dog_order_id'])
+            # Fresh run — clear old order IDs from previous run, start tracking this one
+            bot['_all_dog_order_ids'] = [bot['dog_order_id']]
             bot['dog_price'] = actual_price
             # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
             bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)
@@ -13156,7 +13161,13 @@ def _run_monitor():
                         try:
                             _amend_kw = {f'{_s_side}_price': _new_price}
                             api_rate_limiter.wait()
-                            kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, **_amend_kw)
+                            _amend_resp = kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, **_amend_kw)
+                            # Capture new order ID from amend
+                            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                            _amend_new_oid = _amend_ord.get('order_id', '')
+                            if _amend_new_oid and _amend_new_oid != _s_oid:
+                                _sv['oid'] = _amend_new_oid
+                                _s_oid = _amend_new_oid
                             _sv['posted_price'] = _new_price
                             print(f'📤 MAKER SELL AMEND: {_sv["reason"]} {_s_side} {_s_ticker} → {_new_price}¢ (ask={_s_ask} bid={_s_bid})')
                         except Exception as _ae:

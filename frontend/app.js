@@ -6370,7 +6370,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
         const targetProfit = 100 - targetCombined;
-        const stopLoss = 100 + width;
+        const slThreshold = _apexStopLossThreshold(width, avgCost);
+        const stopLoss = 100 + slThreshold;
         const slDist = stopLoss - combined;
         const exitPostedAt = bot._exit_posted_at || 0;
         const skewSec = exitPostedAt > 0 ? Math.floor(nowSec - exitPostedAt) : 0;
@@ -6383,31 +6384,51 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Hedge fills
         const hedgeFp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
         // Walk status
+        const walkCount = bot._exit_walk_count || 0;
+        const wallParked = bot._wall_parked || false;
+        const origTarget = bot._exit_target_price || exitPrice;
+        const origTargetCombined = avgCost + origTarget;
         let walkLabel = '';
         if (exitPrice > 0) {
-            const walkCount = bot._exit_walk_count || 0;
             if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">STOP LOSS</span>`;
             else if (combined >= 100) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">SL ZONE</span>`;
+            else if (wallParked) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALL</span>`;
             else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">THIN</span>`;
-            else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALKING</span>`;
+            else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALKING +${walkCount}</span>`;
             else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // SL pressure bar
-        let slBarHtml = '';
-        if (combined >= 98 && exitPrice > 0) {
-            const slRange = stopLoss - 96;
-            const slFillPct = slRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - 96) / slRange * 100))) : 0;
-            const bePct = slRange > 0 ? Math.round((100 - 96) / slRange * 100) : 50;
-            slBarHtml = `<div style="position:relative;height:5px;background:#0a1018;border-radius:3px;overflow:hidden;margin-top:6px;">
-                <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8810;"></div>
-                <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#ff444415;"></div>
-                <div style="position:absolute;left:${bePct}%;width:1px;height:100%;background:#ffaa00;z-index:2;"></div>
-                <div style="position:absolute;left:${slFillPct}%;width:5px;height:100%;background:${profitCol};border-radius:2px;z-index:3;transform:translateX(-2px);"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:7px;margin-top:1px;">
-                <span style="color:#00ff88;">96c</span>
-                <span style="color:#ffaa00;">100c</span>
-                <span style="color:#ff4444;">${stopLoss}c</span>
+        // Walk bar — full range from target to stop-loss
+        let walkBarHtml = '';
+        if (exitPrice > 0) {
+            const barMin = origTargetCombined;
+            const barMax = stopLoss;
+            const barRange = barMax - barMin;
+            const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
+            const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
+            // Marker for where exit price currently is (vs where it was originally)
+            const exitCombNow = avgCost + exitPrice;
+            const exitPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((exitCombNow - barMin) / barRange * 100))) : 0;
+            const walkProfitNow = 100 - combined;
+            const walkProfitTarget = 100 - origTargetCombined;
+            const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
+            walkBarHtml = `<div style="margin-top:8px;padding:8px 10px;background:#060a12;border:1px solid #1e274030;border-radius:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                    <span style="color:#8892a6;font-size:8px;font-weight:700;letter-spacing:.06em;">WALK</span>
+                    <span style="font-size:8px;">${walkLabel}</span>
+                    <span style="color:#556;font-size:8px;">${origTargetCombined}c → ${stopLoss}c</span>
+                </div>
+                <div style="position:relative;height:8px;background:#0a1018;border-radius:4px;overflow:hidden;">
+                    <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
+                    <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
+                    <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
+                    ${exitPct !== combPct ? `<div style="position:absolute;left:${exitPct}%;width:3px;height:100%;background:#ff704360;border-radius:1px;z-index:2;transform:translateX(-1px);"></div>` : ''}
+                    <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">
+                    <span style="color:#00ff88;">+${walkProfitTarget}c</span>
+                    <span style="color:#ffaa00;">100c</span>
+                    <span style="color:#ff4444;">${stopLoss}c</span>
+                </div>
             </div>`;
         }
         positionBarHtml = `<div style="margin-bottom:8px;">
@@ -6446,7 +6467,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${exitFillQty}/${exitTotalQty}</div>
                 </div>
             </div>
-            ${slBarHtml}
+            ${walkBarHtml}
         </div>`;
     }
 
@@ -6497,7 +6518,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
         const combined = heldAvg + exitPrice;
-        const stopLoss = 100 + width;
+        const stopLoss = 100 + _apexStopLossThreshold(width, heldAvg);
         const targetCombined = heldAvg + targetPrice;
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
@@ -6553,9 +6574,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}c</strong></span>` : ''}
                     <span style="color:#ff7043;">${roundTrips} RTs</span>
                 </div>
-                <span class="arr" style="color:#445;font-size:8px;">&#9654;</span>
+                <span class="arr" style="color:#445;font-size:8px;">&#9660;</span>
             </div>
-            <div id="${historyId}" style="display:none;margin-top:4px;">
+            <div id="${historyId}" style="display:block;margin-top:4px;">
                 ${rtLog.length > 0 ? rtLog.map((rt, i) => {
                     const combCol = rt.combined <= 96 ? '#00ff88' : rt.combined <= 98 ? '#ffaa00' : '#ff4444';
                     const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';

@@ -2630,7 +2630,15 @@ def load_state():
             _saved_sells = data.get('pending_maker_sells', {})
             if _saved_sells:
                 _pending_maker_sells.update(_saved_sells)
-                print(f'📤 Restored {len(_saved_sells)} pending maker sells')
+                # Subscribe tickers to WS so sell-follow gets price ticks
+                _sell_tickers = set(v.get('ticker','') for v in _saved_sells.values() if v.get('ticker'))
+                for _st in _sell_tickers:
+                    try:
+                        if ws_manager:
+                            ws_manager.subscribe(_st)
+                    except Exception:
+                        pass
+                print(f'📤 Restored {len(_saved_sells)} pending maker sells (subscribed {len(_sell_tickers)} tickers)')
             print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history, {len(_opening_lines)} opening lines, resets={pnl_resets}')
             # Clear transient runtime flags that should never persist across restarts.
             # _completion_in_progress is set during the multi-phase apex completion flow
@@ -12687,8 +12695,8 @@ def _run_monitor():
                     del _pending_maker_sells[_sk]
                     execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
                     continue
-                # Still resting — follow ask down, and walk toward bid if stale
-                if _s_age > 10 and (time.time() - _sv.get('_last_amend', 0)) > 10:
+                # Still resting — follow ask down every 3s, walk toward bid if stale >30s
+                if (time.time() - _sv.get('_last_amend', 0)) > 3:
                     _sv['_last_amend'] = time.time()
                     api_read_limiter.wait()
                     _s_ob = kalshi_client.get_market_orderbook(_s_ticker)

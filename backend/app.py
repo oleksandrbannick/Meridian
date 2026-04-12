@@ -7248,19 +7248,7 @@ def _apex_mm_walk_up(bot_id, bot):
         _apex_mm_begin_exit(bot_id, bot, f'time_expired ({int(total_age)}s)')
         return
 
-    # At breakeven wall? Park — WS stop-loss handles exit if market drags past 100+width
-    if current_price >= max_walk_price:
-        if not bot.get('_wall_parked'):
-            bot['_wall_parked'] = True
-            bot['_wall_parked_at'] = now
-            print(f'📊 APEX MM WALL: {bot_id} parked at {current_price}c (combined={avg_held + current_price}c, breakeven)')
-            bot_log('APEX_MM_WALL_PARKED', bot_id, {
-                'exit_price': current_price, 'avg_held': avg_held,
-                'combined': avg_held + current_price, 'width': width,
-            })
-        return
-
-    # Snap-back: if market recovers to target or better, snap back and reset soak
+    # Snap-back FIRST — always follow bid down, even if parked at wall
     live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
     if live_exit_bid > 0 and current_price > target_price and live_exit_bid <= target_price:
         # Market recovered — snap to target and restart soak
@@ -7297,6 +7285,18 @@ def _apex_mm_walk_up(bot_id, bot):
             bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid})
         except Exception:
             pass
+        return
+
+    # At breakeven wall? Park — WS stop-loss handles exit if market drags past 100+width
+    if current_price >= max_walk_price:
+        if not bot.get('_wall_parked'):
+            bot['_wall_parked'] = True
+            bot['_wall_parked_at'] = now
+            print(f'📊 APEX MM WALL: {bot_id} parked at {current_price}c (combined={avg_held + current_price}c, breakeven)')
+            bot_log('APEX_MM_WALL_PARKED', bot_id, {
+                'exit_price': current_price, 'avg_held': avg_held,
+                'combined': avg_held + current_price, 'width': width,
+            })
         return
 
     # Soak phase: 0-15s — hold position, preserve queue seniority

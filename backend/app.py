@@ -4366,6 +4366,22 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 print(f'🚪 WS APEX MM SELLBACK FILL: {bot_id} {matched_side.upper()} +{count}')
             else:
                 # Ladder fill (or late fill from old cycle) — update inventory
+                # CRITICAL: re-check _counted_order_fills under lock for late fills
+                # Two WS threads can both read already_counted=0 outside the lock,
+                # both pass the dedup check, both enter here — second one double-counts
+                if _is_late_fill:
+                    _recheck = bot.get('_counted_order_fills', {}).get(order_id, 0)
+                    if _recheck >= _late_verified_fills:
+                        print(f'🛡️ APEX MM LATE FILL DEDUP (lock): {bot_id} {matched_side.upper()} order {order_id[:12]} already counted {_recheck} under lock — skipping')
+                        save_state()
+                        break
+                    # Write count under lock to prevent next thread from double-adding
+                    bot.setdefault('_counted_order_fills', {})[order_id] = _late_verified_fills
+                    count = max(0, _late_verified_fills - _recheck)
+                    if count <= 0:
+                        save_state()
+                        break
+
                 if not _is_late_fill:
                     orders_dict = bot['yes_orders'] if matched_side == 'yes' else bot['no_orders']
                     level = orders_dict.get(str(matched_price), {})

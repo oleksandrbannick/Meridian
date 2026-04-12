@@ -7303,14 +7303,18 @@ async function loadBots() {
                 dogList.innerHTML = '<div class="empty-state"><div class="icon">👻</div><div class="title">No active Phantom bots</div><div class="desc">Deploy a Phantom bot from the Markets tab</div></div>';
             } else {
                 dogList.innerHTML = '';
-                // ── Sport filter pills for Phantom tab ──
+                // ── Sport filter pills for Phantom tab (daily P&L from trade history) ──
+                const _dogSportPnlRaw = (window._lastPnlData || {}).dog_sport_pnl || {};
                 const _dogSportPnl = {};
+                // Seed from daily P&L
+                Object.entries(_dogSportPnlRaw).forEach(([sp, net]) => {
+                    _dogSportPnl[sp] = { net, count: 0 };
+                });
+                // Count active bots per sport
                 dogBotIds.forEach(id => {
-                    const b = bots[id];
-                    const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
+                    const sp = detectSport((bots[id].ticker || '').toUpperCase()) || 'Other';
                     if (!_dogSportPnl[sp]) _dogSportPnl[sp] = { net: 0, count: 0 };
                     _dogSportPnl[sp].count++;
-                    _dogSportPnl[sp].net += b.lifetime_pnl ?? b.net_pnl_cents ?? 0;
                 });
                 const _dogSportEntries = Object.entries(_dogSportPnl).sort((a,b) => b[1].count - a[1].count);
                 if (_dogSportEntries.length > 1) {
@@ -7406,16 +7410,19 @@ async function loadBots() {
         }
         botsList.innerHTML = '';
 
-        // ── Sport filter pills ──
+        // ── Sport filter pills (daily P&L from trade history) ──
+        const _sportPnlRaw = (window._lastPnlData || {}).sport_pnl || {};
         const _sportPnl = {};
         const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+        // Seed from daily P&L (in dollars from sport_pnl)
+        Object.entries(_sportPnlRaw).forEach(([sp, netDollars]) => {
+            _sportPnl[sp] = { net: Math.round(netDollars * 100), count: 0 };
+        });
+        // Count active bots per sport
         arbBotIds.forEach(id => {
-            const b = bots[id];
-            const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
+            const sp = detectSport((bots[id].ticker || '').toUpperCase()) || 'Other';
             if (!_sportPnl[sp]) _sportPnl[sp] = { net: 0, count: 0 };
             _sportPnl[sp].count++;
-            const pnl = b.lifetime_pnl ?? b.net_pnl_cents ?? 0;
-            _sportPnl[sp].net += pnl;
         });
         const _sportEntries = Object.entries(_sportPnl).sort((a,b) => b[1].count - a[1].count);
         if (_sportEntries.length > 1) {

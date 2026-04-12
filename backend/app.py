@@ -17966,8 +17966,10 @@ def get_pnl():
         'dog_loss_cents':   dog_d['gross_loss_cents'],
         'dog_wins':         dog_d['completed_bots'],
         'dog_losses':       dog_d['stopped_bots'],
-        # Sport breakdown (today)
+        # Sport breakdown (today — all categories)
         'sport_pnl': {s: round(v/100, 2) for s, v in daily['sport_pnl'].items() if v != 0},
+        # Phantom sport breakdown (today — dog category only, in cents)
+        'dog_sport_pnl': {s: v for s, v in dog_d['sport_pnl'].items() if v != 0},
         # Middle bot unrealized (both legs filled, awaiting settlement)
         'mid_unrealized_cents': mid_unrealized_cents,
         'mid_unrealized_count': mid_unrealized_count,

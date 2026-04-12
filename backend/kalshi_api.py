@@ -118,7 +118,8 @@ class KalshiAPI:
             if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
                 if hasattr(self, '_on_429') and self._on_429:
                     try:
-                        self._on_429()
+                        _cat = 'read' if method.upper() == 'GET' else 'write'
+                        self._on_429(_cat)
                     except Exception:
                         pass
             raise

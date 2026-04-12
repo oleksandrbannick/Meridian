@@ -11381,6 +11381,9 @@ async function loadLatency() {
                 const writePerSec = (writePerMin / 60).toFixed(1);
                 const readPerSec = (readPerMin / 60).toFixed(1);
                 const hits = rl.hits_last_60s || 0;
+                const r429 = rl.reads_last_60s || 0;
+                const w429 = rl.writes_last_60s || 0;
+                const h429 = rl.hedges_last_60s || 0;
                 const maxPS = rl.limit_per_sec || 30;
                 const wPct = Math.min(100, Math.round(writePerSec / maxPS * 100));
                 const rPct = Math.min(100, Math.round(readPerSec / maxPS * 100));
@@ -11410,7 +11413,12 @@ async function loadLatency() {
                             <div style="height:3px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px;"><div style="width:${rPct}%;height:100%;background:${rCol};border-radius:2px;"></div></div>
                         </div>
                     </div>
-                    ${hits > 0 ? `<div style="color:${hCol};font-size:10px;font-weight:700;text-align:center;margin-top:6px;">${hits} 429s/min</div>` : ''}
+                    ${hits > 0 ? `<div style="display:flex;justify-content:center;gap:8px;margin-top:6px;font-size:10px;font-weight:700;">
+                        <span style="color:${hCol};">${hits} 429s/min</span>
+                        <span style="color:#8892a6;">R:${r429}</span>
+                        <span style="color:${w429 > 0 ? '#ff4444' : '#8892a6'};">W:${w429}</span>
+                        ${h429 > 0 ? `<span style="color:#ff4444;animation:pulse 1.5s infinite;">H:${h429} 🚨</span>` : ''}
+                    </div>` : ''}
                 </div>`;
             }
             // Order Place + Orderbook tiles: same consistent style

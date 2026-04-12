@@ -2881,31 +2881,43 @@ class RateLimiter:
 api_rate_limiter = RateLimiter(burst=28)  # Kalshi advanced tier: 30 writes/s (keep 2 headroom)
 api_read_limiter = RateLimiter(burst=28)  # Kalshi advanced tier: 30 reads/s (keep 2 headroom)
 
-# ── 429 Rate Limit Tracking ──
+# ── 429 Rate Limit Tracking (read / write / hedge split) ──
 _rate_limit_hits = 0
+_rate_limit_reads = 0
+_rate_limit_writes = 0
+_rate_limit_hedges = 0
 _rate_limit_window_start = time.time()
 _rate_limit_last_alert = 0
 _rate_limit_lock = threading.Lock()
 
-def track_rate_limit_hit():
-    """Call when a 429 is received. Sends notification when hitting threshold."""
-    global _rate_limit_hits, _rate_limit_window_start, _rate_limit_last_alert
+def track_rate_limit_hit(category='unknown'):
+    """Call when a 429 is received. category: 'read', 'write', 'hedge', or 'unknown'."""
+    global _rate_limit_hits, _rate_limit_reads, _rate_limit_writes, _rate_limit_hedges
+    global _rate_limit_window_start, _rate_limit_last_alert
     with _rate_limit_lock:
         now = time.time()
-        # Reset counter every 60s
         if now - _rate_limit_window_start >= 60:
             _rate_limit_hits = 0
+            _rate_limit_reads = 0
+            _rate_limit_writes = 0
+            _rate_limit_hedges = 0
             _rate_limit_window_start = now
         _rate_limit_hits += 1
+        if category == 'read':
+            _rate_limit_reads += 1
+        elif category == 'write':
+            _rate_limit_writes += 1
+        elif category == 'hedge':
+            _rate_limit_hedges += 1
+            # Hedge 429 is critical — immediate alert
+            msg = f'🚨 HEDGE 429: rate limited during hot-path hedge!'
+            print(msg)
+            bot_log('HEDGE_429', 'system', {'category': category, 'total_hits': _rate_limit_hits})
         # Alert every 10 hits, max once per 30s
         if _rate_limit_hits % 10 == 0 and now - _rate_limit_last_alert >= 30:
             _rate_limit_last_alert = now
-            msg = f'⚠ RATE LIMIT: {_rate_limit_hits} 429s in last 60s — too many bots or too fast'
+            msg = f'⚠ RATE LIMIT: {_rate_limit_hits}/min (R:{_rate_limit_reads} W:{_rate_limit_writes} H:{_rate_limit_hedges})'
             print(msg)
-            try:
-                _push_notification('rate_limit', msg, {'hits': _rate_limit_hits, 'window_s': 60})
-            except Exception:
-                pass
 
 # ─── LocalOrderbook: real-time depth mirror from WS orderbook_delta ───────────
 from collections import deque as _deque
@@ -18639,6 +18651,9 @@ def get_latency():
             'write': write_usage,
             'read': read_usage,
             'hits_last_60s': _rate_limit_hits,
+            'reads_last_60s': _rate_limit_reads,
+            'writes_last_60s': _rate_limit_writes,
+            'hedges_last_60s': _rate_limit_hedges,
             'limit_per_sec': 30,
         },
     })

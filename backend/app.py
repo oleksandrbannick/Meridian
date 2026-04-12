@@ -1105,6 +1105,15 @@ def diagnose_bots_endpoint():
                     known_ids.add(oid)
                 for oid in b.get('_all_dog_order_ids', []):
                     known_ids.add(oid)
+                # Apex MM exit orders (amend exit + exit sell)
+                for _exit_side in ('yes', 'no'):
+                    _oid = b.get(f'_{_exit_side}_exit_oid')
+                    if _oid:
+                        known_ids.add(_oid)
+                    _sell = b.get('_exit_sell_oids', {}).get(_exit_side, {})
+                    _oid2 = _sell.get('oid') if isinstance(_sell, dict) else None
+                    if _oid2:
+                        known_ids.add(_oid2)
                 for rung in b.get('rungs', []):
                     for side in ('yes', 'no'):
                         oid = rung.get(f'{side}_order_id')
@@ -17500,6 +17509,15 @@ def _sweep_orphaned_orders():
         for oid in bot.get('_all_dog_order_ids', []):
             if oid:
                 known_ids.add(oid)
+        # Apex MM exit orders (amend exit + exit sell)
+        for _exit_side in ('yes', 'no'):
+            _oid = bot.get(f'_{_exit_side}_exit_oid')
+            if _oid:
+                known_ids.add(_oid)
+            _sell = bot.get('_exit_sell_oids', {}).get(_exit_side, {})
+            _oid2 = _sell.get('oid') if isinstance(_sell, dict) else None
+            if _oid2:
+                known_ids.add(_oid2)
 
     try:
         resp = kalshi_client.get_orders(status='resting')

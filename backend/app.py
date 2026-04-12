@@ -1862,12 +1862,14 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         all_matches = _api_tennis_cache['data']
     else:
         # Use UTC dates — tennis matches in Europe start early UTC, server is US timezone
+        # Include tomorrow UTC to catch European matches dated ahead (e.g. Barcelona 15:30 CEST = Apr 13 in API Tennis but live on Apr 12 UTC evening)
         _utc_today = _dt.datetime.utcnow().date()
         _utc_yesterday = (_utc_today - _dt.timedelta(days=1)).isoformat()
+        _utc_tomorrow = (_utc_today + _dt.timedelta(days=1)).isoformat()
         today = _utc_today.isoformat()
         try:
-            # Fetch today + yesterday to catch matches that started late yesterday UTC but are still live
-            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={_utc_yesterday}&date_stop={today}&APIkey={_API_TENNIS_KEY}'
+            # Fetch yesterday + today + tomorrow to catch timezone boundary matches
+            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={_utc_yesterday}&date_stop={_utc_tomorrow}&APIkey={_API_TENNIS_KEY}'
             resp = requests.get(url, timeout=8)
             resp.raise_for_status()
             result = resp.json()
@@ -1893,6 +1895,26 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         else:  # wta
             return 'wta' in t or 'challenger women' in t
     filtered = [m for m in all_matches if _tennis_match_filter(m)]
+
+    # Exclude pre-match games from tomorrow — only include live/finished matches from the extra day
+    # This prevents showing future games that waste rate limit reads
+    def _is_tomorrow_prematch(m):
+        if m.get('event_date') != _utc_tomorrow:
+            return False
+        # Keep if actually live or finished
+        if m.get('event_live') == '1':
+            return False
+        status = (m.get('event_status') or '').lower()
+        if 'finished' in status or m.get('event_winner'):
+            return False
+        if status in ('interrupted', 'break time', 'retired', 'walkover', 'defaulted'):
+            return False
+        # Has scores with sets won = still in progress, keep it
+        scores = m.get('scores', [])
+        if scores and any(int(s.get('score_first', 0)) > 0 or int(s.get('score_second', 0)) > 0 for s in scores):
+            return False
+        return True  # Pre-match tomorrow game — exclude
+    filtered = [m for m in filtered if not _is_tomorrow_prematch(m)]
 
     # Transform into ESPN-like event format for parseESPNGame()
     events = []
@@ -7999,17 +8021,13 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
         # Flat — check smart mode before completing
         # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
         _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
-        if _cycle_pnl < 0:
-            bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
-            print(f'📊 APEX MM CYCLE LOSS: {bot_id} cycle_pnl={_cycle_pnl}c → consecutive_losses={bot["consecutive_losses"]}')
-        elif _cycle_pnl > 0:
-            bot['consecutive_losses'] = 0
-        _smart_limit = bot.get('smart_mode', 0)
-        if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
-            print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} losses={bot["consecutive_losses"]}/{_smart_limit} cycle_pnl={_cycle_pnl}c — cycling')
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
+        if _smart_repeat:
+            print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} reason={_smart_reason} cycle_pnl={_cycle_pnl}c losses={bot.get("consecutive_losses",0)} — cycling')
             bot_log('APEX_MM_SMART_RESTART', bot_id, {
-                'reason': reason, 'consecutive_losses': bot['consecutive_losses'],
-                'smart_limit': _smart_limit, 'realized_pnl': bot.get('realized_pnl_cents', 0),
+                'reason': reason, 'smart_reason': _smart_reason,
+                'consecutive_losses': bot.get('consecutive_losses', 0),
+                'realized_pnl': bot.get('realized_pnl_cents', 0),
                 'cycle_pnl': _cycle_pnl,
             })
             bot['status'] = 'market_making_active'
@@ -8281,19 +8299,14 @@ def _apex_mm_exit_tick(bot_id, bot):
     if yes_done and no_done and bot.get('net_yes', 0) <= 0 and bot.get('net_no', 0) <= 0:
         # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
         _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
-        if _cycle_pnl < 0:
-            bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
-            print(f'📊 APEX MM CYCLE LOSS: {bot_id} cycle_pnl={_cycle_pnl}c → consecutive_losses={bot["consecutive_losses"]}')
-        elif _cycle_pnl > 0:
-            bot['consecutive_losses'] = 0
-        # Smart mode: restart if we haven't hit the loss limit
-        _smart_limit = bot.get('smart_mode', 0)
-        if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
-            print(f'🔄 APEX MM RESTART: {bot_id} exit complete but smart {bot["consecutive_losses"]}/{_smart_limit} cycle_pnl={_cycle_pnl}c — cycling')
+        # Smart mode: use standard 2-consecutive-loss logic
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
+        if _smart_repeat:
+            print(f'🔄 APEX MM RESTART: {bot_id} exit complete, smart={_smart_reason} cycle_pnl={_cycle_pnl}c losses={bot.get("consecutive_losses",0)} — cycling')
             bot_log('APEX_MM_SMART_RESTART', bot_id, {
                 'reason': bot.get('_exit_reason', 'exit'),
-                'consecutive_losses': bot['consecutive_losses'],
-                'smart_limit': _smart_limit,
+                'smart_reason': _smart_reason,
+                'consecutive_losses': bot.get('consecutive_losses', 0),
                 'realized_pnl': bot.get('realized_pnl_cents', 0),
                 'cycle_pnl': _cycle_pnl,
             })
@@ -8498,7 +8511,7 @@ def create_ladder_arb_bot():
         spacing = int(data.get('spacing', 1))
         qty_per_level = int(data.get('qty_per_level', 10))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
-        smart_mode = int(data.get('smart_mode', 0))
+        smart_mode = bool(data.get('smart_mode', False))
         auto_scale = bool(data.get('auto_scale', True))
 
         if not ticker:

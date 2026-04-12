@@ -6465,7 +6465,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
                         <span style="color:#556;font-size:9px;">${exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending'}</span>
-                        <span style="font-size:8px;">${walkLabel} <span style="color:#00ff88;">${exitSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${exitSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
+                        <span style="font-size:8px;">${combined >= 100 ? `<span style="color:#ff4444;font-weight:800;${combined >= stopLoss ? 'animation:pulse 1.5s infinite;' : ''}">SL</span> ` : ''}<span style="color:#00ff88;">${exitSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${exitSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
                     </div>
                     <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
                         <div style="width:${hedgeFp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>

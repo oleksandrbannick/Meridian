@@ -7303,6 +7303,31 @@ async function loadBots() {
                 dogList.innerHTML = '<div class="empty-state"><div class="icon">👻</div><div class="title">No active Phantom bots</div><div class="desc">Deploy a Phantom bot from the Markets tab</div></div>';
             } else {
                 dogList.innerHTML = '';
+                // ── Sport filter pills for Phantom tab ──
+                const _dogSportPnl = {};
+                dogBotIds.forEach(id => {
+                    const b = bots[id];
+                    const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
+                    if (!_dogSportPnl[sp]) _dogSportPnl[sp] = { net: 0, count: 0 };
+                    _dogSportPnl[sp].count++;
+                    _dogSportPnl[sp].net += b.lifetime_pnl ?? b.net_pnl_cents ?? 0;
+                });
+                const _dogSportEntries = Object.entries(_dogSportPnl).sort((a,b) => b[1].count - a[1].count);
+                if (_dogSportEntries.length > 1) {
+                    const _dTotalNet = _dogSportEntries.reduce((s, [,d]) => s + d.net, 0);
+                    const _dTotalCol = _dTotalNet >= 0 ? '#00ff88' : '#ff4444';
+                    const _dSportBar = document.createElement('div');
+                    _dSportBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;margin-bottom:4px;align-items:center;';
+                    const _dAllActive = _botsActiveSport === 'all';
+                    const _dsi = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+                    _dSportBar.innerHTML = `<span onclick="window._filterBotsSport('all')" style="background:${_dAllActive ? '#ffaa0022' : '#0f1419'};color:${_dAllActive ? '#ffaa00' : '#556'};border:1px solid ${_dAllActive ? '#ffaa0044' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All <span style="color:${_dTotalCol}">${_dTotalNet >= 0 ? '+' : ''}${(_dTotalNet/100).toFixed(2)}</span></span>` +
+                        _dogSportEntries.map(([sp, d]) => {
+                            const isActive = _botsActiveSport === sp;
+                            const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                            return `<span onclick="window._filterBotsSport('${sp}')" style="background:${isActive ? '#ffaa0022' : '#0f1419'};color:${isActive ? '#ffaa00' : '#8892a6'};border:1px solid ${isActive ? '#ffaa0044' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">${_dsi[sp] || '🏟️'} ${sp} <span style="color:${col}">${d.net >= 0 ? '+' : ''}${(d.net/100).toFixed(2)}</span></span>`;
+                        }).join('');
+                    dogList.appendChild(_dSportBar);
+                }
                 // Group dog bots by game (same logic as arb bots)
                 const dogGameGroups = {};
                 dogBotIds.forEach(botId => {
@@ -7322,6 +7347,8 @@ async function loadBots() {
                 sortedDogGameKeys.forEach(gk => {
                     const groupIds = dogGameGroups[gk];
                     const sampleBot = bots[groupIds[0]];
+                    const _dgSport = detectSport((sampleBot.ticker || '').toUpperCase()) || 'Other';
+                    if (_botsActiveSport !== 'all' && _dgSport !== _botsActiveSport) return;
                     const groupName = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
                     const rawTickerDog = sampleBot.ticker || '';
                     const sampleTicker = rawTickerDog.toUpperCase();

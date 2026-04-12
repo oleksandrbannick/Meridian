@@ -6038,6 +6038,28 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `${wouldPostAt}¢`}</div>
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ff66aa;">${favBid || '?'}¢</strong> · ask <strong style="color:#ff66aa;">${favAsk || '?'}¢</strong></div>
                 <div style="color:#8892a6;font-size:10px;margin-bottom:4px;">${favStatusText}</div>
+                ${status === 'fav_hedge_posted' && bot.fav_posted_at > 0 ? (() => {
+                    const fd = bot._fav_depth || 0;
+                    const tier = fd < 200 ? 'THIN' : fd < 500 ? 'MOD' : 'THICK';
+                    const timerS = fd < 200 ? 10 : fd < 500 ? 15 : 30;
+                    const threshC = fd < 200 ? 98 : fd < 500 ? 96 : 95;
+                    const elapsed = Math.max(0, Date.now()/1000 - bot.fav_posted_at);
+                    const left = Math.max(0, timerS - elapsed);
+                    const tierCol = tier === 'THIN' ? '#ff4444' : tier === 'MOD' ? '#ffaa00' : '#00ff88';
+                    const combined = avgDogPrice + (favAsk || favBid || favPrice);
+                    const wouldFire = combined <= threshC && left <= 0;
+                    const fdLabel = fd >= 1000 ? (fd/1000).toFixed(1) + 'K' : fd;
+                    if (left > 0) {
+                        return `<div style="color:${tierCol};font-size:9px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+                            <span style="background:${tierCol}18;padding:1px 5px;border-radius:3px;">${tier} · ${fdLabel}</span>
+                            <span>taker in ${Math.ceil(left)}s @ ≤${threshC}¢</span>
+                        </div>`;
+                    } else if (wouldFire) {
+                        return `<div style="color:#ff8800;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ TAKER READY · ${tier} · combined ${combined}¢ ≤ ${threshC}¢</div>`;
+                    } else {
+                        return `<div style="color:#ff4444;font-size:9px;font-weight:600;margin-bottom:4px;">⏳ ${tier} · ${fdLabel} · combined ${combined}¢ > ${threshC}¢</div>`;
+                    }
+                })() : ''}
                 ${favPrice > 0 ? `
                     <div style="display:flex;align-items:center;gap:6px;">
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">

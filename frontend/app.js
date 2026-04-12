@@ -6476,7 +6476,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#00d4ff;font-size:10px;font-weight:700;">${avgCost}c</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                        <span style="color:#556;font-size:9px;">${netHeld}x filled</span>
+                        <span style="color:#556;font-size:9px;">${netHeld}x held</span>
                         <span style="font-size:8px;"><span style="color:#00ff88;">${longSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${longSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
                     </div>
                     <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">

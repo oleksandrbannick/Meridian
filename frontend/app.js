@@ -5802,6 +5802,11 @@ function _sportIcon(ticker) {
 }
 
 let botsTabMode = 'arb';  // 'arb' | 'middle'
+let _botsActiveSport = 'all';  // Sport filter for active bots tab
+window._filterBotsSport = function(sport) {
+    _botsActiveSport = (_botsActiveSport === sport && sport !== 'all') ? 'all' : sport;
+    if (typeof loadBots === 'function') loadBots();
+};
 function _renderDogBotCard(bot, botId, container, gameScores) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
@@ -7374,6 +7379,33 @@ async function loadBots() {
         }
         botsList.innerHTML = '';
 
+        // ── Sport filter pills ──
+        const _sportPnl = {};
+        const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+        arbBotIds.forEach(id => {
+            const b = bots[id];
+            const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
+            if (!_sportPnl[sp]) _sportPnl[sp] = { net: 0, count: 0 };
+            _sportPnl[sp].count++;
+            const pnl = b.lifetime_pnl ?? b.net_pnl_cents ?? 0;
+            _sportPnl[sp].net += pnl;
+        });
+        const _sportEntries = Object.entries(_sportPnl).sort((a,b) => b[1].count - a[1].count);
+        if (_sportEntries.length > 1) {
+            const _totalNet = _sportEntries.reduce((s, [,d]) => s + d.net, 0);
+            const _totalCol = _totalNet >= 0 ? '#00ff88' : '#ff4444';
+            const sportBar = document.createElement('div');
+            sportBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;margin-bottom:4px;align-items:center;';
+            const allActive = _botsActiveSport === 'all';
+            sportBar.innerHTML = `<span onclick="window._filterBotsSport('all')" style="background:${allActive ? '#00d4ff22' : '#0f1419'};color:${allActive ? '#00d4ff' : '#556'};border:1px solid ${allActive ? '#00d4ff44' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All <span style="color:${_totalCol}">${_totalNet >= 0 ? '+' : ''}${(_totalNet/100).toFixed(2)}</span></span>` +
+                _sportEntries.map(([sp, d]) => {
+                    const isActive = _botsActiveSport === sp;
+                    const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                    return `<span onclick="window._filterBotsSport('${sp}')" style="background:${isActive ? '#00d4ff22' : '#0f1419'};color:${isActive ? '#00d4ff' : '#8892a6'};border:1px solid ${isActive ? '#00d4ff44' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">${_si[sp] || '🏟️'} ${sp} <span style="color:${col}">${d.net >= 0 ? '+' : ''}${(d.net/100).toFixed(2)}</span></span>`;
+                }).join('');
+            botsList.appendChild(sportBar);
+        }
+
         let activeBotCount = 0;
         let filledLegs = 0;
         let anchoredCount = 0;  // one leg filled, waiting for second
@@ -7415,8 +7447,11 @@ async function loadBots() {
             return firstB - firstA;  // newest game first, but stable within a game
         });
 
-        // Render grouped bots
+        // Render grouped bots (filtered by sport if active)
         sortedGameKeys.forEach(gameKey => {
+            const _filterTicker = (bots[gameGroups[gameKey][0]]?.ticker || '').toUpperCase();
+            const _filterSport = detectSport(_filterTicker) || 'Other';
+            if (_botsActiveSport !== 'all' && _filterSport !== _botsActiveSport) return;
             // ── Game group header ──
             const groupBots = gameGroups[gameKey];
             const sampleBot = bots[groupBots[0]];

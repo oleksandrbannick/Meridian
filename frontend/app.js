@@ -6425,10 +6425,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         let walkLabel = '';
         if (exitPrice > 0) {
             if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">STOP LOSS</span>`;
-            else if (postedCombined >= 100) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">PARKED</span>`;
-            else if (postedCombined >= 98) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">THIN</span>`;
-            else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALKING +${walkCount}</span>`;
-            else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET</span>`;
+            else if (combined > 100) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">PARKED</span>`;
+            else if (combined === 100) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALL</span>`;
+            else if (combined <= 99 && exitPrice > origTarget) walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">SNAP +${100 - combined}c</span>`;
+            else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET +${100 - combined}c</span>`;
         }
         // Walk bar — full range from target to stop-loss
         let walkBarHtml = '';

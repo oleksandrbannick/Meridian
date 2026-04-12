@@ -3452,6 +3452,7 @@ function displayOrderbookLadder(orderbook) {
     else if (catchScore >= 55) _recDepth = 6 - Math.floor((catchScore - 55) / 10);  // SNIPER — 55-64→6¢, 65-74→5¢
     else if (catchScore >= 35) _recDepth = 9 - Math.floor((catchScore - 35) / 7);   // TRAP — 35-41→9¢, 42-48→8¢, 49-54→7¢
     else _recDepth = 0;                                                    // KILL — pull
+    const _baseDepth = _recDepth;  // before gap overrides
     // Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if (_recDepth > 0) {
         if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
@@ -3459,6 +3460,7 @@ function displayOrderbookLadder(orderbook) {
         else if (favAnalysis.gaps >= 1 && _recDepth < 5) _recDepth = 5;
         _recDepth = Math.min(_recDepth, 12);
     }
+    const _obGapBump = _recDepth > _baseDepth && _baseDepth > 0;
     const _favIsThick = _favPL >= 20;
     const _favIsThin = _favPL < 5;
     const _favIsLight = _favPL >= 5 && _favPL < 10;
@@ -3520,7 +3522,7 @@ function displayOrderbookLadder(orderbook) {
     const depthHtml = `<div style="background:#0f1419;border:1px solid #1e2740;border-radius:8px;padding:10px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:#8892a6;font-size:11px;font-weight:600;">DEPTH WITHIN ${DEPTH_WINDOW}¢</span>
-            <span style="color:${catchCol};font-weight:800;font-size:12px;" title="${_scoreBreakdown}">${botIconImg('phantom', 14)} ${catchLabel} ${catchScore}</span>
+            <span style="color:${catchCol};font-weight:800;font-size:12px;" title="${_scoreBreakdown}">${botIconImg('phantom', 14)} ${catchLabel} ${catchScore} → ${_recDepth}¢${_obGapBump ? ` <span style="color:#ff8800;font-size:9px;">gaps</span>` : ''}</span>
         </div>
         <div style="padding:5px 8px;background:${verdictCol}11;border:1px solid ${verdictCol}33;border-radius:5px;margin-bottom:6px;">
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
@@ -4376,10 +4378,11 @@ function updateAnchorPreview() {
             const _ppiScore = _obCache.catchScore || 0;
             const _ppiTier = _obCache.ppiTier || (_ppiScore >= 90 ? 'WALL' : _ppiScore >= 75 ? 'PRIME' : _ppiScore >= 55 ? 'SNIPER' : _ppiScore >= 35 ? 'TRAP' : 'KILL');
             const _ppiTierCol = _ppiScore >= 90 ? '#00ff88' : _ppiScore >= 75 ? '#00ccff' : _ppiScore >= 55 ? '#ffaa00' : _ppiScore >= 35 ? '#ff8800' : '#ff4444';
+            const _creBaseD = _ppiScore >= 90 ? 3 : _ppiScore >= 75 ? 4 : _ppiScore >= 55 ? (6 - Math.floor((_ppiScore - 55) / 10)) : _ppiScore >= 35 ? (9 - Math.floor((_ppiScore - 35) / 7)) : 0;
+            const _creGapBump = recDepth > _creBaseD && _creBaseD > 0 ? ` <span style="color:#ff8800;font-size:9px;font-weight:700;">gaps→${recDepth}¢</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
-                `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span> ` +
+                `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span>${_creGapBump} ` +
                 `<span style="color:#ff66aa;font-weight:700;">→ ${recDepth}¢${recDepth > 0 ? '' : ' PULL'}</span>` +
-                (recNote ? ` <span style="color:#8892a6;font-size:9px;">${recNote}</span>` : '') +
                 `${thinWarn}${depthWarnTxt}` +
                 (dd > 0 ? `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
                 `dog ${dd.toLocaleString()} @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +

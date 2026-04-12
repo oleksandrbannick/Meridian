@@ -10497,60 +10497,63 @@ def _handle_phantom(bot_id, bot, actions):
             'fav_order_id': (bot.get('fav_order_id') or 'none')[:12],
             'dog_filled_at': bot.get('dog_filled_at'),
         })
-        # Settlement check: if market is closed/settled, record result based on outcome
-        try:
-            api_read_limiter.wait()
-            mkt_resp = kalshi_client.get_market(ticker)
-            mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
-            mkt_status = mkt.get('status', '').lower()
-            mkt_result = mkt.get('result', '').lower()
-            if mkt_status in ('settled', 'finalized'):
-                dog_price = bot['dog_price']
-                # Dog side won → position pays 100¢
-                dog_won = (dog_side == 'yes' and mkt_result == 'yes') or \
-                          (dog_side == 'no' and mkt_result == 'no')
-                if dog_won:
-                    profit = (100 - dog_price) * qty
-                    session_pnl['gross_profit_cents'] += profit
-                    print(f'🏆 PHANTOM SETTLED WIN: {bot_id} dog {dog_side}@{dog_price}¢ won — +{profit}¢')
-                else:
-                    loss = dog_price * qty
-                    session_pnl['gross_loss_cents'] += loss
-                    profit = -loss
-                    print(f'⚠ PHANTOM SETTLED LOSS: {bot_id} dog {dog_side}@{dog_price}¢ lost — -{loss}¢')
-                session_pnl['completed_bots'] += 1
-                bot['_trade_recorded'] = True
-                _record_trade({
-                    'bot_id': bot_id, 'ticker': ticker,
-                    'yes_price': dog_price if dog_side == 'yes' else 0,
-                    'no_price': dog_price if dog_side == 'no' else 0,
-                    'quantity': qty,
-                    'profit_cents': max(0, profit), 'loss_cents': max(0, -profit),
-                    'result': f'settled_{"win" if dog_won else "loss"}_{dog_side}',
-                    'exit_via': 'anchor_settlement',
-                    'first_leg': dog_side,
-                    'hedge_latency_ms': bot.get('hedge_latency_ms'),
-                    'raw_hedge_ms': bot.get('raw_hedge_ms'),
-                    'timestamp': now,
-                    'placed_at': bot.get('created_at', now),
-                    'arb_width': bot.get('target_width', 0),
-                    'game_phase': 'settled',
-                    'fill_source': 'anchor_settlement',
-                    'bot_category': 'anchor_dog',
-                }, bot)
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                bot['_market_settled_at'] = now
-                bot['_smart_stopped'] = True
-                bot['_smart_stop_reason'] = 'final'
-                _audit('PHANTOM_SETTLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'result': mkt_result, 'dog_won': dog_won, 'profit': profit})
-                _audit_position_check(bot_id, ticker, dog_side, 'after_settlement')
-                save_state()
-                actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
-                return
-        except Exception as sett_err:
-            # Non-fatal — fall through to normal retry
-            pass
+        # Settlement check: throttled 30s (10s if game over), checks result field too
+        _game_over_df = _is_game_over_cached(ticker)
+        _settle_interval_df = 10 if _game_over_df else 30
+        if now - bot.get('_last_settle_check', 0) >= _settle_interval_df:
+            bot['_last_settle_check'] = now
+            try:
+                api_read_limiter.wait()
+                mkt_resp = kalshi_client.get_market(ticker)
+                mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
+                mkt_status = mkt.get('status', '').lower()
+                mkt_result = mkt.get('result', '').lower()
+                if mkt_status in ('settled', 'finalized') or mkt_result:
+                    dog_price = bot['dog_price']
+                    _settle_result = mkt_result or ('yes' if mkt_status == 'settled' else '')
+                    dog_won = (dog_side == 'yes' and _settle_result == 'yes') or \
+                              (dog_side == 'no' and _settle_result == 'no')
+                    if dog_won:
+                        profit = (100 - dog_price) * qty
+                        session_pnl['gross_profit_cents'] += profit
+                        print(f'🏆 PHANTOM SETTLED WIN: {bot_id} dog {dog_side}@{dog_price}¢ won — +{profit}¢')
+                    else:
+                        loss = dog_price * qty
+                        session_pnl['gross_loss_cents'] += loss
+                        profit = -loss
+                        print(f'⚠ PHANTOM SETTLED LOSS: {bot_id} dog {dog_side}@{dog_price}¢ lost — -{loss}¢')
+                    session_pnl['completed_bots'] += 1
+                    bot['_trade_recorded'] = True
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': dog_price if dog_side == 'yes' else 0,
+                        'no_price': dog_price if dog_side == 'no' else 0,
+                        'quantity': qty,
+                        'profit_cents': max(0, profit), 'loss_cents': max(0, -profit),
+                        'result': f'settled_{"win" if dog_won else "loss"}_{_settle_result}',
+                        'exit_via': 'anchor_settlement',
+                        'first_leg': dog_side,
+                        'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                        'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                        'timestamp': now,
+                        'placed_at': bot.get('created_at', now),
+                        'arb_width': bot.get('target_width', 0),
+                        'game_phase': 'settled',
+                        'fill_source': 'anchor_settlement',
+                        'bot_category': 'anchor_dog',
+                    }, bot)
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    bot['_market_settled_at'] = now
+                    bot['_smart_stopped'] = True
+                    bot['_smart_stop_reason'] = 'final'
+                    _audit('PHANTOM_SETTLED', bot_id, {'ticker': ticker, 'dog_side': dog_side, 'result': _settle_result, 'dog_won': dog_won, 'profit': profit})
+                    _audit_position_check(bot_id, ticker, dog_side, 'after_settlement')
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
+                    return
+            except Exception as sett_err:
+                bot_log('PHANTOM_SETTLE_CHECK_ERR', bot_id, {'error': str(sett_err)[:200], 'state': 'dog_filled'}, level='WARN')
 
         # Retry posting the fav (hedge_ticker for cross-market)
         try:
@@ -10920,18 +10923,18 @@ def _handle_phantom(bot_id, bot, actions):
             actions.append({'bot_id': bot_id, 'action': 'anchor_complete', 'profit_cents': net_pnl})
             return
 
-        # Fav not filled yet — check if game/market is over
-        # Check via ESPN OR direct Kalshi market status (fallback for markets ESPN doesn't track)
-        _fav_wait = now - (bot.get('fav_posted_at') or bot.get('dog_filled_at') or now)
-        _check_settlement = (bot.get('game_phase') == 'live' and _is_game_ending(ticker)) or _fav_wait > 60
-        if _check_settlement:
+        # Fav not filled yet — throttled settlement check (30s, 10s if death zone/game over)
+        _game_over = _is_game_over_cached(ticker)
+        _settle_interval = 10 if (bot.get('_death_zone_stopped') or _game_over) else 30
+        if now - bot.get('_last_settle_check', 0) >= _settle_interval:
+            bot['_last_settle_check'] = now
             try:
                 api_read_limiter.wait()
                 mkt_resp = kalshi_client.get_market(ticker)
                 mkt = mkt_resp.get('market', mkt_resp) if isinstance(mkt_resp, dict) else {}
                 mkt_status = mkt.get('status', '').lower()
                 mkt_result = mkt.get('result', '').lower()
-                if mkt_status in ('settled', 'finalized'):
+                if mkt_status in ('settled', 'finalized') or mkt_result:
                     # Cancel unfilled fav order
                     try:
                         api_rate_limiter.wait()
@@ -10939,10 +10942,22 @@ def _handle_phantom(bot_id, bot, actions):
                     except Exception:
                         pass
                     dog_price = bot['dog_price']
-                    dog_won = (dog_side == 'yes' and mkt_result == 'yes') or \
-                              (dog_side == 'no' and mkt_result == 'no')
-                    profit = ((100 - dog_price) * qty) if dog_won else (-(dog_price * qty))
-                    if dog_won:
+                    _settle_result = mkt_result or ('yes' if mkt_status == 'settled' else '')
+                    dog_won = (dog_side == 'yes' and _settle_result == 'yes') or \
+                              (dog_side == 'no' and _settle_result == 'no')
+                    # Account for any partial fav fills at settlement
+                    _fav_settled = bot.get('fav_fill_qty', 0)
+                    _fav_price = bot.get('fav_price', 0)
+                    if _fav_settled > 0 and _fav_price > 0:
+                        # Hedged portion: arb P&L
+                        _hedged_pnl = (100 - dog_price - _fav_price) * _fav_settled
+                        # Unhedged portion: settlement P&L
+                        _unhedged_qty = qty - _fav_settled
+                        _unhedged_pnl = ((100 - dog_price) * _unhedged_qty) if dog_won else (-(dog_price * _unhedged_qty))
+                        profit = _hedged_pnl + _unhedged_pnl
+                    else:
+                        profit = ((100 - dog_price) * qty) if dog_won else (-(dog_price * qty))
+                    if profit >= 0:
                         session_pnl['gross_profit_cents'] += profit
                     else:
                         session_pnl['gross_loss_cents'] += abs(profit)
@@ -10954,20 +10969,21 @@ def _handle_phantom(bot_id, bot, actions):
                         'quantity': qty,
                         'profit_cents': profit if profit > 0 else 0,
                         'loss_cents': abs(profit) if profit < 0 else 0,
-                        'result': 'settled_win' if dog_won else 'settled_loss',
+                        'result': f'settled_{"win" if dog_won else "loss"}_{_settle_result}',
                         'exit_via': 'phantom_settlement',
                         'timestamp': now, 'placed_at': bot.get('created_at', now),
                         'fill_source': 'anchor_dog', 'bot_category': 'anchor_dog',
+                        'fav_partial_fills': _fav_settled,
                     }, bot)
-                    print(f'🏁 PHANTOM GAME OVER: {bot_id} fav unfilled, market settled → {"WIN" if dog_won else "LOSS"} {profit}¢')
+                    print(f'🏁 PHANTOM SETTLED: {bot_id} fav {"partial " + str(_fav_settled) + "/" + str(qty) if _fav_settled else "unfilled"}, market={_settle_result} → {"WIN" if dog_won else "LOSS"} {profit}¢')
                     _phantom_set_final_status(bot, bot_id)
                     bot['_smart_stopped'] = True
                     bot['_smart_stop_reason'] = 'final'
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return
-            except Exception:
-                pass  # non-fatal, fall through to normal timeout
+            except Exception as _settle_err:
+                bot_log('PHANTOM_SETTLE_CHECK_ERR', bot_id, {'error': str(_settle_err)[:200]}, level='WARN')
 
         fav_posted_at = bot.get('fav_posted_at') or bot.get('dog_filled_at') or now
         wait_s = now - fav_posted_at

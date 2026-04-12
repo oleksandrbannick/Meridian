@@ -4091,9 +4091,11 @@ function initAnchorDogPrices() {
     _anchorIsBrokenSpread = spread > 1;
     const anchorBase = _anchorIsBrokenSpread ? dogAsk : _anchorDogBid;
 
-    // Calculate smart price using depth floor slider directly
+    // Calculate smart price using depth floor (or PPI rec when AUTO)
     const depthSlider = document.getElementById('anchor-depth');
-    const anchorDepth = parseInt(depthSlider?.value) || 5;
+    const _obTicker = isCrossMode ? (_anchorCrossMarketSwapped ? _anchorCrossMarketTicker : currentArbMarket.ticker) : currentArbMarket.ticker;
+    const _autoRec = window._phantomAutoDepth && window._obDepthCache?.[_obTicker]?._backendRec;
+    const anchorDepth = _autoRec || parseInt(depthSlider?.value) || 5;
     const smartPrice = Math.max(1, anchorBase - anchorDepth);
 
     // Populate display

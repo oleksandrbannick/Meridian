@@ -7857,6 +7857,8 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 _current_oids.add(_oid)
     bot['_all_placed_order_ids'] = list(_current_oids)
     bot['_counted_order_fills'] = {}
+    # Snapshot P&L at cycle start — used to detect losing cycles for smart mode
+    bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
     save_state()
     bot_log('APEX_MM_CYCLE_RESET', bot_id, {'midpoint': midpoint})
     print(f'📊 APEX MM CYCLE RESET: {bot_id} flat → fresh ladder @ mid={midpoint}')
@@ -7966,15 +7968,20 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
 
     if net_yes == 0 and net_no == 0:
         # Flat — check smart mode before completing
-        _exit_pnl = bot.get('_last_exit_pnl', 0)
-        if _exit_pnl < 0:
+        # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
+        _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
+        if _cycle_pnl < 0:
             bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+            print(f'📊 APEX MM CYCLE LOSS: {bot_id} cycle_pnl={_cycle_pnl}c → consecutive_losses={bot["consecutive_losses"]}')
+        elif _cycle_pnl > 0:
+            bot['consecutive_losses'] = 0
         _smart_limit = bot.get('smart_mode', 0)
         if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
-            print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} losses={bot["consecutive_losses"]}/{_smart_limit} — cycling')
+            print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} losses={bot["consecutive_losses"]}/{_smart_limit} cycle_pnl={_cycle_pnl}c — cycling')
             bot_log('APEX_MM_SMART_RESTART', bot_id, {
                 'reason': reason, 'consecutive_losses': bot['consecutive_losses'],
                 'smart_limit': _smart_limit, 'realized_pnl': bot.get('realized_pnl_cents', 0),
+                'cycle_pnl': _cycle_pnl,
             })
             bot['status'] = 'market_making_active'
             bot['_exit_reason'] = None
@@ -8243,19 +8250,23 @@ def _apex_mm_exit_tick(bot_id, bot):
     yes_done = not bot.get('_exit_sell_oids', {}).get('yes', {}).get('oid')
     no_done = not bot.get('_exit_sell_oids', {}).get('no', {}).get('oid')
     if yes_done and no_done and bot.get('net_yes', 0) <= 0 and bot.get('net_no', 0) <= 0:
-        # Only count exit as loss if realized P&L from this exit was negative
-        _exit_pnl = bot.get('_last_exit_pnl', 0)
-        if _exit_pnl < 0:
+        # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
+        _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
+        if _cycle_pnl < 0:
             bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+            print(f'📊 APEX MM CYCLE LOSS: {bot_id} cycle_pnl={_cycle_pnl}c → consecutive_losses={bot["consecutive_losses"]}')
+        elif _cycle_pnl > 0:
+            bot['consecutive_losses'] = 0
         # Smart mode: restart if we haven't hit the loss limit
         _smart_limit = bot.get('smart_mode', 0)
         if _smart_limit > 0 and bot.get('consecutive_losses', 0) < _smart_limit and not bot.get('_smart_stopped'):
-            print(f'🔄 APEX MM RESTART: {bot_id} exit complete but smart {bot["consecutive_losses"]}/{_smart_limit} — cycling')
+            print(f'🔄 APEX MM RESTART: {bot_id} exit complete but smart {bot["consecutive_losses"]}/{_smart_limit} cycle_pnl={_cycle_pnl}c — cycling')
             bot_log('APEX_MM_SMART_RESTART', bot_id, {
                 'reason': bot.get('_exit_reason', 'exit'),
                 'consecutive_losses': bot['consecutive_losses'],
                 'smart_limit': _smart_limit,
                 'realized_pnl': bot.get('realized_pnl_cents', 0),
+                'cycle_pnl': _cycle_pnl,
             })
             bot['status'] = 'market_making_active'
             bot['_exit_reason'] = None
@@ -8627,6 +8638,7 @@ def create_ladder_arb_bot():
             '_order_group_id': None,
             '_velocity_gated': False,
             '_velocity_fills': [],
+            '_cycle_start_pnl': 0,
         }
 
         success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_levels, no_levels)
@@ -17800,6 +17812,8 @@ def phantom_edit(bot_id):
                 api_rate_limiter.wait()
                 kalshi_client.cancel_order(dog_oid)
                 bot['dog_order_id'] = None
+                bot['_all_dog_order_ids'] = []  # clear so cancel-race doesn't find old run fills
+                bot['dog_fill_qty'] = 0
                 applied_now = True
                 print(f'🔧 PHANTOM EDIT: {bot_id} cancelled dog order for repost with new settings')
             except Exception as e:

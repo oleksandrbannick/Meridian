@@ -6463,8 +6463,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const exitFillQty = bot._exit_fill_qty || 0;
     const exitTotalQty = bot._exit_total_qty || Math.abs(netYes - netNo);
     const _buildExitPanel = (col, exitSide) => {
-        const exitBid = exitSide === 'yes' ? yesBid : noBid;
-        const exitAsk = exitSide === 'yes' ? yesAsk : noAsk;
+        const exitBid = exitSide === 'yes' ? liveYesBid : liveNoBid;
+        const exitAsk = exitSide === 'yes' ? liveYesAsk : liveNoAsk;
         const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);

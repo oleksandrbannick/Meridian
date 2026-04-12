@@ -3880,6 +3880,38 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
+        # ── Taker fallback: if hedge sitting 15s+ and combined at ask still profitable, cross spread ──
+        fav_ask = (yes_ask if fav_side == 'yes' else no_ask) if hedge_ticker == ticker else 0
+        dog_price = bot.get('dog_price', 0)
+        posted_at = bot.get('fav_posted_at', bot.get('dog_filled_at', 0))
+        hedge_age = time.time() - posted_at if posted_at > 0 else 0
+        if fav_ask > 0 and hedge_age >= 15 and not bot.get('_taker_fired'):
+            combined_at_ask = dog_price + fav_ask
+            if combined_at_ask <= 96:
+                # Still profitable at ask — cross the spread
+                if not _phantom_drop_lock.acquire(blocking=False):
+                    return
+                try:
+                    fav_oid = bot.get('fav_order_id')
+                    if fav_oid:
+                        qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+                        amend_kwargs = {f'{fav_side}_price': fav_ask}
+                        api_rate_limiter.wait(priority=True)
+                        kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
+                                                  count=qty, **amend_kwargs)
+                        bot['fav_price'] = fav_ask
+                        bot['_taker_fired'] = True
+                        print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s)')
+                        bot_log('PHANTOM_WS_TAKER', bot_id, {
+                            'fav_price': fav_ask, 'dog_price': dog_price,
+                            'combined': combined_at_ask, 'hedge_age_s': int(hedge_age),
+                            'was_price': fav_price,
+                        })
+                        save_state()
+                finally:
+                    _phantom_drop_lock.release()
+                return
+
         # Only snap if bid is ABOVE posted price (we're behind the market)
         if fav_bid <= fav_price:
             continue
@@ -4628,6 +4660,7 @@ def _execute_phantom_hedge(bot_id):
         bot['fav_posted_at'] = time.time()
         bot['fav_walk_count'] = 0
         bot['fav_last_walk_at'] = None
+        bot['_taker_fired'] = False
         if fav_side == 'yes':
             bot['yes_price'] = actual_fav_price
             bot['yes_order_id'] = fav_order_id

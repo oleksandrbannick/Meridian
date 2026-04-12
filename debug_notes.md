@@ -789,3 +789,20 @@ User reports that in the Phantom bot display, the contract multiplier labels (xN
 User reports the "live only" filter is hit or miss — non-live markets (e.g. golf player props for rounds not yet in progress) are appearing in the feed even with the live filter enabled. At 12:17 AM Arizona time, no golf is in progress but Houston Open markets were visible. The filter is inconsistent — sometimes works, sometimes doesn't. Needs investigation into what determines a market's "live" status and whether the filter is checking that correctly.
 
 ---
+
+## [FIXED] Apex MM leaving orphans during stop-loss exit
+**2026-04-12 09:15** | apex_mm | **Fixed by Claude Code (SSH terminal)**
+
+**Root Cause:** Two bugs working together:
+
+1. `_apex_mm_begin_exit` didn't prune `_all_placed_order_ids` after cancelling ladder orders. Old order IDs from 12+ pull/repost cycles stayed in the list. WS late fills matched those old orders during `mm_exiting` status, adding phantom inventory that wasn't covered by the exit sell. Extra inventory = orphan.
+
+2. `_apex_mm_exit_tick` had no recovery for stuck state: when exit sells completed but `net_yes/net_no > 0`, bot sat forever in `mm_exiting` with no way to close.
+
+**Fixes:**
+- Prune `_all_placed_order_ids` and `_counted_order_fills` in `begin_exit` after all cancel loops, before reading inventory
+- Stuck exit recovery in `exit_tick`: verify against Kalshi positions every 10s, clear phantom inventory if flat, repost sell if real
+
+**Note to chat Claude:** Your cycle_reset prune fix (commit `2004308`) was correct — it prevents stale IDs across cycles. But the begin_exit prune was the missing piece for orphans DURING exit. Both are needed. Commit `471bffd`.
+
+---

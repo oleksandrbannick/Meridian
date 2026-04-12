@@ -17215,19 +17215,27 @@ def apex_mm_edit(bot_id):
         print(f'🔧 APEX MM EDIT DEFERRED: {bot_id} — {changes} (holding inventory, will apply when flat)')
         return jsonify({'ok': True, 'applied_now': False, 'deferred': True, 'changes': changes,
                         'reason': f'Holding {net_yes} YES / {net_no} NO — changes will apply after current cycle completes'})
-    # Flat — apply immediately
-    if status == 'market_making_active':
-        _apex_mm_pull_all(bot_id, bot, 'edit_repost')
-        applied_now = True
-    elif status == 'mm_depth_pulled':
+    # Flat — apply immediately: pull all, clear pauses, repost both sides
+    if status in ('market_making_active', 'mm_depth_pulled'):
+        if status == 'market_making_active':
+            _apex_mm_pull_all(bot_id, bot, 'edit_repost')
+        # Clear side pauses so both sides repost with new params
+        bot['_yes_side_paused'] = False
+        bot['_no_side_paused'] = False
+        # Repost full ladder now
+        ticker = bot.get('ticker', '')
+        midpoint = _apex_mm_midpoint(ticker)
+        if midpoint:
+            base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+            yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+            _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
+            bot['midpoint'] = midpoint
+            bot['status'] = 'market_making_active'
         applied_now = True
     # Recalculate inventory limit
-    if new_qty or new_gap:
-        _levels = bot.get('levels', 7)
-        _spacing = bot.get('spacing', 1)
-        _gap = bot.get('start_gap', 4)
-        _qty = bot.get('qty_per_level', 10)
-        bot['inventory_limit'] = _levels * _qty
+    _levels = bot.get('levels', 7)
+    _qty = bot.get('qty_per_level', 10)
+    bot['inventory_limit'] = _levels * _qty
     save_state()
     bot_log('APEX_MM_EDIT', bot_id, {'changes': changes, 'applied_now': applied_now, 'status': status})
     print(f'🔧 APEX MM EDIT: {bot_id} — {changes} (applied_now={applied_now})')

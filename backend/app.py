@@ -7425,13 +7425,10 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             return
 
         # Calculate exit price: breakeven with profit target (half width)
+        # Post at the actual target — don't cap at bid. Being best bid is fine when exiting.
+        # Snap-to-profit in walk_exit handles snapping down if market improves.
         width = bot.get('start_gap', 4) * 2
         exit_price = max(1, min(98, 100 - avg_held - width // 2))
-        # Cap at live bid — don't post above what's available
-        _live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
-        if _live_exit_bid > 0:
-            exit_price = min(exit_price, _live_exit_bid)
-        exit_price = max(1, exit_price)
         exit_oid = bot.get(f'_{exit_side}_exit_oid')
         price_kwarg = {f'{exit_side}_price': exit_price}
 

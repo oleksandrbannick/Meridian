@@ -6549,23 +6549,29 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
         const targetPrice = bot._exit_target_price || exitPrice;
         const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
-        const combined = heldAvg + exitPrice;
+        // Live combined = what it costs if exit fills at current bid
+        const liveComb = (exitBid > 0) ? heldAvg + exitBid : heldAvg + exitPrice;
+        // Posted combined = what it costs if exit fills at posted price
+        const postedComb = heldAvg + exitPrice;
         const stopLoss = 100 + _apexStopLossThreshold(width, heldAvg);
         const targetCombined = heldAvg + targetPrice;
-        const profit = 100 - combined;
-        const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
-        // Zone bar: target → 100 (green) → SL (red)
+        const liveProfit = 100 - liveComb;
+        const liveProfitCol = liveProfit > 2 ? '#00ff88' : liveProfit > 0 ? '#ffaa00' : '#ff4444';
+        const postedProfit = 100 - postedComb;
+        const postedProfitCol = postedProfit > 2 ? '#00ff88' : postedProfit > 0 ? '#ffaa00' : '#ff4444';
+        // Zone bar: target → 100 (green) → SL (red) — use LIVE combined
         const barMin = targetCombined;
         const barMax = stopLoss;
         const barRange = barMax - barMin;
-        const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
+        const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((liveComb - barMin) / barRange * 100))) : 0;
         const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
         return `<div style="padding:6px;">
-            <div style="text-align:center;margin-bottom:6px;">
-                <span style="color:${profitCol};font-weight:800;font-size:18px;">${combined}c</span>
-                <span style="color:${profitCol};font-weight:700;font-size:11px;margin-left:4px;">${profit >= 0 ? '+' : ''}${profit}c</span>
+            <div style="text-align:center;margin-bottom:4px;">
+                <span style="color:${liveProfitCol};font-weight:800;font-size:18px;">${liveComb}c</span>
+                <span style="color:${liveProfitCol};font-weight:700;font-size:11px;margin-left:4px;">${liveProfit >= 0 ? '+' : ''}${liveProfit}c</span>
             </div>
-            <div style="color:#556;font-size:9px;text-align:center;margin-bottom:6px;">${heldAvg}c + ${exitPrice}c</div>
+            <div style="color:#556;font-size:9px;text-align:center;margin-bottom:2px;">${heldAvg}c + bid ${exitBid}c</div>
+            <div style="color:#334;font-size:8px;text-align:center;margin-bottom:6px;">posted <span style="color:${postedProfitCol};">${exitPrice}c</span> (${postedComb}c ${postedProfit >= 0 ? '+' : ''}${postedProfit}c)</div>
             <div style="height:5px;background:#0a1018;border-radius:3px;overflow:hidden;margin-bottom:2px;">
                 <div style="width:${fp}%;height:100%;background:${col};border-radius:3px;transition:width .3s;"></div>
             </div>
@@ -6574,15 +6580,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8815;"></div>
                 <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#ff444415;"></div>
                 <div style="position:absolute;left:${bePct}%;width:1px;height:100%;background:#ffaa00;z-index:2;"></div>
-                <div style="position:absolute;left:${combPct}%;width:5px;height:100%;background:${profitCol};border-radius:2px;z-index:3;transform:translateX(-2px);"></div>
+                <div style="position:absolute;left:${combPct}%;width:5px;height:100%;background:${liveProfitCol};border-radius:2px;z-index:3;transform:translateX(-2px);"></div>
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:7px;font-weight:700;">
                 <span style="color:#00ff88;">${targetCombined}c</span>
                 <span style="color:#ffaa00;">100c</span>
                 <span style="color:#ff4444;">${stopLoss}c</span>
-            </div>
-            <div style="text-align:center;margin-top:6px;">
-                <span style="color:#556;font-size:9px;">bid <strong style="color:${col};">${exitBid}c</strong> ask <strong>${exitAsk}c</strong></span>
             </div>
         </div>`;
     };

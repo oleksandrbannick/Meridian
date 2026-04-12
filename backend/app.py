@@ -7484,6 +7484,17 @@ def _apex_mm_cycle_reset(bot_id, bot):
         else:
             return
 
+    # Apply any deferred edits now that we're flat
+    _pending = bot.pop('_pending_edit', None)
+    if _pending:
+        for key, vals in _pending.items():
+            bot[key] = vals['new']
+            if key == 'qty_per_level':
+                bot['base_qty'] = vals['new']
+        bot['inventory_limit'] = bot.get('levels', 7) * bot.get('qty_per_level', 10)
+        print(f'🔧 APEX MM DEFERRED EDIT APPLIED: {bot_id} — {_pending}')
+        bot_log('APEX_MM_EDIT_APPLIED', bot_id, {'changes': _pending})
+
     base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
     # Clear side pauses so fresh ladder replaces ALL orders (resets fill_qty)
     bot['_yes_side_paused'] = False
@@ -17191,14 +17202,25 @@ def apex_mm_edit(bot_id):
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
     status = bot.get('status', '')
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    has_inventory = net_yes > 0 or net_no > 0
+    has_exit = bot.get('_yes_exit_oid') or bot.get('_no_exit_oid')
     applied_now = False
-    # If actively quoting and flat, pull and repost with new params
-    if status == 'market_making_active' and bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+    if has_inventory or has_exit or status == 'mm_exiting':
+        # Holding inventory or mid-hedge — defer changes until flat
+        bot['_pending_edit'] = changes
+        save_state()
+        bot_log('APEX_MM_EDIT_DEFERRED', bot_id, {'changes': changes, 'status': status, 'net_yes': net_yes, 'net_no': net_no})
+        print(f'🔧 APEX MM EDIT DEFERRED: {bot_id} — {changes} (holding inventory, will apply when flat)')
+        return jsonify({'ok': True, 'applied_now': False, 'deferred': True, 'changes': changes,
+                        'reason': f'Holding {net_yes} YES / {net_no} NO — changes will apply after current cycle completes'})
+    # Flat — apply immediately
+    if status == 'market_making_active':
         _apex_mm_pull_all(bot_id, bot, 'edit_repost')
-        # Recalculate levels and repost — monitor will handle on next tick
         applied_now = True
     elif status == 'mm_depth_pulled':
-        applied_now = True  # next repost will use new params
+        applied_now = True
     # Recalculate inventory limit
     if new_qty or new_gap:
         _levels = bot.get('levels', 7)

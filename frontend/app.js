@@ -6043,7 +6043,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const fd = bot._fav_depth || 0;
                     const tier = fd < 200 ? 'THIN' : fd < 500 ? 'MOD' : 'THICK';
                     const timerS = fd < 200 ? 10 : fd < 500 ? 15 : 30;
-                    const threshC = fd < 200 ? 98 : fd < 500 ? 96 : 95;
+                    const threshC = fd < 200 ? 98 : fd < 500 ? 99 : 100;
                     const elapsed = Math.max(0, Date.now()/1000 - bot.fav_posted_at);
                     const left = Math.max(0, timerS - elapsed);
                     const tierCol = tier === 'THIN' ? '#ff4444' : tier === 'MOD' ? '#ffaa00' : '#00ff88';

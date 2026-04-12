@@ -3887,10 +3887,11 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
 
 def _phantom_taker_depth_tier(fav_depth):
     """Thin book = taker exit (nobody taking). Thick book = patient (fills coming).
-    Returns (timer_seconds, combined_threshold). Depth is contracts at the fav bid level."""
-    if fav_depth < 200:    return (10, 98)   # THIN: taker at 10s, accept combined <= 98
-    elif fav_depth < 500:  return (15, 96)   # MODERATE: current-ish behavior
-    else:                  return (30, 95)   # THICK: 30s failsafe only, maker fills coming
+    Returns (timer_seconds, combined_threshold). Threshold = max combined you'll accept.
+    Higher threshold = willing to exit closer to breakeven (100¢)."""
+    if fav_depth < 200:    return (10, 98)    # THIN: exit fast, accept up to 2¢ loss
+    elif fav_depth < 500:  return (15, 99)    # MODERATE: more patience, exit before breakeven
+    else:                  return (30, 100)   # THICK: max patience, exit at breakeven if maker didn't fill
 
 
 def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):

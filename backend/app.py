@@ -11696,7 +11696,8 @@ def _handle_phantom(bot_id, bot, actions):
                 count=qty, price=new_dog_price
             )
             bot['dog_order_id'] = dog_resp['order']['order_id']
-            bot['_all_dog_order_ids'] = [bot['dog_order_id']]  # fresh start — old IDs no longer needed
+            # Keep old order IDs so WS can catch late fills on cancelled reposts
+            bot.setdefault('_all_dog_order_ids', []).append(bot['dog_order_id'])
             bot['dog_price'] = actual_price
             # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
             bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)

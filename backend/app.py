@@ -1857,16 +1857,16 @@ def _fetch_api_tennis_scoreboard(tour_filter):
     import datetime as _dt
     now = time.time()
 
+    # Compute dates upfront — needed for both fetch and tomorrow-prematch filter
+    _utc_today = _dt.datetime.utcnow().date()
+    _utc_yesterday = (_utc_today - _dt.timedelta(days=1)).isoformat()
+    _utc_tomorrow = (_utc_today + _dt.timedelta(days=1)).isoformat()
+    today = _utc_today.isoformat()
+
     # Cache: single fetch for both ATP+WTA, filter client-side
     if _api_tennis_cache['data'] and (now - _api_tennis_cache['ts']) < _API_TENNIS_TTL:
         all_matches = _api_tennis_cache['data']
     else:
-        # Use UTC dates — tennis matches in Europe start early UTC, server is US timezone
-        # Include tomorrow UTC to catch European matches dated ahead (e.g. Barcelona 15:30 CEST = Apr 13 in API Tennis but live on Apr 12 UTC evening)
-        _utc_today = _dt.datetime.utcnow().date()
-        _utc_yesterday = (_utc_today - _dt.timedelta(days=1)).isoformat()
-        _utc_tomorrow = (_utc_today + _dt.timedelta(days=1)).isoformat()
-        today = _utc_today.isoformat()
         try:
             # Fetch yesterday + today + tomorrow to catch timezone boundary matches
             url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={_utc_yesterday}&date_stop={_utc_tomorrow}&APIkey={_API_TENNIS_KEY}'

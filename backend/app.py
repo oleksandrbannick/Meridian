@@ -1837,10 +1837,13 @@ def _fetch_api_tennis_scoreboard(tour_filter):
     if _api_tennis_cache['data'] and (now - _api_tennis_cache['ts']) < _API_TENNIS_TTL:
         all_matches = _api_tennis_cache['data']
     else:
-        today = _dt.date.today().isoformat()
+        # Use UTC dates — tennis matches in Europe start early UTC, server is US timezone
+        _utc_today = _dt.datetime.utcnow().date()
+        _utc_yesterday = (_utc_today - _dt.timedelta(days=1)).isoformat()
+        today = _utc_today.isoformat()
         try:
-            # get_fixtures returns all matches (scheduled + live + finished)
-            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={today}&date_stop={today}&APIkey={_API_TENNIS_KEY}'
+            # Fetch today + yesterday to catch matches that started late yesterday UTC but are still live
+            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={_utc_yesterday}&date_stop={today}&APIkey={_API_TENNIS_KEY}'
             resp = requests.get(url, timeout=8)
             resp.raise_for_status()
             result = resp.json()

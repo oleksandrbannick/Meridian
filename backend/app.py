@@ -763,21 +763,34 @@ def get_markets():
                 seen.add(ticker)
                 unique_markets.append(m)
         
-        # Filter out stale/postponed markets (e.g. postponed games still technically 'open'
-        # but with expected_expiration_time far in the past and zero recent activity)
+        # Filter out stale/postponed markets
         now = datetime.now(timezone.utc)
+        today_str = now.strftime('%d%b%y').upper()  # e.g. "12APR26"
+        # Build today's date components for ticker matching
+        _today_day = int(now.strftime('%d'))
+        _today_mon = now.strftime('%b').upper()  # APR
+        _today_yr = now.strftime('%y')  # 26
+        _month_map = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
+        _today_ord = int(_today_yr) * 10000 + _month_map.get(_today_mon, 0) * 100 + _today_day
         before_filter = len(unique_markets)
         filtered_markets = []
         for m in unique_markets:
+            # Filter by ticker date — remove yesterday's unsettled markets
+            _ticker = m.get('event_ticker', m.get('ticker', ''))
+            import re as _re
+            _dm = _re.search(r'(\d{2})([A-Z]{3})(\d{2})', _ticker)
+            if _dm:
+                _yr, _mon, _day = _dm.group(1), _dm.group(2), _dm.group(3)
+                _ticker_ord = int(_yr) * 10000 + _month_map.get(_mon, 0) * 100 + int(_day)
+                if _ticker_ord < _today_ord:
+                    continue  # yesterday or older — skip
             exp_str = m.get('expected_expiration_time', '')
             if exp_str:
                 try:
                     exp_time = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
                     days_past = (now - exp_time).days
-                    # If expected expiration was > 30 days ago, always skip (clearly stale)
                     if days_past > 30:
                         continue
-                    # If expected expiration was > 7 days ago AND no recent volume, skip
                     vol_24 = m.get('volume_24h', 0) or m.get('volume_24h_fp', '0')
                     liq = m.get('liquidity', 0) or m.get('liquidity_dollars', '0')
                     if days_past > 7 and float(vol_24) == 0 and float(liq) == 0:

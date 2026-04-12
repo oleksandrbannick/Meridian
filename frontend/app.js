@@ -6355,9 +6355,19 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const netHeld = Math.abs(netYes - netNo);
         const avgCost = netYes > netNo ? avgYesCost : avgNoCost;
         const invPct = invLimit > 0 ? Math.min(100, Math.round(netHeld / invLimit * 100)) : 0;
-        const combined = avgCost + exitPrice;
+        // LIVE combined = what it costs to exit RIGHT NOW at market (same calc as stop-loss)
+        const exitAskLive = exitSide === 'YES' ? liveYesAsk : liveNoAsk;
+        const heldBidLive = longSide === 'YES' ? liveYesBid : liveNoBid;
+        const liveBuyOpp = (exitAskLive > 0) ? avgCost + exitAskLive : 999;
+        const liveSellHeld = (heldBidLive > 0) ? avgCost + (100 - heldBidLive) : 999;
+        const liveCombined = Math.min(liveBuyOpp, liveSellHeld);
+        // Target combined = what we get IF hedge fills at posted price
+        const targetCombined = avgCost + exitPrice;
+        // Show live as primary (what matters for risk), target as secondary
+        const combined = (liveCombined < 999 && exitPrice > 0) ? liveCombined : targetCombined;
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
+        const targetProfit = 100 - targetCombined;
         const stopLoss = 100 + width;
         const slDist = stopLoss - combined;
         const exitPostedAt = bot._exit_posted_at || 0;
@@ -6405,12 +6415,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#556;font-size:10px;">avg ${avgCost}c</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
-                    ${exitPrice > 0 ? `<span style="color:${profitCol};font-weight:800;font-size:14px;">${profit >= 0 ? '+' : ''}${profit}c</span>` : ''}
+                    ${exitPrice > 0 ? `<span style="color:${profitCol};font-weight:800;font-size:14px;">${profit >= 0 ? '+' : ''}${profit}c now</span>` : ''}
+                    ${exitPrice > 0 && targetProfit !== profit ? `<span style="color:#00d4ff;font-size:10px;">(+${targetProfit}c if fills)</span>` : ''}
                     ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
                 </div>
             </div>
             ${exitPrice > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;color:#556;">
-                <span>entry ${avgCost}c + hedge ${exitPrice}c = <strong style="color:${profitCol};">${combined}c</strong></span>
+                <span>LIVE: <strong style="color:${profitCol};">${combined}c</strong> (${profit >= 0 ? '+' : ''}${profit}c)${targetCombined !== combined ? ` · target: <strong style="color:${targetProfit > 0 ? '#00ff88' : '#ffaa00'};">${targetCombined}c</strong> (+${targetProfit}c)` : ''}</span>
                 <span>SL ${stopLoss}c</span>
             </div>` : ''}
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;">

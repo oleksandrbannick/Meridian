@@ -7442,62 +7442,23 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 pass
         bot[f'_{side}_exit_oid'] = None
 
-    # Cancel remaining entry orders — check each for fills before clearing
-    # LOCK: acquire ws_fill_lock to prevent WS handler from double-counting the same fills
-    _late_fills = 0
+    # Cancel remaining entry orders — clear OIDs under lock so WS handler
+    # falls through to late-fill path (which has proper dedup via _counted_order_fills).
+    # DO NOT add fills to inventory here — the exit may have already sold those contracts,
+    # and re-adding them creates phantom inventory that doesn't exist on Kalshi.
     for side_key in ('yes_orders', 'no_orders'):
-        _side = 'yes' if side_key == 'yes_orders' else 'no'
         for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
             if not oid:
                 continue
-            _cr = _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
-            if isinstance(_cr, tuple) and _cr[0] == 'filled':
-                _kalshi_fills = _cr[1]
-                # Lock to prevent WS handler from racing on the same fills
-                with ws_fill_lock:
-                    _ws_already = max(level.get('fill_qty', 0),
-                                      bot.get('_counted_order_fills', {}).get(oid, 0))
-                    _new_fills = max(0, _kalshi_fills - _ws_already)
-                    if _new_fills > 0:
-                        _price = int(price_str)
-                        _late_fills += _new_fills
-                        bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
-                        bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
-                        _net = bot[f'net_{_side}']
-                        bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
-                        # Mark as counted so WS handler won't re-add
-                        level['fill_qty'] = _kalshi_fills
-                        bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
-                        print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already} net_{_side}={_net})')
-                        bot_log('APEX_MM_CYCLE_RESET_LATE_FILL', bot_id, {
-                            'side': _side, 'fills': _kalshi_fills, 'new_fills': _new_fills,
-                            'price': _price, 'net': _net, 'ws_already': _ws_already,
-                        }, level='WARN')
-                    elif _kalshi_fills > 0:
-                        # Ensure counted_order_fills is up to date even when WS already counted
-                        bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
-                        print(f'✅ CYCLE RESET: {bot_id} {_side.upper()} order had {_kalshi_fills} fills — already counted by WS (fill_qty={_ws_already})')
-                    # Clear OID under lock so WS handler can't match it after we've counted
-                    level['oid'] = None
-            else:
+            _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
+            with ws_fill_lock:
+                # Mark fills as counted so WS late-fill path won't re-add
+                _kalshi_fills = level.get('fill_qty', 0)
+                if oid and _kalshi_fills > 0:
+                    bot.setdefault('_counted_order_fills', {})[oid] = max(
+                        _kalshi_fills, bot.get('_counted_order_fills', {}).get(oid, 0))
                 level['oid'] = None
-
-    # If late fills found, we're NOT flat — don't reset, let exit system handle
-    if _late_fills > 0:
-        print(f'🚨 CYCLE RESET ABORTED: {bot_id} {_late_fills} late fills during cancel — not flat')
-        bot['_skew_active'] = True
-        net_y = bot.get('net_yes', 0)
-        net_n = bot.get('net_no', 0)
-        if net_y > net_n:
-            bot['_skew_direction'] = 'exit_no'
-        elif net_n > net_y:
-            bot['_skew_direction'] = 'exit_yes'
-        # Trigger exit amend for the late fills
-        _fill_side = 'yes' if bot.get('net_yes', 0) > bot.get('net_no', 0) else 'no'
-        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
-        save_state()
-        return
 
     # Final flat check — WS may have delivered late fills during cancel
     _post_cancel_yes = bot.get('net_yes', 0)

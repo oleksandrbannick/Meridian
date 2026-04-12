@@ -9320,18 +9320,20 @@ def execute_maker_sell(ticker, side, count, reason='maker_exit'):
     """Post a maker sell at ask price. Returns (order_id, ask_price) or (None, 0).
     MAKER ONLY — never crosses the spread. If no ask available, returns None."""
     try:
-        api_read_limiter.wait()
-        ob = kalshi_client.get_market_orderbook(ticker)
-        ask = _best_ask(ob, side)
+        # Use WS cache FIRST for live ask — orderbook endpoint can be stale
+        ask = 0
+        ws_p = ws_manager.get_price(ticker) if ws_manager else None
+        if ws_p:
+            ask = ws_p.get(f'{side}_ask', 0)
+            if ask <= 0:
+                opp = 'no' if side == 'yes' else 'yes'
+                opp_bid = ws_p.get(f'{opp}_bid', 0)
+                ask = (100 - opp_bid) if opp_bid > 0 else 0
         if ask <= 0:
-            # Try WS cache
-            ws_p = ws_manager.get_price(ticker) if ws_manager else None
-            if ws_p:
-                ask = ws_p.get(f'{side}_ask', 0)
-                if ask <= 0:
-                    opp = 'no' if side == 'yes' else 'yes'
-                    opp_bid = ws_p.get(f'{opp}_bid', 0)
-                    ask = (100 - opp_bid) if opp_bid > 0 else 0
+            # Fallback to orderbook
+            api_read_limiter.wait()
+            ob = kalshi_client.get_market_orderbook(ticker)
+            ask = _best_ask(ob, side)
         if ask <= 0:
             print(f'⚠ execute_maker_sell({reason}): no ask for {side} on {ticker} — skipping')
             return None, 0
@@ -11159,6 +11161,45 @@ def _handle_phantom(bot_id, bot, actions):
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return
+                # Market closed + game over = hedge won't fill, transition to awaiting settlement
+                if mkt_status == 'closed':
+                    _sc = _get_game_score_for_ticker(ticker)
+                    _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
+                    _yb = bot.get('live_yes_bid', 0)
+                    _nb = bot.get('live_no_bid', 0)
+                    if _game_over or _sc_done or (_yb <= 0 and _nb <= 0):
+                        # Cancel unfilled fav
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(fav_order_id)
+                        except Exception:
+                            pass
+                        # Store info for P&L calc when market settles
+                        bot['_needs_settlement_pnl'] = True
+                        bot['_settlement_dog_price'] = bot['dog_price']
+                        bot['_settlement_dog_side'] = dog_side
+                        bot['_settlement_fav_fills'] = bot.get('fav_fill_qty', 0)
+                        bot['_settlement_fav_price'] = bot.get('fav_price', 0)
+                        bot['_settlement_qty'] = qty
+                        # Set awaiting qty for UI display
+                        _dog_qty = qty
+                        if dog_side == 'yes':
+                            bot['awaiting_qty_yes'] = _dog_qty
+                            bot['awaiting_qty_no'] = 0
+                        else:
+                            bot['awaiting_qty_yes'] = 0
+                            bot['awaiting_qty_no'] = _dog_qty
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        bot['_death_zone_stopped'] = True
+                        print(f'⏳ PHANTOM → AWAITING SETTLEMENT: {bot_id} game over + market closed, fav {bot.get("fav_fill_qty", 0)}/{qty} filled')
+                        bot_log('PHANTOM_GAME_OVER_AWAITING', bot_id, {
+                            'mkt_status': mkt_status, 'dog_price': bot['dog_price'],
+                            'fav_fill_qty': bot.get('fav_fill_qty', 0), 'qty': qty,
+                        })
+                        save_state()
+                        actions.append({'bot_id': bot_id, 'action': 'phantom_awaiting_settlement'})
+                        return
             except Exception as _settle_err:
                 bot_log('PHANTOM_SETTLE_CHECK_ERR', bot_id, {'error': str(_settle_err)[:200]}, level='WARN')
 
@@ -12729,19 +12770,19 @@ def _run_monitor():
                 # Still resting — follow ask down every 3s, walk toward bid if stale >30s
                 if (time.time() - _sv.get('_last_amend', 0)) > 3:
                     _sv['_last_amend'] = time.time()
-                    api_read_limiter.wait()
-                    _s_ob = kalshi_client.get_market_orderbook(_s_ticker)
-                    _s_ask = _best_ask(_s_ob, _s_side)
-                    # Also get bid for walk-down
-                    _opp_side = 'no' if _s_side == 'yes' else 'yes'
-                    _s_bid = _best_bid(_s_ob, _s_side) if callable(globals().get('_best_bid', None)) else 0
-                    if _s_bid <= 0:
-                        _opp_ask_raw = _s_ob.get(f'{_opp_side}', {})
-                        _opp_bids = _opp_ask_raw if isinstance(_opp_ask_raw, dict) else {}
-                        # bid for our side = 100 - opp ask
-                        _ws_p = ws_manager.get_price(_s_ticker) if ws_manager else None
-                        if _ws_p:
-                            _s_bid = _ws_p.get(f'{_s_side}_bid', 0)
+                    # Use WS for live prices first, orderbook as fallback
+                    _ws_p = ws_manager.get_price(_s_ticker) if ws_manager else None
+                    _s_ask = 0
+                    _s_bid = 0
+                    if _ws_p:
+                        _s_ask = _ws_p.get(f'{_s_side}_ask', 0)
+                        _s_bid = _ws_p.get(f'{_s_side}_bid', 0)
+                    if _s_ask <= 0:
+                        api_read_limiter.wait()
+                        _s_ob = kalshi_client.get_market_orderbook(_s_ticker)
+                        _s_ask = _best_ask(_s_ob, _s_side)
+                        if _s_bid <= 0:
+                            _s_bid = _best_bid(_s_ob, _s_side) if callable(globals().get('_best_bid', None)) else 0
                     _new_price = _sv['posted_price']
                     if _s_ask > 0 and _s_ask < _sv['posted_price']:
                         # Ask dropped below us — follow down

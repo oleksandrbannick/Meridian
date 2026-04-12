@@ -12889,16 +12889,12 @@ def _run_monitor():
                             _s_bid = _best_bid(_s_ob, _s_side) if callable(globals().get('_best_bid', None)) else 0
                     _new_price = _sv['posted_price']
                     if _s_ask > 0 and _s_ask < _sv['posted_price']:
-                        # Ask dropped below us — follow down
+                        # Ask dropped below us — follow down instantly
                         _new_price = _s_ask
-                    elif _s_bid > 0 and _sv['posted_price'] < _s_bid and (time.time() - _sv.get('_last_walk_up', 0)) >= 30:
-                        # Posted below bid — walk up +1c every 30s to become best bid
-                        # Cap at bid (never hit ask)
-                        _new_price = min(_sv['posted_price'] + 1, _s_bid)
-                        _sv['_last_walk_up'] = time.time()
-                    elif _s_age > 30 and _s_bid > 0 and _sv['posted_price'] > _s_bid + 1:
-                        # Stale >30s — walk 1c toward bid every 10s
-                        _new_price = _sv['posted_price'] - 1
+                    elif _s_age > 30 and _s_bid > 0 and _sv['posted_price'] > _s_bid + 1 and (time.time() - _sv.get('_last_walk_down', 0)) >= 30:
+                        # Stale >30s — walk -1c toward bid every 30s (never below bid)
+                        _new_price = max(_sv['posted_price'] - 1, _s_bid + 1)
+                        _sv['_last_walk_down'] = time.time()
                     if _new_price != _sv['posted_price'] and _new_price > 0:
                         try:
                             _amend_kw = {f'{_s_side}_price': _new_price}

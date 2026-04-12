@@ -6485,8 +6485,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Status label — based on combined price zones
         let statusLabel = '';
         if (combined >= stopLoss) statusLabel = `<span style="color:#ff4444;font-weight:700;">⚠ STOP LOSS</span>`;
-        else if (combined > 100) statusLabel = `<span style="color:#ff4444;font-weight:700;">LOSS ${combined - 100}¢</span>`;
-        else if (combined === 100) statusLabel = `<span style="color:#ffaa00;font-weight:700;">BREAKEVEN</span>`;
+        else if (combined >= 100) statusLabel = `<span style="color:#ff4444;font-weight:700;">SL ZONE -${combined - 100}¢</span>`;
         else if (combined >= 98) statusLabel = `<span style="color:#ffaa00;font-weight:700;">THIN +${100 - combined}¢</span>`;
         else if (walkCount > 0) statusLabel = `<span style="color:#ffaa00;font-weight:700;">WALKING</span>`;
         else if (combined <= targetCombined) statusLabel = `<span style="color:#00ff88;">at target</span>`;

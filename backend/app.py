@@ -7568,6 +7568,16 @@ def _apex_mm_cycle_reset(bot_id, bot):
     bot['_exit_fill_qty'] = 0
     bot['_exit_total_qty'] = 0
     bot['_last_pull_reason'] = ''
+    # Prune old order IDs — only keep current cycle's orders
+    # This prevents the late-fill path from re-adding fills from old cycles
+    _current_oids = set()
+    for _side_key in ('yes_orders', 'no_orders'):
+        for _lvl in bot.get(_side_key, {}).values():
+            _oid = _lvl.get('oid')
+            if _oid:
+                _current_oids.add(_oid)
+    bot['_all_placed_order_ids'] = list(_current_oids)
+    bot['_counted_order_fills'] = {}
     save_state()
     bot_log('APEX_MM_CYCLE_RESET', bot_id, {'midpoint': midpoint})
     print(f'📊 APEX MM CYCLE RESET: {bot_id} flat → fresh ladder @ mid={midpoint}')

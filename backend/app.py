@@ -2879,7 +2879,7 @@ class RateLimiter:
             return False
 
 api_rate_limiter = RateLimiter(burst=30)  # Kalshi advanced tier: 30 writes/s
-api_read_limiter = RateLimiter(burst=40)  # Kalshi advanced tier: 40 reads/s
+api_read_limiter = RateLimiter(burst=30)  # Kalshi advanced tier: 30 reads/s
 
 # ── 429 Rate Limit Tracking (read / write / hedge split) ──
 _rate_limit_hits = 0

@@ -10197,8 +10197,25 @@ def _handle_phantom(bot_id, bot, actions):
                 if bot.get('auto_depth'):
                     _ppi_now, _ppi_rec, _ppi_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
                     if _ppi_now is not None:
-                        _last_ppi = bot.get('_last_ppi', _ppi_now)
-                        if abs(_ppi_now - _last_ppi) >= 5:  # hysteresis
+                        _last_ppi = bot.get('_last_ppi')
+                        if _last_ppi is None:
+                            # First check (or after restart) — initialize and apply immediately
+                            bot['_last_ppi'] = _ppi_now
+                            if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                                print(f'📊 AUTO DEPTH INIT: {bot_id} PPI={_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
+                                bot['anchor_depth'] = _ppi_rec
+                                anchor_depth = _ppi_rec
+                            elif _ppi_rec == 0:
+                                print(f'⚠ AUTO DEPTH PULL (init): {bot_id} PPI={_ppi_now} < 35 — pulling dog')
+                                if dog_order_id:
+                                    _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
+                                    bot['dog_order_id'] = None
+                                bot['_price_floor_pulled'] = True
+                                bot['_ppi_pulled'] = True
+                                bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
+                                save_state()
+                                return
+                        elif abs(_ppi_now - _last_ppi) >= 5:  # hysteresis
                             bot['_last_ppi'] = _ppi_now
                             if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
                                 print(f'📊 AUTO DEPTH ADJUST: {bot_id} PPI {_last_ppi}→{_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
@@ -11165,12 +11182,18 @@ def _handle_phantom(bot_id, bot, actions):
                 _fav_ob = ob
                 _current_fav_bid = _best_bid(_fav_ob, fav_side)
             anchor_depth = bot.get('anchor_depth', 5)
-            # Auto-depth: recalculate PPI on each repeat (5pt hysteresis)
+            # Auto-depth: recalculate PPI on each repeat
             if bot.get('auto_depth'):
                 _ppi_now, _ppi_rec, _ppi_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
                 if _ppi_now is not None:
-                    _last_ppi = bot.get('_last_ppi', _ppi_now)
-                    if abs(_ppi_now - _last_ppi) >= 5:
+                    _last_ppi = bot.get('_last_ppi')
+                    if _last_ppi is None:
+                        bot['_last_ppi'] = _ppi_now
+                        if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                            print(f'📊 AUTO DEPTH INIT (repeat): {bot_id} PPI={_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
+                            bot['anchor_depth'] = _ppi_rec
+                            anchor_depth = _ppi_rec
+                    elif abs(_ppi_now - _last_ppi) >= 5:
                         bot['_last_ppi'] = _ppi_now
                         if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
                             print(f'📊 AUTO DEPTH ADJUST (repeat): {bot_id} PPI {_last_ppi}→{_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')

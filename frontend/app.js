@@ -6411,9 +6411,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         if (exitPrice > 0) {
             const barMin = origTargetCombined;
             const barMax = stopLoss;
-            const barRange = barMax - barMin;
-            const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
-            const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
+            // 100c is always at 50% — left half = profit zone, right half = loss zone
+            const leftRange = 100 - barMin;  // target to 100c
+            const rightRange = barMax - 100;  // 100c to stop loss
+            const combPct = combined <= 100
+                ? Math.max(0, Math.min(50, leftRange > 0 ? Math.round((combined - barMin) / leftRange * 50) : 0))
+                : Math.min(100, 50 + (rightRange > 0 ? Math.round((combined - 100) / rightRange * 50) : 0));
             // Marker for where exit price currently is (vs where it was originally)
             const exitCombNow = avgCost + exitPrice;
             const exitPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((exitCombNow - barMin) / barRange * 100))) : 0;
@@ -6427,9 +6430,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#556;font-size:8px;">${origTargetCombined}c → ${stopLoss}c</span>
                 </div>
                 <div style="position:relative;height:8px;background:#0a1018;border-radius:4px;overflow:hidden;">
-                    <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
-                    <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
-                    <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
+                    <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
+                    <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
+                    <div style="position:absolute;left:50%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
                     <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
                 </div>
                 <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">

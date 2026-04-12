@@ -4376,7 +4376,9 @@ function updateAnchorPreview() {
             const _ppiTierCol = _ppiScore >= 90 ? '#00ff88' : _ppiScore >= 75 ? '#00ccff' : _ppiScore >= 55 ? '#ffaa00' : _ppiScore >= 35 ? '#ff8800' : '#ff4444';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span> ` +
-                `<span style="color:#ff66aa;font-weight:700;">→ ${recDepth}¢${recDepth > 0 ? '' : ' PULL'}</span>${thinWarn}${depthWarnTxt}` +
+                `<span style="color:#ff66aa;font-weight:700;">→ ${recDepth}¢${recDepth > 0 ? '' : ' PULL'}</span>` +
+                (recNote ? ` <span style="color:#8892a6;font-size:9px;">${recNote}</span>` : '') +
+                `${thinWarn}${depthWarnTxt}` +
                 (dd > 0 ? `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
                 `dog ${dd.toLocaleString()} @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
                 `</div>` : '') +

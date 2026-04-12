@@ -7591,6 +7591,34 @@ def _apex_mm_cycle_reset(bot_id, bot):
         save_state()
         return
 
+    # FINAL SAFETY: verify against Kalshi position before reposting
+    # WS fills can arrive after all our checks — trust Kalshi as source of truth
+    try:
+        api_read_limiter.wait()
+        _vpos = kalshi_client.get_positions()
+        _vlist = _vpos.get('market_positions', [])
+        _kalshi_pos = 0
+        for _vp in _vlist:
+            if _vp.get('ticker') == ticker:
+                _kalshi_pos = int(float(_vp.get('position_fp', '0')))
+                break
+        if _kalshi_pos != 0:
+            # Kalshi says we're holding — sync bot state and abort
+            if _kalshi_pos > 0:
+                bot['net_yes'] = abs(_kalshi_pos)
+                bot['net_no'] = 0
+            else:
+                bot['net_no'] = abs(_kalshi_pos)
+                bot['net_yes'] = 0
+            print(f'🚨 CYCLE RESET ABORTED (kalshi check): {bot_id} kalshi_pos={_kalshi_pos} — not actually flat')
+            bot_log('APEX_MM_CYCLE_KALSHI_ABORT', bot_id, {'kalshi_pos': _kalshi_pos})
+            _fill_side = 'yes' if _kalshi_pos > 0 else 'no'
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+            save_state()
+            return
+    except Exception as _ve:
+        print(f'⚠ Cycle reset Kalshi verify failed: {_ve}')
+
     # Fresh symmetric ladder
     midpoint = _apex_mm_midpoint(ticker)
     if midpoint is None:

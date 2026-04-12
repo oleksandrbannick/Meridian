@@ -7175,7 +7175,7 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             bot['_exit_side'] = exit_side
             bot['_exit_held_side'] = held_side
             bot['_exit_avg_cost'] = avg_held
-            bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - 4))  # original target before walk
+            bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - width // 2))  # original target before walk
             # Only set posted_at on FIRST exit creation — amends shouldn't restart patience timer
             if not exit_oid:
                 bot['_exit_fill_qty'] = 0

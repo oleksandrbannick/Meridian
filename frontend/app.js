@@ -1173,14 +1173,12 @@ function isKalshiLive(market) {
 
     const ticker = market.event_ticker || market.ticker || '';
 
-    // ── Tennis: Use Kalshi milestone_status (authoritative) ──
+    // ── Tennis: Use Kalshi milestone_status (authoritative) when available ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
-    if (isTennis) {
-        // milestone_status is injected by backend from milestones cache
-        // Tennis has batch expirations so expiration-based detection doesn't work
-        if (market.milestone_status) return market.milestone_status === 'live';
-        return false;
+    if (isTennis && market.milestone_status) {
+        return market.milestone_status === 'live';
     }
+    // If no milestone_status for tennis, fall through to expiration-based detection
 
     const expStr = market.expected_expiration_time;
     if (!expStr) return false;
@@ -3999,10 +3997,9 @@ function setAutoDepth() {
     if (displayEl) displayEl.textContent = 'AUTO';
     document.querySelectorAll('#depth-floor-buttons .depth-btn').forEach(btn => {
         const isAuto = btn.getAttribute('data-depth') === 'auto';
-        btn.style.background = isAuto ? 'radial-gradient(circle,#ffaa0020,#ffaa0008)' : '#0a0e1a';
-        btn.style.borderColor = isAuto ? '#ffaa00' : '#1e274066';
-        btn.style.color = isAuto ? '#ffaa00' : '#556';
-        btn.style.boxShadow = isAuto ? '0 0 10px #ffaa0030' : 'none';
+        btn.style.background = isAuto ? 'rgba(100,255,218,0.15)' : 'transparent';
+        btn.style.color = isAuto ? '#64ffda' : '#5a6484';
+        btn.style.boxShadow = isAuto ? 'inset 0 -2px 0 #64ffda' : 'none';
     });
     if (typeof initAnchorDogPrices === 'function') initAnchorDogPrices();
 }
@@ -4012,13 +4009,16 @@ function setDepthFloor(value) {
     const hiddenInput = document.getElementById('anchor-depth');
     if (hiddenInput) hiddenInput.value = value;
     document.querySelectorAll('#depth-floor-buttons .depth-btn').forEach(btn => {
-        const btnDepth = btn.getAttribute('data-depth');
-        const isAuto = btnDepth === 'auto';
-        const isSelected = !isAuto && parseInt(btnDepth) === value;
-        btn.style.background = isSelected ? 'radial-gradient(circle,#ff66aa20,#ff66aa08)' : '#0a0e1a';
-        btn.style.borderColor = isSelected ? '#ff66aa' : '#1e274066';
-        btn.style.color = isSelected ? '#ff66aa' : '#556';
-        btn.style.boxShadow = isSelected ? '0 0 10px #ff66aa30' : 'none';
+        const btnDepth = parseInt(btn.getAttribute('data-depth'));
+        if (btnDepth === value) {
+            btn.style.background = 'rgba(255,102,170,0.15)';
+            btn.style.color = '#ff66aa';
+            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
+        } else {
+            btn.style.background = 'transparent';
+            btn.style.color = '#5a6484';
+            btn.style.boxShadow = 'none';
+        }
     });
     const display = document.getElementById('anchor-depth-display');
     if (display) display.textContent = `${value}¢`;
@@ -13860,7 +13860,7 @@ async function loadPositions() {
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px 12px;font-size:12px;color:#8892a6;">
                     <div>Qty: <strong style="color:#fff;">${pos.quantity}</strong></div>
                     <div>Entry: <strong style="color:#fff;">${avgEntry}¢</strong></div>
-                    <div>Bid: <strong style="color:${sideColor};">${bid}¢</strong> · Ask: <strong style="color:#8892a6;">${ask}¢</strong></div>
+                    <div>Bid: <strong style="color:${sideColor};">${bid}¢</strong> · Ask: <strong style="color:${sideColor};">${ask}¢</strong></div>
                     <div>P&L: <strong style="color:${unrealizedColor};">${unrealized >= 0 ? '+' : ''}${unrealized}¢/ea</strong></div>
                     <div>Total: <strong style="color:${unrealizedColor};">${unrealizedTotal >= 0 ? '+' : ''}${unrealizedTotal}¢</strong></div>
                     <div>Realized: <strong style="color:${pnlColor};">$${realizedPnl}</strong></div>

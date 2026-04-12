@@ -11640,6 +11640,66 @@ def _handle_phantom(bot_id, bot, actions):
                         bot['live_hedge_no_ask'] = _ws_h.get('no_ask', 0)
         except Exception:
             pass
+
+        # ── Phantom settlement P&L: game-over → awaiting → market settles → P&L + complete ──
+        if bot.get('_needs_settlement_pnl'):
+            if now - bot.get('_last_settlement_check', 0) < 10:
+                return
+            bot['_last_settlement_check'] = now
+            try:
+                api_read_limiter.wait()
+                _mkt_resp = kalshi_client.get_market(ticker)
+                _mkt = _mkt_resp.get('market', _mkt_resp) if isinstance(_mkt_resp, dict) else {}
+                _mkt_st = _mkt.get('status', '').lower()
+                _mkt_res = _mkt.get('result', '').lower()
+                if _mkt_st in ('settled', 'finalized') or _mkt_res:
+                    _s_dog_price = bot.get('_settlement_dog_price', bot.get('dog_price', 0))
+                    _s_dog_side = bot.get('_settlement_dog_side', bot.get('dog_side', 'no'))
+                    _s_qty = bot.get('_settlement_qty', bot.get('quantity', 0))
+                    _settle_result = _mkt_res or ('yes' if _mkt_st == 'settled' else '')
+                    dog_won = (_s_dog_side == 'yes' and _settle_result == 'yes') or \
+                              (_s_dog_side == 'no' and _settle_result == 'no')
+                    _fav_filled = bot.get('_settlement_fav_fills', 0)
+                    _fav_pr = bot.get('_settlement_fav_price', 0)
+                    if _fav_filled > 0 and _fav_pr > 0:
+                        _hedged_pnl = (100 - _s_dog_price - _fav_pr) * _fav_filled
+                        _unhedged_qty = _s_qty - _fav_filled
+                        _unhedged_pnl = ((100 - _s_dog_price) * _unhedged_qty) if dog_won else (-(_s_dog_price * _unhedged_qty))
+                        profit = _hedged_pnl + _unhedged_pnl
+                    else:
+                        profit = ((100 - _s_dog_price) * _s_qty) if dog_won else (-(_s_dog_price * _s_qty))
+                    if profit >= 0:
+                        session_pnl['gross_profit_cents'] += profit
+                    else:
+                        session_pnl['gross_loss_cents'] += abs(profit)
+                    bot['_trade_recorded'] = True
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker,
+                        'yes_price': _s_dog_price if _s_dog_side == 'yes' else 0,
+                        'no_price': _s_dog_price if _s_dog_side == 'no' else 0,
+                        'quantity': _s_qty,
+                        'profit_cents': max(0, profit), 'loss_cents': max(0, -profit),
+                        'result': f'settled_{"win" if dog_won else "loss"}_{_settle_result}',
+                        'exit_via': 'phantom_settlement',
+                        'timestamp': now, 'placed_at': bot.get('created_at', now),
+                        'fill_source': 'anchor_dog', 'bot_category': 'anchor_dog',
+                        'fav_partial_fills': _fav_filled,
+                        'game_phase': 'settled',
+                    }, bot)
+                    print(f'🏁 PHANTOM SETTLED: {bot_id} fav {"partial " + str(_fav_filled) + "/" + str(_s_qty) if _fav_filled else "unfilled"}, market={_settle_result} → {"WIN" if dog_won else "LOSS"} {profit}¢')
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
+                    bot['_market_settled_at'] = now
+                    bot['_smart_stopped'] = True
+                    bot['_smart_stop_reason'] = 'final'
+                    bot['_needs_settlement_pnl'] = False
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
+                    return
+            except Exception as _se:
+                bot_log('PHANTOM_SETTLE_AWAIT_ERR', bot_id, {'error': str(_se)[:200]}, level='WARN')
+            return
+
         # Check positions every 60s — when both clear, mark completed
         if now - bot.get('_last_settlement_check', 0) < 60:
             return

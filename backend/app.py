@@ -7497,6 +7497,8 @@ def _apex_mm_cycle_reset(bot_id, bot):
     bot['_exit_walk_count'] = 0
     bot['_exit_walk_started'] = 0
     bot['_exit_posted_at'] = 0
+    bot['_exit_fill_qty'] = 0
+    bot['_exit_total_qty'] = 0
     bot['_last_pull_reason'] = ''
     save_state()
     bot_log('APEX_MM_CYCLE_RESET', bot_id, {'midpoint': midpoint})
@@ -7601,6 +7603,9 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
         bot['_exit_reason'] = reason
         bot['_exit_started_at'] = time.time()
         bot['_exit_sell_oids'] = {}
+        # Clear stale entry orders so the card only shows current state
+        bot['yes_orders'] = {}
+        bot['no_orders'] = {}
 
         ticker = bot['ticker']
         for side, net_qty, avg_cost in [('yes', net_yes, bot.get('avg_yes_cost', 0)), ('no', net_no, bot.get('avg_no_cost', 0))]:

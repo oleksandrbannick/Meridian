@@ -9069,10 +9069,10 @@ async function apexMmModify(botId) {
         : status === 'mm_depth_pulled'
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
-    const _widths = [4, 6, 8, 10, 12];
+    const _widths = [4, 5, 6, 7, 8, 10, 12];
     const _rungs = [3, 5, 7, 10];
-    const _wBtnStyle = (active) => `width:38px;height:38px;border-radius:50%;background:${active ? 'radial-gradient(circle,#ff704320,#ff704308)' : '#0a0e1a'};border:2px solid ${active ? '#ff7043' : '#1e274066'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #ff704330' : 'none'};`;
-    const _rBtnStyle = (active) => `width:38px;height:38px;border-radius:50%;background:${active ? 'radial-gradient(circle,#00d4ff20,#00d4ff08)' : '#0a0e1a'};border:2px solid ${active ? '#00d4ff' : '#1e274066'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #00d4ff30' : 'none'};`;
+    const _wBtnStyle = (active) => `width:42px;height:42px;border-radius:50%;background:${active ? 'radial-gradient(circle,#ff704320,#ff704308)' : '#0a0e1a'};border:2px solid ${active ? '#ff7043' : '#1e274066'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #ff704330' : 'none'};`;
+    const _rBtnStyle = (active) => `width:42px;height:42px;border-radius:50%;background:${active ? 'radial-gradient(circle,#00d4ff20,#00d4ff08)' : '#0a0e1a'};border:2px solid ${active ? '#00d4ff' : '#1e274066'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #00d4ff30' : 'none'};`;
     const html = `
         <div style="background:#0f1419;border:1px solid #ff704330;border-radius:14px;padding:20px;max-width:320px;position:relative;overflow:hidden;">
             <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#00d4ff,#ff7043);opacity:0.6;"></div>

@@ -12780,15 +12780,15 @@ def _handle_apex(bot_id, bot, actions):
             _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width})')
             return
 
-    # 0.5. Active drift guard — pull ladder if market drifts past 25/75 boundary
+    # 0.5. Active drift guard — pull ladder if market is decided (one side > 90c)
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-    if _active_max_bid >= 75:
+    if _active_max_bid >= 90:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)
         if net_yes > 0 or net_no > 0:
-            _apex_mm_begin_exit(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 75c)')
+            _apex_mm_begin_exit(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 90c)')
         else:
-            _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 75c)')
+            _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 90c)')
         print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulling/exiting')
         return
 

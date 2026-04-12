@@ -7619,6 +7619,11 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
                     print(f'🚨 APEX MM BEGIN EXIT LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c (kalshi={_kalshi_fills} ws_had={_ws_already})')
             level['oid'] = None
 
+    # Prune _all_placed_order_ids — prevent WS late fills from adding phantom inventory during exit
+    # All orders cancelled above; any fills during cancel were caught and counted
+    bot['_all_placed_order_ids'] = []
+    bot['_counted_order_fills'] = {}
+
     # Re-read inventory AFTER cancels — WS handler may have updated during cancel
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
@@ -7925,6 +7930,64 @@ def _apex_mm_exit_tick(bot_id, bot):
                 'consecutive_losses': bot.get('consecutive_losses', 0),
             })
             print(f'✅ APEX MM DONE: {bot_id} all exits filled, pnl={bot.get("realized_pnl_cents", 0)}c')
+    elif yes_done and no_done:
+        # Exit sells done/gone but still holding inventory — stuck state
+        # Caused by: late fills during exit, cancel-race fills not processed, etc.
+        _stuck_yes = bot.get('net_yes', 0)
+        _stuck_no = bot.get('net_no', 0)
+        if (_stuck_yes > 0 or _stuck_no > 0) and now - bot.get('_exit_stuck_check', 0) >= 10:
+            bot['_exit_stuck_check'] = now
+            # Verify against Kalshi — bot inventory may be phantom (sell filled but inventory not updated)
+            try:
+                if api_read_limiter.try_wait():
+                    _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                    _pos_list = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                    _kalshi_net = 0
+                    for _p in _pos_list:
+                        if _p.get('ticker') == ticker:
+                            _kalshi_net = _parse_position_qty(_p)
+                            break
+                    if _kalshi_net == 0:
+                        # Kalshi flat — phantom inventory from unprocessed exit fills
+                        print(f'🛡️ APEX MM EXIT PHANTOM CLEAR: {bot_id} kalshi=0 but net_yes={_stuck_yes} net_no={_stuck_no} — clearing')
+                        bot['net_yes'] = 0
+                        bot['net_no'] = 0
+                        bot['avg_yes_cost'] = 0
+                        bot['avg_no_cost'] = 0
+                        bot['total_yes_cost'] = 0
+                        bot['total_no_cost'] = 0
+                        bot_log('APEX_MM_EXIT_PHANTOM_CLEAR', bot_id, {
+                            'old_yes': _stuck_yes, 'old_no': _stuck_no,
+                        })
+                    else:
+                        # Real inventory — repost exit sell
+                        _sell_side = 'yes' if _kalshi_net > 0 else 'no'
+                        _sell_qty = abs(_kalshi_net)
+                        # Reconcile bot inventory with Kalshi
+                        bot[f'net_{_sell_side}'] = _sell_qty
+                        _other = 'no' if _sell_side == 'yes' else 'yes'
+                        bot[f'net_{_other}'] = 0
+                        _live_bid = bot.get(f'live_{_sell_side}_bid', 0)
+                        _live_ask = bot.get(f'live_{_sell_side}_ask', 0)
+                        _sell_price = _live_ask if _live_ask > 0 else (_live_bid + 1 if _live_bid > 0 else bot.get(f'avg_{_sell_side}_cost', 50))
+                        try:
+                            resp, actual_price = create_order_maker(ticker, _sell_side, 'sell', _sell_qty, _sell_price)
+                            _oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                            if _oid:
+                                bot.setdefault('_exit_sell_oids', {})[_sell_side] = {
+                                    'oid': _oid, 'qty': _sell_qty, 'price': actual_price,
+                                    'posted_at': now, 'action': 'sell',
+                                }
+                                bot.setdefault('_all_placed_order_ids', []).append(_oid)
+                                print(f'🚪 APEX MM EXIT REPOST: {bot_id} selling {_sell_side.upper()} {_sell_qty}x @{actual_price}c (stuck recovery, kalshi={_kalshi_net})')
+                                bot_log('APEX_MM_EXIT_REPOST', bot_id, {
+                                    'side': _sell_side, 'qty': _sell_qty, 'price': actual_price,
+                                    'kalshi_net': _kalshi_net,
+                                }, level='WARN')
+                        except Exception as e:
+                            print(f'⚠ APEX MM exit repost: {e}')
+            except Exception as _pe:
+                print(f'⚠ APEX MM exit stuck check: {_pe}')
     save_state()
 
 

@@ -4229,7 +4229,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         matched = None
         if order_id == bot.get('dog_order_id') and bot['status'] == 'dog_anchor_posted':
             matched = 'dog'
-        elif order_id in (bot.get('_all_dog_order_ids_set') or set()) and bot['status'] == 'dog_anchor_posted':
+        elif order_id in set(bot.get('_all_dog_order_ids') or []) and bot['status'] == 'dog_anchor_posted':
             # Cancel-race: old order MIGHT have filled after repost — verify before acting
             # Stale WS events for cancelled orders cause ghost fills if not verified
             try:
@@ -11705,7 +11705,6 @@ def _handle_phantom(bot_id, bot, actions):
             bot['dog_order_id'] = dog_resp['order']['order_id']
             # Keep old order IDs so WS can catch late fills on cancelled reposts
             bot.setdefault('_all_dog_order_ids', []).append(bot['dog_order_id'])
-            bot['_all_dog_order_ids_set'] = set(bot['_all_dog_order_ids'])
             bot['dog_price'] = actual_price
             # Recalculate precalc hedge for new dog price (stale precalc = wrong hedge)
             bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_price, bot.get('target_width', 5), dog_side, qty)

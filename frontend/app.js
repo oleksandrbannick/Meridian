@@ -6451,10 +6451,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const noPaused = bot._no_side_paused ? ' <span style="color:#ffaa00;font-size:8px;font-weight:700;">PAUSED</span>' : '';
 
     // Determine which side is exit vs entry for column labels
-    const yesIsExit = skewActive && skewDirection === 'exit_yes';
-    const noIsExit = skewActive && skewDirection === 'exit_no';
-    const yesLabel = yesIsExit ? 'YES — HEDGE EXIT' : noIsExit ? 'YES — ENTRY' : 'YES BIDS';
-    const noLabel = noIsExit ? 'NO — HEDGE EXIT' : yesIsExit ? 'NO — ENTRY' : 'NO BIDS';
+    const hasInv = netYes > 0 || netNo > 0;
+    const yesIsExit = hasInv && skewActive && skewDirection === 'exit_yes';
+    const noIsExit = hasInv && skewActive && skewDirection === 'exit_no';
+    const yesLabel = yesIsExit ? 'YES — HEDGE EXIT' : (hasInv && noIsExit) ? 'YES — ENTRY' : 'YES BIDS';
+    const noLabel = noIsExit ? 'NO — HEDGE EXIT' : (hasInv && yesIsExit) ? 'NO — ENTRY' : 'NO BIDS';
     const yesBorderCol = yesIsExit ? '#00ff8833' : '#66bbcc33';
     const noBorderCol = noIsExit ? '#ff444433' : '#66bbcc33';
 
@@ -6525,8 +6526,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             </div>
         </div>`;
     };
-    if (!isCompleted && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88', 'yes');
-    if (!isCompleted && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444', 'no');
+    // Only show exit panel when actually holding inventory — not when flat with stale skew flags
+    const hasInventory = netYes > 0 || netNo > 0;
+    if (!isCompleted && hasInventory && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88', 'yes');
+    if (!isCompleted && hasInventory && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444', 'no');
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid #66bbcc33;border-left:3px solid #00d4ff;border-radius:12px;padding:14px;margin-bottom:10px;`;

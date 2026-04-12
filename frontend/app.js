@@ -3999,9 +3999,10 @@ function setAutoDepth() {
     if (displayEl) displayEl.textContent = 'AUTO';
     document.querySelectorAll('#depth-floor-buttons .depth-btn').forEach(btn => {
         const isAuto = btn.getAttribute('data-depth') === 'auto';
-        btn.style.background = isAuto ? 'rgba(100,255,218,0.15)' : 'transparent';
-        btn.style.color = isAuto ? '#64ffda' : '#5a6484';
-        btn.style.boxShadow = isAuto ? 'inset 0 -2px 0 #64ffda' : 'none';
+        btn.style.background = isAuto ? 'radial-gradient(circle,#ffaa0020,#ffaa0008)' : '#0a0e1a';
+        btn.style.borderColor = isAuto ? '#ffaa00' : '#1e274066';
+        btn.style.color = isAuto ? '#ffaa00' : '#556';
+        btn.style.boxShadow = isAuto ? '0 0 10px #ffaa0030' : 'none';
     });
     if (typeof initAnchorDogPrices === 'function') initAnchorDogPrices();
 }
@@ -4010,18 +4011,14 @@ function setDepthFloor(value) {
     window._phantomAutoDepth = false;
     const hiddenInput = document.getElementById('anchor-depth');
     if (hiddenInput) hiddenInput.value = value;
-    // Update button states
     document.querySelectorAll('#depth-floor-buttons .depth-btn').forEach(btn => {
-        const btnDepth = parseInt(btn.getAttribute('data-depth'));
-        if (btnDepth === value) {
-            btn.style.background = 'rgba(255,102,170,0.15)';
-            btn.style.color = '#ff66aa';
-            btn.style.boxShadow = 'inset 0 -2px 0 #ff66aa';
-        } else {
-            btn.style.background = 'transparent';
-            btn.style.color = '#5a6484';
-            btn.style.boxShadow = 'none';
-        }
+        const btnDepth = btn.getAttribute('data-depth');
+        const isAuto = btnDepth === 'auto';
+        const isSelected = !isAuto && parseInt(btnDepth) === value;
+        btn.style.background = isSelected ? 'radial-gradient(circle,#ff66aa20,#ff66aa08)' : '#0a0e1a';
+        btn.style.borderColor = isSelected ? '#ff66aa' : '#1e274066';
+        btn.style.color = isSelected ? '#ff66aa' : '#556';
+        btn.style.boxShadow = isSelected ? '0 0 10px #ff66aa30' : 'none';
     });
     const display = document.getElementById('anchor-depth-display');
     if (display) display.textContent = `${value}¢`;
@@ -8941,29 +8938,43 @@ async function phantomModify(botId) {
 
     const autoDepth = !!bot.auto_depth;
 
+    const _depthValues = [3, 4, 5, 6, 7, 8, 9];
+    const _dBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? 'radial-gradient(circle,#ff66aa20,#ff66aa08)' : '#0a0e1a'};border:2px solid ${active ? '#ff66aa' : '#1e274066'};color:${active ? '#ff66aa' : '#556'};cursor:pointer;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #ff66aa30' : 'none'};`;
     const html = `
-        <div style="background:#0f1419;border:1px solid #ff66aa44;border-radius:12px;padding:20px;max-width:320px;">
-            <div style="color:#ff66aa;font-weight:700;font-size:13px;margin-bottom:4px;">Edit Phantom</div>
+        <div style="background:#0f1419;border:1px solid #ff66aa30;border-radius:14px;padding:20px;max-width:320px;position:relative;overflow:hidden;">
+            <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#ffaa00,#ff66aa);opacity:0.6;"></div>
+            <div style="color:#ff66aa;font-weight:800;font-size:13px;margin-bottom:4px;letter-spacing:.03em;">Edit Phantom</div>
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')} · ${(bot.dog_side || '?').toUpperCase()}</div>
             ${statusNote}
-            <div style="margin-bottom:10px;">
-                <label style="color:#8892a6;font-size:10px;">Contracts per run</label>
-                <input id="phantom-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-            </div>
             <div style="margin-bottom:14px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                    <label style="color:#8892a6;font-size:10px;">Depth floor (¢ below bid)</label>
-                    <div onclick="togglePhantomAutoDepth()" id="phantom-edit-auto-toggle" style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:2px 8px;border-radius:4px;border:1px solid ${autoDepth ? '#ffaa0066' : '#33333366'};background:${autoDepth ? '#ffaa0015' : '#1a2540'};">
-                        <div style="width:8px;height:8px;border-radius:50%;background:${autoDepth ? '#ffaa00' : '#555'};transition:background 0.15s;"></div>
-                        <span style="color:${autoDepth ? '#ffaa00' : '#555'};font-size:10px;font-weight:700;">PPI Auto</span>
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                    <div style="width:3px;height:12px;background:linear-gradient(180deg,#ffaa00,#ff66aa);border-radius:2px;"></div>
+                    <span style="color:#ffaa00;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Contracts</span>
+                    <span style="color:#3a4560;font-size:9px;">per run</span>
+                </div>
+                <input id="phantom-edit-qty" type="number" value="${curQty}" min="1" max="100" style="width:100%;padding:10px;background:#0a0e1a;border:2px solid #ffaa0033;border-radius:50px;color:#ffaa00;font-size:18px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;" onfocus="this.style.borderColor='#ffaa00';this.style.boxShadow='0 0 10px #ffaa0020'" onblur="this.style.borderColor='#ffaa0033';this.style.boxShadow='none'">
+            </div>
+            <div style="height:1px;background:linear-gradient(90deg,transparent,#1e274066,transparent);margin-bottom:14px;"></div>
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <div style="width:3px;height:12px;background:linear-gradient(180deg,#ff66aa,#ffaa00);border-radius:2px;"></div>
+                        <span style="color:#ff66aa;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Depth</span>
+                    </div>
+                    <div onclick="togglePhantomAutoDepth()" id="phantom-edit-auto-toggle" style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:3px 10px;border-radius:50px;border:1px solid ${autoDepth ? '#ffaa0066' : '#1e274066'};background:${autoDepth ? '#ffaa0012' : '#0a0e1a'};transition:all .2s;">
+                        <div style="width:8px;height:8px;border-radius:50%;background:${autoDepth ? '#ffaa00' : '#333'};transition:background 0.15s;box-shadow:${autoDepth ? '0 0 6px #ffaa0060' : 'none'};"></div>
+                        <span style="color:${autoDepth ? '#ffaa00' : '#556'};font-size:10px;font-weight:700;">PPI Auto</span>
                     </div>
                 </div>
-                <input id="phantom-edit-depth" type="number" value="${curDepth}" min="3" max="30" style="width:100%;background:#1a2540;color:${autoDepth ? '#555' : '#fff'};border:1px solid ${autoDepth ? '#222' : '#333'};border-radius:6px;padding:6px 10px;font-size:13px;${autoDepth ? 'opacity:0.5;' : ''}" ${autoDepth ? 'disabled' : ''}>
-                <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:10px;margin-top:2px;">${autoDepth ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + curDepth + '¢'}</div>
+                <div style="display:flex;justify-content:space-between;gap:4px;${autoDepth ? 'opacity:0.3;pointer-events:none;' : ''}" id="phantom-edit-depth-grid">
+                    ${_depthValues.map(d => `<button onclick="document.getElementById('phantom-edit-depth').value=${d};document.querySelectorAll('.pe-d-btn').forEach(b=>b.style.cssText='${_dBtnStyle(false)}');this.style.cssText='${_dBtnStyle(true)}';document.getElementById('phantom-edit-depth-hint').textContent='Dog posts at bid - ${d}c'" class="pe-d-btn" style="${_dBtnStyle(!autoDepth && d === curDepth)}">${d}</button>`).join('')}
+                </div>
+                <input id="phantom-edit-depth" type="hidden" value="${curDepth}">
+                <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:9px;margin-top:6px;text-align:center;">${autoDepth ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + curDepth + 'c'}</div>
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="phantomModifySave('${botId}')" style="flex:1;background:#ff66aa;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
-                <button onclick="document.getElementById('phantom-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
+                <button onclick="phantomModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#ffaa00,#ff66aa);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff66aa25;transition:all .2s;">Save</button>
+                <button onclick="document.getElementById('phantom-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
             </div>
         </div>`;
 
@@ -8992,21 +9003,20 @@ function togglePhantomAutoDepth() {
     modal._autoDepth = !modal._autoDepth;
     const on = modal._autoDepth;
     const toggle = document.getElementById('phantom-edit-auto-toggle');
+    const depthGrid = document.getElementById('phantom-edit-depth-grid');
     const depthInput = document.getElementById('phantom-edit-depth');
     const hint = document.getElementById('phantom-edit-depth-hint');
     if (toggle) {
-        toggle.style.borderColor = on ? '#ffaa0066' : '#33333366';
-        toggle.style.background = on ? '#ffaa0015' : '#1a2540';
-        toggle.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${on ? '#ffaa00' : '#555'};transition:background 0.15s;"></div><span style="color:${on ? '#ffaa00' : '#555'};font-size:10px;font-weight:700;">PPI Auto</span>`;
+        toggle.style.borderColor = on ? '#ffaa0066' : '#1e274066';
+        toggle.style.background = on ? '#ffaa0012' : '#0a0e1a';
+        toggle.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${on ? '#ffaa00' : '#333'};transition:background 0.15s;box-shadow:${on ? '0 0 6px #ffaa0060' : 'none'};"></div><span style="color:${on ? '#ffaa00' : '#556'};font-size:10px;font-weight:700;">PPI Auto</span>`;
     }
-    if (depthInput) {
-        depthInput.disabled = on;
-        depthInput.style.color = on ? '#555' : '#fff';
-        depthInput.style.borderColor = on ? '#222' : '#333';
-        depthInput.style.opacity = on ? '0.5' : '1';
+    if (depthGrid) {
+        depthGrid.style.opacity = on ? '0.3' : '1';
+        depthGrid.style.pointerEvents = on ? 'none' : 'auto';
     }
     if (hint) {
-        hint.textContent = on ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + (depthInput?.value || '5') + '¢';
+        hint.textContent = on ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + (depthInput?.value || '5') + 'c';
     }
 }
 

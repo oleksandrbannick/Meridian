@@ -3863,6 +3863,14 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
     # Ceiling sell follow removed — no more dog sell system
 
 
+def _phantom_taker_depth_tier(fav_depth):
+    """Thin book = taker exit (nobody taking). Thick book = patient (fills coming).
+    Returns (timer_seconds, combined_threshold). Depth is contracts at the fav bid level."""
+    if fav_depth < 200:    return (10, 98)   # THIN: taker at 10s, accept combined <= 98
+    elif fav_depth < 500:  return (15, 96)   # MODERATE: current-ish behavior
+    else:                  return (30, 95)   # THICK: 30s failsafe only, maker fills coming
+
+
 def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
     """Instant snap UP: if fav bid rose above posted price, amend up immediately.
     Catches fast market moves (tennis breaks, game events) before the 2s monitor cycle.
@@ -3885,15 +3893,21 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # ── Taker fallback: if hedge sitting 15s+ and combined at ask still profitable, cross spread ──
+        # ── Depth-aware taker fallback: thin books fire sooner, thick books stay patient ──
         fav_ask = (yes_ask if fav_side == 'yes' else no_ask) if hedge_ticker == ticker else 0
         dog_price = bot.get('dog_price', 0)
         posted_at = bot.get('fav_posted_at', bot.get('dog_filled_at', 0))
         hedge_age = time.time() - posted_at if posted_at > 0 else 0
-        if fav_ask > 0 and hedge_age >= 15 and not bot.get('_taker_fired'):
+
+        # Read real-time fav depth at bid level (1 level = what the card shows)
+        _lob = _local_orderbooks.get(hedge_ticker)
+        _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
+        _taker_timer, _taker_threshold = _phantom_taker_depth_tier(_fav_depth)
+
+        if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired'):
             combined_at_ask = dog_price + fav_ask
-            if combined_at_ask <= 96:
-                # Still profitable at ask — cross the spread
+            if combined_at_ask <= _taker_threshold:
+                # Cross the spread — maker fill isn't coming on this book
                 if not _phantom_drop_lock.acquire(blocking=False):
                     return
                 try:
@@ -3907,16 +3921,26 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                         bot['fav_price'] = fav_ask
                         bot['_taker_fired'] = True
                         bot['_fav_was_taker'] = True
-                        print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s)')
+                        _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
+                        print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s, depth={_fav_depth} [{_depth_label}] timer={_taker_timer}s)')
                         bot_log('PHANTOM_WS_TAKER', bot_id, {
                             'fav_price': fav_ask, 'dog_price': dog_price,
                             'combined': combined_at_ask, 'hedge_age_s': int(hedge_age),
                             'was_price': fav_price,
+                            'fav_depth': _fav_depth, 'depth_tier': _depth_label,
+                            'taker_timer': _taker_timer, 'taker_threshold': _taker_threshold,
                         })
                         save_state()
                 finally:
                     _phantom_drop_lock.release()
                 return
+            else:
+                # Near-miss: timer expired but combined too high — log periodically
+                _last_miss = bot.get('_taker_miss_log_at', 0)
+                if time.time() - _last_miss >= 5:
+                    _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
+                    print(f'⏳ PHANTOM TAKER WAITING: {bot_id} combined={combined_at_ask}¢ > {_taker_threshold}¢ (depth={_fav_depth} [{_depth_label}] age={int(hedge_age)}s)')
+                    bot['_taker_miss_log_at'] = time.time()
 
         # Only snap if bid is ABOVE posted price (we're behind the market)
         if fav_bid <= fav_price:

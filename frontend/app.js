@@ -646,10 +646,7 @@ function applyFilters() {
             const eventTicker = m.event_ticker || m.ticker || '';
             const gameId = extractGameId(eventTicker);
             const sport = detectSport(eventTicker);
-            // Cross-check: if score data says match is finished, don't count as live
-            const _gs = getGameScore(gameId, sport);
-            const _finished = _gs && _gs.state === 'post';
-            if ((getLiveScoreForGame(gameId, sport) || isKalshiLive(m)) && !_finished) {
+            if (getLiveScoreForGame(gameId, sport) || isKalshiLive(m)) {
                 liveGameIds.add(gameId);
             }
         });
@@ -2101,10 +2098,9 @@ function displayEventRow(eventData, container) {
     const liveScore = getLiveScoreForGame(eventData.gameId, sport);
     const gameScore = getGameScore(eventData.gameId, sport);
     // A game is "live" if ESPN confirms it OR Kalshi-native detection says so
-    // But if score data says match is finished, override Kalshi's stale "live" signal
+    // Trust Kalshi's live signal — score APIs can prematurely mark matches as finished
     const kalshiLive = !liveScore && eventData.markets.some(m => isKalshiLive(m));
-    const scoreFinished = gameScore && gameScore.state === 'post';
-    const isLive = (!!liveScore || kalshiLive) && !scoreFinished;
+    const isLive = !!liveScore || kalshiLive;
     const emoji = getSportEmoji(sport);
 
     // Compute game signal — factors in score, period, edge (not just liquidity)
@@ -2178,8 +2174,8 @@ function displayEventRow(eventData, container) {
             roundBadge.textContent = roundMatch[1].replace('Round Of ', 'R');
             badgeWrap.appendChild(roundBadge);
         }
-        // Show LIVE badge when Kalshi market is live but no score available (and match not finished)
-        if (!liveScore && kalshiLive && !scoreFinished) {
+        // Show LIVE badge when Kalshi market is live but no ESPN score available
+        if (!liveScore && kalshiLive) {
             const liveBadge = document.createElement('span');
             liveBadge.style.cssText = 'background:#ff333322;color:#ff4444;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;';
             liveBadge.innerHTML = '<span style="animation:pulse 1.5s infinite;">●</span> LIVE';

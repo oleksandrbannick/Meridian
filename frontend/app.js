@@ -6379,23 +6379,20 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Exit line
         let exitLineHtml = '';
         if (exitPrice > 0) {
-            const exitBid = exitSide === 'YES' ? liveYesBid : liveNoBid;
-            const bidDist = exitPrice > exitBid ? `${exitPrice - exitBid}c above` : exitPrice === exitBid ? 'at bid' : `${exitBid - exitPrice}c below`;
             const walkCount = bot._exit_walk_count || 0;
             let walkLabel = '';
             if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-weight:700;">STOP LOSS</span>`;
             else if (combined >= 100) walkLabel = `<span style="color:#ff4444;font-weight:700;">SL ZONE -${combined - 100}c</span>`;
-            else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-weight:700;">THIN +${profit}c</span>`;
+            else if (combined >= 98) walkLabel = `<span style="color:#ffaa00;font-weight:700;">THIN</span>`;
             else if (walkCount > 0) walkLabel = `<span style="color:#ffaa00;font-weight:700;">WALKING</span>`;
-            else walkLabel = `<span style="color:#00ff88;">at target</span>`;
+            else walkLabel = `<span style="color:#00ff88;">TARGET</span>`;
             const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
             exitLineHtml = `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1a2540;">
                 <div style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:#ff7043;font-size:10px;font-weight:700;">EXIT ${exitSide} @${exitPrice}c</span>
+                    <span style="color:#ff7043;font-size:10px;font-weight:700;">Hedge ${exitSide} @${exitPrice}c</span>
                     ${walkLabel}
-                    <span style="color:#445;font-size:9px;">${bidDist}</span>
                 </div>
-                <span style="color:#ff7043;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty}</span>
+                <span style="color:#ff7043;font-size:10px;font-weight:700;">${exitFillQty}/${exitTotalQty} filled</span>
             </div>
             <div style="height:3px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:3px;">
                 <div style="width:${fp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>
@@ -6407,18 +6404,24 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:${sideCol};font-weight:800;font-size:12px;">HOLDING ${longSide} ${netHeld}x</span>
                     <span style="color:#556;font-size:10px;">avg ${avgCost}c</span>
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    ${exitPrice > 0 ? `<span style="color:${profitCol};font-weight:800;font-size:14px;">${combined}c</span>
-                    <span style="color:${profitCol};font-weight:700;font-size:11px;">${profit >= 0 ? '+' : ''}${profit}c</span>` : ''}
+                <div style="display:flex;align-items:center;gap:6px;">
+                    ${exitPrice > 0 ? `<span style="color:${profitCol};font-weight:800;font-size:14px;">${profit >= 0 ? '+' : ''}${profit}c</span>` : ''}
                     ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
                 </div>
             </div>
-            <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:6px;">
+            ${exitPrice > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;color:#556;">
+                <span>entry ${avgCost}c + hedge ${exitPrice}c = <strong style="color:${profitCol};">${combined}c</strong></span>
+                <span>SL ${stopLoss}c</span>
+            </div>` : ''}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;">
+                <span style="color:#00ff88;">YES bid:${liveYesBid} ask:${liveYesAsk}</span>
+                <span style="color:#ff4444;">NO bid:${liveNoBid} ask:${liveNoAsk}</span>
+            </div>
+            <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;margin-top:4px;">
                 <div style="width:${invPct}%;height:100%;background:${sideCol};border-radius:2px;opacity:0.7;transition:width .3s;"></div>
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:2px;">
                 <span style="color:#445;font-size:8px;">${netHeld}/${invLimit} inventory</span>
-                ${exitPrice > 0 ? `<span style="color:#445;font-size:8px;">${avgCost}+${exitPrice}=${combined}c</span>` : ''}
             </div>
             ${exitLineHtml}
             ${slZoneHtml}

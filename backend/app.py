@@ -2588,6 +2588,7 @@ def save_state():
                     'opening_lines': _opening_lines,
                     'pnl_resets': pnl_resets,
                     'applied_migrations': applied_migrations,
+                    'pending_maker_sells': _pending_maker_sells,
                 }, f, indent=2, default=str)
             os.replace(tmp, DATA_FILE)  # atomic — no partial-write corruption
         except Exception as e:
@@ -2598,7 +2599,7 @@ BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_bac
 def load_state():
     """Load persisted bots and history from disk.
     Also merges trades.jsonl to recover any trades recorded after the last save_state()."""
-    global active_bots, trade_history, session_pnl, _opening_lines, pnl_resets, applied_migrations
+    global active_bots, trade_history, session_pnl, _opening_lines, pnl_resets, applied_migrations, _pending_maker_sells
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
@@ -2625,6 +2626,11 @@ def load_state():
                 for k in ('gross_profit_cents','gross_loss_cents','completed_bots','stopped_bots'):
                     if k in saved:
                         session_pnl[k] = saved[k]
+            # Restore pending maker sells so they survive restarts
+            _saved_sells = data.get('pending_maker_sells', {})
+            if _saved_sells:
+                _pending_maker_sells.update(_saved_sells)
+                print(f'📤 Restored {len(_saved_sells)} pending maker sells')
             print(f'✅ Loaded: {len(active_bots)} bots, {len(trade_history)} history, {len(_opening_lines)} opening lines, resets={pnl_resets}')
             # Clear transient runtime flags that should never persist across restarts.
             # _completion_in_progress is set during the multi-phase apex completion flow
